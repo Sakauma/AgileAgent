@@ -43,21 +43,21 @@ def main() -> int:
         writer.writerows(flat_rows)
     (report_root / "summary.json").write_text(json.dumps(rows, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     lines = [
-        "# Compliant No-Old-Data Incremental Summary",
+        "# 合规的无旧数据增量学习汇总",
         "",
-        "Training uses incremental images only. A frozen base handles old classes and new-data specialists handle new classes; no old raw image is replayed.",
+        "训练仅使用增量图像。冻结的基础模型负责旧类别，基于新增数据训练的专用模型负责新类别；整个过程不回放旧类原始图像。",
         "",
-        "| protocol | New-mAP50 | KRR | full mAP50 | old raw images | frozen drift | seconds | result |",
+        "| 协议 | New-mAP50 | KRR | 完整集 mAP50 | 旧类原始图像数 | 冻结参数漂移 | 耗时（秒） | 结果 |",
         "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
         lines.append(
             f"| {row['protocol']} | {row['new_map50_after']:.5f} | {row['krr']:.5f} | {row['full_map50_after']:.5f} | "
             f"{row['old_raw_image_count']} | {row['frozen_parameter_max_abs_drift']:.3g} | {row['training_seconds']:.1f} | "
-            f"{'PASS' if row['decision']['passed'] else 'FAIL'} |"
+            f"{'通过' if row['decision']['passed'] else '未通过'} |"
         )
     overall = all(row["decision"]["passed"] for row in rows)
-    lines += ["", f"Overall decision: **{'PASS' if overall else 'FAIL'}**."]
+    lines += ["", f"总体结论：**{'通过' if overall else '未通过'}**。"]
     (report_root / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print((report_root / "summary.md").relative_to(ROOT).as_posix())
     return 0

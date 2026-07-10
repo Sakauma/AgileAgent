@@ -328,13 +328,13 @@ def run_model_recheck(config_path: Path, reuse_predictions_dir: Path | None = No
         with (report_dir / "bootstrap_deltas.csv").open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle); writer.writerow(["replicate", "delta_map50"]); writer.writerows(enumerate(deltas, 1))
     (report_dir / "stability_metrics.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    lines = ["# 640/768 推理尺寸稳定性复核", "", f"- status: `{result['status']}`", f"- images: `{len(images)}`", f"- model_sha256: `{actual_hash}`", ""]
+    lines = ["# 640/768 推理尺寸稳定性复核", "", f"- 状态：`{result['status']}`", f"- 图像数：`{len(images)}`", f"- 模型 SHA256：`{actual_hash}`", ""]
     if result["status"] == "passed":
-        lines.extend([f"- recommendation: `{result['recommendation']}`", f"- selected_imgsz: `{result['selected_imgsz']}`", f"- bootstrap 95% CI: `[{result['bootstrap']['ci95_lower']:.6f}, {result['bootstrap']['ci95_upper']:.6f}]`", "", "## Groups", "", "| group | images | mAP50 640 | mAP50 768 | delta |", "|---|---:|---:|---:|---:|"])
+        lines.extend([f"- 推荐结论：`{result['recommendation']}`", f"- 选定输入尺寸：`{result['selected_imgsz']}`", f"- 自助法 95% 置信区间：`[{result['bootstrap']['ci95_lower']:.6f}, {result['bootstrap']['ci95_upper']:.6f}]`", "", "## 分组指标", "", "| 分组 | 图像数 | mAP50 640 | mAP50 768 | 差值 |", "|---|---:|---:|---:|---:|"])
         for row in result["groups"]:
             lines.append(f"| {row['group']} | {row['image_count']} | {row['map50_640']:.5f} | {row['map50_768']:.5f} | {row['delta']:+.5f} |")
         overall = next(row for row in result["groups"] if row["group"] == "overall")
-        lines.extend(["", "## Per Class", "", "| class | mAP50 640 | mAP50 768 |", "|---|---:|---:|"])
+        lines.extend(["", "## 分类别指标", "", "| 类别 | mAP50 640 | mAP50 768 |", "|---|---:|---:|"])
         for class_name in CLASS_NAMES:
             lines.append(f"| {class_name} | {overall[f'{class_name}_map50_640']:.5f} | {overall[f'{class_name}_map50_768']:.5f} |")
     (report_dir / "stability_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

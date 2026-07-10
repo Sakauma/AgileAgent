@@ -172,19 +172,19 @@ def write_report(report_dir: Path, row: Mapping[str, Any]) -> None:
         writer.writerow(flat)
     decision = row["decision"]
     lines = [
-        f"# {row['protocol']} Compliant Incremental Learning",
+        f"# {row['protocol']} 合规增量学习报告",
         "",
-        f"- Method: {row['method']}",
-        f"- Training images: {row['training_image_count']}",
-        f"- Old raw training images: {row['old_raw_image_count']}",
+        f"- 方法：{row['method']}",
+        f"- 训练图像数：{row['training_image_count']}",
+        f"- 旧类原始训练图像数：{row['old_raw_image_count']}",
         f"- New-mAP50: {row['new_map50_after']:.5f}",
         f"- KRR: {row['krr']:.5f}",
-        f"- Full mAP50: {row['full_map50_after']:.5f}",
-        f"- Training seconds: {row['training_seconds']:.1f}",
-        f"- Frozen parameter max drift: {row['frozen_parameter_max_abs_drift']:.8g}",
-        f"- Parameter isolation: {decision['parameter_isolation_pass']}",
-        f"- Compliance: {decision['compliant']}",
-        f"- Result: {'PASS' if decision['passed'] else 'FAIL'}",
+        f"- 完整集 mAP50：{row['full_map50_after']:.5f}",
+        f"- 训练耗时（秒）：{row['training_seconds']:.1f}",
+        f"- 冻结参数最大漂移：{row['frozen_parameter_max_abs_drift']:.8g}",
+        f"- 参数隔离检查：{decision['parameter_isolation_pass']}",
+        f"- 合规检查：{decision['compliant']}",
+        f"- 结果：{'通过' if decision['passed'] else '未通过'}",
     ]
     (report_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 

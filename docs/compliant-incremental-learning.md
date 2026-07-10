@@ -1,39 +1,39 @@
-# Compliant Incremental Learning
+# 合规的无旧数据增量学习
 
-## Constraint
+## 约束
 
-During an incremental round, training may use only the newly supplied images and annotations. Old raw training images must never enter the student train or validation split.
+在每轮增量学习中，训练只能使用本轮新增的图像和标注。旧类原始训练图像不得进入学生模型的训练集或验证集。
 
-## Method
+## 方法
 
-The primary implementation for each 3+1 protocol is:
+每个 3+1 协议采用以下主流程：
 
-1. Freeze the detector trained on the three base classes.
-2. Remap the newly introduced global class ID to class `0` inside an isolated specialist dataset.
-3. Train a one-class specialist only on the incremental images and labels.
-4. Keep the base detector immutable for old-class inference.
-5. Compose predictions by taking old classes from the frozen base and the new class from the specialist.
-6. Map specialist class `0` back to the global class ID.
-7. Evaluate the composed class-wise output on the full test view.
+1. 冻结基于三个旧类别训练的检测器。
+2. 在隔离的专用数据集中，将新增类别的全局类别编号映射为类别 `0`。
+3. 仅使用增量图像和标签训练单类别专用模型。
+4. 旧类别推理始终使用不可变的基础检测器。
+5. 按类别组合预测：旧类别取自冻结的基础检测器，新增类别取自专用模型。
+6. 将专用模型的类别 `0` 映射回全局类别编号。
+7. 在完整测试视图上评估按类别组合后的预测结果。
 
-The repository also includes a teacher pseudo-label distillation ablation. It generates old-class pseudo labels only on incremental images, but it never admits old raw images into training.
+仓库还提供教师伪标签蒸馏消融方案。该方案只在增量图像上生成旧类别伪标签，不会把旧类原始图像加入训练。
 
-## Audit Contract
+## 审计约定
 
-Every generated protocol contains `manifest.json` with:
+每个生成的协议都包含 `manifest.json`，其中记录：
 
 - `training_source_policy: new_incremental_images_only`
-- exact training image count
-- new-class ground-truth object count
-- old-class pseudo-label count
-- `old_raw_image_count`, which must equal zero
-- a strict stem comparison between generated training images and the authorized new-image split
+- 精确的训练图像数量
+- 新类别真实标注目标数量
+- 旧类别伪标签数量
+- `old_raw_image_count`，其值必须为零
+- 生成训练图像与授权新增图像划分之间严格的文件主名比对结果
 
-The training runner refuses to start when the compliance check fails.
+合规检查失败时，训练执行器会拒绝启动。
 
-## Acceptance
+## 验收标准
 
-A protocol passes only when all conditions hold:
+只有同时满足以下条件，协议才判定为通过：
 
 ```text
 old_raw_image_count = 0
@@ -42,4 +42,4 @@ New-mAP50 >= 0.60
 KRR >= 0.95
 ```
 
-KRR is computed as `old_mAP50_after / old_mAP50_before` on the same full test view. Per-protocol outputs are isolated under `reports/incremental_no_old_distill/<protocol>/`; aggregation never overwrites individual evidence.
+KRR 在同一完整测试视图上按 `old_mAP50_after / old_mAP50_before` 计算。每个协议的输出隔离保存到 `reports/incremental_no_old_distill/<protocol>/`；汇总过程不会覆盖单次实验的证据文件。

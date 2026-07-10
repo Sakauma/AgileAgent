@@ -1,6 +1,6 @@
 # AgileAgent
 
-面向 IR/SAR 目标检测竞赛的可审计快速学习 Agent。仓库包含统一 YOLO11s 检测器、四个合规增量 specialist、命令行工具和 Streamlit 工作台。x86 Windows、WSL 与 Linux 均可直接运行；训练数据、标签和竞赛提交结果不随仓库分发。
+面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。仓库包含统一 YOLO11s 检测器、四个合规增量专用模型、命令行工具和 Streamlit 工作台。x86-64 架构的 Windows、WSL 与 Linux 均可直接运行；训练数据、标签和竞赛提交结果不随仓库分发。
 
 ## 快速部署
 
@@ -23,7 +23,7 @@ Set-Location AgileAgent
 powershell -ExecutionPolicy Bypass -File scripts/bootstrap_x86.ps1
 ```
 
-脚本会创建 `.venv`、安装 CPU 版 PyTorch 和 Agent 依赖、运行环境诊断，并加载五个模型完成合成图 CPU smoke test。已有合适 PyTorch 环境时，也可手动执行：
+脚本会创建 `.venv`、安装 CPU 版 PyTorch 和智能体依赖、运行环境诊断，并加载五个模型完成合成图 CPU 冒烟测试。已有合适的 PyTorch 环境时，也可手动执行：
 
 ```bash
 python -m pip install -e ".[workbench,inference,dev]"
@@ -31,9 +31,9 @@ python -m fair_agent.cli doctor
 python scripts/smoke_models.py
 ```
 
-## 启动 Agent
+## 启动智能体
 
-先生成本机黑板和策略结果，再启动 Web 工作台：
+先生成本机黑板和策略结果，再启动网页工作台：
 
 ```bash
 python -m fair_agent.cli refresh
@@ -42,7 +42,7 @@ python -m fair_agent.cli pipeline --mode dryrun
 python -m fair_agent.cli serve
 ```
 
-浏览器访问 `http://localhost:8501`。`doctor` 在模型缺失、SHA256 错误或核心依赖缺失时返回非零。干净 clone 没有私有数据分析报告，因此数据页可能为空，正式提交也会保持 `blocked`；这不影响模型校验、策略框架和工作台启动。
+浏览器访问 `http://localhost:8501`。`doctor` 在模型缺失、SHA256 错误或核心依赖缺失时返回非零。全新克隆不包含私有数据分析报告，因此数据页可能为空，正式提交也会保持阻塞状态（`blocked`）；这不影响模型校验、策略框架和工作台启动。
 
 ## 本地 CPU 推理
 
@@ -52,7 +52,7 @@ python -m fair_agent.cli serve
 python tools/42_predict_submission.py --config configs/local_infer_cpu.yaml
 ```
 
-配置集中在 `configs/local_infer_cpu.yaml`。结果写入独立的 `runs/submission/<run_id>/`，包含 YOLO 标签、带置信度标签、CSV、JSON、manifest 和 zip，不会覆盖已有结果。使用 NVIDIA GPU 时复制该 YAML，将 `predict.device` 改为 `0`，并按 PyTorch 官方说明安装对应 CUDA wheel。
+配置集中在 `configs/local_infer_cpu.yaml`。结果写入独立的 `runs/submission/<run_id>/`，包含 YOLO 标签、带置信度标签、CSV、JSON、运行清单和压缩包，不会覆盖已有结果。使用 NVIDIA GPU 时复制该 YAML，将 `predict.device` 改为 `0`，并按 PyTorch 官方说明安装对应的 CUDA 软件包。
 
 ## 模型清单
 
@@ -76,7 +76,7 @@ python -m fair_agent.cli pipeline --mode execute
 pytest -q
 ```
 
-`pipeline --mode execute` 只执行 YAML allowlist 中的低风险动作。训练、正式推理、打包和提交始终需要人工触发并保留审计记录。Agent 主配置位于 `configs/agent_pipeline.yaml`。
+`pipeline --mode execute` 只执行 YAML 允许列表中的低风险动作。训练、正式推理、打包和提交始终需要人工触发并保留审计记录。智能体主配置位于 `configs/agent_pipeline.yaml`。
 
 ## 数据与增量训练
 
@@ -85,6 +85,6 @@ pytest -q
 ## 已知限制
 
 - x86 CPU 版本用于展示、开发和功能验证，不代表端侧 FPS。
-- 仓库不包含竞赛数据、标签、PDF、SSH 凭据、预测结果或训练 runs。
+- 仓库不包含竞赛数据、标签、PDF、SSH 凭据、预测结果或训练运行产物。
 - 官方隐藏测试目录和提交格式尚未确认，因此正式提交门禁默认关闭。
 - Ascend 310B 转换与推理接口仍待板卡就绪后补充。

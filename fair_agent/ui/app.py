@@ -29,16 +29,16 @@ def load_csv(path: str, limit: Optional[int] = None) -> List[Dict[str, str]]:
 
 def markdown_file(path: str) -> str:
     target = ROOT / path
-    return target.read_text(encoding="utf-8") if target.exists() else f"`{path}` not found."
+    return target.read_text(encoding="utf-8") if target.exists() else f"未找到 `{path}`。"
 
 
 def metric_row(cols, items):
     for col, (label, value) in zip(cols, items):
-        col.metric(label, value if value is not None else "N/A")
+        col.metric(label, value if value is not None else "暂无")
 
 
-st.set_page_config(page_title="IR/SAR Agent Workbench", layout="wide")
-st.title("IR/SAR 快速学习 Agent Workbench")
+st.set_page_config(page_title="IR/SAR 快速学习智能体工作台", layout="wide")
+st.title("IR/SAR 快速学习智能体工作台")
 
 state = load_json("reports/agent_blackboard/blackboard_state.json")
 decision = load_json("reports/agent_blackboard/agent_decision.json")
@@ -50,21 +50,21 @@ if not state:
 tabs = st.tabs(["首页", "数据", "错误分析", "策略", "增量学习", "提交"])
 
 with tabs[0]:
-    st.subheader("Agent 状态")
-    st.caption(f"黑板生成时间：{state.get('generated_at')} · schema v{state.get('schema_version', 1)}")
+    st.subheader("智能体状态")
+    st.caption(f"黑板生成时间：{state.get('generated_at')} · 架构版本 {state.get('schema_version', 1)}")
     detector = state.get("detector", {})
     weights = state.get("frozen_assets", {}).get("weights", {})
     cols = st.columns(4)
     metric_row(
         cols,
         [
-            ("all mAP50", detector.get("combined_all_map50", detector.get("lock_all_map50"))),
+            ("整体 mAP50", detector.get("combined_all_map50", detector.get("lock_all_map50"))),
             ("SAR mAP50", detector.get("combined_sar_map50", detector.get("lock_sar_map50"))),
             ("soldier mAP50", detector.get("combined_soldier_map50", detector.get("lock_sar_soldier_map50"))),
             ("权重哈希匹配", weights.get("matches_expected")),
         ],
     )
-    blockers = state.get("current_blockers") or ["none"]
+    blockers = state.get("current_blockers") or ["无"]
     st.write("当前阻塞项：", blockers)
     st.write("最终权重：", weights.get("path"))
     st.write("候选状态：", detector.get("candidate_status"))
@@ -76,24 +76,24 @@ with tabs[1]:
     dataset = state.get("dataset", {})
     cols = st.columns(2)
     metric_row(cols, [("图像数", dataset.get("image_count")), ("目标数", dataset.get("object_count"))])
-    st.write("sensor 分布")
+    st.write("传感器分布")
     st.json(dataset.get("sensor", {}))
-    st.write("scene 分布")
+    st.write("场景分布")
     st.json(dataset.get("scene", {}))
     metadata = load_csv("reports/metadata.csv", limit=100)
     if metadata:
         st.dataframe(metadata, use_container_width=True)
 
 with tabs[2]:
-    st.subheader("SAR Soldier Case Bank")
+    st.subheader("SAR Soldier 案例库")
     sar = state.get("sar_soldier", {})
     case_bank = sar.get("case_bank", {})
     cols = st.columns(3)
     metric_row(
         cols,
         [
-            ("case 数", case_bank.get("case_count")),
-            ("specialist 状态", sar.get("specialist_status")),
+            ("案例数", case_bank.get("case_count")),
+            ("专用模型状态", sar.get("specialist_status")),
             ("主线策略", "统一 YOLO11s"),
         ],
     )
@@ -130,9 +130,9 @@ with tabs[5]:
     metric_row(
         cols,
         [
-            ("hidden test ready", submission.get("official_test_ready")),
-            ("format confirmed", submission.get("official_format_confirmed")),
-            ("format", submission.get("official_format")),
+            ("隐藏测试集就绪", submission.get("official_test_ready")),
+            ("提交格式已确认", submission.get("official_format_confirmed")),
+            ("提交格式", submission.get("official_format")),
         ],
     )
     st.write("官方测试目录：", submission.get("official_test_dir"))

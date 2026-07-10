@@ -47,36 +47,36 @@ def write_pipeline_artifacts(run_dir: Path, plan: Dict[str, Any], state: Dict[st
 def render_run_report(plan: Dict[str, Any], state: Dict[str, Any], decision: Dict[str, Any], manifest: Dict[str, Any]) -> str:
     rec = decision.get("recommended_action", {})
     lines = [
-        "# Agent Run Report",
+        "# 智能体运行报告",
         "",
-        f"- run_dir：`{manifest.get('run_dir')}`",
-        f"- mode：`{plan.get('mode')}`",
-        f"- generated_at：`{manifest.get('created_at')}`",
-        f"- recommended_action：`{rec.get('action')}`",
-        f"- action_status：`{rec.get('status')}`",
-        f"- risk_level：`{rec.get('risk_level')}`",
+        f"- 运行目录：`{manifest.get('run_dir')}`",
+        f"- 运行模式：`{plan.get('mode')}`",
+        f"- 生成时间：`{manifest.get('created_at')}`",
+        f"- 推荐动作：`{rec.get('action')}`",
+        f"- 动作状态：`{rec.get('status')}`",
+        f"- 风险等级：`{rec.get('risk_level')}`",
         "",
-        "## Blockers",
+        "## 阻塞项",
         "",
     ]
-    blockers = state.get("current_blockers") or ["none"]
+    blockers = state.get("current_blockers") or ["无"]
     for blocker in blockers:
         lines.append(f"- `{blocker}`")
     lines.extend(
         [
             "",
-            "## Planned Steps",
+            "## 计划步骤",
             "",
         ]
     )
     for step in plan.get("steps", []):
-        lines.append(f"- `{step['name']}` execute=`{step['execute']}` reason={step['reason']}")
+        lines.append(f"- `{step['name']}` 执行=`{step['execute']}` 原因={step['reason']}")
     lines.extend(
         [
             "",
-            "## Notes",
+            "## 说明",
             "",
-            "Dry-run only writes audit artifacts. Execute mode is restricted to configured low-risk actions and never runs training or formal submission.",
+            "试运行只写入审计产物。执行模式仅允许运行配置中的低风险动作，不会启动训练或正式提交。",
         ]
     )
     return "\n".join(lines) + "\n"

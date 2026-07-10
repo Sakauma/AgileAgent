@@ -152,23 +152,23 @@ def write_report(path: Path, rows: List[Dict[str, Any]]) -> None:
     action_counts = Counter(row["recommended_action"] for row in rows)
     scene_counts = Counter(row["scene"] for row in rows)
     lines = [
-        "# SAR Soldier Case Bank 报告",
+        "# SAR Soldier 案例库报告",
         "",
         f"生成时间：{datetime.now().isoformat(timespec='seconds')}",
         "",
         "## 结论",
         "",
-        "已将 SAR soldier 错误分析结果整理为 agent 可消费的 case bank。样本按既有 `priority` 从高到低排序，并附带推荐处理动作。",
+        "已将 SAR soldier 错误分析结果整理为智能体可读取的案例库。样本按既有 `priority` 从高到低排序，并附带推荐处理动作。",
         "",
         "## 汇总",
         "",
         f"- 样本数：`{len(rows)}`",
-        f"- scene 分布：`{dict(sorted(scene_counts.items()))}`",
+        f"- 场景分布：`{dict(sorted(scene_counts.items()))}`",
         f"- 推荐动作分布：`{dict(sorted(action_counts.items()))}`",
         "",
-        "## Top 样本",
+        "## 重点样本",
         "",
-        "| rank | image | scene | statuses | priority | action |",
+        "| 排名 | 图像 | 场景 | 状态 | 优先级 | 推荐动作 |",
         "|---:|---|---|---|---:|---|",
     ]
     for row in rows[:10]:

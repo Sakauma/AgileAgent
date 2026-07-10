@@ -18,6 +18,6 @@ if ($LoadOnly) {
 }
 
 Write-Host ""
-Write-Host "AgileAgent is ready. Start the UI with:"
+Write-Host "AgileAgent 已准备就绪。使用以下命令启动界面："
 Write-Host "  .venv\Scripts\python.exe -m fair_agent.cli refresh"
 Write-Host "  .venv\Scripts\python.exe -m fair_agent.cli serve"

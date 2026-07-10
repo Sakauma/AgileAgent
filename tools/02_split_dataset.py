@@ -88,7 +88,7 @@ def split_report(splits: Dict[str, List[Dict[str, str]]]) -> str:
         "",
         f"随机种子：`{SEED}`",
         "",
-        "| 划分 | 图片数 | sensor | scene | class_presence |",
+        "| 划分 | 图片数 | 传感器 | 场景 | 包含类别 |",
         "|---|---:|---|---|---|",
     ]
     for split_name in ["train", "dev_val", "lock_val"]:

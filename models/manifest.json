@@ -45,8 +45,8 @@
     }
   ],
   "notes": [
-    "All reported metrics are mAP50.",
-    "The p01 specialist is distributed for reproducibility but did not reach the 0.60 acceptance threshold.",
-    "Competition datasets and labels are not included."
+    "所有报告指标均为 mAP50。",
+    "为便于复现，仓库保留 p01 专用模型，但该模型未达到 0.60 验收阈值。",
+    "仓库不包含竞赛数据集和标签。"
   ]
 }

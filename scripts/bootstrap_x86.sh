@@ -13,4 +13,4 @@ python -m pip install -e ".[workbench,inference,dev]"
 python -m fair_agent.cli doctor
 python scripts/smoke_models.py
 
-printf '\nAgileAgent is ready. Start the UI with:\n  .venv/bin/python -m fair_agent.cli refresh\n  .venv/bin/python -m fair_agent.cli serve\n'
+printf '\nAgileAgent 已准备就绪。使用以下命令启动界面：\n  .venv/bin/python -m fair_agent.cli refresh\n  .venv/bin/python -m fair_agent.cli serve\n'
