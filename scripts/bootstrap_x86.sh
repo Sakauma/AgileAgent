@@ -17,8 +17,5 @@ fi
 python -m pip install -e ".[workbench,inference,dev]"
 python -m fair_agent.cli doctor
 python scripts/smoke_models.py
-python -m fair_agent.cli refresh
-python -m fair_agent.cli decide
 
-printf '\nAgileAgent 已准备就绪，正在启动工作台。按 Ctrl+C 可停止服务。\n'
-exec python -m fair_agent.cli serve
+printf '\n环境配置完成。日常启动请运行：./scripts/start_agent.sh\n'

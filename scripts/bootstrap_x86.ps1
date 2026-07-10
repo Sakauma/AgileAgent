@@ -34,9 +34,5 @@ if ($LoadOnly) {
 } else {
     Invoke-Checked -Executable $VenvPython -CommandArgs @("scripts/smoke_models.py")
 }
-Invoke-Checked -Executable $VenvPython -CommandArgs @("-m", "fair_agent.cli", "refresh")
-Invoke-Checked -Executable $VenvPython -CommandArgs @("-m", "fair_agent.cli", "decide")
-
 Write-Host ""
-Write-Host "AgileAgent 已准备就绪，正在启动工作台。按 Ctrl+C 可停止服务。"
-Invoke-Checked -Executable $VenvPython -CommandArgs @("-m", "fair_agent.cli", "serve")
+Write-Host "环境配置完成。日常启动请运行：powershell -ExecutionPolicy Bypass -File scripts/start_agent.ps1"

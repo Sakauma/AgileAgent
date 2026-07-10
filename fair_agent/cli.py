@@ -201,7 +201,15 @@ def execute_low_risk_action(config: Dict[str, Any], action: Dict[str, Any], log_
 
 def cmd_serve(args: argparse.Namespace) -> int:
     app_path = ROOT / "fair_agent" / "ui" / "app.py"
-    command = [sys.executable, "-m", "streamlit", "run", str(app_path)]
+    command = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.headless=true",
+        "--browser.gatherUsageStats=false",
+    ]
     try:
         return subprocess.call(command, cwd=str(ROOT))
     except FileNotFoundError:
