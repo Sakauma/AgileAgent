@@ -13,31 +13,41 @@ if ! command -v nvidia-smi >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ -z "${PYTHON_BIN:-}" ]]; then
-  for candidate in python3.12 python3.11 python3.10; do
-    if command -v "${candidate}" >/dev/null 2>&1; then
-      PYTHON_BIN="${candidate}"
-      break
-    fi
-  done
-fi
-if [[ -z "${PYTHON_BIN:-}" ]] || ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  printf '未找到 Python 3.10-3.12。请先安装兼容版本，或通过 PYTHON_BIN 指定。\n' >&2
-  exit 1
-fi
-if ! "${PYTHON_BIN}" -c 'import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)'; then
-  printf 'PYTHON_BIN 必须指向 Python 3.10-3.12：%s\n' "${PYTHON_BIN}" >&2
-  exit 1
-fi
+python_supported() {
+  "$1" -c 'import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)' >/dev/null 2>&1
+}
 
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 TORCH_VERSION="${TORCH_VERSION:-2.11.0+cu128}"
 TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.26.0+cu128}"
-if [[ ! -x .venv/bin/python ]]; then
+if [[ -x .venv/bin/python ]]; then
+  if ! python_supported .venv/bin/python || ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+    printf '现有 .venv 不完整或 Python 版本不受支持。请移走该目录后重新运行配置脚本。\n' >&2
+    exit 1
+  fi
+elif [[ -n "${PYTHON_BIN:-}" ]]; then
+  if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1 || ! python_supported "${PYTHON_BIN}"; then
+    printf 'PYTHON_BIN 必须指向可用的 Python 3.10-3.12：%s\n' "${PYTHON_BIN}" >&2
+    exit 1
+  fi
   "${PYTHON_BIN}" -m venv .venv
-elif ! .venv/bin/python -c 'import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)'; then
-  printf '现有 .venv 的 Python 版本不受支持。请移走该目录后重新运行配置脚本。\n' >&2
-  exit 1
+elif command -v uv >/dev/null 2>&1; then
+  uv venv --python 3.12 --seed .venv
+else
+  for candidate in python3.12 python3.11 python3.10; do
+    if command -v "${candidate}" >/dev/null 2>&1 && python_supported "${candidate}"; then
+      PYTHON_BIN="${candidate}"
+      break
+    fi
+  done
+  if [[ -z "${PYTHON_BIN:-}" ]]; then
+    printf '未找到 Python 3.10-3.12。请先安装兼容版本，或通过 PYTHON_BIN 指定。\n' >&2
+    exit 1
+  fi
+  if ! "${PYTHON_BIN}" -m venv .venv; then
+    printf '无法创建虚拟环境。请为 %s 安装 venv/ensurepip，或安装 uv 后重试。\n' "${PYTHON_BIN}" >&2
+    exit 1
+  fi
 fi
 source .venv/bin/activate
 python -m pip install --upgrade pip

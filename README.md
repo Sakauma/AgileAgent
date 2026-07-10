@@ -4,7 +4,7 @@
 
 ## 首次配置环境
 
-要求：x86-64 电脑、NVIDIA GPU、可用的显卡驱动、Python 3.10-3.12、Git，以及约 5 GB 可用空间。仓库为私有仓库，克隆前需获得 GitHub 访问权限。配置脚本会自动优先选择 `python3.12`、`python3.11` 或 `python3.10`，不会误用 WSL 中常见的 Python 3.8；也可通过 `PYTHON_BIN` 显式指定。
+要求：x86-64 电脑、NVIDIA GPU、可用的显卡驱动、Python 3.10-3.12、Git，以及约 5 GB 可用空间。仓库为私有仓库，克隆前需获得 GitHub 访问权限。配置脚本优先使用已安装的 `uv` 创建 Python 3.12 环境；否则按 `python3.12`、`python3.11`、`python3.10` 顺序选择，不会误用 WSL 中常见的 Python 3.8。也可通过 `PYTHON_BIN` 显式指定。
 
 ### WSL / Linux
 
