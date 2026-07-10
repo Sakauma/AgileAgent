@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Private competition data and derived artifacts
+/datasets*/
+/20260701*/
+/分析结果/
+/incremental_protocols/
+/incremental_protocols_no_old/
+/splits/
+/runs/
+/reports/
+/final_submission_assets/
+/external_repos/
+*.pt
+*.pth
+*.onnx
+*.om
+*.engine
+*.zip
+*.pdf
+
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+*.pass
+.ssh/
+
+# Keep the public repository focused on maintained entry points.
+/tools/*
+!/tools/00_check_dataset.py
+!/tools/01_build_metadata.py
+!/tools/02_split_dataset.py
+!/tools/23_build_no_old_distill_dataset.py
+!/tools/24_run_no_old_distill.py
+!/tools/25_aggregate_no_old_distill.py
+!/tools/27_build_new_class_specialist_dataset.py
+!/tools/42_predict_submission.py
+!/tools/52_build_sar_soldier_case_bank.py
+
+/configs/*
+!/configs/agent_pipeline.yaml
+!/configs/base_dataset.yaml
+!/configs/incremental_no_old_distill_yolo11s.yaml
+!/configs/submission_infer_yolo11s_imgsz640.yaml
+
+# Local competition notes are not part of the public source release.
+/*.md
+!/README.md
+/docs/
+!/docs/
+!/docs/*.md

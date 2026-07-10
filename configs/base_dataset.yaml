@@ -1,0 +1,9 @@
+path: .
+train: splits/train.txt
+val: splits/dev_val.txt
+test: splits/lock_val.txt
+names:
+  0: soldier
+  1: small_aircraft
+  2: warship
+  3: tank

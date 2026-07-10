@@ -1,0 +1,94 @@
+seed: 20260705
+output_root: incremental_protocols_no_old
+specialist_output_root: incremental_protocols_no_old_specialist
+project: runs/detect/incremental_no_old_distill
+report_dir: reports/incremental_no_old_distill
+
+env:
+  NCCL_P2P_DISABLE: "1"
+  NCCL_IB_DISABLE: "1"
+
+teacher_prediction:
+  imgsz: 640
+  conf: 0.10
+  iou: 0.70
+  max_det: 100
+  batch: 32
+  workers: 8
+  max_pseudo_per_image: 5
+
+common:
+  imgsz: 640
+  batch: 32
+  workers: 8
+  optimizer: AdamW
+  patience: 30
+  cache: false
+  plots: true
+  amp: true
+  weight_decay: 0.0005
+
+adaptation:
+  mode: frozen_base_plus_new_specialist
+  max_frozen_parameter_drift: 0.000001
+
+incremental_train:
+  epochs: 80
+  lr0: 0.001
+  lrf: 0.01
+  cos_lr: true
+  close_mosaic: 10
+  mosaic: 1.0
+  mixup: 0.0
+  copy_paste: 0.0
+
+eval:
+  split: test
+  imgsz: 640
+  batch: 32
+  workers: 8
+  conf: 0.001
+  iou: 0.70
+  max_det: 300
+  plots: false
+
+protocols:
+  - name: p01_new_small_aircraft
+    base_classes: [soldier, tank, warship]
+    new_classes: [small_aircraft]
+    teacher_weight: runs/detect/runs/detect/incremental_yolo11s/p01_new_small_aircraft_base-8/weights/best.pt
+    new_train_split: incremental_protocols/p01_new_small_aircraft/splits/new_train.txt
+    new_val_split: incremental_protocols/p01_new_small_aircraft/splits/new_val.txt
+    full_test_split: incremental_protocols/p01_new_small_aircraft/splits/full_test.txt
+    new_only_data: incremental_protocols/p01_new_small_aircraft/new_dataset.yaml
+    base_eval_data: incremental_protocols/p01_new_small_aircraft/new_dataset.yaml
+
+  - name: p02_new_warship
+    base_classes: [soldier, small_aircraft, tank]
+    new_classes: [warship]
+    teacher_weight: runs/detect/runs/detect/incremental_yolo11s/p02_new_warship_base/weights/best.pt
+    new_train_split: incremental_protocols/p02_new_warship/splits/new_train.txt
+    new_val_split: incremental_protocols/p02_new_warship/splits/new_val.txt
+    full_test_split: incremental_protocols/p02_new_warship/splits/full_test.txt
+    new_only_data: incremental_protocols/p02_new_warship/new_dataset.yaml
+    base_eval_data: incremental_protocols/p02_new_warship/new_dataset.yaml
+
+  - name: p03_new_tank
+    base_classes: [soldier, small_aircraft, warship]
+    new_classes: [tank]
+    teacher_weight: runs/detect/runs/detect/incremental_yolo11s_p03_p04/p03_new_tank_base/weights/best.pt
+    new_train_split: incremental_protocols/p03_new_tank/splits/new_train.txt
+    new_val_split: incremental_protocols/p03_new_tank/splits/new_val.txt
+    full_test_split: incremental_protocols/p03_new_tank/splits/full_test.txt
+    new_only_data: incremental_protocols/p03_new_tank/new_dataset.yaml
+    base_eval_data: incremental_protocols/p03_new_tank/new_dataset.yaml
+
+  - name: p04_new_soldier
+    base_classes: [small_aircraft, warship, tank]
+    new_classes: [soldier]
+    teacher_weight: runs/detect/runs/detect/incremental_yolo11s_p03_p04/p04_new_soldier_base/weights/best.pt
+    new_train_split: incremental_protocols/p04_new_soldier/splits/new_train.txt
+    new_val_split: incremental_protocols/p04_new_soldier/splits/new_val.txt
+    full_test_split: incremental_protocols/p04_new_soldier/splits/full_test.txt
+    new_only_data: incremental_protocols/p04_new_soldier/new_dataset.yaml
+    base_eval_data: incremental_protocols/p04_new_soldier/new_dataset.yaml

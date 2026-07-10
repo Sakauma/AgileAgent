@@ -1,0 +1,149 @@
+seed: 20260705
+
+runtime:
+  mode: local
+  local_python: null
+
+model:
+  weights: final_submission_assets/best.pt
+  expected_sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
+
+automation:
+  audit_before_execute: true
+  run_root: reports/agent_runs
+  forbid_overwrite_fixed_reports: true
+  allowed_risk_levels: [low]
+  allowed_actions: [refresh_blackboard, diagnose_sar_soldier, review_incremental_learning]
+  default_timeout_seconds: 300
+  allowed_output_roots: [reports/agent_runs, reports/agent_blackboard, runs/submission]
+
+submission:
+  official_test_ready: false
+  official_format_confirmed: false
+  official_format: null
+  official_test_dir: datasets_r1_base_test
+
+blackboard:
+  output_dir: reports/agent_blackboard
+  state_json: blackboard_state.json
+  report_md: agent_preparation_report.md
+
+detector:
+  name: yolo11s_imgsz640
+  weights: final_submission_assets/best.pt
+  config: configs/submission_infer_yolo11s_imgsz640.yaml
+  candidate_status: stability_rechecked
+  metric: mAP50
+  lock_all_map50: 0.91202
+  lock_sar_map50: 0.88158
+  lock_sar_soldier_map50: 0.72962
+
+inputs:
+  data_audit: reports/data_audit_summary.json
+  metadata: reports/metadata.csv
+  final_candidate_card: reports/final_candidate_card.md
+  sar_soldier_summary: reports/sar_soldier_error_v2_summary.md
+  sar_soldier_case_bank: reports/agent_blackboard/sar_soldier_case_bank.csv
+  agent_sar_soldier_casebank_split: splits/agent_sar_soldier_casebank_train.txt
+  agent_sar_soldier_casebank_config: configs/agent_sar_soldier_casebank_yolo11s.yaml
+  agent_sar_soldier_casebank_summary: reports/agent_sar_soldier_casebank_summary.md
+  incremental_replay_report: reports/incremental_learning/replay_incremental_report.md
+  incremental_p01_p04_summary: reports/incremental_learning_p01_p04_summary.md
+  incremental_metrics:
+    - reports/incremental_learning/replay_incremental_report.csv
+    - reports/incremental_learning_p03_p04/yolo11s_incremental_summary.csv
+  incremental_compliant_metrics: reports/incremental_no_old_distill/summary.csv
+  specialist_metrics: reports/agent_sar_soldier_casebank/sar_soldier_replay_metrics.csv
+  submission_smoke_manifest: runs/submission/smoke_yolo11s_imgsz640_lock_sar_20260710/manifest.json
+  submission_dryrun_manifest: runs/submission/dryrun_yolo11s_imgsz640_lock_val_20260710/manifest.json
+
+modules:
+  - name: data_gate
+    status: ready
+    owner: data
+    inputs: [reports/data_audit_summary.json, reports/metadata.csv]
+    outputs: [reports/data_audit_report.md, reports/metadata.csv]
+  - name: detector
+    status: frozen_candidate
+    owner: model
+    inputs: [configs/submission_infer_yolo11s_imgsz640.yaml]
+    outputs: [runs/submission/dryrun_yolo11s_imgsz640_lock_val_20260710]
+  - name: error_analyzer
+    status: ready
+    owner: model
+    inputs: [reports/sar_soldier_error_v2_summary.md]
+    outputs: [reports/error_analysis_sar_soldier_v2]
+  - name: incremental_manager
+    status: ready_for_protocol_extension
+    owner: incremental
+    inputs: [configs/incremental_yolo11s.yaml, incremental_protocols]
+    outputs: [reports/incremental_learning]
+  - name: report_writer
+    status: ready
+    owner: documentation
+    inputs: [reports]
+    outputs: [reports/agent_blackboard]
+
+policies:
+  primary_model: use_unified_yolo11s_imgsz640
+  submission_format: pending_official_confirmation
+  sar_soldier_focus: tiny_object_localization_and_confidence
+  incremental_learning: replay_first_then_distillation_if_krr_drops
+  end_device: paused_until_ascend_board_ready
+
+thresholds:
+  min_new_class_map50: 0.60
+  min_krr: 0.95
+  preferred_export_conf: null
+  fallback_export_conf: 0.01
+  weak_class_map50: 0.80
+
+incremental:
+  expected_protocols: [p01_new_small_aircraft, p02_new_warship, p03_new_tank, p04_new_soldier]
+  require_compliant_no_old_data: true
+
+specialist_acceptance:
+  min_lock_all_delta: 0.0
+  min_lock_ir_soldier_delta: -0.01
+  min_lock_sar_soldier_delta: 0.01
+
+decision:
+  default_context:
+    sensor: sar
+    scene: all
+    class_focus: soldier
+    official_test_ready: false
+    official_format_confirmed: false
+  outputs:
+    decision_json: reports/agent_blackboard/agent_decision.json
+    decision_md: reports/agent_blackboard/agent_decision_report.md
+  actions:
+    formal_submission:
+      module: detector
+      argv: ["{python}", tools/42_predict_submission.py, --config, configs/submission_infer_yolo11s_imgsz640.yaml]
+      risk_level: high
+      timeout_seconds: 0
+      inputs: [final_submission_assets/best.pt, configs/submission_infer_yolo11s_imgsz640.yaml]
+      outputs: [runs/submission]
+    diagnose_sar_soldier:
+      module: error_analyzer
+      argv: ["{python}", tools/52_build_sar_soldier_case_bank.py]
+      risk_level: low
+      timeout_seconds: 300
+      inputs: [reports/error_analysis_sar_soldier_v2/image_error_cases.csv]
+      outputs: [reports/agent_blackboard/sar_soldier_case_bank.csv]
+    review_incremental_learning:
+      module: incremental_manager
+      handler: review_incremental_learning
+      risk_level: low
+      timeout_seconds: 60
+      inputs:
+        - reports/incremental_no_old_distill/summary.csv
+      outputs: [reports/incremental_no_old_distill/summary.md]
+    refresh_blackboard:
+      module: report_writer
+      handler: refresh_blackboard
+      risk_level: low
+      timeout_seconds: 60
+      inputs: [configs/agent_pipeline.yaml]
+      outputs: [reports/agent_blackboard/blackboard_state.json]
