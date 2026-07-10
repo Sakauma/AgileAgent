@@ -10,10 +10,18 @@ from .hashes import hash_if_exists
 
 
 def make_run_dir(prefix: str = "run", run_root: str = "reports/agent_runs") -> Path:
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = resolve_path(run_root) / f"{prefix}_{run_id}"
-    path.mkdir(parents=True, exist_ok=False)
-    return path
+    root = resolve_path(run_root)
+    root.mkdir(parents=True, exist_ok=True)
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    for suffix in range(100):
+        extra = "" if suffix == 0 else f"_{suffix:02d}"
+        path = root / f"{prefix}_{run_id}{extra}"
+        try:
+            path.mkdir(exist_ok=False)
+            return path
+        except FileExistsError:
+            continue
+    raise RuntimeError("无法创建唯一的智能体运行目录")
 
 
 def write_pipeline_artifacts(run_dir: Path, plan: Dict[str, Any], state: Dict[str, Any], decision: Dict[str, Any], action_results: list[Dict[str, Any]] | None = None) -> Dict[str, Path]:
@@ -55,6 +63,7 @@ def render_run_report(plan: Dict[str, Any], state: Dict[str, Any], decision: Dic
         f"- 推荐动作：`{rec.get('action')}`",
         f"- 动作状态：`{rec.get('status')}`",
         f"- 风险等级：`{rec.get('risk_level')}`",
+        f"- 终止原因：`{plan.get('termination')}`",
         "",
         "## 阻塞项",
         "",

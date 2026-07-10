@@ -23,6 +23,7 @@ def _action(config: Dict[str, Any], name: str, status: str, freshness: str, reas
         "command": " ".join(argv) if argv else action_cfg.get("handler", ""),
         "handler": action_cfg.get("handler"),
         "required_artifacts": list(action_cfg.get("inputs", [])),
+        "outputs": list(action_cfg.get("outputs", [])),
         "risk_level": risk_level,
         "can_execute": status == "ready" and name in allowed_actions and risk_level in allowed_risks,
         "warnings": warnings or [],

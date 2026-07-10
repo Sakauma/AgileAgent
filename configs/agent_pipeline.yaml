@@ -4,6 +4,8 @@ runtime:
   mode: local
   local_python: null
   default_device: "0"
+  server_host: 127.0.0.1
+  server_port: 8501
 
 model:
   weights: models/base/yolo11s_ir_sar_imgsz640.pt
@@ -19,6 +21,7 @@ assets:
     - models/incremental/p03_new_tank_best.pt
     - models/incremental/p04_new_soldier_best.pt
     - models/manifest.json
+    - demo_artifacts/agent_demo_state.json
 
 automation:
   audit_before_execute: true
@@ -26,8 +29,9 @@ automation:
   forbid_overwrite_fixed_reports: true
   allowed_risk_levels: [low]
   allowed_actions: [refresh_blackboard, diagnose_sar_soldier, review_incremental_learning]
+  max_steps_per_run: 8
   default_timeout_seconds: 300
-  allowed_output_roots: [reports/agent_runs, reports/agent_blackboard, runs/submission]
+  allowed_output_roots: [reports/agent_runs, reports/agent_blackboard, reports/incremental_no_old_distill, runs/submission]
 
 submission:
   official_test_ready: false
@@ -39,12 +43,13 @@ blackboard:
   output_dir: reports/agent_blackboard
   state_json: blackboard_state.json
   report_md: agent_preparation_report.md
+  demo_evidence: demo_artifacts/agent_demo_state.json
 
 detector:
   name: yolo11s_imgsz640
   weights: models/base/yolo11s_ir_sar_imgsz640.pt
   config: configs/submission_infer_yolo11s_imgsz640.yaml
-  candidate_status: stability_rechecked
+  candidate_status: gpu_smoke_verified
   metric: mAP50
   lock_all_map50: 0.91202
   lock_sar_map50: 0.88158

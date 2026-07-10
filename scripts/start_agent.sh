@@ -14,5 +14,5 @@ fi
 "${AGENT_PYTHON}" -m fair_agent.cli refresh
 "${AGENT_PYTHON}" -m fair_agent.cli decide
 
-printf '\n正在启动 AgileAgent 工作台：http://localhost:8501\n按 Ctrl+C 可停止服务。\n'
+printf '\n正在启动 AgileAgent 工作台：http://127.0.0.1:8501\n按 Ctrl+C 可停止服务。\n'
 exec "${AGENT_PYTHON}" -m fair_agent.cli serve

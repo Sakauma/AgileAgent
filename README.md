@@ -17,14 +17,28 @@ chmod +x scripts/bootstrap_x86.sh
 
 首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch 和智能体依赖、运行环境诊断，并在 GPU 0 上校验五个模型。配置完成后脚本退出，不启动工作台。
 
-默认使用 PyTorch 的 `cu128` 软件源。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
+默认使用 PyTorch `2.11.0+cu128` 和 `constraints-agent.txt` 中锁定的依赖组合。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`、`TORCH_VERSION` 和 `TORCHVISION_VERSION`。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
 
 已有合适的 CUDA 版 PyTorch 环境时，也可手动安装：
 
 ```bash
-python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-python -m pip install -e ".[workbench,inference,dev]"
+python -m pip install "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -c constraints-agent.txt -e ".[workbench,inference,dev]"
 python -m fair_agent.cli doctor
+```
+
+## 发布验收
+
+无需 GPU 的静态验收会验证配置、全部模型哈希、推理参数、脱敏证据和启动脚本：
+
+```bash
+python scripts/verify_release.py
+```
+
+GPU 冒烟验收读取 `configs/local_infer_gpu.yaml`，逐个验证五个模型，并额外执行 `imgsz=640、batch=32` 的基础模型批量推理：
+
+```bash
+python scripts/smoke_models.py
 ```
 
 ## 日常一键启动
@@ -35,7 +49,9 @@ python -m fair_agent.cli doctor
 ./scripts/start_agent.sh
 ```
 
-启动脚本仅依次执行环境门禁、刷新黑板、生成默认决策和启动 Streamlit。浏览器访问 `http://localhost:8501`，在终端按 `Ctrl+C` 停止服务。
+启动脚本仅依次执行环境门禁、刷新黑板、生成默认决策和启动 Streamlit。工作台强制监听本机回环地址，浏览器访问 `http://127.0.0.1:8501`，在终端按 `Ctrl+C` 停止服务。
+
+当私有实验报告存在时，工作台使用 `live` 证据；全新克隆时自动使用 `demo_artifacts/` 中不含原始图像、标注和真实文件名的脱敏证据。首页会明确显示当前证据模式。
 
 ## 手动调试命令
 
@@ -48,7 +64,7 @@ python -m fair_agent.cli pipeline --mode dryrun
 python -m fair_agent.cli serve
 ```
 
-通常无需手动执行上述命令；它们用于单独调试某个阶段。`doctor` 在 GPU、模型、SHA256 或核心依赖异常时返回非零。全新克隆不包含私有数据分析报告，因此数据页可能为空，正式提交也会保持阻塞状态（`blocked`）；这不影响模型校验、策略框架和工作台启动。
+通常无需手动执行上述命令；它们用于单独调试某个阶段。`doctor` 在 GPU、模型、SHA256 或核心依赖异常时返回非零。全新克隆不包含私有数据分析报告，工作台会自动加载脱敏演示证据，因此六个页面仍可完整展示；正式提交保持阻塞状态（`blocked`），直到官方测试目录和格式得到确认。
 
 ## 本地 GPU 推理
 

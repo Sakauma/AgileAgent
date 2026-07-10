@@ -33,7 +33,7 @@ def test_active_inference_uses_verified_frozen_weight() -> None:
     assert all(state["frozen_assets"]["artifacts"].values())
     manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
     assert state["detector"]["imgsz"] == manifest["base_model"]["imgsz"]
-    assert state["detector"]["candidate_status"] == "stability_rechecked"
+    assert state["detector"]["candidate_status"] == "gpu_smoke_verified"
 
 
 @pytest.mark.skipif(not PRIVATE_REPORTS_AVAILABLE, reason="private competition reports are not distributed")

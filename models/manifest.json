@@ -7,7 +7,7 @@
     "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
     "imgsz": 640,
     "classes": ["soldier", "small_aircraft", "warship", "tank"],
-    "status": "stability_rechecked",
+    "status": "gpu_smoke_verified",
     "metric": "mAP50",
     "lock_all_map50": 0.91202,
     "lock_sar_map50": 0.88158,

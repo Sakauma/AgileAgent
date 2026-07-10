@@ -13,6 +13,7 @@ from fair_agent.core.audit import make_run_dir, write_pipeline_artifacts
 from fair_agent.core.blackboard import build_blackboard, write_blackboard
 from fair_agent.core.config import ROOT, configured_python, load_config, rel_path, resolve_path
 from fair_agent.executors.local import append_log, run_command
+from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.status import parse_incremental
 from fair_agent.policies.decision import build_decision, write_decision
 
@@ -60,8 +61,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     py = configured_python(config)
     external = check_external_python(py)
-    default_device = str(config.get("runtime", {}).get("default_device", "0"))
-    gpu_ready = bool(external.get("accelerator", {}).get("cuda_available"))
+    runtime_cfg = config.get("runtime", {})
+    default_device = str(runtime_cfg.get("default_device", "0"))
+    accelerator = external.get("accelerator", {})
+    gpu_ready = (
+        bool(accelerator.get("cuda_available"))
+        and int(default_device) < int(accelerator.get("cuda_device_count") or 0)
+    )
     state = build_blackboard(config)
     artifacts = state.get("frozen_assets", {}).get("artifacts", {})
     result = {
@@ -70,6 +76,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "default": default_device,
             "gpu_required": True,
             "ready": gpu_ready,
+        },
+        "server": {
+            "host": runtime_cfg.get("server_host"),
+            "port": runtime_cfg.get("server_port"),
         },
         "dependency_groups": {
             "required": REQUIRED_MODULES,
@@ -99,7 +109,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     inference_ok = bool(result["inference_weights"].get("matches_expected")) and bool(result["inference_weights"].get("same_frozen_path"))
     core_artifacts_ok = all(bool(value) for value in artifacts.values())
     checksums_ok = bool(result["frozen_checksums"].get("valid"))
-    return 1 if missing_required or not gpu_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or external.get("returncode") != 0 else 0
+    return 1 if missing_required or missing_workbench or missing_inference or not gpu_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or external.get("returncode") != 0 else 0
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
@@ -147,25 +157,52 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     decision = build_decision(config, state, context)
     automation = config.get("automation", {})
     run_dir = make_run_dir("dryrun" if args.mode == "dryrun" else "execute", automation.get("run_root", "reports/agent_runs"))
-    recommended = decision["recommended_action"]
     plan = {
         "mode": args.mode,
         "audit_before_execute": bool(config.get("automation", {}).get("audit_before_execute", True)),
         "context": context,
-        "steps": [{
-            "name": recommended["action"],
-            "execute": args.mode == "execute" and bool(recommended.get("can_execute")),
-            "reason": recommended["reason"],
-        }],
+        "steps": [],
+        "termination": None,
     }
     paths = write_pipeline_artifacts(run_dir, plan, state, decision)
     action_results: List[Dict[str, Any]] = []
-    if args.mode == "execute" and recommended.get("can_execute"):
-        result = execute_low_risk_action(config, recommended, paths["log"])
-        action_results.append(result)
-        state = build_blackboard(config)
-        decision = build_decision(config, state, context)
-        write_pipeline_artifacts(run_dir, plan, state, decision, action_results)
+    if args.mode == "dryrun":
+        recommended = decision["recommended_action"]
+        plan["steps"].append({
+            "name": recommended["action"],
+            "execute": False,
+            "reason": recommended["reason"],
+        })
+        plan["termination"] = "dryrun"
+    else:
+        max_steps = int(automation.get("max_steps_per_run", 8))
+        executed_names = set()
+        while len(action_results) < max_steps:
+            recommended = decision["recommended_action"]
+            name = str(recommended["action"])
+            if not recommended.get("can_execute"):
+                plan["termination"] = "no_executable_action"
+                break
+            if name in executed_names:
+                plan["termination"] = f"repeated_action:{name}"
+                break
+            plan["steps"].append({
+                "name": name,
+                "execute": True,
+                "reason": recommended["reason"],
+            })
+            write_pipeline_artifacts(run_dir, plan, state, decision, action_results)
+            result = execute_low_risk_action(config, recommended, paths["log"])
+            action_results.append(result)
+            executed_names.add(name)
+            if result.get("returncode") != 0:
+                plan["termination"] = f"action_failed:{name}"
+                break
+            state = build_blackboard(config)
+            decision = build_decision(config, state, context)
+        else:
+            plan["termination"] = "max_steps_reached"
+    write_pipeline_artifacts(run_dir, plan, state, decision, action_results)
     write_blackboard(config, state)
     write_decision(config, decision)
     print(rel_path(run_dir))
@@ -179,6 +216,10 @@ def execute_low_risk_action(config: Dict[str, Any], action: Dict[str, Any], log_
     name = str(action["action"])
     if not action.get("can_execute") or action.get("risk_level") != "low":
         return {"action": name, "returncode": 2, "status": "refused"}
+    path_error = validate_action_outputs(config, action)
+    if path_error:
+        append_log(log_path, {"event": "refused", "name": name, "reason": path_error, "time": datetime.now().isoformat(timespec="seconds")})
+        return {"action": name, "returncode": 2, "status": "refused", "reason": path_error}
     handler = action.get("handler")
     if handler == "refresh_blackboard":
         append_log(log_path, {"event": "start", "name": name, "time": datetime.now().isoformat(timespec="seconds")})
@@ -189,8 +230,11 @@ def execute_low_risk_action(config: Dict[str, Any], action: Dict[str, Any], log_
         append_log(log_path, {"event": "start", "name": name, "time": datetime.now().isoformat(timespec="seconds")})
         summary = parse_incremental(config)
         code = 0 if summary.get("complete") else 1
+        output = None
+        if code == 0:
+            output = write_incremental_review(config, summary)
         append_log(log_path, {"event": "finish", "name": name, "returncode": code, "summary": summary, "time": datetime.now().isoformat(timespec="seconds")})
-        return {"action": name, "returncode": code, "status": "completed" if code == 0 else "failed"}
+        return {"action": name, "returncode": code, "status": "completed" if code == 0 else "failed", "output": rel_path(output) if output else None}
     argv = [str(value) for value in action.get("argv", [])]
     if not argv:
         return {"action": name, "returncode": 2, "status": "missing_command"}
@@ -199,7 +243,25 @@ def execute_low_risk_action(config: Dict[str, Any], action: Dict[str, Any], log_
     return {"action": name, "returncode": code, "status": "completed" if code == 0 else "failed"}
 
 
+def validate_action_outputs(config: Dict[str, Any], action: Dict[str, Any]) -> Optional[str]:
+    roots = [resolve_path(path).resolve() for path in config.get("automation", {}).get("allowed_output_roots", [])]
+    if not roots:
+        return "allowed_output_roots_missing"
+    for value in action.get("outputs", []):
+        target = resolve_path(value).resolve()
+        if not any(target == root or root in target.parents for root in roots):
+            return f"output_outside_allowlist:{rel_path(target)}"
+    return None
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    runtime = config.get("runtime", {})
+    host = str(runtime.get("server_host", "127.0.0.1"))
+    port = int(runtime.get("server_port", 8501))
+    if not check_module("streamlit"):
+        print("缺少 Streamlit。请先运行 scripts/bootstrap_x86.sh 完成环境配置。")
+        return 1
     app_path = ROOT / "fair_agent" / "ui" / "app.py"
     command = [
         sys.executable,
@@ -207,47 +269,23 @@ def cmd_serve(args: argparse.Namespace) -> int:
         "streamlit",
         "run",
         str(app_path),
+        f"--server.address={host}",
+        f"--server.port={port}",
         "--server.headless=true",
         "--browser.gatherUsageStats=false",
     ]
     try:
         return subprocess.call(command, cwd=str(ROOT))
+    except KeyboardInterrupt:
+        print("\n工作台已停止。")
+        return 0
     except FileNotFoundError:
-        print("Streamlit is not installed. Run: pip install -r requirements-agent.txt")
+        print("未找到 Streamlit。请先运行 scripts/bootstrap_x86.sh 完成环境配置。")
         return 1
-
-
-def cmd_model_recheck(args: argparse.Namespace) -> int:
-    try:
-        from fair_agent.modules.model_recheck import run_model_recheck
-        reuse = resolve_path(args.reuse_predictions) if args.reuse_predictions else None
-        output = run_model_recheck(resolve_path(args.recheck_config), reuse)
-    except ImportError as exc:
-        print(f"Model recheck requires the remote inference environment: {exc}")
-        return 1
-    print(rel_path(output))
-    return 0
-
-
-def cmd_freeze_candidate(args: argparse.Namespace) -> int:
-    import yaml
-    from fair_agent.modules.model_recheck import freeze_candidate
-
-    recheck_config = resolve_path(args.recheck_config)
-    config = yaml.safe_load(recheck_config.read_text(encoding="utf-8"))
-    report_dir = resolve_path(args.report)
-    metrics = json.loads((report_dir / "stability_metrics.json").read_text(encoding="utf-8"))
-    selected = int(metrics.get("selected_imgsz") or 0)
-    if metrics.get("status") != "passed" or selected != int(args.imgsz):
-        print("Refusing freeze: report is not passed or selected_imgsz does not match --imgsz")
-        return 1
-    freeze_candidate(config, selected, report_dir)
-    print(f"frozen_imgsz={selected}")
-    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="IR/SAR fast-learning agent workbench")
+    parser = argparse.ArgumentParser(description="IR/SAR 快速学习智能体工作台")
     parser.add_argument("--config", default="configs/agent_pipeline.yaml")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -259,7 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
     decide.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
     decide.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"])
     decide.add_argument("--refresh", action="store_true")
-    decide.add_argument("--cached", action="store_true", help="Reuse persisted blackboard state instead of rebuilding it.")
+    decide.add_argument("--cached", action="store_true", help="复用已保存的黑板状态，不重新采集证据。")
     decide.set_defaults(func=cmd_decide)
 
     pipeline = sub.add_parser("pipeline")
@@ -268,17 +306,6 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"], default="all")
     pipeline.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"], default="soldier")
     pipeline.set_defaults(func=cmd_pipeline)
-
-    recheck = sub.add_parser("model-recheck")
-    recheck.add_argument("--config", dest="recheck_config", default="configs/inference_size_stability.yaml")
-    recheck.add_argument("--reuse-predictions", help="Reuse predictions_640.json and predictions_768.json from a prior failed validation run.")
-    recheck.set_defaults(func=cmd_model_recheck)
-
-    freeze = sub.add_parser("freeze-candidate")
-    freeze.add_argument("--config", dest="recheck_config", default="configs/inference_size_stability.yaml")
-    freeze.add_argument("--report", required=True)
-    freeze.add_argument("--imgsz", type=int, choices=[640, 768], required=True)
-    freeze.set_defaults(func=cmd_freeze_candidate)
 
     sub.add_parser("serve").set_defaults(func=cmd_serve)
     return parser

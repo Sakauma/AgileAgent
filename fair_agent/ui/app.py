@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import csv
 import json
+import subprocess
+import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import streamlit as st
 
@@ -18,23 +19,23 @@ def load_json(path: str) -> Dict[str, Any]:
     return json.loads(target.read_text(encoding="utf-8"))
 
 
-def load_csv(path: str, limit: Optional[int] = None) -> List[Dict[str, str]]:
-    target = ROOT / path
-    if not target.exists():
-        return []
-    with target.open("r", encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f))
-    return rows[:limit] if limit else rows
-
-
-def markdown_file(path: str) -> str:
-    target = ROOT / path
-    return target.read_text(encoding="utf-8") if target.exists() else f"未找到 `{path}`。"
-
-
 def metric_row(cols, items):
     for col, (label, value) in zip(cols, items):
         col.metric(label, value if value is not None else "暂无")
+
+
+def run_cli(arguments: list[str], timeout: int = 600) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, "-m", "fair_agent.cli", *arguments]
+    return subprocess.run(command, cwd=str(ROOT), text=True, capture_output=True, timeout=timeout)
+
+
+def remember_result(label: str, result: subprocess.CompletedProcess[str]) -> None:
+    st.session_state["last_command"] = {
+        "label": label,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
 
 
 st.set_page_config(page_title="IR/SAR 快速学习智能体工作台", layout="wide")
@@ -52,6 +53,8 @@ tabs = st.tabs(["首页", "数据", "错误分析", "策略", "增量学习", "�
 with tabs[0]:
     st.subheader("智能体状态")
     st.caption(f"黑板生成时间：{state.get('generated_at')} · 架构版本 {state.get('schema_version', 1)}")
+    evidence = state.get("evidence", {})
+    st.caption(f"证据模式：{evidence.get('mode', 'unknown')} · demo 表示脱敏快照，live 表示本机真实实验产物")
     detector = state.get("detector", {})
     weights = state.get("frozen_assets", {}).get("weights", {})
     cols = st.columns(4)
@@ -68,8 +71,15 @@ with tabs[0]:
     st.write("当前阻塞项：", blockers)
     st.write("最终权重：", weights.get("path"))
     st.write("候选状态：", detector.get("candidate_status"))
-    if detector.get("combined_all_map50") is not None:
-        st.write("稳定性复核：", {"imgsz": detector.get("imgsz"), "combined_mAP50": detector.get("combined_all_map50"), "bootstrap_delta_ci95": detector.get("bootstrap_delta_ci95")})
+    st.write("证据来源：", evidence.get("sources", {}))
+    if detector.get("imgsz") is not None:
+        st.write("冻结模型配置：", {"imgsz": detector.get("imgsz"), "状态": detector.get("candidate_status")})
+    if st.button("刷新黑板与默认决策", width="content"):
+        refresh_result = run_cli(["refresh"])
+        if refresh_result.returncode == 0:
+            refresh_result = run_cli(["decide"])
+        remember_result("刷新黑板与默认决策", refresh_result)
+        st.rerun()
 
 with tabs[1]:
     st.subheader("数据集黑板")
@@ -80,9 +90,11 @@ with tabs[1]:
     st.json(dataset.get("sensor", {}))
     st.write("场景分布")
     st.json(dataset.get("scene", {}))
-    metadata = load_csv("reports/metadata.csv", limit=100)
-    if metadata:
-        st.dataframe(metadata, use_container_width=True)
+    distribution_rows = []
+    for dimension, values in [("传感器", dataset.get("sensor", {})), ("场景", dataset.get("scene", {})), ("包含类别", dataset.get("class_presence_images", {}))]:
+        distribution_rows.extend({"维度": dimension, "名称": key, "数量": value} for key, value in values.items())
+    if distribution_rows:
+        st.dataframe(distribution_rows, width="stretch", hide_index=True)
 
 with tabs[2]:
     st.subheader("SAR Soldier 案例库")
@@ -98,12 +110,31 @@ with tabs[2]:
         ],
     )
     st.info(sar.get("reason"))
-    rows = load_csv("reports/agent_blackboard/sar_soldier_case_bank.csv", limit=50)
+    rows = case_bank.get("top_cases", [])
     if rows:
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
 
 with tabs[3]:
     st.subheader("策略选择")
+    controls = st.columns(3)
+    sensor = controls[0].selectbox("传感器", ["sar", "ir"], index=0)
+    scene = controls[1].selectbox("场景", ["all", "air", "forest", "sea", "urban"], index=0)
+    class_focus = controls[2].selectbox("关注类别", ["soldier", "small_aircraft", "warship", "tank"], index=0)
+    command_args = ["--sensor", sensor, "--scene", scene, "--class-focus", class_focus]
+    action_cols = st.columns(3)
+    if action_cols[0].button("生成决策", width="stretch"):
+        result = run_cli(["decide", *command_args])
+        remember_result("生成决策", result)
+        st.rerun()
+    if action_cols[1].button("生成试运行计划", width="stretch"):
+        result = run_cli(["pipeline", "--mode", "dryrun", *command_args])
+        remember_result("生成试运行计划", result)
+        st.rerun()
+    execute_confirmed = st.checkbox("我确认只执行允许列表中的低风险动作")
+    if action_cols[2].button("执行低风险动作", disabled=not execute_confirmed, width="stretch"):
+        result = run_cli(["pipeline", "--mode", "execute", *command_args])
+        remember_result("执行低风险动作", result)
+        st.rerun()
     if not decision:
         st.warning("未找到策略报告。请运行 `python -m fair_agent.cli decide --sensor sar --class-focus soldier`。")
     else:
@@ -115,13 +146,28 @@ with tabs[3]:
         st.write("新鲜度：", rec.get("freshness"))
         st.write("允许自动执行：", rec.get("can_execute"))
         st.code(rec.get("command", ""), language="bash")
-        st.dataframe(decision.get("candidates", []), use_container_width=True)
+        st.dataframe(decision.get("candidates", []), width="stretch")
+    last_command = st.session_state.get("last_command")
+    if last_command:
+        if last_command["returncode"] == 0:
+            st.success(f"{last_command['label']} 已完成")
+        else:
+            st.error(f"{last_command['label']} 失败，返回码 {last_command['returncode']}")
+        output = (last_command.get("stdout") or "") + (last_command.get("stderr") or "")
+        if output.strip():
+            st.code(output.strip(), language="text")
 
 with tabs[4]:
     st.subheader("3+1 增量学习")
-    compliant = "reports/incremental_no_old_distill/summary.md"
-    legacy = "reports/incremental_learning_p01_p04_summary.md"
-    st.markdown(markdown_file(compliant) if (ROOT / compliant).exists() else markdown_file(legacy))
+    incremental = state.get("incremental_learning", {})
+    cols = st.columns(3)
+    metric_row(cols, [("协议完整", incremental.get("complete")), ("合规证据", incremental.get("compliance_verified")), ("总体验收", incremental.get("passed"))])
+    st.write("验收阈值：", incremental.get("acceptance", {}))
+    protocols = incremental.get("protocols", [])
+    if protocols:
+        st.dataframe(protocols, width="stretch", hide_index=True)
+    if incremental.get("warnings"):
+        st.warning(incremental.get("warnings"))
 
 with tabs[5]:
     st.subheader("提交准备")
@@ -136,6 +182,16 @@ with tabs[5]:
         ],
     )
     st.write("官方测试目录：", submission.get("official_test_dir"))
-    st.markdown(markdown_file("reports/submission_dryrun_lock_val_report.md"))
-    st.markdown("### 正式提交模板")
-    st.markdown(markdown_file("reports/final_submission_report_template.md"))
+    st.markdown("### 已验证运行")
+    run_rows = []
+    for name in ["smoke", "dryrun"]:
+        item = submission.get(name, {})
+        run_rows.append({
+            "类型": name,
+            "图像数": item.get("image_count"),
+            "预测数": item.get("prediction_count"),
+            "模型 SHA256": item.get("model_sha256"),
+            "有效": submission.get(f"{name}_valid"),
+        })
+    st.dataframe(run_rows, width="stretch", hide_index=True)
+    st.info("正式提交仍受官方测试目录和提交格式门禁控制，工作台不会自动提交。")

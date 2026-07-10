@@ -36,9 +36,19 @@ def load_config(path: Union[str, Path] = DEFAULT_CONFIG) -> Dict[str, Any]:
 
 def validate_config(config: Dict[str, Any]) -> None:
     errors: List[str] = []
-    default_device = str(config.get("runtime", {}).get("default_device", ""))
+    runtime = config.get("runtime", {})
+    default_device = str(runtime.get("default_device", ""))
     if not default_device.isdigit() or int(default_device) < 0:
         errors.append("runtime.default_device 必须是非负 GPU 编号")
+    server_host = str(runtime.get("server_host", ""))
+    if server_host not in {"127.0.0.1", "localhost", "::1"}:
+        errors.append("runtime.server_host 必须是本机回环地址")
+    try:
+        server_port = int(runtime.get("server_port"))
+    except (TypeError, ValueError):
+        server_port = 0
+    if not 1 <= server_port <= 65535:
+        errors.append("runtime.server_port 必须在 1-65535 之间")
     model = config.get("model", {})
     if not model.get("weights"):
         errors.append("model.weights is required")
@@ -52,6 +62,15 @@ def validate_config(config: Dict[str, Any]) -> None:
         errors.append("assets.checksums is required")
     if not isinstance(assets.get("required"), list) or not assets.get("required"):
         errors.append("assets.required must be a non-empty list")
+    automation = config.get("automation", {})
+    if not isinstance(automation.get("allowed_output_roots"), list) or not automation.get("allowed_output_roots"):
+        errors.append("automation.allowed_output_roots must be a non-empty list")
+    try:
+        max_steps = int(automation.get("max_steps_per_run"))
+    except (TypeError, ValueError):
+        max_steps = 0
+    if not 1 <= max_steps <= 100:
+        errors.append("automation.max_steps_per_run must be in 1-100")
     actions = config.get("decision", {}).get("actions", {})
     if not isinstance(actions, dict) or not actions:
         errors.append("decision.actions must be a non-empty mapping")

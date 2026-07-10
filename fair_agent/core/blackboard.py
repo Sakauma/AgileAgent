@@ -88,6 +88,9 @@ def artifact_status(paths: Iterable[str]) -> Dict[str, bool]:
 
 def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     inputs = config.get("inputs", {})
+    blackboard_cfg = config.get("blackboard", {})
+    demo_path = resolve_path(blackboard_cfg.get("demo_evidence", "demo_artifacts/agent_demo_state.json"))
+    demo = read_json_if_exists(demo_path)
     detector = dict(config.get("detector", {}))
     model_cfg = dict(config.get("model", {}))
     assets_cfg = dict(config.get("assets", {}))
@@ -110,6 +113,21 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     case_bank = read_csv_if_exists(resolve_path(inputs.get("sar_soldier_case_bank", "reports/agent_blackboard/sar_soldier_case_bank.csv")))
     dryrun = read_json_if_exists(resolve_path(inputs.get("submission_dryrun_manifest", "runs/submission/dryrun_yolo11s_imgsz640_lock_val_20260710/manifest.json")))
     smoke = read_json_if_exists(resolve_path(inputs.get("submission_smoke_manifest", "runs/submission/smoke_yolo11s_imgsz640_lock_sar_20260710/manifest.json")))
+    evidence_sources = {
+        "dataset": "live" if metadata_rows else "demo",
+        "data_audit": "live" if data_audit else "demo",
+        "sar_soldier": "live" if case_bank else "demo",
+        "incremental_learning": "live",
+        "submission_dryrun": "live" if dryrun else "demo",
+        "submission_smoke": "live" if smoke else "demo",
+    }
+    dataset_summary = count_metadata(metadata_rows) if metadata_rows else dict(demo.get("dataset", {}))
+    if not data_audit:
+        data_audit = dict(demo.get("data_audit", {}))
+    if not dryrun:
+        dryrun = dict(demo.get("submission", {}).get("dryrun", {}))
+    if not smoke:
+        smoke = dict(demo.get("submission", {}).get("smoke", {}))
 
     weights_path = resolve_path(model_cfg.get("weights") or "models/base/yolo11s_ir_sar_imgsz640.pt")
     weights_hash = hash_if_exists(weights_path)
@@ -137,6 +155,18 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
         incremental_cfg.get("inputs", []), incremental_cfg.get("outputs", [])
     )
     specialist = parse_specialist(config)
+    case_summary = summarize_case_bank(case_bank)
+    sar_reason = "案例库专用模型略微改善了 SAR soldier，但降低了 lock_all 和 IR soldier 指标，因此主线继续使用统一 YOLO11s。"
+    if not case_bank and demo:
+        demo_sar = demo.get("sar_soldier", {})
+        case_summary = dict(demo_sar.get("case_bank", {}))
+        case_freshness = {"freshness": "current", "reason": "demo_snapshot", "missing": []}
+        sar_reason = str(demo_sar.get("reason") or sar_reason)
+    if specialist.get("status") == "not_run" and demo:
+        specialist = dict(demo.get("sar_soldier", {}).get("specialist", specialist))
+    if not incremental.get("complete") and demo.get("incremental_learning"):
+        incremental = dict(demo["incremental_learning"])
+        evidence_sources["incremental_learning"] = "demo"
 
     fixed_artifacts = list(assets_cfg.get("required", [model_cfg.get("weights")]))
     checksum_path = resolve_path(assets_cfg.get("checksums", "models/SHA256SUMS.txt"))
@@ -174,14 +204,24 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
             tracked_inputs.append(value)
         elif isinstance(value, list):
             tracked_inputs.extend(str(item) for item in value)
+    tracked_inputs.append(rel_path(demo_path))
+
+    source_values = set(evidence_sources.values())
+    evidence_mode = "live" if source_values == {"live"} else ("demo" if source_values == {"demo"} else "mixed")
 
     state = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "evidence": {
+            "mode": evidence_mode,
+            "sources": evidence_sources,
+            "demo_path": rel_path(demo_path),
+            "demo_hash": hash_if_exists(demo_path),
+        },
         "config": {"path": rel_path(config_path), **hash_if_exists(config_path)},
         "input_fingerprints": fingerprints(tracked_inputs),
         "runtime": config.get("runtime", {}),
-        "dataset": count_metadata(metadata_rows),
+        "dataset": dataset_summary,
         "data_audit": {
             "total_images": data_audit.get("total_images"),
             "total_labels": data_audit.get("total_labels"),
@@ -200,11 +240,11 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
             "artifacts": artifact_status(fixed_artifacts),
         },
         "sar_soldier": {
-            "case_bank": summarize_case_bank(case_bank),
+            "case_bank": case_summary,
             "case_bank_freshness": case_freshness,
             "specialist_status": specialist.get("status"),
             "specialist": specialist,
-            "reason": "案例库专用模型略微改善了 SAR soldier，但降低了 lock_all 和 IR soldier 指标，因此主线继续使用统一 YOLO11s。",
+            "reason": sar_reason,
         },
         "incremental_learning": incremental,
         "submission": {
@@ -251,6 +291,7 @@ def render_blackboard_report(state: Dict[str, Any]) -> str:
         "# 智能体黑板报告",
         "",
         f"生成时间：{state.get('generated_at')}",
+        f"证据模式：`{state.get('evidence', {}).get('mode')}`",
         "",
         "## 总体状态",
         "",

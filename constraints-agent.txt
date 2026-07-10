@@ -1,0 +1,8 @@
+pandas==2.3.3
+streamlit==1.59.1
+ultralytics==8.4.92
+opencv-python==4.13.0.92
+pexpect==4.9.0
+pillow==12.0.0
+pyyaml==6.0.3
+pytest==9.0.2
