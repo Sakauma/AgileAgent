@@ -9,6 +9,7 @@ import yaml
 from fair_agent.core.blackboard import build_blackboard
 from fair_agent.core.config import ROOT, load_config, rel_path, resolve_path
 from fair_agent.core.hashes import hash_if_exists, verify_sha256s
+from fair_agent.modules.functional_models import validate_functional_models
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -44,6 +45,13 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
     incremental_models = manifest.get("incremental_models", [])
     if len(incremental_models) != 4:
         errors.append("manifest_incremental_model_count_invalid")
+    functional = validate_functional_models(config["functional_models"]["registry"])
+    if not functional["valid"]:
+        errors.extend(f"functional_models:{item}" for item in functional["errors"])
+    if functional["model_count"] < int(config["functional_models"]["required_count"]):
+        errors.append("functional_model_count_invalid")
+    if not functional["all_x86_gpu_ready"]:
+        errors.append("functional_models_not_x86_gpu_ready")
 
     inference_configs = {}
     for name in ["configs/local_infer_gpu.yaml", config["detector"]["config"]]:
@@ -109,6 +117,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         "checksums": checksums,
         "required_assets": required,
         "inference_configs": inference_configs,
+        "functional_models": functional,
         "evidence_mode": state.get("evidence", {}).get("mode"),
         "blockers": state.get("current_blockers", []),
     }

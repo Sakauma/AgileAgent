@@ -1,0 +1,78 @@
+schema_version: 1
+
+models:
+  - id: scene_sensor_net_v1
+    function: context_perception
+    display_name: 场景与传感器认知模型
+    implementation: multitask_cnn
+    status: verified
+    inputs: [image_rgb]
+    outputs: [sensor_ir_sar, scene_air_forest_sea_urban, confidence]
+    artifacts:
+      - path: models/context/scene_sensor_net.pt
+        sha256: 926baa7c5d4ebf70ebbe143a425490101aa563eecf36ef56d895db68aa23dc72
+    evidence:
+      path: models/context/scene_sensor_metrics.json
+      sha256: 34171ef39af05bd2fa41a853f95d69bb50d42d09045a3f75a7ba70368a611a14
+      require_acceptance_passed: true
+    runtime:
+      x86_gpu: true
+      ascend_310b: false
+
+  - id: unified_yolo11s_v1
+    function: multimodal_target_detection
+    display_name: IR/SAR 统一目标检测模型
+    implementation: yolo11s
+    status: verified
+    inputs: [image_rgb]
+    outputs: [boxes, class_ids, confidence]
+    artifacts:
+      - path: models/base/yolo11s_ir_sar_imgsz640.pt
+        sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
+    evidence:
+      path: models/manifest.json
+      sha256: 74fe24b6549c901b6c7c284c114d7b52c2868325a778b732ab78458c367a25d5
+    runtime:
+      x86_gpu: true
+      ascend_310b: false
+
+  - id: incremental_model_bank_v1
+    function: new_class_incremental_learning
+    display_name: 新类别快速学习模型库
+    implementation: frozen_base_plus_class_specialists
+    status: partially_verified
+    inputs: [new_class_images, frozen_base_predictions, class_focus]
+    outputs: [incremental_boxes, new_map50, krr, acceptance]
+    artifacts:
+      - path: models/incremental/p01_new_small_aircraft_best.pt
+        sha256: dec95184c44d168bfe5b3760cf55fa71fdbd93ff8fdd4542be63c32a6233f37b
+      - path: models/incremental/p02_new_warship_best.pt
+        sha256: 03f4a68f85647bb33b4be043e32c9c4f74adfd3887bf22d63c3471e236af6a1e
+      - path: models/incremental/p03_new_tank_best.pt
+        sha256: 5ee5e4866772f1c28d5aad7608636c7b40284033de12ed7ba1185f7b431df5d7
+      - path: models/incremental/p04_new_soldier_best.pt
+        sha256: c22face61219ebf6d7a887f57dd3b90030b7a50324789283e66a12532372ccee
+    evidence:
+      path: models/manifest.json
+      sha256: 74fe24b6549c901b6c7c284c114d7b52c2868325a778b732ab78458c367a25d5
+    runtime:
+      x86_gpu: true
+      ascend_310b: false
+
+collaboration:
+  - from: scene_sensor_net_v1
+    to: unified_yolo11s_v1
+    payload: agent_policy_context
+    status: implemented
+    proof_command: python -m fair_agent.cli decide --source IMAGE --class-focus soldier
+    purpose: 认知结果进入 Agent 策略，用于选择检测配置和分组诊断；不改变 YOLO 输入张量
+  - from: unified_yolo11s_v1
+    to: incremental_model_bank_v1
+    payload: weak_class_and_error_cases
+    status: implemented
+    purpose: 触发新类学习或弱类专项复核
+  - from: incremental_model_bank_v1
+    to: unified_yolo11s_v1
+    payload: gated_incremental_predictions
+    status: gated_manual
+    purpose: 仅对通过 New-mAP 与 KRR 门禁的协议提供人工复核候选，不自动改写统一检测结果

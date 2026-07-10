@@ -74,6 +74,33 @@ with tabs[0]:
     st.write("证据来源：", evidence.get("sources", {}))
     if detector.get("imgsz") is not None:
         st.write("冻结模型配置：", {"imgsz": detector.get("imgsz"), "状态": detector.get("candidate_status")})
+    functional = state.get("functional_models", {})
+    st.markdown("### 三个功能模型")
+    function_labels = {
+        "context_perception": "场景与传感器认知",
+        "multimodal_target_detection": "IR/SAR 统一目标检测",
+        "new_class_incremental_learning": "新类别快速学习",
+    }
+    status_labels = {
+        "verified": "已验证",
+        "partially_verified": "部分验证",
+    }
+    model_rows = [
+        {
+            "模型": item.get("display_name"),
+            "功能": function_labels.get(item.get("function"), item.get("function")),
+            "实现": item.get("implementation"),
+            "状态": status_labels.get(item.get("status"), item.get("status")),
+            "x86 GPU": item.get("x86_gpu"),
+            "Ascend 310B": item.get("ascend_310b"),
+        }
+        for item in functional.get("models", [])
+    ]
+    if model_rows:
+        st.dataframe(model_rows, width="stretch", hide_index=True)
+    st.caption(f"不同功能数量：{functional.get('distinct_function_count')} · 注册表有效：{functional.get('valid')}")
+    if functional.get("collaboration"):
+        st.write("模型协同链路：", functional.get("collaboration"))
     if st.button("刷新黑板与默认决策", width="content"):
         refresh_result = run_cli(["refresh"])
         if refresh_result.returncode == 0:

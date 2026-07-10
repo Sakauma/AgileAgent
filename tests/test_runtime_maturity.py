@@ -13,6 +13,7 @@ from fair_agent.core.blackboard import build_blackboard
 from fair_agent.core.config import load_config
 from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.release_verification import verify_release
+from fair_agent.policies.decision import build_decision
 
 
 def test_serve_is_bound_to_loopback(monkeypatch) -> None:
@@ -57,6 +58,18 @@ def test_run_directories_are_unique(tmp_path: Path) -> None:
     assert first != second
     assert first.is_dir()
     assert second.is_dir()
+
+
+def test_decision_commands_use_the_active_python() -> None:
+    config = load_config()
+    state = build_blackboard(config)
+    decision = build_decision(config, state, {"sensor": "sar", "scene": "urban", "class_focus": "soldier"})
+    commands = [item for item in decision["candidates"] if item.get("argv")]
+    assert commands
+    for item in commands:
+        assert item["argv"][0] == sys.executable
+        assert all(value != "None" for value in item["argv"])
+        assert "None" not in item["command"]
 
 
 def test_shell_entrypoints_have_valid_syntax() -> None:
@@ -171,7 +184,9 @@ def test_static_release_verification_passes() -> None:
     result = verify_release()
     assert result["status"] == "passed", result["errors"]
     assert isinstance(result["required_assets"], dict)
-    assert len(result["required_assets"]) == 7
+    assert len(result["required_assets"]) == 9
+    assert result["functional_models"]["valid"] is True
+    assert result["functional_models"]["distinct_function_count"] == 3
 
 
 def test_low_risk_action_output_cannot_escape_allowlist(tmp_path: Path) -> None:

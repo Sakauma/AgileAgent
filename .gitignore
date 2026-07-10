@@ -51,6 +51,7 @@ venv/
 !/tools/27_build_new_class_specialist_dataset.py
 !/tools/42_predict_submission.py
 !/tools/52_build_sar_soldier_case_bank.py
+!/tools/60_train_scene_sensor.py
 
 /configs/*
 !/configs/agent_pipeline.yaml
@@ -58,6 +59,8 @@ venv/
 !/configs/incremental_no_old_distill_yolo11s.yaml
 !/configs/submission_infer_yolo11s_imgsz640.yaml
 !/configs/local_infer_gpu.yaml
+!/configs/scene_sensor_model.yaml
+!/configs/functional_models.yaml
 
 # Local competition notes are not part of the public source release.
 /*.md

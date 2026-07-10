@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fair_agent.core.config import resolve_path
+from fair_agent.core.config import configured_python, resolve_path
 
 
 def _action(config: Dict[str, Any], name: str, status: str, freshness: str, reason: str, score: int, warnings: List[str] | None = None) -> Dict[str, Any]:
     action_cfg = config.get("decision", {}).get("actions", {}).get(name, {})
-    argv = [str(value).replace("{python}", str(config.get("runtime", {}).get("local_python", "python"))) for value in action_cfg.get("argv", [])]
+    python = str(configured_python(config))
+    argv = [str(value).replace("{python}", python) for value in action_cfg.get("argv", [])]
     risk_level = action_cfg.get("risk_level", "high")
     allowed_actions = set(config.get("automation", {}).get("allowed_actions", []))
     allowed_risks = set(config.get("automation", {}).get("allowed_risk_levels", ["low"]))
@@ -20,7 +22,7 @@ def _action(config: Dict[str, Any], name: str, status: str, freshness: str, reas
         "freshness": freshness,
         "reason": reason,
         "argv": argv,
-        "command": " ".join(argv) if argv else action_cfg.get("handler", ""),
+        "command": shlex.join(argv) if argv else action_cfg.get("handler", ""),
         "handler": action_cfg.get("handler"),
         "required_artifacts": list(action_cfg.get("inputs", [])),
         "outputs": list(action_cfg.get("outputs", [])),

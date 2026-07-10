@@ -14,6 +14,34 @@
     "lock_sar_soldier_map50": 0.72962,
     "sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c"
   },
+  "functional_models": [
+    {
+      "id": "scene_sensor_net_v1",
+      "function": "context_perception",
+      "path": "models/context/scene_sensor_net.pt",
+      "status": "verified",
+      "lock_sensor_accuracy": 0.98947,
+      "lock_scene_accuracy": 0.76842,
+      "lock_joint_accuracy": 0.76842,
+      "sha256": "926baa7c5d4ebf70ebbe143a425490101aa563eecf36ef56d895db68aa23dc72"
+    },
+    {
+      "id": "unified_yolo11s_v1",
+      "function": "multimodal_target_detection",
+      "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
+      "status": "verified",
+      "lock_all_map50": 0.91202,
+      "sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c"
+    },
+    {
+      "id": "incremental_model_bank_v1",
+      "function": "new_class_incremental_learning",
+      "model_count": 4,
+      "status": "partially_verified",
+      "passed_protocols": 3,
+      "total_protocols": 4
+    }
+  ],
   "incremental_models": [
     {
       "protocol": "p01_new_small_aircraft",

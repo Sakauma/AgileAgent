@@ -20,7 +20,7 @@ python scripts/verify_release.py
 python scripts/smoke_models.py
 ```
 
-前两项验证逻辑、配置和资产哈希；最后一项在 GPU 0 上加载五个模型，并执行 `imgsz=640`、`batch=32` 推理。
+前两项验证逻辑、配置和资产哈希；最后一项在 GPU 0 上加载六份权重、验证三种不同功能，并执行 `imgsz=640`、`batch=32` 推理。
 
 ## 编码风格与命名规范
 

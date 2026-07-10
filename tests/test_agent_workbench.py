@@ -29,7 +29,9 @@ def test_active_inference_uses_verified_frozen_weight() -> None:
     assert inference["matches_expected"] is True
     assert inference["same_frozen_path"] is True
     assert state["frozen_assets"]["checksums"]["valid"] is True
-    assert state["frozen_assets"]["checksums"]["checked"] == 5
+    assert state["frozen_assets"]["checksums"]["checked"] == 6
+    assert state["functional_models"]["valid"] is True
+    assert state["functional_models"]["distinct_function_count"] == 3
     assert all(state["frozen_assets"]["artifacts"].values())
     manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
     assert state["detector"]["imgsz"] == manifest["base_model"]["imgsz"]

@@ -62,6 +62,15 @@ def validate_config(config: Dict[str, Any]) -> None:
         errors.append("assets.checksums is required")
     if not isinstance(assets.get("required"), list) or not assets.get("required"):
         errors.append("assets.required must be a non-empty list")
+    functional = config.get("functional_models", {})
+    if not functional.get("registry"):
+        errors.append("functional_models.registry is required")
+    try:
+        required_functional_count = int(functional.get("required_count"))
+    except (TypeError, ValueError):
+        required_functional_count = 0
+    if required_functional_count < 3:
+        errors.append("functional_models.required_count must be at least 3")
     automation = config.get("automation", {})
     if not isinstance(automation.get("allowed_output_roots"), list) or not automation.get("allowed_output_roots"):
         errors.append("automation.allowed_output_roots must be a non-empty list")

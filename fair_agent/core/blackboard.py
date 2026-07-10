@@ -11,6 +11,7 @@ import yaml
 
 from .config import rel_path, resolve_path
 from .hashes import hash_if_exists, verify_sha256s
+from fair_agent.modules.functional_models import validate_functional_models
 from fair_agent.modules.status import fingerprints, output_freshness, parse_incremental, parse_specialist
 
 
@@ -94,6 +95,8 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     detector = dict(config.get("detector", {}))
     model_cfg = dict(config.get("model", {}))
     assets_cfg = dict(config.get("assets", {}))
+    functional_cfg = dict(config.get("functional_models", {}))
+    functional_models = validate_functional_models(functional_cfg.get("registry", "configs/functional_models.yaml"))
     detector["weights"] = model_cfg.get("weights")
     detector["expected_sha256"] = model_cfg.get("expected_sha256")
     manifest_path = resolve_path(assets_cfg.get("manifest", "models/manifest.json"))
@@ -196,6 +199,12 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
         blockers.append("submission_smoke_missing_or_invalid")
     if incremental.get("compliance_required") and incremental.get("complete") and not incremental.get("passed"):
         blockers.append("incremental_compliant_threshold_not_met")
+    if not functional_models.get("valid"):
+        blockers.append("functional_models_invalid")
+    elif not functional_models.get("all_x86_gpu_ready"):
+        blockers.append("functional_models_x86_not_ready")
+    if not functional_models.get("all_ascend_310b_ready"):
+        blockers.append("ascend_310b_not_ready")
 
     config_path = resolve_path(config.get("_config_path", "configs/agent_pipeline.yaml"))
     tracked_inputs: List[str] = []
@@ -205,12 +214,13 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
         elif isinstance(value, list):
             tracked_inputs.extend(str(item) for item in value)
     tracked_inputs.append(rel_path(demo_path))
+    tracked_inputs.append(str(functional_cfg.get("registry", "configs/functional_models.yaml")))
 
     source_values = set(evidence_sources.values())
     evidence_mode = "live" if source_values == {"live"} else ("demo" if source_values == {"demo"} else "mixed")
 
     state = {
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "evidence": {
             "mode": evidence_mode,
@@ -231,6 +241,7 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
             "invalid_errors": data_audit.get("invalid_errors"),
         },
         "detector": detector,
+        "functional_models": functional_models,
         "frozen_assets": {
             "weights": {"path": rel_path(weights_path), **weights_hash},
             "inference_weights": {"path": rel_path(inference_weights_path), **inference_weights_hash},
@@ -309,6 +320,13 @@ def render_blackboard_report(state: Dict[str, Any]) -> str:
         f"- lock_all mAP50：`{detector.get('lock_all_map50')}`",
         f"- lock_sar mAP50：`{detector.get('lock_sar_map50')}`",
         f"- lock_sar soldier mAP50：`{detector.get('lock_sar_soldier_map50')}`",
+        "",
+        "## 三个功能模型",
+        "",
+        f"- 注册表有效：`{state.get('functional_models', {}).get('valid')}`",
+        f"- 不同功能数量：`{state.get('functional_models', {}).get('distinct_function_count')}`",
+        f"- x86 GPU 全部就绪：`{state.get('functional_models', {}).get('all_x86_gpu_ready')}`",
+        f"- Ascend 310B 全部就绪：`{state.get('functional_models', {}).get('all_ascend_310b_ready')}`",
         "",
         "## SAR Soldier 分析",
         "",

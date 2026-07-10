@@ -14,13 +14,14 @@ from fair_agent.core.blackboard import build_blackboard, write_blackboard
 from fair_agent.core.config import ROOT, configured_python, load_config, rel_path, resolve_path
 from fair_agent.executors.local import append_log, run_command
 from fair_agent.modules.incremental_review import write_incremental_review
+from fair_agent.modules.functional_models import validate_functional_models
 from fair_agent.modules.status import parse_incremental
 from fair_agent.policies.decision import build_decision, write_decision
 
 
 REQUIRED_MODULES = ["yaml", "PIL"]
 WORKBENCH_MODULES = ["pandas", "streamlit"]
-INFERENCE_MODULES = ["ultralytics", "cv2", "torch"]
+INFERENCE_MODULES = ["ultralytics", "cv2", "torch", "torchvision"]
 ALL_MODULES = REQUIRED_MODULES + WORKBENCH_MODULES + INFERENCE_MODULES
 
 
@@ -90,6 +91,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "inference_weights": state.get("frozen_assets", {}).get("inference_weights"),
         "frozen_checksums": state.get("frozen_assets", {}).get("checksums"),
         "core_artifacts": artifacts,
+        "functional_models": state.get("functional_models"),
         "current_blockers": state.get("current_blockers"),
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -109,7 +111,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     inference_ok = bool(result["inference_weights"].get("matches_expected")) and bool(result["inference_weights"].get("same_frozen_path"))
     core_artifacts_ok = all(bool(value) for value in artifacts.values())
     checksums_ok = bool(result["frozen_checksums"].get("valid"))
-    return 1 if missing_required or missing_workbench or missing_inference or not gpu_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or external.get("returncode") != 0 else 0
+    functional_ok = bool(result["functional_models"].get("valid")) and bool(result["functional_models"].get("all_x86_gpu_ready"))
+    return 1 if missing_required or missing_workbench or missing_inference or not gpu_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or not functional_ok or external.get("returncode") != 0 else 0
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
@@ -121,12 +124,34 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     return 0
 
 
+def infer_image_context(config: Dict[str, Any], source: str | Path) -> Dict[str, Any]:
+    from PIL import Image
+
+    from fair_agent.models.context import load_context_model, predict_context
+
+    functional_cfg = config.get("functional_models", {})
+    registry = validate_functional_models(functional_cfg.get("registry", "configs/functional_models.yaml"))
+    if not registry.get("valid"):
+        raise RuntimeError(f"功能模型注册表无效：{registry.get('errors')}")
+    context_entry = next(item for item in registry["models"] if item["function"] == "context_perception")
+    weights = resolve_path(context_entry["artifacts"][0]["path"])
+    device_index = str(config.get("runtime", {}).get("default_device", "0"))
+    device = f"cuda:{device_index}"
+    model, checkpoint = load_context_model(weights, device)
+    source_path = resolve_path(source)
+    with Image.open(source_path) as image:
+        prediction = predict_context(model, checkpoint, image, device)
+    return {"source": rel_path(source_path), "model_id": checkpoint["model_id"], **prediction}
+
+
 def decision_context(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
     defaults = config.get("decision", {}).get("default_context", {})
+    inferred = infer_image_context(config, args.source) if getattr(args, "source", None) else {}
     return {
-        "sensor": args.sensor or defaults.get("sensor", "sar"),
-        "scene": args.scene or defaults.get("scene", "all"),
+        "sensor": args.sensor or inferred.get("sensor") or defaults.get("sensor", "sar"),
+        "scene": args.scene or inferred.get("scene") or defaults.get("scene", "all"),
         "class_focus": args.class_focus or defaults.get("class_focus", "soldier"),
+        "context_model": inferred or None,
     }
 
 
@@ -149,11 +174,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
 def cmd_pipeline(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     state = build_blackboard(config)
-    context = {
-        "sensor": args.sensor,
-        "scene": args.scene,
-        "class_focus": args.class_focus,
-    }
+    context = decision_context(config, args)
     decision = build_decision(config, state, context)
     automation = config.get("automation", {})
     run_dir = make_run_dir("dryrun" if args.mode == "dryrun" else "execute", automation.get("run_root", "reports/agent_runs"))
@@ -284,6 +305,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_context_predict(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    try:
+        result = infer_image_context(config, args.source)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"上下文认知失败：{exc}")
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="IR/SAR 快速学习智能体工作台")
     parser.add_argument("--config", default="configs/agent_pipeline.yaml")
@@ -296,16 +328,22 @@ def build_parser() -> argparse.ArgumentParser:
     decide.add_argument("--sensor", choices=["ir", "sar"])
     decide.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
     decide.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"])
+    decide.add_argument("--source", help="使用 Scene-SensorNet 从图像自动推断传感器和场景。")
     decide.add_argument("--refresh", action="store_true")
     decide.add_argument("--cached", action="store_true", help="复用已保存的黑板状态，不重新采集证据。")
     decide.set_defaults(func=cmd_decide)
 
     pipeline = sub.add_parser("pipeline")
     pipeline.add_argument("--mode", choices=["dryrun", "execute"], default="dryrun")
-    pipeline.add_argument("--sensor", choices=["ir", "sar"], default="sar")
-    pipeline.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"], default="all")
+    pipeline.add_argument("--sensor", choices=["ir", "sar"])
+    pipeline.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
     pipeline.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"], default="soldier")
+    pipeline.add_argument("--source", help="使用 Scene-SensorNet 从图像自动推断传感器和场景。")
     pipeline.set_defaults(func=cmd_pipeline)
+
+    context_predict = sub.add_parser("context-predict")
+    context_predict.add_argument("--source", required=True)
+    context_predict.set_defaults(func=cmd_context_predict)
 
     sub.add_parser("serve").set_defaults(func=cmd_serve)
     return parser

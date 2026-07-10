@@ -20,6 +20,8 @@ assets:
     - models/incremental/p02_new_warship_best.pt
     - models/incremental/p03_new_tank_best.pt
     - models/incremental/p04_new_soldier_best.pt
+    - models/context/scene_sensor_net.pt
+    - models/context/scene_sensor_metrics.json
     - models/manifest.json
     - demo_artifacts/agent_demo_state.json
 
@@ -54,6 +56,10 @@ detector:
   lock_all_map50: 0.91202
   lock_sar_map50: 0.88158
   lock_sar_soldier_map50: 0.72962
+
+functional_models:
+  registry: configs/functional_models.yaml
+  required_count: 3
 
 inputs:
   data_audit: reports/data_audit_summary.json

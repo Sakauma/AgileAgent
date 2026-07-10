@@ -2,3 +2,7 @@ streamlit
 pandas
 pyyaml
 pillow
+ultralytics
+opencv-python
+pexpect
+pytest

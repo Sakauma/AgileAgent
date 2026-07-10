@@ -1,6 +1,6 @@
 # AgileAgent
 
-面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。仓库包含统一 YOLO11s 检测器、四个合规增量专用模型、命令行工具和 Streamlit 工作台。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
+面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。系统包含场景/传感器认知模型、统一 YOLO11s 检测模型和新类别增量模型库三种不同功能模型，以及命令行工具和 Streamlit 工作台。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
 
 ## 首次配置环境
 
@@ -15,7 +15,7 @@ chmod +x scripts/bootstrap_x86.sh
 ./scripts/bootstrap_x86.sh
 ```
 
-首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch 和智能体依赖、运行环境诊断，并在 GPU 0 上校验五个模型。配置完成后脚本退出，不启动工作台。
+首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch 和智能体依赖、运行环境诊断，并在 GPU 0 上校验六份权重及三种功能。配置完成后脚本退出，不启动工作台。
 
 默认使用已完成端到端验收的 PyTorch `2.5.1+cu124` 和 `constraints-agent.txt` 中锁定的依赖组合。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`、`TORCH_VERSION` 和 `TORCHVISION_VERSION`。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
 
@@ -35,7 +35,7 @@ python -m fair_agent.cli doctor
 python scripts/verify_release.py
 ```
 
-GPU 冒烟验收读取 `configs/local_infer_gpu.yaml`，逐个验证五个模型，并额外执行 `imgsz=640、batch=32` 的基础模型批量推理：
+GPU 冒烟验收读取推理配置和功能模型注册表，验证 Scene-SensorNet、基础检测器及四个增量权重，并执行 `imgsz=640、batch=32` 的基础模型批量推理：
 
 ```bash
 python scripts/smoke_models.py
@@ -60,6 +60,8 @@ python scripts/smoke_models.py
 ```bash
 python -m fair_agent.cli refresh
 python -m fair_agent.cli decide --sensor sar --scene urban --class-focus soldier
+python -m fair_agent.cli context-predict --source data/images/example.png
+python -m fair_agent.cli decide --source data/images/example.png --class-focus soldier
 python -m fair_agent.cli pipeline --mode dryrun
 python -m fair_agent.cli serve
 ```
@@ -78,15 +80,16 @@ python tools/42_predict_submission.py --config configs/local_infer_gpu.yaml
 
 ## 模型清单
 
-| 模型 | 用途 | mAP50 / KRR | 验收 |
+| 模型 | 功能 | 核心指标 | 验收 |
 | --- | --- | --- | --- |
+| `models/context/scene_sensor_net.pt` | IR/SAR 与 air/forest/sea/urban 认知 | lock sensor 0.98947 / scene 0.76842 | 通过 |
 | `models/base/yolo11s_ir_sar_imgsz640.pt` | IR/SAR 四类统一检测 | lock-all 0.91202 | 已冻结 |
 | `p01_new_small_aircraft_best.pt` | 新类 small_aircraft | 0.55860 / 1.0 | 未通过 |
 | `p02_new_warship_best.pt` | 新类 warship | 0.83539 / 1.0 | 通过 |
 | `p03_new_tank_best.pt` | 新类 tank | 0.74989 / 1.0 | 通过 |
 | `p04_new_soldier_best.pt` | 新类 soldier | 0.76914 / 1.0 | 通过 |
 
-所有指标均为 mAP50。p01 权重仅用于复现与后续改进，未达到 `New-mAP50 >= 0.60` 门槛。完整路径、状态和摘要见 `models/manifest.json`，文件哈希见 `models/SHA256SUMS.txt`。
+检测与增量指标均为 mAP50。p01 权重仅用于复现与后续改进，未达到 `New-mAP50 >= 0.60` 门槛。三模型输入输出契约和协同链路见 `configs/functional_models.yaml` 与 `docs/functional-models.md`；完整路径、状态和摘要见 `models/manifest.json`，文件哈希见 `models/SHA256SUMS.txt`。
 
 ## 常用命令
 
@@ -103,6 +106,8 @@ pytest -q
 ## 数据与增量训练
 
 数据文件名遵循 `{sensor}_r1_base_{scene}_{id}`，图像和 YOLO 标签同名配对。获得授权数据后，可依次运行 `tools/00_check_dataset.py`、`01_build_metadata.py` 和 `02_split_dataset.py`。合规增量方案不使用旧类原始样本，具体协议与审计约束见 `docs/compliant-incremental-learning.md`。
+
+Scene-SensorNet 的训练参数全部位于 `configs/scene_sensor_model.yaml`，训练入口为 `python tools/60_train_scene_sensor.py`。固定权重已经随仓库发布，日常启动不会重新训练。
 
 ## 已知限制
 
