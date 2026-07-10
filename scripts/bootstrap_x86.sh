@@ -6,12 +6,19 @@ cd "${ROOT_DIR}"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
-"${PYTHON_BIN}" -m venv .venv
+if [[ ! -x .venv/bin/python ]]; then
+  "${PYTHON_BIN}" -m venv .venv
+fi
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install torch torchvision --index-url "${PYTORCH_INDEX_URL}"
+if ! python -c 'import sys, torch; sys.exit(0 if torch.cuda.is_available() else 1)' >/dev/null 2>&1; then
+  python -m pip install --upgrade --force-reinstall torch torchvision --index-url "${PYTORCH_INDEX_URL}"
+fi
 python -m pip install -e ".[workbench,inference,dev]"
 python -m fair_agent.cli doctor
 python scripts/smoke_models.py
+python -m fair_agent.cli refresh
+python -m fair_agent.cli decide
 
-printf '\nAgileAgent 已准备就绪。使用以下命令启动界面：\n  .venv/bin/python -m fair_agent.cli refresh\n  .venv/bin/python -m fair_agent.cli serve\n'
+printf '\nAgileAgent 已准备就绪，正在启动工作台。按 Ctrl+C 可停止服务。\n'
+exec python -m fair_agent.cli serve

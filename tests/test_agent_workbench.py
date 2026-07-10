@@ -135,3 +135,12 @@ def test_runtime_rejects_non_gpu_device() -> None:
     config["runtime"]["default_device"] = "cpu"
     with pytest.raises(ValueError, match="GPU 编号"):
         validate_config(config)
+
+
+def test_bootstrap_scripts_start_workbench() -> None:
+    for path in [Path("scripts/bootstrap_x86.sh"), Path("scripts/bootstrap_x86.ps1")]:
+        content = path.read_text(encoding="utf-8")
+        assert "fair_agent.cli" in content
+        assert "refresh" in content
+        assert "decide" in content
+        assert "serve" in content

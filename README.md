@@ -2,7 +2,7 @@
 
 面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。仓库包含统一 YOLO11s 检测器、四个合规增量专用模型、命令行工具和 Streamlit 工作台。x86-64 架构的 Windows、WSL 与 Linux 均可直接运行；训练数据、标签和竞赛提交结果不随仓库分发。
 
-## 快速部署
+## 一键部署并启动
 
 要求：x86-64 电脑、NVIDIA GPU、可用的显卡驱动、Python 3.10-3.12、Git，以及约 5 GB 可用空间。仓库为私有仓库，克隆前需获得 GitHub 访问权限。
 
@@ -23,18 +23,19 @@ Set-Location AgileAgent
 powershell -ExecutionPolicy Bypass -File scripts/bootstrap_x86.ps1
 ```
 
-脚本会创建 `.venv`，默认从 PyTorch 的 `cu128` 软件源安装 CUDA 版 PyTorch 和智能体依赖，随后运行环境诊断，并在 GPU 0 上加载五个模型完成合成图冒烟测试。已有合适的 CUDA 版 PyTorch 环境时，也可手动执行：
+脚本会自动完成以下操作：创建或复用 `.venv`、安装 CUDA 版 PyTorch 和智能体依赖、运行环境诊断、在 GPU 0 上校验五个模型、刷新黑板、生成默认决策，并启动 Streamlit 工作台。浏览器访问 `http://localhost:8501`；在终端按 `Ctrl+C` 停止服务。后续仍运行同一个脚本即可再次启动。
+
+默认使用 PyTorch 的 `cu128` 软件源。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页替换软件源：WSL/Linux 设置 `PYTORCH_INDEX_URL`，Windows PowerShell 使用 `-TorchIndexUrl` 参数。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
+
+已有合适的 CUDA 版 PyTorch 环境时，也可手动安装：
 
 ```bash
 python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 python -m pip install -e ".[workbench,inference,dev]"
 python -m fair_agent.cli doctor
-python scripts/smoke_models.py
 ```
 
-若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页替换软件源。WSL/Linux 设置 `PYTORCH_INDEX_URL`，Windows PowerShell 使用 `-TorchIndexUrl` 参数。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时返回非零。
-
-## 启动智能体
+## 手动运行命令
 
 先生成本机黑板和策略结果，再启动网页工作台：
 
@@ -45,7 +46,7 @@ python -m fair_agent.cli pipeline --mode dryrun
 python -m fair_agent.cli serve
 ```
 
-浏览器访问 `http://localhost:8501`。`doctor` 在模型缺失、SHA256 错误或核心依赖缺失时返回非零。全新克隆不包含私有数据分析报告，因此数据页可能为空，正式提交也会保持阻塞状态（`blocked`）；这不影响模型校验、策略框架和工作台启动。
+通常无需手动执行上述命令；它们用于单独调试某个阶段。`doctor` 在 GPU、模型、SHA256 或核心依赖异常时返回非零。全新克隆不包含私有数据分析报告，因此数据页可能为空，正式提交也会保持阻塞状态（`blocked`）；这不影响模型校验、策略框架和工作台启动。
 
 ## 本地 GPU 推理
 
