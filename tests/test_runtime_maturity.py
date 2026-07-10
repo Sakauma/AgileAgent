@@ -68,7 +68,7 @@ def test_shell_entrypoints_have_valid_syntax() -> None:
 def test_bootstrap_selects_only_supported_python() -> None:
     content = Path("scripts/bootstrap_x86.sh").read_text(encoding="utf-8")
     assert "python3.12 python3.11 python3.10" in content
-    assert "uv venv --python 3.12 --seed" in content
+    assert 'uv venv --python "${UV_PYTHON:-3.12}" --seed' in content
     assert "python3.8" not in content
     assert "nvidia-smi" in content
 

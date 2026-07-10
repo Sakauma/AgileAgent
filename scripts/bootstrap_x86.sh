@@ -32,7 +32,14 @@ elif [[ -n "${PYTHON_BIN:-}" ]]; then
   fi
   "${PYTHON_BIN}" -m venv .venv
 elif command -v uv >/dev/null 2>&1; then
-  uv venv --python 3.12 --seed .venv
+  UV_PYTHON=""
+  for candidate in python3.12 python3.11 python3.10; do
+    if command -v "${candidate}" >/dev/null 2>&1 && python_supported "${candidate}"; then
+      UV_PYTHON="$(command -v "${candidate}")"
+      break
+    fi
+  done
+  uv venv --python "${UV_PYTHON:-3.12}" --seed .venv
 else
   for candidate in python3.12 python3.11 python3.10; do
     if command -v "${candidate}" >/dev/null 2>&1 && python_supported "${candidate}"; then

@@ -90,7 +90,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             errors.append(f"start_script_mutates_environment:{forbidden}")
     bootstrap_script = ROOT / "scripts" / "bootstrap_x86.sh"
     bootstrap_text = bootstrap_script.read_text(encoding="utf-8") if bootstrap_script.exists() else ""
-    for required_marker in ["python3.12 python3.11 python3.10", "uv venv --python 3.12 --seed", "nvidia-smi", "uname -m"]:
+    for required_marker in ["python3.12 python3.11 python3.10", 'uv venv --python "${UV_PYTHON:-3.12}" --seed', "nvidia-smi", "uname -m"]:
         if required_marker not in bootstrap_text:
             errors.append(f"bootstrap_gate_missing:{required_marker}")
 
