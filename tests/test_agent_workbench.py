@@ -15,28 +15,27 @@ from fair_agent.modules.status import output_freshness, parse_incremental, parse
 from fair_agent.policies.decision import build_decision
 
 
-PRIVATE_ASSETS_AVAILABLE = (
-    Path("final_submission_assets/best.pt").exists()
-    and Path("final_submission_assets/manifest.json").exists()
-    and Path("reports/agent_sar_soldier_casebank/sar_soldier_replay_metrics.csv").exists()
-)
+RELEASE_ASSETS_AVAILABLE = Path("models/base/yolo11s_ir_sar_imgsz640.pt").exists()
+PRIVATE_REPORTS_AVAILABLE = Path("reports/agent_sar_soldier_casebank/sar_soldier_replay_metrics.csv").exists()
 
 
-@pytest.mark.skipif(not PRIVATE_ASSETS_AVAILABLE, reason="private competition artifacts are not distributed")
+@pytest.mark.skipif(not RELEASE_ASSETS_AVAILABLE, reason="release weights are not present")
 def test_active_inference_uses_verified_frozen_weight() -> None:
     config = load_config()
     state = build_blackboard(config)
     inference = state["frozen_assets"]["inference_weights"]
-    assert inference["path"] == "final_submission_assets/best.pt"
+    assert inference["path"] == "models/base/yolo11s_ir_sar_imgsz640.pt"
     assert inference["matches_expected"] is True
     assert inference["same_frozen_path"] is True
     assert state["frozen_assets"]["checksums"]["valid"] is True
-    manifest = json.loads(Path("final_submission_assets/manifest.json").read_text(encoding="utf-8"))
-    assert state["detector"]["imgsz"] == manifest["frozen_candidate"]["imgsz"]
+    assert state["frozen_assets"]["checksums"]["checked"] == 5
+    assert all(state["frozen_assets"]["artifacts"].values())
+    manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
+    assert state["detector"]["imgsz"] == manifest["base_model"]["imgsz"]
     assert state["detector"]["candidate_status"] == "stability_rechecked"
 
 
-@pytest.mark.skipif(not PRIVATE_ASSETS_AVAILABLE, reason="private competition artifacts are not distributed")
+@pytest.mark.skipif(not PRIVATE_REPORTS_AVAILABLE, reason="private competition reports are not distributed")
 def test_completed_diagnosis_does_not_loop() -> None:
     config = load_config()
     state = build_blackboard(config)
@@ -47,7 +46,7 @@ def test_completed_diagnosis_does_not_loop() -> None:
     assert decision["recommended_action"]["action"] in {"review_incremental_learning", "wait_for_external_input"}
 
 
-@pytest.mark.skipif(not PRIVATE_ASSETS_AVAILABLE, reason="private competition artifacts are not distributed")
+@pytest.mark.skipif(not PRIVATE_REPORTS_AVAILABLE, reason="private competition reports are not distributed")
 def test_stale_low_risk_diagnosis_becomes_executable() -> None:
     config = load_config()
     state = deepcopy(build_blackboard(config))
@@ -59,7 +58,7 @@ def test_stale_low_risk_diagnosis_becomes_executable() -> None:
     assert action["risk_level"] == "low"
 
 
-@pytest.mark.skipif(not PRIVATE_ASSETS_AVAILABLE, reason="private competition artifacts are not distributed")
+@pytest.mark.skipif(not PRIVATE_REPORTS_AVAILABLE, reason="private competition reports are not distributed")
 def test_metrics_are_parsed_instead_of_inferred_from_report_existence() -> None:
     config = load_config()
     specialist = parse_specialist(config)
@@ -85,6 +84,23 @@ def test_output_freshness_detects_stale_output(tmp_path: Path) -> None:
     os.utime(output, (1, 1))
     os.utime(source, (2, 2))
     assert output_freshness([str(source)], [str(output)])["freshness"] == "stale"
+
+
+def test_missing_incremental_inputs_are_not_executable() -> None:
+    config = load_config()
+    state = deepcopy(build_blackboard(config))
+    state["sar_soldier"]["case_bank_freshness"] = {
+        "freshness": "missing", "reason": "missing_inputs", "missing": ["private.csv"]
+    }
+    state["incremental_learning"]["complete"] = False
+    state["incremental_learning"]["freshness"] = {
+        "freshness": "missing", "reason": "missing_inputs", "missing": ["private.csv"]
+    }
+    decision = build_decision(config, state, {"sensor": "sar", "scene": "urban", "class_focus": "soldier"})
+    review = next(item for item in decision["candidates"] if item["action"] == "review_incremental_learning")
+    assert review["status"] == "blocked"
+    assert review["can_execute"] is False
+    assert decision["recommended_action"]["action"] == "wait_for_external_input"
 
 
 def test_executor_logs_timeout(tmp_path: Path) -> None:

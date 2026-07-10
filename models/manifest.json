@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "release": "x86-20260710",
+  "created_at": "2026-07-10T00:00:00+08:00",
+  "base_model": {
+    "architecture": "YOLO11s",
+    "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
+    "imgsz": 640,
+    "classes": ["soldier", "small_aircraft", "warship", "tank"],
+    "status": "stability_rechecked",
+    "metric": "mAP50",
+    "lock_all_map50": 0.91202,
+    "lock_sar_map50": 0.88158,
+    "lock_sar_soldier_map50": 0.72962,
+    "sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c"
+  },
+  "incremental_models": [
+    {
+      "protocol": "p01_new_small_aircraft",
+      "path": "models/incremental/p01_new_small_aircraft_best.pt",
+      "new_map50": 0.55860,
+      "krr": 1.0,
+      "acceptance": "failed"
+    },
+    {
+      "protocol": "p02_new_warship",
+      "path": "models/incremental/p02_new_warship_best.pt",
+      "new_map50": 0.83539,
+      "krr": 1.0,
+      "acceptance": "passed"
+    },
+    {
+      "protocol": "p03_new_tank",
+      "path": "models/incremental/p03_new_tank_best.pt",
+      "new_map50": 0.74989,
+      "krr": 1.0,
+      "acceptance": "passed"
+    },
+    {
+      "protocol": "p04_new_soldier",
+      "path": "models/incremental/p04_new_soldier_best.pt",
+      "new_map50": 0.76914,
+      "krr": 1.0,
+      "acceptance": "passed"
+    }
+  ],
+  "notes": [
+    "All reported metrics are mAP50.",
+    "The p01 specialist is distributed for reproducibility but did not reach the 0.60 acceptance threshold.",
+    "Competition datasets and labels are not included."
+  ]
+}

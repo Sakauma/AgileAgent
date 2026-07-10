@@ -1,0 +1,5 @@
+*.pt binary
+*.pth binary
+*.onnx binary
+*.om binary
+*.sh text eol=lf

@@ -34,7 +34,7 @@ def write_pipeline_artifacts(run_dir: Path, plan: Dict[str, Any], state: Dict[st
         "key_artifacts": {
             "blackboard": hash_if_exists(resolve_path("reports/agent_blackboard/blackboard_state.json")),
             "decision": hash_if_exists(resolve_path("reports/agent_blackboard/agent_decision.json")),
-            "final_assets_manifest": hash_if_exists(resolve_path("final_submission_assets/manifest.json")),
+            "model_manifest": state.get("frozen_assets", {}).get("manifest", {}),
         },
     }
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

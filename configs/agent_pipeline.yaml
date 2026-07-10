@@ -5,8 +5,19 @@ runtime:
   local_python: null
 
 model:
-  weights: final_submission_assets/best.pt
+  weights: models/base/yolo11s_ir_sar_imgsz640.pt
   expected_sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
+
+assets:
+  manifest: models/manifest.json
+  checksums: models/SHA256SUMS.txt
+  required:
+    - models/base/yolo11s_ir_sar_imgsz640.pt
+    - models/incremental/p01_new_small_aircraft_best.pt
+    - models/incremental/p02_new_warship_best.pt
+    - models/incremental/p03_new_tank_best.pt
+    - models/incremental/p04_new_soldier_best.pt
+    - models/manifest.json
 
 automation:
   audit_before_execute: true
@@ -30,7 +41,7 @@ blackboard:
 
 detector:
   name: yolo11s_imgsz640
-  weights: final_submission_assets/best.pt
+  weights: models/base/yolo11s_ir_sar_imgsz640.pt
   config: configs/submission_infer_yolo11s_imgsz640.yaml
   candidate_status: stability_rechecked
   metric: mAP50
@@ -123,7 +134,7 @@ decision:
       argv: ["{python}", tools/42_predict_submission.py, --config, configs/submission_infer_yolo11s_imgsz640.yaml]
       risk_level: high
       timeout_seconds: 0
-      inputs: [final_submission_assets/best.pt, configs/submission_infer_yolo11s_imgsz640.yaml]
+      inputs: [models/base/yolo11s_ir_sar_imgsz640.pt, configs/submission_infer_yolo11s_imgsz640.yaml]
       outputs: [runs/submission]
     diagnose_sar_soldier:
       module: error_analyzer

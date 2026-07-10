@@ -17,7 +17,7 @@ from fair_agent.modules.status import parse_incremental
 from fair_agent.policies.decision import build_decision, write_decision
 
 
-REQUIRED_MODULES = ["yaml", "pexpect", "PIL"]
+REQUIRED_MODULES = ["yaml", "PIL"]
 WORKBENCH_MODULES = ["pandas", "streamlit"]
 INFERENCE_MODULES = ["ultralytics", "cv2", "torch"]
 ALL_MODULES = REQUIRED_MODULES + WORKBENCH_MODULES + INFERENCE_MODULES
@@ -74,7 +74,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print("Missing required modules:", ", ".join(missing_required))
     if missing_workbench:
         print("Missing workbench modules:", ", ".join(missing_workbench))
-        print(f"Install workbench deps with: {py.parent / 'pip'} install -r requirements-agent.txt")
+        print(f"Install workbench deps with: {py} -m pip install -e \".[workbench]\"")
     if missing_inference:
         print("Missing optional inference modules:", ", ".join(missing_inference))
         print("Install inference deps only when local prediction is needed; avoid unplanned CUDA/Torch upgrades.")

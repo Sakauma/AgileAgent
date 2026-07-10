@@ -42,6 +42,13 @@ def validate_config(config: Dict[str, Any]) -> None:
     expected = str(model.get("expected_sha256") or "")
     if len(expected) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in expected):
         errors.append("model.expected_sha256 must be a 64-character hexadecimal digest")
+    assets = config.get("assets", {})
+    if not assets.get("manifest"):
+        errors.append("assets.manifest is required")
+    if not assets.get("checksums"):
+        errors.append("assets.checksums is required")
+    if not isinstance(assets.get("required"), list) or not assets.get("required"):
+        errors.append("assets.required must be a non-empty list")
     actions = config.get("decision", {}).get("actions", {})
     if not isinstance(actions, dict) or not actions:
         errors.append("decision.actions must be a non-empty mapping")

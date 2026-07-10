@@ -90,12 +90,14 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     inputs = config.get("inputs", {})
     detector = dict(config.get("detector", {}))
     model_cfg = dict(config.get("model", {}))
+    assets_cfg = dict(config.get("assets", {}))
     detector["weights"] = model_cfg.get("weights")
     detector["expected_sha256"] = model_cfg.get("expected_sha256")
-    frozen_manifest = read_json_if_exists(resolve_path("final_submission_assets/manifest.json"))
-    frozen_candidate = frozen_manifest.get("frozen_candidate", {})
+    manifest_path = resolve_path(assets_cfg.get("manifest", "models/manifest.json"))
+    frozen_manifest = read_json_if_exists(manifest_path)
+    frozen_candidate = frozen_manifest.get("frozen_candidate") or frozen_manifest.get("base_model", {})
     if frozen_candidate:
-        selected_imgsz = int(frozen_candidate.get("imgsz", 768))
+        selected_imgsz = int(frozen_candidate.get("imgsz", 640))
         detector["name"] = f"yolo11s_imgsz{selected_imgsz}"
         detector["imgsz"] = selected_imgsz
         detector["candidate_status"] = frozen_candidate.get("status", detector.get("candidate_status"))
@@ -109,7 +111,7 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     dryrun = read_json_if_exists(resolve_path(inputs.get("submission_dryrun_manifest", "runs/submission/dryrun_yolo11s_imgsz640_lock_val_20260710/manifest.json")))
     smoke = read_json_if_exists(resolve_path(inputs.get("submission_smoke_manifest", "runs/submission/smoke_yolo11s_imgsz640_lock_sar_20260710/manifest.json")))
 
-    weights_path = resolve_path(model_cfg.get("weights") or "final_submission_assets/best.pt")
+    weights_path = resolve_path(model_cfg.get("weights") or "models/base/yolo11s_ir_sar_imgsz640.pt")
     weights_hash = hash_if_exists(weights_path)
     expected_hash = model_cfg.get("expected_sha256")
     weights_hash["matches_expected"] = bool(expected_hash and weights_hash.get("sha256") == expected_hash)
@@ -136,15 +138,8 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     )
     specialist = parse_specialist(config)
 
-    fixed_artifacts = [
-        "final_submission_assets/best.pt",
-        "final_submission_assets/SHA256SUMS.txt",
-        "final_submission_assets/manifest.json",
-        "reports/final_candidate_card.md",
-        "reports/incremental_learning_p01_p04_summary.md",
-        "reports/agent_sar_soldier_casebank_summary.md",
-        "reports/submission_dryrun_lock_val_report.md",
-    ]
+    fixed_artifacts = list(assets_cfg.get("required", [model_cfg.get("weights")]))
+    checksum_path = resolve_path(assets_cfg.get("checksums", "models/SHA256SUMS.txt"))
 
     submission_cfg = config.get("submission", {})
     official_ready = bool(submission_cfg.get("official_test_ready", False))
@@ -200,7 +195,8 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
             "weights": {"path": rel_path(weights_path), **weights_hash},
             "inference_weights": {"path": rel_path(inference_weights_path), **inference_weights_hash},
             "inference_config": {"path": rel_path(inference_config_path), **hash_if_exists(inference_config_path)},
-            "checksums": verify_sha256s(resolve_path("final_submission_assets/SHA256SUMS.txt")),
+            "manifest": {"path": rel_path(manifest_path), **hash_if_exists(manifest_path)},
+            "checksums": {"path": rel_path(checksum_path), **verify_sha256s(checksum_path)},
             "artifacts": artifact_status(fixed_artifacts),
         },
         "sar_soldier": {

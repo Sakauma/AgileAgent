@@ -27,6 +27,11 @@ venv/
 *.zip
 *.pdf
 
+# Versioned release weights. Other checkpoints remain ignored.
+!/models/
+!/models/**
+/data/
+
 # Local credentials and environment files
 .env
 .env.*
@@ -51,6 +56,7 @@ venv/
 !/configs/base_dataset.yaml
 !/configs/incremental_no_old_distill_yolo11s.yaml
 !/configs/submission_infer_yolo11s_imgsz640.yaml
+!/configs/local_infer_cpu.yaml
 
 # Local competition notes are not part of the public source release.
 /*.md

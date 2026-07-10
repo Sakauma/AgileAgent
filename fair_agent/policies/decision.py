@@ -44,9 +44,12 @@ def build_decision(config: Dict[str, Any], state: Dict[str, Any], context: Dict[
     sar_focus = sensor == "sar" and class_focus == "soldier"
     diagnose_status = "completed" if case_current else ("ready" if sar_focus and case_freshness.get("reason") != "missing_inputs" else "blocked")
     incremental = state.get("incremental_learning", {})
-    incremental_freshness = incremental.get("freshness", {}).get("freshness", "missing")
+    incremental_freshness_state = incremental.get("freshness", {})
+    incremental_freshness = incremental_freshness_state.get("freshness", "missing")
     if incremental.get("complete") and incremental_freshness == "current":
         incremental_status = "completed" if incremental.get("passed") else "blocked"
+    elif incremental_freshness_state.get("reason") == "missing_inputs":
+        incremental_status = "blocked"
     else:
         incremental_status = "ready"
 

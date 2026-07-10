@@ -2,5 +2,5 @@
 # Install only when this WSL environment must run YOLO prediction locally.
 # If torch is already installed, prefer:
 #   pip install ultralytics opencv-python --no-deps
-ultralytics
+ultralytics>=8.3.0
 opencv-python
