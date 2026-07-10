@@ -71,6 +71,8 @@ def test_bootstrap_selects_only_supported_python() -> None:
     assert 'uv venv --python "${UV_PYTHON:-3.12}" --seed' in content
     assert "python3.8" not in content
     assert "nvidia-smi" in content
+    assert "2.5.1+cu124" in content
+    assert "0.20.1+cu124" in content
 
 
 def test_doctor_fails_when_workbench_dependency_is_missing(monkeypatch, capsys) -> None:

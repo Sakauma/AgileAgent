@@ -17,12 +17,12 @@ chmod +x scripts/bootstrap_x86.sh
 
 首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch 和智能体依赖、运行环境诊断，并在 GPU 0 上校验五个模型。配置完成后脚本退出，不启动工作台。
 
-默认使用 PyTorch `2.11.0+cu128` 和 `constraints-agent.txt` 中锁定的依赖组合。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`、`TORCH_VERSION` 和 `TORCHVISION_VERSION`。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
+默认使用已完成端到端验收的 PyTorch `2.5.1+cu124` 和 `constraints-agent.txt` 中锁定的依赖组合。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`、`TORCH_VERSION` 和 `TORCHVISION_VERSION`。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
 
 已有合适的 CUDA 版 PyTorch 环境时，也可手动安装：
 
 ```bash
-python -m pip install "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" --index-url https://download.pytorch.org/whl/cu128
+python -m pip install "torch==2.5.1+cu124" "torchvision==0.20.1+cu124" --index-url https://download.pytorch.org/whl/cu124
 python -m pip install -c constraints-agent.txt -e ".[workbench,inference,dev]"
 python -m fair_agent.cli doctor
 ```

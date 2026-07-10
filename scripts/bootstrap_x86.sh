@@ -17,9 +17,9 @@ python_supported() {
   "$1" -c 'import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)' >/dev/null 2>&1
 }
 
-PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
-TORCH_VERSION="${TORCH_VERSION:-2.11.0+cu128}"
-TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.26.0+cu128}"
+PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
+TORCH_VERSION="${TORCH_VERSION:-2.5.1+cu124}"
+TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.20.1+cu124}"
 if [[ -x .venv/bin/python ]]; then
   if ! python_supported .venv/bin/python || ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
     printf '现有 .venv 不完整或 Python 版本不受支持。请移走该目录后重新运行配置脚本。\n' >&2
