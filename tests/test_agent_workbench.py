@@ -128,4 +128,10 @@ def test_default_x86_inference_uses_gpu_zero() -> None:
     assert config["runtime"]["default_device"] == "0"
     assert inference["predict"]["device"] == "0"
     assert inference["predict"]["batch"] == 32
-    assert not Path("configs/local_infer_cpu.yaml").exists()
+
+
+def test_runtime_rejects_non_gpu_device() -> None:
+    config = load_config()
+    config["runtime"]["default_device"] = "cpu"
+    with pytest.raises(ValueError, match="GPU 编号"):
+        validate_config(config)

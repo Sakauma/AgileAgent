@@ -44,6 +44,13 @@ def resolve_path(value: str | Path) -> Path:
     return path if path.is_absolute() else ROOT / path
 
 
+def validate_gpu_device(value: Any) -> str:
+    device = str("0" if value is None else value)
+    if not device.isdigit():
+        raise ValueError("推理设备必须是非负 GPU 编号")
+    return device
+
+
 def collect_images(source: Path, exts: Iterable[str]) -> list[Path]:
     suffixes = {ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in exts}
     if source.is_file() and source.suffix.lower() == ".txt":
@@ -169,6 +176,8 @@ def make_zip(zip_path: Path, output_dir: Path, include_names: Iterable[str]) -> 
 def run_prediction(config: Mapping[str, Any], source_override: str | None, output_override: str | None, limit: int | None) -> Path:
     source_cfg = dict(config["source"])
     output_cfg = dict(config["output"])
+    predict_cfg = dict(config["predict"])
+    predict_cfg["device"] = validate_gpu_device(predict_cfg.get("device"))
     source = resolve_path(source_override or source_cfg["path"])
     output_root = resolve_path(output_cfg.get("root", "runs/submission"))
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -189,7 +198,6 @@ def run_prediction(config: Mapping[str, Any], source_override: str | None, outpu
     from ultralytics import YOLO
 
     model = YOLO(str(model_path))
-    predict_cfg = dict(config["predict"])
     results = list(model.predict(
         source=[str(path) for path in images],
         save=False,

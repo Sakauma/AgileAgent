@@ -36,6 +36,9 @@ def load_config(path: Union[str, Path] = DEFAULT_CONFIG) -> Dict[str, Any]:
 
 def validate_config(config: Dict[str, Any]) -> None:
     errors: List[str] = []
+    default_device = str(config.get("runtime", {}).get("default_device", ""))
+    if not default_device.isdigit() or int(default_device) < 0:
+        errors.append("runtime.default_device 必须是非负 GPU 编号")
     model = config.get("model", {})
     if not model.get("weights"):
         errors.append("model.weights is required")

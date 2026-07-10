@@ -18,9 +18,11 @@ from fair_agent.core.hashes import verify_sha256s
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="在 x86 NVIDIA GPU 上校验并加载发布的 YOLO 权重。")
-    parser.add_argument("--device", default="0", help="Ultralytics 设备编号，默认使用 GPU 0；仅显式传入 cpu 时使用 CPU。")
+    parser.add_argument("--device", type=int, default=0, help="Ultralytics GPU 编号，默认使用 GPU 0。")
     parser.add_argument("--load-only", action="store_true", help="只加载模型，不执行合成图推理。")
     args = parser.parse_args()
+    if args.device < 0:
+        parser.error("--device 必须是非负 GPU 编号")
 
     checksum_path = ROOT / "models" / "SHA256SUMS.txt"
     checksums = verify_sha256s(checksum_path)
@@ -33,8 +35,7 @@ def main() -> int:
     except ImportError as exc:
         raise SystemExit("缺少 Ultralytics 或 PyTorch，请安装推理依赖。") from exc
 
-    use_cpu = str(args.device).lower() == "cpu"
-    if not use_cpu and not torch.cuda.is_available():
+    if not torch.cuda.is_available():
         raise SystemExit("默认推理设备为 GPU，但当前 PyTorch 无法使用 CUDA。请检查显卡驱动和 CUDA 版 PyTorch。")
 
     model_paths = sorted((ROOT / "models").rglob("*.pt"))

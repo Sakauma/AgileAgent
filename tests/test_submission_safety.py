@@ -34,6 +34,13 @@ def test_duplicate_stems_are_rejected(tmp_path: Path) -> None:
         submission.validate_unique_stems(images)
 
 
+def test_inference_rejects_non_gpu_device() -> None:
+    assert submission.validate_gpu_device("0") == "0"
+    assert submission.validate_gpu_device(1) == "1"
+    with pytest.raises(ValueError, match="GPU 编号"):
+        submission.validate_gpu_device("cpu")
+
+
 def test_prediction_result_count_mismatch_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = tmp_path / "images"
     source.mkdir()

@@ -61,15 +61,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     py = configured_python(config)
     external = check_external_python(py)
     default_device = str(config.get("runtime", {}).get("default_device", "0"))
-    gpu_required = default_device.lower() != "cpu"
-    gpu_ready = not gpu_required or bool(external.get("accelerator", {}).get("cuda_available"))
+    gpu_ready = bool(external.get("accelerator", {}).get("cuda_available"))
     state = build_blackboard(config)
     artifacts = state.get("frozen_assets", {}).get("artifacts", {})
     result = {
         "runtime": external,
         "device": {
             "default": default_device,
-            "gpu_required": gpu_required,
+            "gpu_required": True,
             "ready": gpu_ready,
         },
         "dependency_groups": {
