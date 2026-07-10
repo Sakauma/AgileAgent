@@ -31,12 +31,22 @@ def check_external_python(path: Path) -> Dict[str, Any]:
     result: Dict[str, Any] = {"path": str(path), "exists": path.exists(), "modules": {}}
     if not path.exists():
         return result
-    code = (
-        "import importlib.util as u, json, sys; "
-        f"mods={ALL_MODULES!r}; "
-        "print(json.dumps({'executable': sys.executable, 'version': sys.version.split()[0], "
-        "'modules': {m: bool(u.find_spec(m)) for m in mods}}, ensure_ascii=False))"
-    )
+    code = "\n".join([
+        "import importlib.util as u, json, sys",
+        f"mods = {ALL_MODULES!r}",
+        "module_status = {m: bool(u.find_spec(m)) for m in mods}",
+        "accelerator = {'cuda_available': False, 'cuda_device_count': 0, 'cuda_devices': []}",
+        "if module_status.get('torch'):",
+        "    import torch",
+        "    accelerator = {",
+        "        'torch_version': torch.__version__,",
+        "        'torch_cuda_version': torch.version.cuda,",
+        "        'cuda_available': bool(torch.cuda.is_available()),",
+        "        'cuda_device_count': int(torch.cuda.device_count()),",
+        "        'cuda_devices': [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())],",
+        "    }",
+        "print(json.dumps({'executable': sys.executable, 'version': sys.version.split()[0], 'modules': module_status, 'accelerator': accelerator}, ensure_ascii=False))",
+    ])
     proc = subprocess.run([str(path), "-c", code], text=True, capture_output=True, timeout=60)
     result["returncode"] = proc.returncode
     if proc.returncode == 0 and proc.stdout.strip():
@@ -50,10 +60,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     py = configured_python(config)
     external = check_external_python(py)
+    default_device = str(config.get("runtime", {}).get("default_device", "0"))
+    gpu_required = default_device.lower() != "cpu"
+    gpu_ready = not gpu_required or bool(external.get("accelerator", {}).get("cuda_available"))
     state = build_blackboard(config)
     artifacts = state.get("frozen_assets", {}).get("artifacts", {})
     result = {
         "runtime": external,
+        "device": {
+            "default": default_device,
+            "gpu_required": gpu_required,
+            "ready": gpu_ready,
+        },
         "dependency_groups": {
             "required": REQUIRED_MODULES,
             "workbench": WORKBENCH_MODULES,
@@ -71,17 +89,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     missing_workbench = [name for name in WORKBENCH_MODULES if not modules.get(name)]
     missing_inference = [name for name in INFERENCE_MODULES if not modules.get(name)]
     if missing_required:
-        print("Missing required modules:", ", ".join(missing_required))
+        print("缺少必需模块：", ", ".join(missing_required))
     if missing_workbench:
-        print("Missing workbench modules:", ", ".join(missing_workbench))
-        print(f"Install workbench deps with: {py} -m pip install -e \".[workbench]\"")
+        print("缺少工作台模块：", ", ".join(missing_workbench))
+        print(f"安装命令：{py} -m pip install -e \".[workbench]\"")
     if missing_inference:
-        print("Missing optional inference modules:", ", ".join(missing_inference))
-        print("Install inference deps only when local prediction is needed; avoid unplanned CUDA/Torch upgrades.")
+        print("缺少推理模块：", ", ".join(missing_inference))
+    if not gpu_ready:
+        print("默认设备为 NVIDIA GPU，但当前环境无法使用 CUDA。请安装 CUDA 版 PyTorch 并检查显卡驱动。")
     inference_ok = bool(result["inference_weights"].get("matches_expected")) and bool(result["inference_weights"].get("same_frozen_path"))
     core_artifacts_ok = all(bool(value) for value in artifacts.values())
     checksums_ok = bool(result["frozen_checksums"].get("valid"))
-    return 1 if missing_required or not inference_ok or not core_artifacts_ok or not checksums_ok or external.get("returncode") != 0 else 0
+    return 1 if missing_required or not gpu_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or external.get("returncode") != 0 else 0
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:

@@ -3,6 +3,7 @@ seed: 20260705
 runtime:
   mode: local
   local_python: null
+  default_device: "0"
 
 model:
   weights: models/base/yolo11s_ir_sar_imgsz640.pt

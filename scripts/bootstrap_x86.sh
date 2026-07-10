@@ -5,10 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
 "${PYTHON_BIN}" -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+python -m pip install torch torchvision --index-url "${PYTORCH_INDEX_URL}"
 python -m pip install -e ".[workbench,inference,dev]"
 python -m fair_agent.cli doctor
 python scripts/smoke_models.py

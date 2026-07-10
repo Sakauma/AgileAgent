@@ -1,5 +1,6 @@
 param(
     [string]$Python = "python",
+    [string]$TorchIndexUrl = "https://download.pytorch.org/whl/cu128",
     [switch]$LoadOnly
 )
 
@@ -8,7 +9,7 @@ Set-Location (Resolve-Path (Join-Path $PSScriptRoot ".."))
 & $Python -m venv .venv
 $VenvPython = Join-Path $PSScriptRoot "..\.venv\Scripts\python.exe"
 & $VenvPython -m pip install --upgrade pip
-& $VenvPython -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+& $VenvPython -m pip install torch torchvision --index-url $TorchIndexUrl
 & $VenvPython -m pip install -e ".[workbench,inference,dev]"
 & $VenvPython -m fair_agent.cli doctor
 if ($LoadOnly) {

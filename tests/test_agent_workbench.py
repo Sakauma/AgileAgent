@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+import yaml
 
 from fair_agent.core.blackboard import build_blackboard
 from fair_agent.core.config import load_config, validate_config
@@ -119,3 +120,12 @@ def test_config_validation_fails_closed() -> None:
         assert "expected_sha256" in str(exc)
     else:
         raise AssertionError("invalid config was accepted")
+
+
+def test_default_x86_inference_uses_gpu_zero() -> None:
+    config = load_config()
+    inference = yaml.safe_load(Path("configs/local_infer_gpu.yaml").read_text(encoding="utf-8"))
+    assert config["runtime"]["default_device"] == "0"
+    assert inference["predict"]["device"] == "0"
+    assert inference["predict"]["batch"] == 32
+    assert not Path("configs/local_infer_cpu.yaml").exists()

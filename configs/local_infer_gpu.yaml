@@ -10,11 +10,11 @@ predict:
   conf: 0.001
   iou: 0.7
   max_det: 300
-  device: cpu
-  batch: 1
+  device: "0"
+  batch: 32
 output:
   root: runs/submission
-  package_name: yolo11s_x86_cpu
+  package_name: yolo11s_x86_gpu
   min_export_conf: null
   write_empty_txt: true
   write_plain_yolo_txt: true

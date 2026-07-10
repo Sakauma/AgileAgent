@@ -1,6 +1,6 @@
-# Optional local inference dependencies.
-# Install only when this WSL environment must run YOLO prediction locally.
-# If torch is already installed, prefer:
+# 本地 GPU 推理依赖。
+# 请先按显卡驱动安装匹配的 CUDA 版 PyTorch。
+# 已安装 PyTorch 时可使用：
 #   pip install ultralytics opencv-python --no-deps
 ultralytics>=8.3.0
 opencv-python
