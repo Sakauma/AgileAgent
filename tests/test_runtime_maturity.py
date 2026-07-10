@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -56,6 +57,19 @@ def test_run_directories_are_unique(tmp_path: Path) -> None:
     assert first != second
     assert first.is_dir()
     assert second.is_dir()
+
+
+def test_shell_entrypoints_have_valid_syntax() -> None:
+    for script in ["scripts/bootstrap_x86.sh", "scripts/start_agent.sh"]:
+        result = subprocess.run(["bash", "-n", script], text=True, capture_output=True)
+        assert result.returncode == 0, result.stderr
+
+
+def test_bootstrap_selects_only_supported_python() -> None:
+    content = Path("scripts/bootstrap_x86.sh").read_text(encoding="utf-8")
+    assert "python3.12 python3.11 python3.10" in content
+    assert "python3.8" not in content
+    assert "nvidia-smi" in content
 
 
 def test_doctor_fails_when_workbench_dependency_is_missing(monkeypatch, capsys) -> None:
@@ -153,6 +167,8 @@ def test_incremental_review_writes_declared_output(tmp_path: Path) -> None:
 def test_static_release_verification_passes() -> None:
     result = verify_release()
     assert result["status"] == "passed", result["errors"]
+    assert isinstance(result["required_assets"], dict)
+    assert len(result["required_assets"]) == 7
 
 
 def test_low_risk_action_output_cannot_escape_allowlist(tmp_path: Path) -> None:

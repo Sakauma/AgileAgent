@@ -88,6 +88,11 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
     for forbidden in ["pip install", "-m venv", "torch==", "bootstrap_x86.sh\nexec"]:
         if forbidden in start_text:
             errors.append(f"start_script_mutates_environment:{forbidden}")
+    bootstrap_script = ROOT / "scripts" / "bootstrap_x86.sh"
+    bootstrap_text = bootstrap_script.read_text(encoding="utf-8") if bootstrap_script.exists() else ""
+    for required_marker in ["python3.12 python3.11 python3.10", "nvidia-smi", "uname -m"]:
+        if required_marker not in bootstrap_text:
+            errors.append(f"bootstrap_gate_missing:{required_marker}")
 
     state = build_blackboard(config)
     if int(state.get("dataset", {}).get("image_count") or 0) != 750:
