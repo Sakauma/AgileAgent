@@ -1,6 +1,6 @@
 # AgileAgent
 
-面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。仓库包含统一 YOLO11s 检测器、四个合规增量专用模型、命令行工具和 Streamlit 工作台。x86-64 架构的 Windows、WSL 与 Linux 均可直接运行；训练数据、标签和竞赛提交结果不随仓库分发。
+面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。仓库包含统一 YOLO11s 检测器、四个合规增量专用模型、命令行工具和 Streamlit 工作台。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
 
 ## 首次配置环境
 
@@ -15,17 +15,9 @@ chmod +x scripts/bootstrap_x86.sh
 ./scripts/bootstrap_x86.sh
 ```
 
-### Windows PowerShell
-
-```powershell
-git clone git@github.com:Sakauma/AgileAgent.git
-Set-Location AgileAgent
-powershell -ExecutionPolicy Bypass -File scripts/bootstrap_x86.ps1
-```
-
 首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch 和智能体依赖、运行环境诊断，并在 GPU 0 上校验五个模型。配置完成后脚本退出，不启动工作台。
 
-默认使用 PyTorch 的 `cu128` 软件源。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页替换软件源：WSL/Linux 设置 `PYTORCH_INDEX_URL`，Windows PowerShell 使用 `-TorchIndexUrl` 参数。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
+默认使用 PyTorch 的 `cu128` 软件源。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
 
 已有合适的 CUDA 版 PyTorch 环境时，也可手动安装：
 
@@ -37,16 +29,10 @@ python -m fair_agent.cli doctor
 
 ## 日常一键启动
 
-环境配置完成后，日常启动不再安装或修改任何依赖。WSL/Linux 运行：
+环境配置完成后，日常启动不再安装或修改任何依赖：
 
 ```bash
 ./scripts/start_agent.sh
-```
-
-Windows PowerShell 运行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/start_agent.ps1
 ```
 
 启动脚本仅依次执行环境门禁、刷新黑板、生成默认决策和启动 Streamlit。浏览器访问 `http://localhost:8501`，在终端按 `Ctrl+C` 停止服务。

@@ -138,13 +138,13 @@ def test_runtime_rejects_non_gpu_device() -> None:
 
 
 def test_start_scripts_only_launch_configured_agent() -> None:
-    for path in [Path("scripts/start_agent.sh"), Path("scripts/start_agent.ps1")]:
-        content = path.read_text(encoding="utf-8")
-        assert "fair_agent.cli" in content
-        assert "doctor" in content
-        assert "refresh" in content
-        assert "decide" in content
-        assert "serve" in content
-        assert "pip install" not in content
-        assert "torch" not in content.lower()
-        assert "-m venv" not in content.lower()
+    path = Path("scripts/start_agent.sh")
+    content = path.read_text(encoding="utf-8")
+    assert "fair_agent.cli" in content
+    assert "doctor" in content
+    assert "refresh" in content
+    assert "decide" in content
+    assert "serve" in content
+    assert "pip install" not in content
+    assert "torch" not in content.lower()
+    assert "-m venv" not in content.lower()
