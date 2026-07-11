@@ -17,9 +17,17 @@ chmod +x scripts/bootstrap_x86.sh
 
 首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch 和智能体依赖、运行环境诊断，并在 GPU 0 上校验六份权重及三种功能。配置完成后脚本退出，不启动工作台。
 
-默认使用已完成端到端验收的 PyTorch `2.5.1+cu124` 和 `constraints-agent.txt` 中锁定的依赖组合。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`、`TORCH_VERSION` 和 `TORCHVISION_VERSION`。`doctor` 会列出 CUDA 状态、GPU 数量和显卡名称；默认 GPU 不可用时脚本会停止。
+配置脚本优先复用显式指定的 `AGILE_AGENT_PYTHON`、项目 `.venv` 或当前激活的 Conda/venv。现有环境只要满足 Python 3.10-3.12、`torch>=2.0`、CUDA 可用、`torch.version.cuda` 有效且 torchvision CUDA NMS 可执行，就会跳过 PyTorch 安装；其余依赖达到 `pyproject.toml` 的最低兼容版本且 `pip check` 无冲突时也会整体跳过安装。`2.5.1+cu124` 和 `constraints-agent.txt` 仅作为新环境的已验证默认组合与严格复现选项。
 
-已有合适的 CUDA 版 PyTorch 环境时，也可手动安装：
+例如直接复用已有的 `egor` 环境：
+
+```bash
+AGILE_AGENT_PYTHON=/home/sakauma/data/miniconda3/envs/egor/bin/python ./scripts/bootstrap_x86.sh
+```
+
+通过全部验收后，脚本会把选中的解释器路径写入本地 `.agent-python`；后续直接运行 `./scripts/start_agent.sh` 即可，无需再次传入环境变量。若兼容环境不存在，脚本才会创建 `.venv` 并安装默认组合。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`、`TORCH_VERSION` 和 `TORCHVISION_VERSION`。`doctor` 会列出 CUDA状态、GPU数量和显卡名称；默认GPU不可用时脚本会停止。
+
+需要严格复现已验收依赖组合时，可手动安装：
 
 ```bash
 python -m pip install "torch==2.5.1+cu124" "torchvision==0.20.1+cu124" --index-url https://download.pytorch.org/whl/cu124

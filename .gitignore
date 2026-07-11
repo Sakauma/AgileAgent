@@ -6,6 +6,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 .venv
+.agent-python
 venv/
 *.egg-info/
 

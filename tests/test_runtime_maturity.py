@@ -108,6 +108,25 @@ def test_bootstrap_selects_only_supported_python() -> None:
     assert "0.20.1+cu124" in content
 
 
+def test_bootstrap_reuses_compatible_cuda_environment() -> None:
+    content = Path("scripts/bootstrap_x86.sh").read_text(encoding="utf-8")
+    assert "AGILE_AGENT_PYTHON" in content
+    assert "torch.version.cuda" in content
+    assert 'tuple(map(int, match.groups())) < (2, 0)' in content
+    assert "torchvision.ops.nms" in content
+    assert "dependencies_compatible" in content
+    assert "> .agent-python" in content
+    assert "python -m pip install --upgrade pip" not in content
+    assert "--force-reinstall" not in content
+    assert "-c constraints-agent.txt" not in content
+
+
+def test_start_script_reuses_bootstrap_selected_python() -> None:
+    content = Path("scripts/start_agent.sh").read_text(encoding="utf-8")
+    assert '[[ -f "${ROOT_DIR}/.agent-python" ]]' in content
+    assert 'IFS= read -r AGENT_PYTHON < "${ROOT_DIR}/.agent-python"' in content
+
+
 def test_doctor_fails_when_workbench_dependency_is_missing(monkeypatch, capsys) -> None:
     external = {
         "returncode": 0,

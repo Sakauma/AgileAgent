@@ -9,15 +9,15 @@ description = "Auditable IR/SAR rapid-learning agent workbench"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-  "pillow",
-  "pyyaml",
+  "pillow>=9.5",
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
-workbench = ["pandas", "starlette", "uvicorn", "python-multipart"]
-inference = ["opencv-python", "ultralytics>=8.3.0"]
+workbench = ["pandas>=2.0", "starlette>=0.40", "uvicorn>=0.30", "python-multipart>=0.0.9"]
+inference = ["opencv-python>=4.8", "ultralytics>=8.3.0"]
 remote = ["pexpect"]
-dev = ["pytest", "httpx2"]
+dev = ["pytest>=8.0", "httpx2>=2.5"]
 
 [project.scripts]
 agile-agent = "fair_agent.cli:main"

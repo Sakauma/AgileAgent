@@ -4,7 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
-AGENT_PYTHON="${AGILE_AGENT_PYTHON:-${ROOT_DIR}/.venv/bin/python}"
+if [[ -n "${AGILE_AGENT_PYTHON:-}" ]]; then
+  AGENT_PYTHON="${AGILE_AGENT_PYTHON}"
+elif [[ -f "${ROOT_DIR}/.agent-python" ]]; then
+  IFS= read -r AGENT_PYTHON < "${ROOT_DIR}/.agent-python"
+else
+  AGENT_PYTHON="${ROOT_DIR}/.venv/bin/python"
+fi
 if [[ ! -x "${AGENT_PYTHON}" ]]; then
   printf '未找到已配置的 Python：%s\n请先运行 scripts/bootstrap_x86.sh。\n' "${AGENT_PYTHON}" >&2
   exit 1
