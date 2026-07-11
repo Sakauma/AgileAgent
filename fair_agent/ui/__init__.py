@@ -1,1 +1,1 @@
-"""Streamlit UI for the IR/SAR agent workbench."""
+"""Operator-facing terminal UI for the IR/SAR agent."""

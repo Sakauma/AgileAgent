@@ -14,10 +14,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-workbench = ["pandas", "streamlit"]
+workbench = ["pandas", "starlette", "uvicorn", "python-multipart"]
 inference = ["opencv-python", "ultralytics>=8.3.0"]
 remote = ["pexpect"]
-dev = ["pytest"]
+dev = ["pytest", "httpx2"]
 
 [project.scripts]
 agile-agent = "fair_agent.cli:main"

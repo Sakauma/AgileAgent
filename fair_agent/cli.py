@@ -22,7 +22,7 @@ from fair_agent.ui.console import run_console_frontend
 
 
 REQUIRED_MODULES = ["yaml", "PIL"]
-WORKBENCH_MODULES = ["pandas", "streamlit"]
+WORKBENCH_MODULES = ["pandas", "starlette", "uvicorn", "multipart"]
 INFERENCE_MODULES = ["ultralytics", "cv2", "torch", "torchvision"]
 ALL_MODULES = REQUIRED_MODULES + WORKBENCH_MODULES + INFERENCE_MODULES
 
@@ -326,20 +326,20 @@ def cmd_serve(args: argparse.Namespace) -> int:
     runtime = config.get("runtime", {})
     host = str(runtime.get("server_host", "127.0.0.1"))
     port = int(runtime.get("server_port", 8501))
-    if not check_module("streamlit"):
-        print("缺少 Streamlit。请先运行 scripts/bootstrap_x86.sh 完成环境配置。")
+    missing = [name for name in ("starlette", "uvicorn", "multipart") if not check_module(name)]
+    if missing:
+        print(f"缺少 Web 服务模块：{', '.join(missing)}。请先运行 scripts/bootstrap_x86.sh 完成环境配置。")
         return 1
-    app_path = ROOT / "fair_agent" / "ui" / "app.py"
     command = [
         sys.executable,
         "-m",
-        "streamlit",
-        "run",
-        str(app_path),
-        f"--server.address={host}",
-        f"--server.port={port}",
-        "--server.headless=true",
-        "--browser.gatherUsageStats=false",
+        "uvicorn",
+        "fair_agent.web.app:app",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--no-access-log",
     ]
     try:
         return subprocess.call(command, cwd=str(ROOT))
@@ -347,7 +347,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print("\n工作台已停止。")
         return 0
     except FileNotFoundError:
-        print("未找到 Streamlit。请先运行 scripts/bootstrap_x86.sh 完成环境配置。")
+        print("未找到 Uvicorn。请先运行 scripts/bootstrap_x86.sh 完成环境配置。")
         return 1
 
 

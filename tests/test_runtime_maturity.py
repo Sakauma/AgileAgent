@@ -30,8 +30,10 @@ def test_serve_is_bound_to_loopback(monkeypatch) -> None:
     monkeypatch.setattr(cli.subprocess, "call", fake_call)
     code = cli.cmd_serve(argparse.Namespace(config="configs/agent_pipeline.yaml"))
     assert code == 0
-    assert "--server.address=127.0.0.1" in captured["command"]
-    assert "--server.port=8501" in captured["command"]
+    assert captured["command"][:4] == [sys.executable, "-m", "uvicorn", "fair_agent.web.app:app"]
+    assert captured["command"][captured["command"].index("--host") + 1] == "127.0.0.1"
+    assert captured["command"][captured["command"].index("--port") + 1] == "8501"
+    assert "--no-access-log" in captured["command"]
 
 
 def test_serve_stops_cleanly_on_keyboard_interrupt(monkeypatch, capsys) -> None:
@@ -47,18 +49,18 @@ def test_serve_stops_cleanly_on_keyboard_interrupt(monkeypatch, capsys) -> None:
     assert "工作台已停止" in output
 
 
-def test_web_ui_keeps_sidebar_expand_control_visible() -> None:
-    content = Path("fair_agent/ui/app.py").read_text(encoding="utf-8")
-    assert '[data-testid="stToolbar"] {display:flex !important' in content
-    assert '[data-testid="stExpandSidebarButton"]' in content
-    assert 'width:38px !important' in content
-    assert '[data-testid="stToolbar"], footer {display:none' not in content
+def test_web_ui_has_no_collapsible_sidebar_dependency() -> None:
+    content = Path("fair_agent/web/static/index.html").read_text(encoding="utf-8")
+    assert "mobileMenu" in content
+    assert "main-nav" in content
+    assert "sidebar" not in content.lower()
 
 
-def test_web_upload_limits_are_declared_in_streamlit_config() -> None:
-    content = Path(".streamlit/config.toml").read_text(encoding="utf-8")
-    assert "maxUploadSize = 20" in content
-    assert "maxMessageSize = 50" in content
+def test_web_upload_limits_are_owned_by_inference_module() -> None:
+    content = Path("fair_agent/modules/web_inference.py").read_text(encoding="utf-8")
+    assert "MAX_FILE_BYTES = 20 * 1024 * 1024" in content
+    assert "MAX_BATCH_FILES = 20" in content
+    assert "MAX_BATCH_BYTES = 200 * 1024 * 1024" in content
 
 
 def test_cli_has_no_retired_image_size_commands() -> None:
@@ -110,7 +112,8 @@ def test_doctor_fails_when_workbench_dependency_is_missing(monkeypatch, capsys) 
     external = {
         "returncode": 0,
         "modules": {
-            "yaml": True, "PIL": True, "pandas": True, "streamlit": False,
+            "yaml": True, "PIL": True, "pandas": True, "starlette": True,
+            "uvicorn": True, "multipart": False,
             "ultralytics": True, "cv2": True, "torch": True,
         },
         "accelerator": {"cuda_available": True, "cuda_device_count": 1, "cuda_devices": ["test-gpu"]},
