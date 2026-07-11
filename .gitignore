@@ -68,7 +68,6 @@ venv/
 # Local competition notes are not part of the public source release.
 /*.md
 !/README.md
-!/AGENTS.md
 /docs/
 !/docs/
 !/docs/*.md
