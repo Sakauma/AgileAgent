@@ -8,7 +8,7 @@ AgileAgent 使用三个不同功能模型形成 `环境认知 -> 目标检测 ->
 |---|---|---|---|---|
 | Scene-SensorNet | 场景与传感器认知 | RGB 图像 | IR/SAR、air/forest/sea/urban、置信度 | lock sensor 0.98947、scene 0.76842、joint 0.76842 |
 | Unified YOLO11s | IR/SAR 四类目标检测 | RGB 图像 | 框、类别、置信度 | lock-all mAP50 0.91202 |
-| Incremental Model Bank | 仅使用增量数据的类别增量学习 | 增量图像/标签、冻结基础权重、关注类别 | 旧类+新类组合预测、New-mAP50、KRR、门禁结论 | p02-p04 通过，p01 待改进 |
+| Incremental Model Bank | 仅使用增量数据的增量目标检测，以类别增量为主并支持目标增量 | 增量图像/标签、冻结基础权重、增量模式 | 组合预测、New-mAP50、KRR、门禁结论 | 类别增量 p02-p04 通过，p01 待改进 |
 
 Scene-SensorNet 为 192,350 参数的双头 CNN，训练配置位于 `configs/scene_sensor_model.yaml`。模型选择只使用 dev，最终验收使用独立 lock；权重和指标分别位于 `models/context/scene_sensor_net.pt` 与 `models/context/scene_sensor_metrics.json`。
 
@@ -24,7 +24,7 @@ flowchart LR
     D --> C
 ```
 
-Scene-SensorNet 不改变 YOLO 的输入张量；其预测进入 Agent 策略上下文。增量模型采用类别增量协议，训练和验证都只能读取增量数据。增量模型不会自动覆盖统一检测结果，只有通过数据边界、New-mAP50 与 KRR 三重门禁的协议才会产生人工复核候选。
+Scene-SensorNet 不改变 YOLO 的输入张量；其预测进入 Agent 策略上下文。增量模型当前以类别增量协议为主，同时允许目标增量协议；两种模式的训练和验证都只能读取增量数据。只有通过数据边界、New-mAP50 与 KRR 三重门禁的协议才会产生人工复核候选。
 
 认知结果可直接进入策略：
 

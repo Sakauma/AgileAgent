@@ -122,9 +122,11 @@ thresholds:
   weak_class_map50: 0.80
 
 incremental:
-  task_type: class_incremental_object_detection
+  task_type: incremental_object_detection
+  primary_mode: class_incremental
+  supported_modes: [class_incremental, target_incremental]
   learning_data_scope: incremental_dataset_only
-  policy: configs/class_incremental_policy.yaml
+  policy: configs/incremental_detection_policy.yaml
   expected_protocols: [p01_new_small_aircraft, p02_new_warship, p03_new_tank, p04_new_soldier]
   require_compliant_no_old_data: true
 

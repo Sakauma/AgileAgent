@@ -22,7 +22,7 @@ def test_three_distinct_functional_models_are_registered() -> None:
     assert {item["function"] for item in result["models"]} == {
         "context_perception",
         "multimodal_target_detection",
-        "new_class_incremental_learning",
+        "incremental_object_detection",
     }
 
 
@@ -66,7 +66,7 @@ def test_incremental_status_is_derived_from_frozen_evidence(tmp_path: Path) -> N
     evidence_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     registry = yaml.safe_load(Path("configs/functional_models.yaml").read_text(encoding="utf-8"))
-    incremental = next(item for item in registry["models"] if item["function"] == "new_class_incremental_learning")
+    incremental = next(item for item in registry["models"] if item["function"] == "incremental_object_detection")
     incremental["evidence"]["path"] = str(evidence_path)
     incremental["evidence"]["sha256"] = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
     registry_path = tmp_path / "functional_models.yaml"

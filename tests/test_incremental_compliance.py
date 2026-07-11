@@ -1,6 +1,7 @@
 from fair_agent.modules.incremental_compliance import (
     evaluate_incremental_metrics,
     verify_class_incremental_learning_scope,
+    verify_incremental_learning_scope,
     verify_new_images_only,
 )
 from fair_agent.modules.status import parse_incremental
@@ -34,7 +35,8 @@ def test_class_incremental_scope_checks_training_validation_and_classes() -> Non
         ["soldier", "tank", "warship"],
         ["small_aircraft"],
     )
-    assert result["task_type"] == "class_incremental_object_detection"
+    assert result["task_type"] == "incremental_object_detection"
+    assert result["incremental_mode"] == "class_incremental"
     assert result["learning_data_scope"] == "incremental_dataset_only"
     assert result["learning_scope_verified"] is True
     assert result["old_raw_image_count"] == 0
@@ -63,7 +65,7 @@ def test_class_incremental_scope_rejects_overlap_and_invalid_class_partition() -
         ["tank"],
     )
     assert result["train_validation_overlap"] == ["a"]
-    assert result["class_partition_valid"] is False
+    assert result["class_contract_valid"] is False
     assert result["learning_scope_verified"] is False
 
 
@@ -94,7 +96,9 @@ def test_required_compliance_never_falls_back_to_legacy_replay_metrics(tmp_path)
         },
         "incremental": {
             "require_compliant_no_old_data": True,
-            "task_type": "class_incremental_object_detection",
+            "task_type": "incremental_object_detection",
+            "primary_mode": "class_incremental",
+            "supported_modes": ["class_incremental", "target_incremental"],
             "learning_data_scope": "incremental_dataset_only",
             "expected_protocols": ["p01_new_small_aircraft"],
         },
@@ -104,3 +108,18 @@ def test_required_compliance_never_falls_back_to_legacy_replay_metrics(tmp_path)
     assert result["protocols"] == []
     assert result["complete"] is False
     assert result["source"] == "missing_compliant_metrics"
+
+
+def test_target_incremental_allows_existing_class_samples() -> None:
+    result = verify_incremental_learning_scope(
+        ["generated/train/a.png"],
+        ["generated/val/b.png"],
+        ["increment/train/a.png"],
+        ["increment/val/b.png"],
+        ["soldier", "tank"],
+        ["soldier"],
+        incremental_mode="target_incremental",
+    )
+    assert result["incremental_mode"] == "target_incremental"
+    assert result["class_contract_valid"] is True
+    assert result["learning_scope_verified"] is True

@@ -15,16 +15,18 @@ def render_incremental_review(summary: Dict[str, Any]) -> str:
         f"- 合规证据已验证：`{summary.get('compliance_verified')}`",
         f"- 总体验收：`{'通过' if summary.get('passed') else '未通过'}`",
         f"- 任务类型：`{summary.get('task_type')}`",
+        f"- 主模式：`{summary.get('primary_mode')}`",
+        f"- 支持模式：`{summary.get('supported_modes')}`",
         f"- 学习数据边界：`{summary.get('learning_data_scope')}`",
         f"- New-mAP50 门槛：`{acceptance.get('min_new_class_map50')}`",
         f"- KRR 门槛：`{acceptance.get('min_krr')}`",
         "",
-        "| 协议 | 新类别 | 数据边界 | New-mAP50 | KRR | 旧类原始图像数 | 合规 | 结果 |",
-        "|---|---|---|---:|---:|---:|---|---|",
+        "| 协议 | 模式 | 新增目标类别 | 数据边界 | New-mAP50 | KRR | 旧类原始图像数 | 合规 | 结果 |",
+        "|---|---|---|---|---:|---:|---:|---|---|",
     ]
     for item in summary.get("protocols", []):
         lines.append(
-            f"| {item.get('protocol')} | {item.get('new_class')} | "
+            f"| {item.get('protocol')} | {item.get('incremental_mode')} | {item.get('new_class')} | "
             f"{'通过' if item.get('learning_scope_verified') else '失败'} | "
             f"{float(item.get('new_map50') or 0):.5f} | {float(item.get('krr') or 0):.5f} | "
             f"{item.get('old_raw_image_count')} | {item.get('compliant')} | "

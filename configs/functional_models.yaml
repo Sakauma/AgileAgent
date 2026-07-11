@@ -31,18 +31,18 @@ models:
         sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
     evidence:
       path: models/manifest.json
-      sha256: 34b3d8c92d30d49a3cbedc3566493fa52828da3fa5a12ef9534595f90ba3e59d
+      sha256: 81b5b26248c9aabb7b3e934fa09d6f62273f222e4c83eb1406f49621e96fdd59
     runtime:
       x86_gpu: true
       ascend_310b: false
 
   - id: incremental_model_bank_v1
-    function: new_class_incremental_learning
-    display_name: 新类别快速学习模型库
+    function: incremental_object_detection
+    display_name: 增量目标检测模型库
     implementation: incremental_data_only_frozen_base_plus_class_specialists
     status: partially_verified
     inputs: [incremental_images_labels, frozen_base_weights, class_focus]
-    outputs: [incremental_boxes, new_map50, krr, acceptance]
+    outputs: [incremental_boxes, incremental_mode, new_map50, krr, acceptance]
     artifacts:
       - path: models/incremental/p01_new_small_aircraft_best.pt
         sha256: dec95184c44d168bfe5b3760cf55fa71fdbd93ff8fdd4542be63c32a6233f37b
@@ -54,7 +54,7 @@ models:
         sha256: c22face61219ebf6d7a887f57dd3b90030b7a50324789283e66a12532372ccee
     evidence:
       path: models/manifest.json
-      sha256: 34b3d8c92d30d49a3cbedc3566493fa52828da3fa5a12ef9534595f90ba3e59d
+      sha256: 81b5b26248c9aabb7b3e934fa09d6f62273f222e4c83eb1406f49621e96fdd59
     runtime:
       x86_gpu: true
       ascend_310b: false

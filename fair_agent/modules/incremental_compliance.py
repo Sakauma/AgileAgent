@@ -59,13 +59,14 @@ def verify_new_images_only(
     }
 
 
-def verify_class_incremental_learning_scope(
+def verify_incremental_learning_scope(
     training_images: Sequence[str | Path],
     validation_images: Sequence[str | Path],
     allowed_training_images: Sequence[str | Path],
     allowed_validation_images: Sequence[str | Path],
     base_classes: Sequence[str],
     new_classes: Sequence[str],
+    incremental_mode: str,
     verify_content: bool = False,
 ) -> Dict[str, Any]:
     train = verify_new_images_only(training_images, allowed_training_images, verify_content=verify_content)
@@ -75,22 +76,50 @@ def verify_class_incremental_learning_scope(
     overlap = sorted(train_stems & val_stems)
     base = [str(value) for value in base_classes]
     new = [str(value) for value in new_classes]
-    class_partition_valid = bool(base and new) and not (set(base) & set(new)) and len(base) == len(set(base)) and len(new) == len(set(new))
+    classes_unique = len(base) == len(set(base)) and len(new) == len(set(new))
+    if incremental_mode == "class_incremental":
+        class_contract_valid = bool(base and new) and classes_unique and not (set(base) & set(new))
+    elif incremental_mode == "target_incremental":
+        class_contract_valid = bool(base and new) and classes_unique
+    else:
+        raise ValueError(f"Unsupported incremental mode: {incremental_mode}")
     old_raw_count = int(train["old_raw_image_count"]) + int(val["old_raw_image_count"])
-    compliant = bool(train["compliant"] and val["compliant"] and not overlap and class_partition_valid)
+    compliant = bool(train["compliant"] and val["compliant"] and not overlap and class_contract_valid)
     return {
-        "task_type": "class_incremental_object_detection",
+        "task_type": "incremental_object_detection",
+        "incremental_mode": incremental_mode,
         "learning_data_scope": "incremental_dataset_only",
         "training": train,
         "validation": val,
         "train_validation_overlap": overlap,
         "base_classes": base,
         "new_classes": new,
-        "class_partition_valid": class_partition_valid,
+        "class_contract_valid": class_contract_valid,
         "old_raw_image_count": old_raw_count,
         "learning_scope_verified": compliant,
         "compliant": compliant,
     }
+
+
+def verify_class_incremental_learning_scope(
+    training_images: Sequence[str | Path],
+    validation_images: Sequence[str | Path],
+    allowed_training_images: Sequence[str | Path],
+    allowed_validation_images: Sequence[str | Path],
+    base_classes: Sequence[str],
+    new_classes: Sequence[str],
+    verify_content: bool = False,
+) -> Dict[str, Any]:
+    return verify_incremental_learning_scope(
+        training_images,
+        validation_images,
+        allowed_training_images,
+        allowed_validation_images,
+        base_classes,
+        new_classes,
+        incremental_mode="class_incremental",
+        verify_content=verify_content,
+    )
 
 
 def evaluate_incremental_metrics(

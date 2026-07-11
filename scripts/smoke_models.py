@@ -49,7 +49,7 @@ def main() -> int:
         raise SystemExit("默认推理设备为 GPU，但当前 PyTorch 无法使用 CUDA。请检查显卡驱动和 CUDA 版 PyTorch。")
 
     detection_entry = next(item for item in functional["models"] if item["function"] == "multimodal_target_detection")
-    incremental_entry = next(item for item in functional["models"] if item["function"] == "new_class_incremental_learning")
+    incremental_entry = next(item for item in functional["models"] if item["function"] == "incremental_object_detection")
     context_entry = next(item for item in functional["models"] if item["function"] == "context_perception")
     model_paths = [ROOT / detection_entry["artifacts"][0]["path"]]
     model_paths.extend(ROOT / artifact["path"] for artifact in incremental_entry["artifacts"])

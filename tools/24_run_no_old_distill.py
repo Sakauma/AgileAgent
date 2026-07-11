@@ -14,7 +14,7 @@ import yaml
 
 from fair_agent.modules.incremental_compliance import (
     evaluate_incremental_metrics,
-    verify_class_incremental_learning_scope,
+    verify_incremental_learning_scope,
 )
 
 
@@ -138,13 +138,14 @@ def verify_specialist_dataset(dataset: Path, protocol: Mapping[str, Any], new_id
     validation = split_values(val_list)
     allowed_training = split_values(allowed_train_list)
     allowed_validation = split_values(allowed_val_list)
-    compliance = verify_class_incremental_learning_scope(
+    compliance = verify_incremental_learning_scope(
         training,
         validation,
         allowed_training,
         allowed_validation,
         protocol["base_classes"],
         protocol["new_classes"],
+        incremental_mode=protocol.get("incremental_mode", "class_incremental"),
         verify_content=True,
     )
     accepted_label_ids = {0} if protocol.get("specialist_remapped") else set(new_ids)
@@ -287,7 +288,8 @@ def main() -> int:
     decision["passed"] = bool(decision["passed"] and decision["parameter_isolation_pass"])
     row = {
         "protocol": args.protocol,
-        "task_type": "class_incremental_object_detection",
+        "task_type": "incremental_object_detection",
+        "incremental_mode": protocol.get("incremental_mode", "class_incremental"),
         "learning_data_scope": "incremental_dataset_only",
         "learning_scope_verified": compliance.get("learning_scope_verified", False),
         "method": method,

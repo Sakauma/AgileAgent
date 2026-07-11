@@ -79,7 +79,7 @@ with tabs[0]:
     function_labels = {
         "context_perception": "场景与传感器认知",
         "multimodal_target_detection": "IR/SAR 统一目标检测",
-        "new_class_incremental_learning": "新类别快速学习",
+        "incremental_object_detection": "增量目标检测",
     }
     status_labels = {
         "verified": "已验证",
@@ -188,7 +188,9 @@ with tabs[4]:
     st.subheader("3+1 增量学习")
     incremental = state.get("incremental_learning", {})
     st.caption(
-        f"任务：{incremental.get('task_type', 'class_incremental_object_detection')} · "
+        f"任务：{incremental.get('task_type', 'incremental_object_detection')} · "
+        f"主模式：{incremental.get('primary_mode', 'class_incremental')} · "
+        f"支持：{', '.join(incremental.get('supported_modes', ['class_incremental', 'target_incremental']))} · "
         f"学习数据边界：{incremental.get('learning_data_scope', 'incremental_dataset_only')}"
     )
     cols = st.columns(3)

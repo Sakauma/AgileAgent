@@ -1,5 +1,7 @@
-schema_version: 1
-task_type: class_incremental_object_detection
+schema_version: 2
+task_type: incremental_object_detection
+primary_mode: class_incremental
+supported_modes: [class_incremental, target_incremental]
 
 learning_phase:
   allowed_inputs:
@@ -16,11 +18,17 @@ learning_phase:
   teacher_inference_scope: incremental_images_only
   train_validation_overlap_allowed: false
 
-class_contract:
-  require_nonempty_base_classes: true
-  require_nonempty_new_classes: true
-  require_disjoint_class_sets: true
-  specialist_global_id_remap_required: true
+mode_contracts:
+  class_incremental:
+    require_nonempty_base_classes: true
+    require_nonempty_new_classes: true
+    require_disjoint_class_sets: true
+    specialist_global_id_remap_required: true
+  target_incremental:
+    require_nonempty_base_classes: true
+    require_nonempty_incremental_target_classes: true
+    allow_existing_class_targets: true
+    require_disjoint_class_sets: false
 
 evaluation_phase:
   starts_after_incremental_weights_frozen: true

@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Mapping, Sequence
 
 import yaml
 
-from fair_agent.modules.incremental_compliance import verify_class_incremental_learning_scope
+from fair_agent.modules.incremental_compliance import verify_incremental_learning_scope
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,13 +177,14 @@ def build_protocol(config: Mapping[str, Any], protocol: Mapping[str, Any], devic
     val_list = output_dir / "splits" / "val.txt"
     write_list(train_list, train["images"])
     write_list(val_list, val["images"])
-    compliance = verify_class_incremental_learning_scope(
+    compliance = verify_incremental_learning_scope(
         train["images"],
         val["images"],
         train_source,
         val_source,
         protocol["base_classes"],
         protocol["new_classes"],
+        incremental_mode=protocol.get("incremental_mode", "class_incremental"),
         verify_content=True,
     )
     if not compliance["compliant"]:
@@ -192,7 +193,8 @@ def build_protocol(config: Mapping[str, Any], protocol: Mapping[str, Any], devic
     write_dataset_yaml(dataset_yaml, train_list, val_list)
     manifest = {
         "protocol": name,
-        "task_type": "class_incremental_object_detection",
+        "task_type": "incremental_object_detection",
+        "incremental_mode": protocol.get("incremental_mode", "class_incremental"),
         "method": "new_images_only_teacher_pseudolabel_distillation",
         "teacher_weight": rel(teacher),
         "base_classes": list(protocol["base_classes"]),

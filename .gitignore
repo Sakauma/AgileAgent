@@ -62,7 +62,7 @@ venv/
 !/configs/local_infer_gpu.yaml
 !/configs/scene_sensor_model.yaml
 !/configs/functional_models.yaml
-!/configs/class_incremental_policy.yaml
+!/configs/incremental_detection_policy.yaml
 
 # Local competition notes are not part of the public source release.
 /*.md

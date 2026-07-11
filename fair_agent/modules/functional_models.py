@@ -122,7 +122,7 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                 if not isinstance(base.get("lock_all_map50"), (int, float)):
                     errors.append(f"functional_evidence_metric_missing:{model_id}")
                 evidence_summary = {"lock_all_map50": base.get("lock_all_map50")}
-            elif function_name == "new_class_incremental_learning":
+            elif function_name == "incremental_object_detection":
                 protocols = evidence_data.get("incremental_models", [])
                 manifest_entry = next(
                     (
@@ -138,12 +138,14 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     or manifest_entry.get("function") != function_name
                     or manifest_entry.get("status") != item.get("status")
                     or manifest_entry.get("model_count") != len(protocols)
-                    or manifest_entry.get("task_type") != "class_incremental_object_detection"
+                    or manifest_entry.get("task_type") != "incremental_object_detection"
+                    or set(manifest_entry.get("supported_modes", [])) != {"class_incremental", "target_incremental"}
                     or manifest_entry.get("learning_data_scope") != "incremental_dataset_only"
                     or manifest_entry.get("old_raw_image_count") != 0
                     or any(
                         not isinstance(protocol, dict)
-                        or protocol.get("task_type") != "class_incremental_object_detection"
+                        or protocol.get("task_type") != "incremental_object_detection"
+                        or protocol.get("incremental_mode") not in {"class_incremental", "target_incremental"}
                         or protocol.get("learning_data_scope") != "incremental_dataset_only"
                         for protocol in protocols
                     )
@@ -156,6 +158,8 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     errors.append(f"functional_status_mismatch:{model_id}")
                 evidence_summary = {
                     "task_type": manifest_entry.get("task_type"),
+                    "primary_mode": manifest_entry.get("primary_mode"),
+                    "supported_modes": manifest_entry.get("supported_modes"),
                     "learning_data_scope": manifest_entry.get("learning_data_scope"),
                     "old_raw_image_count": manifest_entry.get("old_raw_image_count"),
                     "protocol_count": len(protocols),

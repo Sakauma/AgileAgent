@@ -215,7 +215,7 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
             tracked_inputs.extend(str(item) for item in value)
     tracked_inputs.append(rel_path(demo_path))
     tracked_inputs.append(str(functional_cfg.get("registry", "configs/functional_models.yaml")))
-    tracked_inputs.append(str(config.get("incremental", {}).get("policy", "configs/class_incremental_policy.yaml")))
+    tracked_inputs.append(str(config.get("incremental", {}).get("policy", "configs/incremental_detection_policy.yaml")))
 
     source_values = set(evidence_sources.values())
     evidence_mode = "live" if source_values == {"live"} else ("demo" if source_values == {"demo"} else "mixed")

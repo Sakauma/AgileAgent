@@ -72,8 +72,13 @@ def validate_config(config: Dict[str, Any]) -> None:
     if required_functional_count < 3:
         errors.append("functional_models.required_count must be at least 3")
     incremental = config.get("incremental", {})
-    if incremental.get("task_type") != "class_incremental_object_detection":
-        errors.append("incremental.task_type must be class_incremental_object_detection")
+    if incremental.get("task_type") != "incremental_object_detection":
+        errors.append("incremental.task_type must be incremental_object_detection")
+    supported_modes = incremental.get("supported_modes", [])
+    if set(supported_modes) != {"class_incremental", "target_incremental"}:
+        errors.append("incremental.supported_modes must include class_incremental and target_incremental")
+    if incremental.get("primary_mode") not in supported_modes:
+        errors.append("incremental.primary_mode must be listed in incremental.supported_modes")
     if incremental.get("learning_data_scope") != "incremental_dataset_only":
         errors.append("incremental.learning_data_scope must be incremental_dataset_only")
     if not incremental.get("policy"):

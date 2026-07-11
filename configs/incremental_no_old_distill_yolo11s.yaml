@@ -1,5 +1,5 @@
 seed: 20260705
-policy: configs/class_incremental_policy.yaml
+policy: configs/incremental_detection_policy.yaml
 output_root: incremental_protocols_no_old
 specialist_output_root: incremental_protocols_no_old_specialist
 project: runs/detect/incremental_no_old_distill
@@ -55,6 +55,7 @@ eval:
 
 protocols:
   - name: p01_new_small_aircraft
+    incremental_mode: class_incremental
     base_classes: [soldier, tank, warship]
     new_classes: [small_aircraft]
     teacher_weight: runs/detect/runs/detect/incremental_yolo11s/p01_new_small_aircraft_base-8/weights/best.pt
@@ -68,6 +69,7 @@ protocols:
     specialist_remapped: true
 
   - name: p02_new_warship
+    incremental_mode: class_incremental
     base_classes: [soldier, small_aircraft, tank]
     new_classes: [warship]
     teacher_weight: runs/detect/runs/detect/incremental_yolo11s/p02_new_warship_base/weights/best.pt
@@ -81,6 +83,7 @@ protocols:
     specialist_remapped: true
 
   - name: p03_new_tank
+    incremental_mode: class_incremental
     base_classes: [soldier, small_aircraft, warship]
     new_classes: [tank]
     teacher_weight: runs/detect/runs/detect/incremental_yolo11s_p03_p04/p03_new_tank_base/weights/best.pt
@@ -94,6 +97,7 @@ protocols:
     specialist_remapped: true
 
   - name: p04_new_soldier
+    incremental_mode: class_incremental
     base_classes: [small_aircraft, warship, tank]
     new_classes: [soldier]
     teacher_weight: runs/detect/runs/detect/incremental_yolo11s_p03_p04/p04_new_soldier_base/weights/best.pt

@@ -52,7 +52,9 @@ def parse_incremental(config: Dict[str, Any]) -> Dict[str, Any]:
     min_new = float(config.get("thresholds", {}).get("min_new_class_map50", 0.60))
     min_krr = float(config.get("thresholds", {}).get("min_krr", 0.85))
     incremental_cfg = config.get("incremental", {})
-    required_task_type = incremental_cfg.get("task_type", "class_incremental_object_detection")
+    required_task_type = incremental_cfg.get("task_type", "incremental_object_detection")
+    primary_mode = incremental_cfg.get("primary_mode", "class_incremental")
+    supported_modes = set(incremental_cfg.get("supported_modes", ["class_incremental", "target_incremental"]))
     required_scope = incremental_cfg.get("learning_data_scope", "incremental_dataset_only")
     protocols = []
     warnings = []
@@ -62,12 +64,14 @@ def parse_incremental(config: Dict[str, Any]) -> Dict[str, Any]:
         old_raw = int(float(row.get("old_raw_image_count") or 0)) if compliance_verified else None
         scope_verified = str(row.get("learning_scope_verified", "")).lower() in {"true", "1", "yes"}
         task_type = row.get("task_type")
+        incremental_mode = row.get("incremental_mode")
         learning_scope = row.get("learning_data_scope")
         row_compliant = bool(
             compliance_verified
             and old_raw == 0
             and scope_verified
             and task_type == required_task_type
+            and incremental_mode in supported_modes
             and learning_scope == required_scope
         )
         passed = new_map >= min_new and krr >= min_krr and (row_compliant or not compliance_required)
@@ -77,6 +81,7 @@ def parse_incremental(config: Dict[str, Any]) -> Dict[str, Any]:
             "protocol": row.get("protocol"),
             "new_class": row.get("new_classes"),
             "task_type": task_type,
+            "incremental_mode": incremental_mode,
             "learning_data_scope": learning_scope,
             "learning_scope_verified": scope_verified,
             "new_map50": new_map,
@@ -98,6 +103,8 @@ def parse_incremental(config: Dict[str, Any]) -> Dict[str, Any]:
         "warnings": warnings,
         "acceptance": {"min_new_class_map50": min_new, "min_krr": min_krr},
         "task_type": required_task_type,
+        "primary_mode": primary_mode,
+        "supported_modes": sorted(supported_modes),
         "learning_data_scope": required_scope,
     }
 
