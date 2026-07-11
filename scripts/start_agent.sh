@@ -10,7 +10,17 @@ if [[ ! -x "${AGENT_PYTHON}" ]]; then
   exit 1
 fi
 
-"${AGENT_PYTHON}" -m fair_agent.cli doctor
+"${AGENT_PYTHON}" -m fair_agent.cli doctor --quiet
+
+if [[ "${1:-}" == "--cli" ]]; then
+  exec "${AGENT_PYTHON}" -m fair_agent.cli console
+fi
+
+if [[ $# -gt 0 ]]; then
+  printf '未知参数：%s\n用法：scripts/start_agent.sh [--cli]\n' "$1" >&2
+  exit 2
+fi
+
 "${AGENT_PYTHON}" -m fair_agent.cli refresh
 "${AGENT_PYTHON}" -m fair_agent.cli decide
 

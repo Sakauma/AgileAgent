@@ -144,9 +144,12 @@ def test_start_scripts_only_launch_configured_agent() -> None:
     content = path.read_text(encoding="utf-8")
     assert "fair_agent.cli" in content
     assert "doctor" in content
+    assert "doctor --quiet" in content
     assert "refresh" in content
     assert "decide" in content
     assert "serve" in content
+    assert '"--cli"' in content
+    assert "fair_agent.cli console" in content
     assert "pip install" not in content
     assert "torch" not in content.lower()
     assert "-m venv" not in content.lower()

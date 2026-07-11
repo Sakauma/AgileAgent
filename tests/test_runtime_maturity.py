@@ -12,6 +12,7 @@ from fair_agent.core.audit import make_run_dir
 from fair_agent.core.blackboard import build_blackboard
 from fair_agent.core.config import load_config
 from fair_agent.modules.incremental_review import write_incremental_review
+from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
 from fair_agent.modules.release_verification import verify_release
 from fair_agent.policies.decision import build_decision
 
@@ -50,6 +51,8 @@ def test_cli_has_no_retired_image_size_commands() -> None:
     subcommands = next(action for action in parser._actions if action.dest == "command").choices
     assert "model-recheck" not in subcommands
     assert "freeze-candidate" not in subcommands
+    assert "status" in subcommands
+    assert "console" in subcommands
 
 
 def test_run_directories_are_unique(tmp_path: Path) -> None:
@@ -195,3 +198,30 @@ def test_low_risk_action_output_cannot_escape_allowlist(tmp_path: Path) -> None:
     unsafe = {"outputs": [str(tmp_path / "outside" / "result.json")]}
     assert cli.validate_action_outputs(config, safe) is None
     assert cli.validate_action_outputs(config, unsafe).startswith("output_outside_allowlist")
+
+
+def test_operator_snapshot_is_shared_by_text_and_json() -> None:
+    config = load_config()
+    state = build_blackboard(config)
+    decision = build_decision(config, state, {"sensor": "sar", "scene": "urban", "class_focus": "soldier"})
+    snapshot = build_operator_snapshot(state, decision)
+    text = render_snapshot(snapshot, "text")
+    payload = json.loads(render_snapshot(snapshot, "json"))
+    assert "AgileAgent 终端工作台" in text
+    assert snapshot["detector"]["name"] in text
+    assert payload["detector"] == snapshot["detector"]
+    assert payload["deployment"]["x86_nvidia_gpu"] == "ready"
+    assert payload["deployment"]["ascend_310b"] == "waiting_for_hardware"
+
+
+def test_status_command_supports_machine_readable_output(monkeypatch, capsys) -> None:
+    config = load_config()
+    state = build_blackboard(config)
+    monkeypatch.setattr(cli, "load_config", lambda _path: config)
+    monkeypatch.setattr(cli, "load_or_build_state", lambda _config, refresh=False: state)
+    monkeypatch.setattr(cli, "write_decision", lambda *_args: {})
+    code = cli.cmd_status(argparse.Namespace(config="unused", format="json", refresh=True))
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["schema_version"] == 1
+    assert payload["deployment"]["x86_nvidia_gpu"] == "ready"

@@ -51,6 +51,18 @@ python scripts/smoke_models.py
 
 启动脚本仅依次执行环境门禁、刷新黑板、生成默认决策和启动 Streamlit。工作台强制监听本机回环地址，浏览器访问 `http://127.0.0.1:8501`，在终端按 `Ctrl+C` 停止服务。
 
+服务器、SSH 会话或无浏览器环境使用终端模式：
+
+```bash
+./scripts/start_agent.sh --cli
+```
+
+终端模式与 Web 工作台读取同一份黑板、策略和模型注册表。面向外部脚本或未来 Ascend 310B 服务进程，可获取机器可读状态：
+
+```bash
+agile-agent status --format json --refresh
+```
+
 当私有实验报告存在时，工作台使用 `live` 证据；全新克隆时自动使用 `demo_artifacts/` 中不含原始图像、标注和真实文件名的脱敏证据。首页会明确显示当前证据模式。
 
 ## 手动调试命令
@@ -96,6 +108,8 @@ python tools/42_predict_submission.py --config configs/local_infer_gpu.yaml
 ```bash
 python -m fair_agent.cli doctor
 python -m fair_agent.cli refresh
+python -m fair_agent.cli status --refresh
+python -m fair_agent.cli console
 python -m fair_agent.cli decide --sensor sar --class-focus soldier
 python -m fair_agent.cli pipeline --mode execute
 pytest -q
@@ -117,3 +131,5 @@ Scene-SensorNet 的训练参数全部位于 `configs/scene_sensor_model.yaml`，
 - 仓库不包含竞赛数据、标签、PDF、SSH 凭据、预测结果或训练运行产物。
 - 官方隐藏测试目录和提交格式尚未确认，因此正式提交门禁默认关闭。
 - Ascend 310B 转换与推理接口仍待板卡就绪后补充。
+
+Web 与 CLI 的操作说明见 `docs/agent-operations.md`。

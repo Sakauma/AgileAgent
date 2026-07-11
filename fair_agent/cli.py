@@ -15,6 +15,7 @@ from fair_agent.core.config import ROOT, configured_python, load_config, rel_pat
 from fair_agent.executors.local import append_log, run_command
 from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.functional_models import validate_functional_models
+from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
 from fair_agent.modules.status import parse_incremental
 from fair_agent.policies.decision import build_decision, write_decision
 
@@ -94,7 +95,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "functional_models": state.get("functional_models"),
         "current_blockers": state.get("current_blockers"),
     }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    quiet = bool(getattr(args, "quiet", False))
+    if not quiet:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     modules = external.get("modules", {})
     missing_required = [name for name in REQUIRED_MODULES if not modules.get(name)]
     missing_workbench = [name for name in WORKBENCH_MODULES if not modules.get(name)]
@@ -121,6 +124,46 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     paths = write_blackboard(config, state)
     print(rel_path(paths["state"]))
     print(rel_path(paths["report"]))
+    return 0
+
+
+def load_or_build_state(config: Dict[str, Any], refresh: bool = False) -> Dict[str, Any]:
+    output_dir = config.get("blackboard", {}).get("output_dir", "reports/agent_blackboard")
+    state_name = config.get("blackboard", {}).get("state_json", "blackboard_state.json")
+    state_path = resolve_path(output_dir) / state_name
+    if state_path.exists() and not refresh:
+        return json.loads(state_path.read_text(encoding="utf-8"))
+    state = build_blackboard(config)
+    write_blackboard(config, state)
+    return state
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    state = load_or_build_state(config, refresh=args.refresh)
+    decision_path = resolve_path(
+        config.get("decision", {}).get("outputs", {}).get(
+            "decision_json", "reports/agent_blackboard/agent_decision.json"
+        )
+    )
+    if args.refresh or not decision_path.exists():
+        context = dict(config.get("decision", {}).get("default_context", {}))
+        decision = build_decision(config, state, context)
+        write_decision(config, decision)
+    else:
+        decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    snapshot = build_operator_snapshot(state, decision)
+    print(render_snapshot(snapshot, args.format))
+    return 0
+
+
+def cmd_console(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    state = load_or_build_state(config, refresh=True)
+    context = decision_context(config, args)
+    decision = build_decision(config, state, context)
+    write_decision(config, decision)
+    print(render_snapshot(build_operator_snapshot(state, decision), "text"))
     return 0
 
 
@@ -321,8 +364,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="configs/agent_pipeline.yaml")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("doctor").set_defaults(func=cmd_doctor)
+    doctor = sub.add_parser("doctor")
+    doctor.add_argument("--quiet", action="store_true", help="成功时不输出完整诊断信息。")
+    doctor.set_defaults(func=cmd_doctor)
     sub.add_parser("refresh").set_defaults(func=cmd_refresh)
+
+    status = sub.add_parser("status", help="输出面向运维或外部程序的统一状态摘要。")
+    status.add_argument("--format", choices=["text", "json"], default="text")
+    status.add_argument("--refresh", action="store_true", help="读取证据并重建黑板。")
+    status.set_defaults(func=cmd_status)
+
+    console = sub.add_parser("console", help="在无浏览器环境运行终端工作台。")
+    console.add_argument("--sensor", choices=["ir", "sar"])
+    console.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
+    console.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"])
+    console.add_argument("--source", help="使用 Scene-SensorNet 从图像推断传感器和场景。")
+    console.set_defaults(func=cmd_console)
 
     decide = sub.add_parser("decide")
     decide.add_argument("--sensor", choices=["ir", "sar"])
