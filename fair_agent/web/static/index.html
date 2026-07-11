@@ -11,7 +11,7 @@
   <header class="topbar">
     <a class="brand" href="#detect" aria-label="AgileAgent 首页">
       <span class="brand-glyph">AA</span>
-      <span><strong>AgileAgent</strong><small>IR / SAR DETECTION</small></span>
+      <span><strong>AgileAgent</strong><small>IR / SAR 智能识别</small></span>
     </a>
     <nav class="main-nav" aria-label="主导航">
       <button class="nav-item is-active" data-view="detect"><svg><use href="/assets/icons.svg#scan"/></svg>智能检测</button>
@@ -25,7 +25,7 @@
   <main class="app-main">
     <section class="view is-active" id="view-detect" aria-labelledby="detect-title">
       <div class="page-heading">
-        <div><p class="eyebrow">MULTIMODAL TARGET INTELLIGENCE</p><h1 id="detect-title">智能目标检测</h1><p>自动判断红外与SAR场景，识别人员、小型飞行器、舰船和坦克。</p></div>
+        <div><p class="eyebrow">清晰、可靠的多模态识别</p><h1 id="detect-title">智能目标检测</h1><p>自动判断红外与SAR场景，识别人员、小型飞行器、舰船和坦克。</p></div>
         <div class="privacy-note"><svg><use href="/assets/icons.svg#shield"/></svg><span>图像仅在当前会话处理<br><b>不会写入训练数据</b></span></div>
       </div>
 
@@ -39,7 +39,7 @@
 
       <div class="detection-workspace">
         <section class="tool-panel upload-panel" aria-labelledby="upload-title">
-          <div class="panel-heading"><div><span class="panel-index">INPUT</span><h2 id="upload-title">输入图像</h2></div><button class="text-button" id="clearSingle" disabled><svg><use href="/assets/icons.svg#trash"/></svg>清除</button></div>
+        <div class="panel-heading"><div><span class="panel-index">输入</span><h2 id="upload-title">输入图像</h2></div><button class="text-button" id="clearSingle" disabled><svg><use href="/assets/icons.svg#trash"/></svg>清除</button></div>
           <input id="singleFile" type="file" accept="image/png,image/jpeg,image/bmp,image/tiff" hidden>
           <button class="dropzone" id="singleDropzone" type="button">
             <span class="drop-icon"><svg><use href="/assets/icons.svg#upload"/></svg></span>
@@ -58,7 +58,7 @@
         </section>
 
         <section class="tool-panel result-panel" aria-labelledby="result-title">
-          <div class="panel-heading"><div><span class="panel-index">OUTPUT</span><h2 id="result-title">检测结果</h2></div><span class="result-state" id="resultState">等待输入</span></div>
+        <div class="panel-heading"><div><span class="panel-index">结果</span><h2 id="result-title">检测结果</h2></div><span class="result-state" id="resultState">等待输入</span></div>
           <div class="result-empty" id="resultEmpty"><div class="scan-frame"><span></span><span></span><span></span><span></span><svg><use href="/assets/icons.svg#image"/></svg></div><strong>结果将在这里呈现</strong><small>保留原图比例，不裁切有效区域</small></div>
           <div class="result-canvas is-hidden" id="resultCanvas"><img id="resultImage" alt="目标检测标注结果"><div class="result-overlay"><span id="overlaySensor"></span><span id="overlayScene"></span><span id="overlayCount"></span></div></div>
         </section>
@@ -67,14 +67,14 @@
       <section class="result-details is-hidden" id="resultDetails">
         <div class="result-summary" id="resultSummary"></div>
         <div class="details-grid">
-          <div><div class="section-heading"><div><p class="eyebrow">DETECTIONS</p><h2>目标明细</h2></div><span id="detectionTotal"></span></div><div class="detection-table-wrap"><table class="data-table"><thead><tr><th>类别</th><th>置信度</th><th>边界框 XYXY</th></tr></thead><tbody id="detectionRows"></tbody></table></div></div>
-          <aside class="export-panel"><p class="eyebrow">EXPORT</p><h2>导出结果</h2><p>文件名包含当前任务ID，便于结果追踪。</p><button class="secondary-button" id="downloadImage"><svg><use href="/assets/icons.svg#image"/></svg>下载标注图</button><button class="secondary-button" id="downloadJson"><svg><use href="/assets/icons.svg#file"/></svg>下载JSON</button></aside>
+        <div><div class="section-heading"><div><p class="eyebrow">识别明细</p><h2>目标明细</h2></div><span id="detectionTotal"></span></div><div class="detection-table-wrap"><table class="data-table"><thead><tr><th>类别</th><th>置信度</th><th>边界框 XYXY</th></tr></thead><tbody id="detectionRows"></tbody></table></div></div>
+        <aside class="export-panel"><p class="eyebrow">保存与分享</p><h2>导出结果</h2><p>文件名包含当前任务ID，便于结果追踪。</p><button class="secondary-button" id="downloadImage"><svg><use href="/assets/icons.svg#image"/></svg>下载标注图</button><button class="secondary-button" id="downloadJson"><svg><use href="/assets/icons.svg#file"/></svg>下载JSON</button></aside>
         </div>
       </section>
     </section>
 
     <section class="view" id="view-batch" aria-labelledby="batch-title">
-      <div class="page-heading"><div><p class="eyebrow">BATCH PROCESSING</p><h1 id="batch-title">批量检测</h1><p>一次处理最多20张图像，完成后生成独立标注图和结果清单。</p></div></div>
+      <div class="page-heading"><div><p class="eyebrow">高效处理，结果可追踪</p><h1 id="batch-title">批量检测</h1><p>一次处理最多20张图像，完成后生成独立标注图和结果清单。</p></div></div>
       <section class="batch-shell">
         <input id="batchFiles" type="file" accept="image/png,image/jpeg,image/bmp,image/tiff" multiple hidden>
         <button class="batch-dropzone" id="batchDropzone"><span class="drop-icon"><svg><use href="/assets/icons.svg#layers"/></svg></span><div><strong>选择批量图像</strong><small>单批最多20张，总计不超过200MB</small></div><span class="outline-action">选择文件</span></button>
@@ -86,14 +86,14 @@
     </section>
 
     <section class="view" id="view-history" aria-labelledby="history-title">
-      <div class="page-heading"><div><p class="eyebrow">SESSION ACTIVITY</p><h1 id="history-title">会话记录</h1><p>仅保留当前浏览器会话最近20条轻量结果。</p></div><button class="secondary-button danger" id="clearHistory"><svg><use href="/assets/icons.svg#trash"/></svg>清空记录</button></div>
+      <div class="page-heading"><div><p class="eyebrow">本次会话，轻量留存</p><h1 id="history-title">会话记录</h1><p>仅保留当前浏览器会话最近20条轻量结果。</p></div><button class="secondary-button danger" id="clearHistory"><svg><use href="/assets/icons.svg#trash"/></svg>清空记录</button></div>
       <div class="history-stats" id="historyStats"></div>
       <div class="history-list" id="historyList"></div>
     </section>
   </main>
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <div class="loading-overlay is-hidden" id="loadingOverlay"><div class="loading-dialog"><div class="radar"><span></span></div><p class="eyebrow">AGILE AGENT</p><h2 id="loadingTitle">正在分析图像</h2><p id="loadingMessage">正在等待GPU推理队列</p><div class="loading-track"><span></span></div></div></div>
+  <div class="loading-overlay is-hidden" id="loadingOverlay"><div class="loading-dialog"><div class="radar"><span></span></div><p class="eyebrow">AgileAgent 正在工作</p><h2 id="loadingTitle">正在分析图像</h2><p id="loadingMessage">正在等待GPU推理队列</p><div class="loading-track"><span></span></div></div></div>
   <script src="/assets/app.js" defer></script>
 </body>
 </html>
