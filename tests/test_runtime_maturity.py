@@ -15,6 +15,7 @@ from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
 from fair_agent.modules.release_verification import verify_release
 from fair_agent.policies.decision import build_decision
+from fair_agent.ui.console import ConsoleFrontend, render_page
 
 
 def test_serve_is_bound_to_loopback(monkeypatch) -> None:
@@ -225,3 +226,29 @@ def test_status_command_supports_machine_readable_output(monkeypatch, capsys) ->
     assert code == 0
     assert payload["schema_version"] == 1
     assert payload["deployment"]["x86_nvidia_gpu"] == "ready"
+
+
+def test_cli_frontend_navigates_all_operator_pages(monkeypatch) -> None:
+    config = load_config()
+    state = build_blackboard(config)
+    decision = build_decision(config, state, {"sensor": "sar", "scene": "urban", "class_focus": "soldier"})
+    answers = iter(["2", "3", "4", "5", "q"])
+    output = []
+    frontend = ConsoleFrontend(input_fn=lambda _prompt: next(answers), output_fn=output.append, clear_screen=False)
+    monkeypatch.setattr(frontend, "_state", lambda: (state, decision))
+    assert frontend.run() == 0
+    rendered = "\n".join(output)
+    assert "AgileAgent 终端工作台" in rendered
+    assert "功能模型" in rendered
+    assert "数据与诊断" in rendered
+    assert "增量目标检测" in rendered
+    assert "部署与提交" in rendered
+    assert "终端工作台已退出" in rendered
+
+
+def test_cli_frontend_pages_share_operator_state() -> None:
+    config = load_config()
+    state = build_blackboard(config)
+    decision = build_decision(config, state, {"sensor": "sar", "scene": "all", "class_focus": "soldier"})
+    assert "0.91202" in render_page("overview", state, decision)
+    assert "waiting_for_hardware" in render_page("deployment", state, decision)

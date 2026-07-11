@@ -18,13 +18,23 @@ SSH、无桌面服务器和未来板端环境使用：
 ./scripts/start_agent.sh --cli
 ```
 
-该命令依次执行环境诊断、重建黑板、生成默认决策并打印终端总览。它不会启动 Streamlit，也不会安装或修改依赖。
+该命令依次执行环境诊断、重建黑板并进入交互式 CLI 前端。它不会启动 Streamlit，也不会安装或修改依赖。
+
+CLI 前端菜单：
+
+```text
+[1] 总览  [2] 模型  [3] 数据  [4] 增量  [5] 部署
+[r] 刷新  [d] 决策  [p] Dry-run  [x] 执行  [q] 退出
+```
+
+`x` 只允许执行配置白名单中的低风险动作，并要求再次输入 `EXECUTE`。训练、正式推理和提交不会从 CLI 前端自动触发。
 
 单独读取状态：
 
 ```bash
 agile-agent status
 agile-agent status --format json --refresh
+agile-agent console --once
 ```
 
 文本格式用于人工查看，JSON 格式用于外部守护进程、评测脚本或 AscendCL 服务集成。

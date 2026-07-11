@@ -18,6 +18,7 @@ from fair_agent.modules.functional_models import validate_functional_models
 from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
 from fair_agent.modules.status import parse_incremental
 from fair_agent.policies.decision import build_decision, write_decision
+from fair_agent.ui.console import run_console_frontend
 
 
 REQUIRED_MODULES = ["yaml", "PIL"]
@@ -163,8 +164,10 @@ def cmd_console(args: argparse.Namespace) -> int:
     context = decision_context(config, args)
     decision = build_decision(config, state, context)
     write_decision(config, decision)
-    print(render_snapshot(build_operator_snapshot(state, decision), "text"))
-    return 0
+    if args.once or not sys.stdin.isatty():
+        print(render_snapshot(build_operator_snapshot(state, decision), "text"))
+        return 0
+    return run_console_frontend(args.config)
 
 
 def infer_image_context(config: Dict[str, Any], source: str | Path) -> Dict[str, Any]:
@@ -379,6 +382,7 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
     console.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"])
     console.add_argument("--source", help="使用 Scene-SensorNet 从图像推断传感器和场景。")
+    console.add_argument("--once", action="store_true", help="只打印一次终端总览，不进入交互界面。")
     console.set_defaults(func=cmd_console)
 
     decide = sub.add_parser("decide")

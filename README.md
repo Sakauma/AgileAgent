@@ -57,7 +57,15 @@ python scripts/smoke_models.py
 ./scripts/start_agent.sh --cli
 ```
 
-终端模式与 Web 工作台读取同一份黑板、策略和模型注册表。面向外部脚本或未来 Ascend 310B 服务进程，可获取机器可读状态：
+CLI 前端包含总览、模型、数据、增量和部署五个页面，并可在终端内刷新黑板、生成策略、创建 Dry-run 和执行经过确认的低风险动作。终端模式与 Web 工作台读取同一份黑板、策略和模型注册表。
+
+只输出一次终端摘要：
+
+```bash
+agile-agent console --once
+```
+
+面向外部脚本或未来 Ascend 310B 服务进程，可获取机器可读状态：
 
 ```bash
 agile-agent status --format json --refresh
