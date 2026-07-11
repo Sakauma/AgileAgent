@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 import zipfile
 
 from PIL import Image
 
 from fair_agent.modules.web_inference import (
+    FairInferenceQueue,
+    MAX_BATCH_FILES,
     build_batch_zip,
+    content_task_id,
     image_png_bytes,
     result_records,
     summarize_records,
+    validate_batch_uploads,
+    validate_image_bytes,
 )
 
 
@@ -68,9 +75,89 @@ def test_batch_zip_contains_images_and_json() -> None:
     }
     archive_bytes = build_batch_zip([payload])
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-        assert sorted(archive.namelist()) == ["annotated/sample.png", "results.json"]
+        assert sorted(archive.namelist()) == ["annotated/001_sample_unknown.png", "results.json"]
         metadata = json.loads(archive.read("results.json"))
     assert metadata["image_count"] == 1
     assert metadata["results"][0]["filename"] == "sample.png"
     assert "annotated_png" not in metadata["results"][0]
     assert "annotated_image" not in metadata["results"][0]
+
+
+def test_upload_validation_uses_content_hash_not_filename() -> None:
+    first = image_png_bytes(Image.new("RGB", (16, 16), "white"))
+    second = image_png_bytes(Image.new("RGB", (16, 16), "black"))
+    image, task_id = validate_image_bytes(first, "same.png")
+    assert image.size == (16, 16)
+    assert task_id == content_task_id(first)
+    assert task_id != content_task_id(second)
+
+
+def test_upload_validation_rejects_size_pixels_and_duplicate_batch() -> None:
+    data = image_png_bytes(Image.new("RGB", (16, 16), "white"))
+    try:
+        validate_image_bytes(data, "large.png", max_bytes=10)
+    except ValueError as exc:
+        assert "超过" in str(exc)
+    else:
+        raise AssertionError("oversized upload was accepted")
+    try:
+        validate_image_bytes(data, "pixels.png", max_pixels=100)
+    except ValueError as exc:
+        assert "像素超过限制" in str(exc)
+    else:
+        raise AssertionError("oversized image was accepted")
+    try:
+        validate_batch_uploads([("a.png", data), ("copy.png", data)])
+    except ValueError as exc:
+        assert "重复图像" in str(exc)
+    else:
+        raise AssertionError("duplicate image was accepted")
+    try:
+        validate_batch_uploads([(f"{index}.png", data + bytes([index])) for index in range(MAX_BATCH_FILES + 1)])
+    except ValueError as exc:
+        assert "最多处理" in str(exc)
+    else:
+        raise AssertionError("oversized batch was accepted")
+
+
+def test_fair_inference_queue_serializes_concurrent_work() -> None:
+    queue = FairInferenceQueue()
+    guard = threading.Lock()
+    active = 0
+    max_active = 0
+    results = []
+
+    def worker(value: int) -> None:
+        def operation() -> int:
+            nonlocal active, max_active
+            with guard:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.02)
+            with guard:
+                active -= 1
+            return value
+
+        result, wait_ms = queue.run(operation)
+        results.append((result, wait_ms))
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(value for value, _ in results) == [0, 1, 2, 3]
+    assert max_active == 1
+    assert queue.status() == {"waiting": 0, "active": False, "completed": 4}
+
+
+def test_batch_zip_uses_index_and_task_hash_for_duplicate_stems() -> None:
+    annotated = image_png_bytes(Image.new("RGB", (8, 8), "white"))
+    items = [
+        {"filename": "same.jpg", "task_id": "a" * 64, "annotated_png": annotated},
+        {"filename": "same.png", "task_id": "b" * 64, "annotated_png": annotated},
+    ]
+    with zipfile.ZipFile(io.BytesIO(build_batch_zip(items))) as archive:
+        names = archive.namelist()
+    assert "annotated/001_same_aaaaaaaa.png" in names
+    assert "annotated/002_same_bbbbbbbb.png" in names

@@ -55,6 +55,12 @@ def test_web_ui_keeps_sidebar_expand_control_visible() -> None:
     assert '[data-testid="stToolbar"], footer {display:none' not in content
 
 
+def test_web_upload_limits_are_declared_in_streamlit_config() -> None:
+    content = Path(".streamlit/config.toml").read_text(encoding="utf-8")
+    assert "maxUploadSize = 20" in content
+    assert "maxMessageSize = 50" in content
+
+
 def test_cli_has_no_retired_image_size_commands() -> None:
     parser = cli.build_parser()
     subcommands = next(action for action in parser._actions if action.dest == "command").choices
