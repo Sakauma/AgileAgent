@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
+import pandas as pd
 import streamlit as st
 
 from fair_agent.modules.operator_view import build_operator_snapshot
@@ -46,6 +47,25 @@ def metric_row(items: Iterable[tuple[str, Any]]) -> None:
         col.metric(label, value if value is not None else "暂无")
 
 
+def model_pipeline(models: list[Dict[str, Any]]) -> str:
+    labels = {
+        "context_perception": ("01", "环境认知", "IR / SAR 与场景识别"),
+        "multimodal_target_detection": ("02", "统一检测", "YOLO11s · imgsz 640"),
+        "incremental_object_detection": ("03", "增量模型库", "类别增量 / 目标增量"),
+    }
+    nodes = []
+    for item in models:
+        number, title, detail = labels.get(item.get("function"), ("--", item.get("name"), item.get("function")))
+        status = "已验证" if item.get("status") == "verified" else "部分验证"
+        status_class = "ok" if item.get("status") == "verified" else "warn"
+        nodes.append(
+            f'<div class="pipeline-node"><div class="node-index">{number}</div>'
+            f'<div><div class="node-title">{title}</div><div class="node-detail">{detail}</div></div>'
+            f'<span class="status-pill {status_class}">{status}</span></div>'
+        )
+    return '<div class="pipeline">' + '<div class="pipeline-arrow">→</div>'.join(nodes) + "</div>"
+
+
 def render_command_result() -> None:
     result = st.session_state.get("last_command")
     if not result:
@@ -84,17 +104,61 @@ st.set_page_config(page_title="AgileAgent", page_icon=None, layout="wide")
 st.markdown(
     """
     <style>
-    .block-container {padding-top: 1.4rem; padding-bottom: 2.5rem; max-width: 1500px;}
-    [data-testid="stSidebar"] {border-right: 1px solid #d8dee6;}
-    [data-testid="stMetric"] {background: #ffffff; border: 1px solid #d8dee6; border-radius: 6px; padding: 12px 14px;}
-    [data-testid="stMetricLabel"] {color: #52606d !important;}
-    [data-testid="stMetricValue"] {color: #17202a !important;}
-    h1, h2, h3 {letter-spacing: 0;}
-    .agent-kicker {color: #52606d; font-size: 0.86rem; margin-bottom: 0.2rem;}
-    .agent-title {font-size: 2rem; font-weight: 700; line-height: 1.15; margin-bottom: 0.2rem;}
-    .agent-meta {color: #66788a; font-size: 0.86rem; margin-bottom: 1.2rem;}
-    .status-line {border-left: 4px solid #16845b; background: #f3f8f5; color: #17202a; padding: 10px 14px; margin: 8px 0 18px 0;}
-    .status-line.attention {border-left-color: #c17b13; background: #fff8eb;}
+    :root {--ink:#18242D; --muted:#667783; --line:#DCE4E9; --teal:#087F8C; --green:#167A5A; --amber:#B66A09;}
+    .stApp {background:#F4F7F9; color:var(--ink);}
+    [data-testid="stHeader"] {background:transparent;}
+    [data-testid="stToolbar"], footer {display:none !important;}
+    .block-container {padding-top:2.2rem; padding-bottom:3rem; max-width:1420px;}
+    [data-testid="stSidebar"] {background:#101A22; border-right:0; min-width:260px;}
+    [data-testid="stSidebar"] * {color:#D8E1E7;}
+    [data-testid="stSidebar"] hr {border-color:#2A3944;}
+    [data-testid="stSidebar"] [role="radiogroup"] label {padding:0.62rem 0.75rem; border-radius:5px; margin:2px 0;}
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {background:#173943;}
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {color:#FFFFFF; font-weight:600;}
+    [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {font-size:0.72rem; text-transform:uppercase; letter-spacing:0.08em; color:#8FA1AD;}
+    [data-testid="stSidebar"] button {border-color:#3A4B57; background:#16232C;}
+    [data-testid="stSidebar"] button:hover {border-color:#42A7AD; color:#FFFFFF;}
+    [data-testid="stMetric"] {background:#FFFFFF; border:1px solid var(--line); border-top:3px solid #9FB1BC; border-radius:6px; padding:14px 16px; box-shadow:0 1px 2px rgba(20,39,51,.04); min-height:112px;}
+    [data-testid="stMetricLabel"] {color:#60717C !important; font-size:.78rem; text-transform:uppercase; letter-spacing:.035em;}
+    [data-testid="stMetricValue"] {color:var(--ink) !important; font-size:1.8rem;}
+    [data-testid="stDataFrame"] {border:1px solid var(--line); border-radius:6px; overflow:hidden;}
+    .stButton button {border-radius:5px; font-weight:600;}
+    h1, h2, h3 {letter-spacing:0; color:var(--ink);}
+    h3 {font-size:1.12rem !important; margin-top:1.1rem !important;}
+    .brand-mark {font-size:1.12rem; font-weight:750; color:#FFFFFF; letter-spacing:.03em; margin:0.2rem 0 0;}
+    .brand-sub {font-size:.72rem; color:#7FD0D2; text-transform:uppercase; letter-spacing:.12em; margin-bottom:1.5rem;}
+    .runtime-chip {display:inline-flex; align-items:center; gap:7px; font-size:.72rem; color:#AFC0CA; margin:.3rem 0 .8rem;}
+    .runtime-chip:before {content:""; width:7px; height:7px; border-radius:50%; background:#36B37E; box-shadow:0 0 0 3px rgba(54,179,126,.14);}
+    .agent-kicker {color:var(--teal); font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; margin-bottom:.35rem;}
+    .agent-title {font-size:2rem; font-weight:750; line-height:1.15; color:var(--ink); margin-bottom:.3rem;}
+    .agent-meta {color:#71828D; font-size:.8rem; margin-bottom:1.4rem;}
+    .command-bar {display:flex; justify-content:space-between; align-items:center; gap:20px; border:1px solid #E3CF9F; border-left:4px solid var(--amber); background:#FFF9EC; color:#473817; padding:14px 16px; margin:16px 0 22px;}
+    .command-label {font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#95600F;}
+    .command-title {font-size:1rem; font-weight:700; color:#2D2B25; margin-top:2px;}
+    .command-reason {font-size:.82rem; color:#6D5A32; text-align:right; max-width:62%;}
+    .section-label {font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#71828D; margin:1.4rem 0 .65rem;}
+    .pipeline {display:grid; grid-template-columns:1fr 32px 1fr 32px 1fr; align-items:stretch; gap:8px; margin-bottom:1.2rem;}
+    .pipeline-node {display:grid; grid-template-columns:34px 1fr auto; align-items:center; gap:10px; background:#FFFFFF; border:1px solid var(--line); padding:14px; min-height:76px;}
+    .node-index {font-size:.7rem; font-weight:700; color:var(--teal); border-right:1px solid var(--line); padding-right:9px;}
+    .node-title {font-weight:700; color:var(--ink);}
+    .node-detail {font-size:.74rem; color:#71828D; margin-top:2px;}
+    .pipeline-arrow {display:flex; align-items:center; justify-content:center; color:#82949F; font-size:1.15rem;}
+    .status-pill {font-size:.66rem; font-weight:700; padding:3px 7px; border-radius:12px; white-space:nowrap;}
+    .status-pill.ok {color:#126245; background:#E9F7F0;}
+    .status-pill.warn {color:#8A570C; background:#FFF2D8;}
+    .gate-list {background:#FFFFFF; border:1px solid var(--line);}
+    .gate-row {display:grid; grid-template-columns:10px 1fr auto; gap:10px; align-items:center; padding:11px 13px; border-bottom:1px solid #E8EEF1; font-size:.82rem;}
+    .gate-row:last-child {border-bottom:0;}
+    .gate-dot {width:7px; height:7px; border-radius:50%; background:#D08A20;}
+    .gate-dot.external {background:#82949F;}
+    .gate-type {font-size:.68rem; color:#7A8A94; text-transform:uppercase;}
+    @media (max-width: 900px) {
+      .block-container {padding-top:1.25rem;}
+      .pipeline {grid-template-columns:1fr;}
+      .pipeline-arrow {transform:rotate(90deg); min-height:18px;}
+      .command-bar {display:block;}
+      .command-reason {max-width:100%; text-align:left; margin-top:8px;}
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -113,15 +177,15 @@ if not state:
     st.stop()
 
 snapshot = build_operator_snapshot(state, decision)
+st.sidebar.markdown('<div class="brand-mark">AGILE AGENT</div><div class="brand-sub">IR / SAR Workbench</div>', unsafe_allow_html=True)
 page = st.sidebar.radio(
     "工作区",
     ["运行总览", "模型与协同", "数据与诊断", "策略运行", "增量学习", "审计与部署"],
 )
 st.sidebar.divider()
-st.sidebar.caption(f"证据模式：{snapshot['evidence_mode']}")
-st.sidebar.caption(f"黑板时间：{snapshot.get('generated_at')}")
-st.sidebar.caption("运行目标：x86 NVIDIA GPU")
-if st.sidebar.button("刷新状态", width="stretch"):
+st.sidebar.markdown('<div class="runtime-chip">x86 NVIDIA GPU 在线</div>', unsafe_allow_html=True)
+st.sidebar.caption(f"证据：{snapshot['evidence_mode']}  ·  {snapshot.get('generated_at')}")
+if st.sidebar.button("刷新状态", icon=":material/refresh:", width="stretch"):
     result = run_cli(["refresh"])
     if result.returncode == 0:
         result = run_cli(["decide"])
@@ -138,47 +202,45 @@ st.markdown(
 if page == "运行总览":
     detector = snapshot["detector"]
     counts = snapshot["incremental"]["counts"]
-    metric_row(
-        [
-            ("基础模型 mAP50", detector.get("map50")),
-            ("SAR mAP50", detector.get("sar_map50")),
-            ("增量协议通过", f"{counts['passed']} / {counts['total']}"),
-            ("冻结哈希", "通过" if detector.get("hash_verified") else "失败"),
-        ]
-    )
-    health_class = "attention" if snapshot["health"] == "attention" else ""
     action = snapshot["recommended_action"]
     st.markdown(
-        f'<div class="status-line {health_class}"><strong>当前动作：{action.get("action")}</strong><br>{action.get("reason")}</div>',
+        f'<div class="command-bar"><div><div class="command-label">当前 Agent 行动</div>'
+        f'<div class="command-title">{action.get("action")}</div></div>'
+        f'<div class="command-reason">{action.get("reason")}</div></div>',
         unsafe_allow_html=True,
     )
-    left, right = st.columns([1.15, 1])
-    with left:
-        st.subheader("门禁状态")
-        blocker_rows = [
-            {
-                "类型": "外部输入" if item["external"] else "工程内部",
-                "状态": item["label"],
-                "代码": item["code"],
-            }
-            for item in snapshot["blockers"]
+    metric_row(
+        [
+            ("LOCK-ALL MAP50", detector.get("map50")),
+            ("SAR MAP50", detector.get("sar_map50")),
+            ("增量协议", f"{counts['passed']} / {counts['total']} 通过"),
+            ("冻结资产", "SHA256 通过" if detector.get("hash_verified") else "校验失败"),
         ]
-        if blocker_rows:
-            st.dataframe(blocker_rows, width="stretch", hide_index=True)
+    )
+    st.markdown('<div class="section-label">模型协同链路</div>', unsafe_allow_html=True)
+    st.markdown(model_pipeline(snapshot["models"]), unsafe_allow_html=True)
+    left, right = st.columns([1.08, 1], gap="large")
+    with left:
+        st.markdown('<div class="section-label">当前门禁</div>', unsafe_allow_html=True)
+        if snapshot["blockers"]:
+            gate_rows = "".join(
+                f'<div class="gate-row"><span class="gate-dot {"external" if item["external"] else ""}"></span>'
+                f'<span>{item["label"]}</span><span class="gate-type">{"外部输入" if item["external"] else "工程内部"}</span></div>'
+                for item in snapshot["blockers"]
+            )
+            st.markdown(f'<div class="gate-list">{gate_rows}</div>', unsafe_allow_html=True)
         else:
             st.success("当前没有阻塞项。")
     with right:
-        st.subheader("提交准备")
+        st.markdown('<div class="section-label">数据态势</div>', unsafe_allow_html=True)
+        sensor_values = snapshot.get("dataset", {}).get("sensor", {})
+        if sensor_values:
+            sensor_frame = pd.DataFrame({"图像数": sensor_values}).rename_axis("传感器")
+            st.bar_chart(sensor_frame, color="#087F8C", height=190)
         submission = snapshot["submission"]
-        st.dataframe(
-            [
-                {"检查项": "隐藏测试集", "通过": submission["official_test_ready"]},
-                {"检查项": "提交格式", "通过": submission["official_format_confirmed"]},
-                {"检查项": "Dry-run", "通过": submission["dryrun_valid"]},
-                {"检查项": "Smoke test", "通过": submission["smoke_valid"]},
-            ],
-            width="stretch",
-            hide_index=True,
+        st.caption(
+            f"提交链路  ·  Dry-run {'通过' if submission['dryrun_valid'] else '待完成'}  ·  "
+            f"Smoke {'通过' if submission['smoke_valid'] else '待完成'}  ·  官方格式待确认"
         )
 
 elif page == "模型与协同":
@@ -187,54 +249,78 @@ elif page == "模型与协同":
         "multimodal_target_detection": "IR/SAR 统一目标检测",
         "incremental_object_detection": "增量目标检测",
     }
+    st.markdown('<div class="section-label">推理与学习流水线</div>', unsafe_allow_html=True)
+    st.markdown(model_pipeline(snapshot["models"]), unsafe_allow_html=True)
     rows = []
     for item in snapshot["models"]:
         rows.append(
             {
                 "模型": item["name"],
                 "功能": function_labels.get(item["function"], item["function"]),
-                "状态": item["status"],
-                "x86 GPU": item["x86_gpu"],
-                "Ascend 310B": item["ascend_310b"],
+                "状态": "已验证" if item["status"] == "verified" else "部分验证",
+                "x86 GPU": "就绪" if item["x86_gpu"] else "阻塞",
+                "Ascend 310B": "就绪" if item["ascend_310b"] else "待板卡",
             }
         )
-    st.dataframe(rows, width="stretch", hide_index=True)
-    st.subheader("协同链路")
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        st.markdown('<div class="section-label">模型注册表</div>', unsafe_allow_html=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
     collaboration = state.get("functional_models", {}).get("collaboration", [])
-    st.dataframe(
-        [
-            {
-                "上游": item.get("from"),
-                "下游": item.get("to"),
-                "载荷": item.get("payload"),
-                "状态": item.get("status"),
-                "用途": item.get("purpose"),
-            }
-            for item in collaboration
-        ],
-        width="stretch",
-        hide_index=True,
-    )
-    st.subheader("冻结资产")
+    with right:
+        st.markdown('<div class="section-label">协同契约</div>', unsafe_allow_html=True)
+        st.dataframe(
+            [
+                {
+                    "上游": item.get("from"),
+                    "下游": item.get("to"),
+                    "载荷": item.get("payload"),
+                    "状态": item.get("status"),
+                }
+                for item in collaboration
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+    st.markdown('<div class="section-label">冻结资产</div>', unsafe_allow_html=True)
     st.code(snapshot["detector"].get("weights") or "", language="text")
 
 elif page == "数据与诊断":
     dataset = snapshot["dataset"]
     metric_row([("图像数", dataset.get("image_count")), ("目标数", dataset.get("object_count")), ("错误案例", state.get("sar_soldier", {}).get("case_bank", {}).get("case_count"))])
-    distributions = []
-    for dimension, values in [
-        ("传感器", dataset.get("sensor", {})),
-        ("场景", dataset.get("scene", {})),
-        ("类别出现图像", dataset.get("class_presence_images", {})),
-    ]:
-        distributions.extend({"维度": dimension, "名称": key, "数量": value} for key, value in values.items())
-    st.subheader("数据分布")
-    st.dataframe(distributions, width="stretch", hide_index=True)
-    st.subheader("SAR Soldier 高优先级案例")
+    charts = st.columns(3, gap="large")
+    for col, (title, values, color) in zip(
+        charts,
+        [
+            ("传感器分布", dataset.get("sensor", {}), "#087F8C"),
+            ("场景分布", dataset.get("scene", {}), "#3B6EA8"),
+            ("类别出现图像", dataset.get("class_presence_images", {}), "#B66A09"),
+        ],
+    ):
+        with col:
+            st.markdown(f'<div class="section-label">{title}</div>', unsafe_allow_html=True)
+            if values:
+                frame = pd.DataFrame({"数量": values}).rename_axis("名称")
+                st.bar_chart(frame, color=color, height=220)
+    st.markdown('<div class="section-label">SAR Soldier 高优先级案例</div>', unsafe_allow_html=True)
     st.caption(state.get("sar_soldier", {}).get("reason"))
     top_cases = state.get("sar_soldier", {}).get("case_bank", {}).get("top_cases", [])
     if top_cases:
-        st.dataframe(top_cases, width="stretch", hide_index=True)
+        st.dataframe(
+            [
+                {
+                    "排序": item.get("rank"),
+                    "图像": item.get("image_path"),
+                    "场景": item.get("scene"),
+                    "错误类型": item.get("statuses"),
+                    "优先级": item.get("priority"),
+                    "建议动作": item.get("recommended_action"),
+                }
+                for item in top_cases
+            ],
+            width="stretch",
+            hide_index=True,
+        )
     else:
         st.info("当前证据中没有案例记录。")
 
@@ -245,31 +331,51 @@ elif page == "策略运行":
     class_focus = controls[2].selectbox("关注类别", ["soldier", "small_aircraft", "warship", "tank"])
     args = ["--sensor", sensor, "--scene", scene, "--class-focus", class_focus]
     buttons = st.columns(3)
-    if buttons[0].button("生成决策", type="primary", width="stretch"):
+    if buttons[0].button("生成决策", icon=":material/psychology:", type="primary", width="stretch"):
         remember_result("生成决策", run_cli(["decide", *args]))
         st.rerun()
-    if buttons[1].button("生成 Dry-run", width="stretch"):
+    if buttons[1].button("生成 Dry-run", icon=":material/description:", width="stretch"):
         remember_result("生成 Dry-run", run_cli(["pipeline", "--mode", "dryrun", *args]))
         st.rerun()
     confirmed = st.checkbox("确认执行低风险允许列表")
-    if buttons[2].button("执行低风险动作", disabled=not confirmed, width="stretch"):
+    if buttons[2].button("执行低风险动作", icon=":material/play_arrow:", disabled=not confirmed, width="stretch"):
         remember_result("执行低风险动作", run_cli(["pipeline", "--mode", "execute", *args]))
         st.rerun()
     action = snapshot["recommended_action"]
-    metric_row([("推荐动作", action.get("action")), ("状态", action.get("status")), ("风险", action.get("risk_level")), ("允许执行", action.get("can_execute"))])
-    st.write(action.get("reason"))
+    status_label = {"blocked": "已阻塞", "ready": "可执行", "completed": "已完成", "rejected": "已否决"}.get(action.get("status"), action.get("status"))
+    risk_label = {"low": "低风险", "medium": "中风险", "high": "高风险"}.get(action.get("risk_level"), action.get("risk_level"))
+    st.markdown(
+        f'<div class="command-bar"><div><div class="command-label">推荐动作 · {status_label} · {risk_label}</div>'
+        f'<div class="command-title">{action.get("action")}</div></div>'
+        f'<div class="command-reason">{action.get("reason")}</div></div>',
+        unsafe_allow_html=True,
+    )
     if action.get("command"):
         st.code(action["command"], language="bash")
     candidates = decision.get("candidates", [])
     if candidates:
-        st.subheader("候选动作")
-        st.dataframe(candidates, width="stretch", hide_index=True)
+        st.markdown('<div class="section-label">候选动作</div>', unsafe_allow_html=True)
+        st.dataframe(
+            [
+                {
+                    "动作": item.get("action"),
+                    "状态": item.get("status"),
+                    "新鲜度": item.get("freshness"),
+                    "风险": item.get("risk_level"),
+                    "允许执行": "是" if item.get("can_execute") else "否",
+                    "得分": item.get("score"),
+                }
+                for item in candidates
+            ],
+            width="stretch",
+            hide_index=True,
+        )
     render_command_result()
 
 elif page == "增量学习":
     incremental = state.get("incremental_learning", {})
     counts = snapshot["incremental"]["counts"]
-    metric_row([("协议数", counts["total"]), ("通过", counts["passed"]), ("数据合规", counts["compliant"]), ("总体验收", incremental.get("passed"))])
+    metric_row([("协议数", counts["total"]), ("通过协议", counts["passed"]), ("数据合规", f"{counts['compliant']} / {counts['total']}"), ("总体验收", "通过" if incremental.get("passed") else "需改进")])
     st.subheader("任务契约")
     st.dataframe(
         [
@@ -282,7 +388,22 @@ elif page == "增量学习":
         hide_index=True,
     )
     st.subheader("协议指标")
-    st.dataframe(incremental.get("protocols", []), width="stretch", hide_index=True)
+    st.dataframe(
+        [
+            {
+                "协议": item.get("protocol"),
+                "增量模式": item.get("incremental_mode"),
+                "新增类别": item.get("new_class"),
+                "New-mAP50": item.get("new_map50"),
+                "KRR": item.get("krr"),
+                "数据合规": "是" if item.get("compliant") else "否",
+                "通过": "是" if item.get("passed") else "否",
+            }
+            for item in incremental.get("protocols", [])
+        ],
+        width="stretch",
+        hide_index=True,
+    )
     st.caption(f"验收阈值：{incremental.get('acceptance', {})}")
 
 elif page == "审计与部署":
