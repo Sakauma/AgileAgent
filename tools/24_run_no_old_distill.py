@@ -12,7 +12,10 @@ from typing import Any, Dict, Iterable, Mapping, Sequence
 
 import yaml
 
-from fair_agent.modules.incremental_compliance import evaluate_incremental_metrics, verify_new_images_only
+from fair_agent.modules.incremental_compliance import (
+    evaluate_incremental_metrics,
+    verify_class_incremental_learning_scope,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,13 +131,25 @@ def split_values(path: Path) -> list[str]:
 def verify_specialist_dataset(dataset: Path, protocol: Mapping[str, Any], new_ids: Sequence[int]) -> Dict[str, Any]:
     dataset_config = load_yaml(dataset)
     train_list = resolve(dataset_config["train"])
-    allowed_list = resolve(protocol["new_train_split"])
+    val_list = resolve(dataset_config["val"])
+    allowed_train_list = resolve(protocol["new_train_split"])
+    allowed_val_list = resolve(protocol["new_val_split"])
     training = split_values(train_list)
-    allowed = split_values(allowed_list)
-    compliance = verify_new_images_only(training, allowed)
+    validation = split_values(val_list)
+    allowed_training = split_values(allowed_train_list)
+    allowed_validation = split_values(allowed_val_list)
+    compliance = verify_class_incremental_learning_scope(
+        training,
+        validation,
+        allowed_training,
+        allowed_validation,
+        protocol["base_classes"],
+        protocol["new_classes"],
+        verify_content=True,
+    )
     accepted_label_ids = {0} if protocol.get("specialist_remapped") else set(new_ids)
     invalid_labels = []
-    for value in training:
+    for value in training + validation:
         image = resolve(value)
         label = image.parent.parent / "labels" / f"{image.stem}.txt"
         for line in label.read_text(encoding="utf-8").splitlines():
@@ -143,6 +158,7 @@ def verify_specialist_dataset(dataset: Path, protocol: Mapping[str, Any], new_id
                 break
     compliance["invalid_non_new_label_files"] = sorted(set(invalid_labels))
     compliance["compliant"] = bool(compliance["compliant"] and not invalid_labels)
+    compliance["learning_scope_verified"] = compliance["compliant"]
     return compliance
 
 
@@ -174,9 +190,13 @@ def write_report(report_dir: Path, row: Mapping[str, Any]) -> None:
     lines = [
         f"# {row['protocol']} 合规增量学习报告",
         "",
+        f"- 任务类型：{row['task_type']}",
+        f"- 学习数据边界：{row['learning_data_scope']}",
+        f"- 数据边界验证：{row['learning_scope_verified']}",
         f"- 方法：{row['method']}",
         f"- 训练图像数：{row['training_image_count']}",
-        f"- 旧类原始训练图像数：{row['old_raw_image_count']}",
+        f"- 验证图像数：{row['validation_image_count']}",
+        f"- 学习阶段旧类原始图像数：{row['old_raw_image_count']}",
         f"- New-mAP50: {row['new_map50_after']:.5f}",
         f"- KRR: {row['krr']:.5f}",
         f"- 完整集 mAP50：{row['full_map50_after']:.5f}",
@@ -210,18 +230,16 @@ def main() -> int:
     mode = adaptation.get("mode")
     manifest_path = resolve(config["output_root"]) / args.protocol / "manifest.json"
     if mode == "frozen_base_plus_new_specialist":
-        dataset = resolve(protocol["new_only_data"])
+        dataset = resolve(protocol["learning_data"])
+        manifest_path = dataset.parent / "manifest.json"
         compliance = verify_specialist_dataset(dataset, protocol, new_ids)
     elif mode == "new_class_channel_only":
-        dataset = resolve(config["output_root"]) / args.protocol / "distill_dataset.yaml"
+        dataset = resolve(config["output_root"]) / args.protocol / "learning_dataset.yaml"
         compliance = json.loads(manifest_path.read_text(encoding="utf-8"))["compliance"]
     else:
         raise ValueError(f"Unsupported adaptation mode: {mode}")
     if not compliance.get("compliant") or compliance.get("old_raw_image_count") != 0:
         raise RuntimeError(f"Training dataset is not compliant: {compliance}")
-    base_eval_data = resolve(protocol.get("base_eval_data", dataset))
-    before = eval_model(YOLO, teacher, base_eval_data, config, f"{args.protocol}_teacher_eval", args.device)
-
     train_args = dict(config.get("common", {}))
     train_args.update(dict(config.get("incremental_train", {})))
     train_args.update({
@@ -240,7 +258,10 @@ def main() -> int:
     train_result = student.train(**train_args)
     elapsed = time.monotonic() - started
     weight = best_weight(student, train_result)
-    after = eval_model(YOLO, weight, dataset, config, f"{args.protocol}_student_eval", args.device)
+    old_eval_data = resolve(protocol["old_evaluation_data"])
+    new_eval_data = resolve(protocol.get("new_evaluation_data", protocol["old_evaluation_data"]))
+    before = eval_model(YOLO, teacher, old_eval_data, config, f"{args.protocol}_teacher_eval", args.device)
+    after = eval_model(YOLO, weight, new_eval_data, config, f"{args.protocol}_student_eval", args.device)
     old_before = mean_ap(before["per_class_ap50"], old_ids)
     new_after = (
         mean_ap(after["per_class_ap50"], [0])
@@ -266,6 +287,9 @@ def main() -> int:
     decision["passed"] = bool(decision["passed"] and decision["parameter_isolation_pass"])
     row = {
         "protocol": args.protocol,
+        "task_type": "class_incremental_object_detection",
+        "learning_data_scope": "incremental_dataset_only",
+        "learning_scope_verified": compliance.get("learning_scope_verified", False),
         "method": method,
         "base_classes": list(protocol["base_classes"]),
         "new_classes": list(protocol["new_classes"]),
@@ -275,13 +299,18 @@ def main() -> int:
         "full_map50_after": full_after,
         "krr": krr,
         "training_seconds": elapsed,
-        "training_image_count": compliance["training_image_count"],
+        "training_image_count": compliance["training"]["training_image_count"],
+        "validation_image_count": compliance["validation"]["training_image_count"],
         "old_raw_image_count": compliance["old_raw_image_count"],
         "frozen_parameter_max_abs_drift": drift,
         "teacher_weight": rel(teacher),
         "student_weight": rel(weight),
         "student_init": rel(student_init),
         "dataset_manifest": rel(manifest_path),
+        "learning_dataset": rel(dataset),
+        "old_evaluation_data": rel(old_eval_data),
+        "new_evaluation_data": rel(new_eval_data),
+        "evaluation_started_after_training": True,
         "before_eval": before,
         "after_eval": after,
         "composition": {

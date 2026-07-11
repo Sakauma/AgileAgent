@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Mapping
 
 import yaml
 
-from fair_agent.modules.incremental_compliance import verify_new_images_only
+from fair_agent.modules.incremental_compliance import verify_class_incremental_learning_scope
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,14 +92,27 @@ def build_protocol(config: Mapping[str, Any], protocol: Mapping[str, Any]) -> Pa
     write_split(train_list, train)
     write_split(val_list, val)
     write_split(test_list, test)
-    dataset = {"path": ".", "train": rel(train_list), "val": rel(val_list), "test": rel(test_list), "names": {0: new_name}}
-    dataset_path = output / "specialist_dataset.yaml"
-    dataset_path.write_text(yaml.safe_dump(dataset, sort_keys=False, allow_unicode=True), encoding="utf-8")
-    compliance = verify_new_images_only(train, train_source)
+    learning_dataset = {"path": ".", "train": rel(train_list), "val": rel(val_list), "names": {0: new_name}}
+    dataset_path = output / "learning_dataset.yaml"
+    dataset_path.write_text(yaml.safe_dump(learning_dataset, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    evaluation_dataset = {"path": ".", "test": rel(test_list), "names": {0: new_name}}
+    evaluation_path = output / "new_class_evaluation_dataset.yaml"
+    evaluation_path.write_text(yaml.safe_dump(evaluation_dataset, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    compliance = verify_class_incremental_learning_scope(
+        train,
+        val,
+        train_source,
+        val_source,
+        protocol["base_classes"],
+        protocol["new_classes"],
+        verify_content=True,
+    )
     if not compliance["compliant"]:
         raise RuntimeError(f"Specialist dataset compliance failed: {compliance}")
     manifest = {
         "protocol": name,
+        "task_type": "class_incremental_object_detection",
+        "learning_data_scope": "incremental_dataset_only",
         "new_class": new_name,
         "global_class_id": new_id,
         "specialist_class_id": 0,
@@ -108,7 +121,10 @@ def build_protocol(config: Mapping[str, Any], protocol: Mapping[str, Any]) -> Pa
         "val_images": len(val),
         "test_images": len(test),
         "compliance": compliance,
-        "dataset_yaml": rel(dataset_path),
+        "learning_dataset_yaml": rel(dataset_path),
+        "post_freeze_evaluation_dataset_yaml": rel(evaluation_path),
+        "old_dataset_access_during_learning": "forbidden",
+        "post_freeze_evaluation_affects_training": False,
     }
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return dataset_path

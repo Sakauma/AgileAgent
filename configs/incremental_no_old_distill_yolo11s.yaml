@@ -1,4 +1,5 @@
 seed: 20260705
+policy: configs/class_incremental_policy.yaml
 output_root: incremental_protocols_no_old
 specialist_output_root: incremental_protocols_no_old_specialist
 project: runs/detect/incremental_no_old_distill
@@ -60,8 +61,11 @@ protocols:
     new_train_split: incremental_protocols/p01_new_small_aircraft/splits/new_train.txt
     new_val_split: incremental_protocols/p01_new_small_aircraft/splits/new_val.txt
     full_test_split: incremental_protocols/p01_new_small_aircraft/splits/full_test.txt
-    new_only_data: incremental_protocols/p01_new_small_aircraft/new_dataset.yaml
-    base_eval_data: incremental_protocols/p01_new_small_aircraft/new_dataset.yaml
+    historical_learning_data: incremental_protocols/p01_new_small_aircraft/new_dataset.yaml
+    learning_data: incremental_protocols_no_old_specialist/p01_new_small_aircraft/learning_dataset.yaml
+    new_evaluation_data: incremental_protocols_no_old_specialist/p01_new_small_aircraft/new_class_evaluation_dataset.yaml
+    old_evaluation_data: incremental_protocols/p01_new_small_aircraft/new_dataset.yaml
+    specialist_remapped: true
 
   - name: p02_new_warship
     base_classes: [soldier, small_aircraft, tank]
@@ -70,8 +74,11 @@ protocols:
     new_train_split: incremental_protocols/p02_new_warship/splits/new_train.txt
     new_val_split: incremental_protocols/p02_new_warship/splits/new_val.txt
     full_test_split: incremental_protocols/p02_new_warship/splits/full_test.txt
-    new_only_data: incremental_protocols/p02_new_warship/new_dataset.yaml
-    base_eval_data: incremental_protocols/p02_new_warship/new_dataset.yaml
+    historical_learning_data: incremental_protocols/p02_new_warship/new_dataset.yaml
+    learning_data: incremental_protocols_no_old_specialist/p02_new_warship/learning_dataset.yaml
+    new_evaluation_data: incremental_protocols_no_old_specialist/p02_new_warship/new_class_evaluation_dataset.yaml
+    old_evaluation_data: incremental_protocols/p02_new_warship/new_dataset.yaml
+    specialist_remapped: true
 
   - name: p03_new_tank
     base_classes: [soldier, small_aircraft, warship]
@@ -80,8 +87,11 @@ protocols:
     new_train_split: incremental_protocols/p03_new_tank/splits/new_train.txt
     new_val_split: incremental_protocols/p03_new_tank/splits/new_val.txt
     full_test_split: incremental_protocols/p03_new_tank/splits/full_test.txt
-    new_only_data: incremental_protocols/p03_new_tank/new_dataset.yaml
-    base_eval_data: incremental_protocols/p03_new_tank/new_dataset.yaml
+    historical_learning_data: incremental_protocols/p03_new_tank/new_dataset.yaml
+    learning_data: incremental_protocols_no_old_specialist/p03_new_tank/learning_dataset.yaml
+    new_evaluation_data: incremental_protocols_no_old_specialist/p03_new_tank/new_class_evaluation_dataset.yaml
+    old_evaluation_data: incremental_protocols/p03_new_tank/new_dataset.yaml
+    specialist_remapped: true
 
   - name: p04_new_soldier
     base_classes: [small_aircraft, warship, tank]
@@ -90,5 +100,8 @@ protocols:
     new_train_split: incremental_protocols/p04_new_soldier/splits/new_train.txt
     new_val_split: incremental_protocols/p04_new_soldier/splits/new_val.txt
     full_test_split: incremental_protocols/p04_new_soldier/splits/full_test.txt
-    new_only_data: incremental_protocols/p04_new_soldier/new_dataset.yaml
-    base_eval_data: incremental_protocols/p04_new_soldier/new_dataset.yaml
+    historical_learning_data: incremental_protocols/p04_new_soldier/new_dataset.yaml
+    learning_data: incremental_protocols_no_old_specialist/p04_new_soldier/learning_dataset.yaml
+    new_evaluation_data: incremental_protocols_no_old_specialist/p04_new_soldier/new_class_evaluation_dataset.yaml
+    old_evaluation_data: incremental_protocols/p04_new_soldier/new_dataset.yaml
+    specialist_remapped: true

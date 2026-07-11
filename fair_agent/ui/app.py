@@ -187,6 +187,10 @@ with tabs[3]:
 with tabs[4]:
     st.subheader("3+1 增量学习")
     incremental = state.get("incremental_learning", {})
+    st.caption(
+        f"任务：{incremental.get('task_type', 'class_incremental_object_detection')} · "
+        f"学习数据边界：{incremental.get('learning_data_scope', 'incremental_dataset_only')}"
+    )
     cols = st.columns(3)
     metric_row(cols, [("协议完整", incremental.get("complete")), ("合规证据", incremental.get("compliance_verified")), ("总体验收", incremental.get("passed"))])
     st.write("验收阈值：", incremental.get("acceptance", {}))

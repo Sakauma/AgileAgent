@@ -15,6 +15,7 @@ venv/
 /分析结果/
 /incremental_protocols/
 /incremental_protocols_no_old/
+/incremental_protocols_no_old_specialist/
 /splits/
 /runs/
 /reports/
@@ -61,6 +62,7 @@ venv/
 !/configs/local_infer_gpu.yaml
 !/configs/scene_sensor_model.yaml
 !/configs/functional_models.yaml
+!/configs/class_incremental_policy.yaml
 
 # Local competition notes are not part of the public source release.
 /*.md

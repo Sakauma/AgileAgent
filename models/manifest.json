@@ -36,15 +36,20 @@
     {
       "id": "incremental_model_bank_v1",
       "function": "new_class_incremental_learning",
+      "task_type": "class_incremental_object_detection",
+      "learning_data_scope": "incremental_dataset_only",
       "model_count": 4,
       "status": "partially_verified",
       "passed_protocols": 3,
-      "total_protocols": 4
+      "total_protocols": 4,
+      "old_raw_image_count": 0
     }
   ],
   "incremental_models": [
     {
       "protocol": "p01_new_small_aircraft",
+      "task_type": "class_incremental_object_detection",
+      "learning_data_scope": "incremental_dataset_only",
       "path": "models/incremental/p01_new_small_aircraft_best.pt",
       "new_map50": 0.55860,
       "krr": 1.0,
@@ -52,6 +57,8 @@
     },
     {
       "protocol": "p02_new_warship",
+      "task_type": "class_incremental_object_detection",
+      "learning_data_scope": "incremental_dataset_only",
       "path": "models/incremental/p02_new_warship_best.pt",
       "new_map50": 0.83539,
       "krr": 1.0,
@@ -59,6 +66,8 @@
     },
     {
       "protocol": "p03_new_tank",
+      "task_type": "class_incremental_object_detection",
+      "learning_data_scope": "incremental_dataset_only",
       "path": "models/incremental/p03_new_tank_best.pt",
       "new_map50": 0.74989,
       "krr": 1.0,
@@ -66,6 +75,8 @@
     },
     {
       "protocol": "p04_new_soldier",
+      "task_type": "class_incremental_object_detection",
+      "learning_data_scope": "incremental_dataset_only",
       "path": "models/incremental/p04_new_soldier_best.pt",
       "new_map50": 0.76914,
       "krr": 1.0,
@@ -74,6 +85,7 @@
   ],
   "notes": [
     "所有报告指标均为 mAP50。",
+    "增量任务为类别增量目标检测，训练和验证仅使用增量数据，旧样本 replay 被禁止。",
     "为便于复现，仓库保留 p01 专用模型，但该模型未达到 0.60 验收阈值。",
     "仓库不包含竞赛数据集和标签。"
   ]

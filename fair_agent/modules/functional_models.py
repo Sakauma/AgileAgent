@@ -138,6 +138,15 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     or manifest_entry.get("function") != function_name
                     or manifest_entry.get("status") != item.get("status")
                     or manifest_entry.get("model_count") != len(protocols)
+                    or manifest_entry.get("task_type") != "class_incremental_object_detection"
+                    or manifest_entry.get("learning_data_scope") != "incremental_dataset_only"
+                    or manifest_entry.get("old_raw_image_count") != 0
+                    or any(
+                        not isinstance(protocol, dict)
+                        or protocol.get("task_type") != "class_incremental_object_detection"
+                        or protocol.get("learning_data_scope") != "incremental_dataset_only"
+                        for protocol in protocols
+                    )
                 ):
                     errors.append(f"functional_evidence_model_mismatch:{model_id}")
                 passed_count = sum(protocol.get("acceptance") == "passed" for protocol in protocols if isinstance(protocol, dict))
@@ -145,7 +154,13 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     errors.append(f"functional_status_mismatch:{model_id}")
                 if passed_count < len(protocols) and item.get("status") != "partially_verified":
                     errors.append(f"functional_status_mismatch:{model_id}")
-                evidence_summary = {"protocol_count": len(protocols), "passed_protocol_count": passed_count}
+                evidence_summary = {
+                    "task_type": manifest_entry.get("task_type"),
+                    "learning_data_scope": manifest_entry.get("learning_data_scope"),
+                    "old_raw_image_count": manifest_entry.get("old_raw_image_count"),
+                    "protocol_count": len(protocols),
+                    "passed_protocol_count": passed_count,
+                }
 
         runtime = item.get("runtime", {})
         summaries.append(

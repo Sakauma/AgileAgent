@@ -1,0 +1,34 @@
+schema_version: 1
+task_type: class_incremental_object_detection
+
+learning_phase:
+  allowed_inputs:
+    - incremental_images
+    - incremental_labels
+    - frozen_base_weights
+  forbidden_inputs:
+    - old_raw_images
+    - old_raw_labels
+    - old_sample_replay
+    - old_cached_features
+  training_data_scope: incremental_dataset_only
+  validation_data_scope: incremental_dataset_only
+  teacher_inference_scope: incremental_images_only
+  train_validation_overlap_allowed: false
+
+class_contract:
+  require_nonempty_base_classes: true
+  require_nonempty_new_classes: true
+  require_disjoint_class_sets: true
+  specialist_global_id_remap_required: true
+
+evaluation_phase:
+  starts_after_incremental_weights_frozen: true
+  old_and_new_test_data_allowed: true
+  gradients_allowed: false
+  model_selection_allowed: false
+
+acceptance:
+  min_new_map50: 0.60
+  min_krr: 0.95
+  max_old_raw_image_count: 0

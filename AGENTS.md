@@ -30,6 +30,8 @@ python scripts/smoke_models.py
 
 测试文件命名为 `tests/test_*.py`，测试函数命名为 `test_*`。修改策略、路径门禁、黑板新鲜度或提交逻辑时必须补充回归测试。提交前至少运行完整 Pytest 和静态发布验收；涉及模型、依赖或推理配置时还需运行 GPU 冒烟测试。
 
+类别增量阶段的训练、验证、早停和调参只能读取增量数据。禁止旧样本 replay、旧类原始标签和旧数据缓存特征；旧类测试数据只能在增量权重冻结后用于评分。修改增量脚本时必须保持 `configs/class_incremental_policy.yaml` 与数据来源审计通过。
+
 ## 提交与 Pull Request 规范
 
 提交信息使用简短祈使句，例如 `Fix pipeline audit loop`。每个提交聚焦一个完整变更。Pull Request 应说明目的、行为变化、已执行的验收命令和剩余阻塞项；UI 变化附截图，模型变化附指标、配置及 SHA256。禁止提交竞赛原始数据、标签、SSH 凭据和未经授权的派生产物。

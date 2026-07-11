@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, Mapping, Sequence
 
 import yaml
 
-from fair_agent.modules.incremental_compliance import verify_new_images_only
+from fair_agent.modules.incremental_compliance import verify_class_incremental_learning_scope
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,12 +130,11 @@ def build_subset(
     }
 
 
-def write_dataset_yaml(path: Path, train_list: Path, val_list: Path, test_list: Path) -> None:
+def write_dataset_yaml(path: Path, train_list: Path, val_list: Path) -> None:
     data = {
         "path": ".",
         "train": rel(train_list),
         "val": rel(val_list),
-        "test": rel(test_list),
         "names": {idx: name for idx, name in enumerate(CLASS_NAMES)},
     }
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
@@ -153,7 +152,6 @@ def build_protocol(config: Mapping[str, Any], protocol: Mapping[str, Any], devic
     old_ids = {CLASS_NAMES.index(value) for value in protocol["base_classes"]}
     train_source = read_split(resolve(protocol["new_train_split"]))
     val_source = read_split(resolve(protocol["new_val_split"]))
-    test_list = resolve(protocol["full_test_split"])
     teacher = resolve(protocol["teacher_weight"])
     if not teacher.exists():
         raise FileNotFoundError(f"Teacher weight does not exist: {teacher}")
@@ -179,23 +177,37 @@ def build_protocol(config: Mapping[str, Any], protocol: Mapping[str, Any], devic
     val_list = output_dir / "splits" / "val.txt"
     write_list(train_list, train["images"])
     write_list(val_list, val["images"])
-    compliance = verify_new_images_only(train["images"], train_source)
+    compliance = verify_class_incremental_learning_scope(
+        train["images"],
+        val["images"],
+        train_source,
+        val_source,
+        protocol["base_classes"],
+        protocol["new_classes"],
+        verify_content=True,
+    )
     if not compliance["compliant"]:
         raise RuntimeError(f"New-only compliance check failed: {compliance}")
-    dataset_yaml = output_dir / "distill_dataset.yaml"
-    write_dataset_yaml(dataset_yaml, train_list, val_list, test_list)
+    dataset_yaml = output_dir / "learning_dataset.yaml"
+    write_dataset_yaml(dataset_yaml, train_list, val_list)
     manifest = {
         "protocol": name,
+        "task_type": "class_incremental_object_detection",
         "method": "new_images_only_teacher_pseudolabel_distillation",
         "teacher_weight": rel(teacher),
         "base_classes": list(protocol["base_classes"]),
         "new_classes": list(protocol["new_classes"]),
         "training_source_policy": "new_incremental_images_only",
         "validation_source_policy": "new_incremental_images_and_ground_truth_only",
+        "learning_data_scope": "incremental_dataset_only",
+        "old_dataset_access_during_learning": "forbidden",
+        "teacher_inference_scope": "incremental_images_only",
         "train": {key: value for key, value in train.items() if key != "images"},
         "val": {key: value for key, value in val.items() if key != "images"},
         "compliance": compliance,
-        "dataset_yaml": rel(dataset_yaml),
+        "learning_dataset_yaml": rel(dataset_yaml),
+        "post_freeze_evaluation_split": rel(resolve(protocol["full_test_split"])),
+        "post_freeze_evaluation_affects_training": False,
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return output_dir

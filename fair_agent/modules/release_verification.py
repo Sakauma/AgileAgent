@@ -52,6 +52,20 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         errors.append("functional_model_count_invalid")
     if not functional["all_x86_gpu_ready"]:
         errors.append("functional_models_not_x86_gpu_ready")
+    incremental_policy_path = resolve_path(config["incremental"]["policy"])
+    incremental_policy = _load_yaml(incremental_policy_path) if incremental_policy_path.exists() else {}
+    if not incremental_policy:
+        errors.append("class_incremental_policy_missing")
+    else:
+        if incremental_policy.get("task_type") != "class_incremental_object_detection":
+            errors.append("class_incremental_task_type_invalid")
+        learning_phase = incremental_policy.get("learning_phase", {})
+        if learning_phase.get("training_data_scope") != "incremental_dataset_only":
+            errors.append("class_incremental_training_scope_invalid")
+        if learning_phase.get("validation_data_scope") != "incremental_dataset_only":
+            errors.append("class_incremental_validation_scope_invalid")
+        if "old_sample_replay" not in learning_phase.get("forbidden_inputs", []):
+            errors.append("class_incremental_replay_gate_missing")
 
     inference_configs = {}
     for name in ["configs/local_infer_gpu.yaml", config["detector"]["config"]]:
@@ -118,6 +132,11 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         "required_assets": required,
         "inference_configs": inference_configs,
         "functional_models": functional,
+        "class_incremental_policy": {
+            "path": rel_path(incremental_policy_path),
+            "valid": not any(error.startswith("class_incremental_") for error in errors),
+            "task_type": incremental_policy.get("task_type"),
+        },
         "evidence_mode": state.get("evidence", {}).get("mode"),
         "blockers": state.get("current_blockers", []),
     }

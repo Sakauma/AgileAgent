@@ -105,7 +105,9 @@ pytest -q
 
 ## 数据与增量训练
 
-数据文件名遵循 `{sensor}_r1_base_{scene}_{id}`，图像和 YOLO 标签同名配对。获得授权数据后，可依次运行 `tools/00_check_dataset.py`、`01_build_metadata.py` 和 `02_split_dataset.py`。合规增量方案不使用旧类原始样本，具体协议与审计约束见 `docs/compliant-incremental-learning.md`。
+数据文件名遵循 `{sensor}_r1_base_{scene}_{id}`，图像和 YOLO 标签同名配对。获得授权数据后，可依次运行 `tools/00_check_dataset.py`、`01_build_metadata.py` 和 `02_split_dataset.py`。
+
+增量任务统一按类别增量目标检测处理。训练、验证、早停和调参只能读取增量数据集，禁止旧样本 replay；旧类测试数据只允许在增量权重冻结后的评分阶段使用。机器规则位于 `configs/class_incremental_policy.yaml`，完整流程见 `docs/compliant-incremental-learning.md`。
 
 Scene-SensorNet 的训练参数全部位于 `configs/scene_sensor_model.yaml`，训练入口为 `python tools/60_train_scene_sensor.py`。固定权重已经随仓库发布，日常启动不会重新训练。
 

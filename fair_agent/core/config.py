@@ -71,6 +71,13 @@ def validate_config(config: Dict[str, Any]) -> None:
         required_functional_count = 0
     if required_functional_count < 3:
         errors.append("functional_models.required_count must be at least 3")
+    incremental = config.get("incremental", {})
+    if incremental.get("task_type") != "class_incremental_object_detection":
+        errors.append("incremental.task_type must be class_incremental_object_detection")
+    if incremental.get("learning_data_scope") != "incremental_dataset_only":
+        errors.append("incremental.learning_data_scope must be incremental_dataset_only")
+    if not incremental.get("policy"):
+        errors.append("incremental.policy is required")
     automation = config.get("automation", {})
     if not isinstance(automation.get("allowed_output_roots"), list) or not automation.get("allowed_output_roots"):
         errors.append("automation.allowed_output_roots must be a non-empty list")
