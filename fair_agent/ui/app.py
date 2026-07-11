@@ -101,7 +101,17 @@ st.markdown(
     :root {--ink:#18242D; --muted:#667783; --line:#DCE4E9; --teal:#087F8C;}
     .stApp {background:#F4F7F9; color:var(--ink);}
     [data-testid="stHeader"] {background:transparent;}
-    [data-testid="stToolbar"], footer {display:none !important;}
+    [data-testid="stToolbar"] {display:flex !important; background:transparent !important;}
+    [data-testid="stToolbar"] button:not([data-testid="stExpandSidebarButton"]) {display:none !important;}
+    body:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stExpandSidebarButton"] {
+      display:inline-flex !important; width:38px !important; height:38px !important;
+      position:fixed !important; top:12px !important; left:12px !important; z-index:100000 !important;
+      align-items:center !important; justify-content:center !important;
+      color:#FFFFFF !important; background:#101A22 !important; border:1px solid #30434F !important;
+      border-radius:5px !important; box-shadow:0 2px 8px rgba(16,26,34,.18) !important;
+    }
+    body:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="stExpandSidebarButton"] {display:none !important;}
+    footer {display:none !important;}
     .block-container {padding-top:2.2rem; padding-bottom:3rem; max-width:1380px;}
     [data-testid="stSidebar"] {background:#101A22; border-right:0; min-width:250px;}
     [data-testid="stSidebar"] * {color:#D8E1E7;}

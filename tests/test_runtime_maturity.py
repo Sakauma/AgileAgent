@@ -47,6 +47,14 @@ def test_serve_stops_cleanly_on_keyboard_interrupt(monkeypatch, capsys) -> None:
     assert "工作台已停止" in output
 
 
+def test_web_ui_keeps_sidebar_expand_control_visible() -> None:
+    content = Path("fair_agent/ui/app.py").read_text(encoding="utf-8")
+    assert '[data-testid="stToolbar"] {display:flex !important' in content
+    assert '[data-testid="stExpandSidebarButton"]' in content
+    assert 'width:38px !important' in content
+    assert '[data-testid="stToolbar"], footer {display:none' not in content
+
+
 def test_cli_has_no_retired_image_size_commands() -> None:
     parser = cli.build_parser()
     subcommands = next(action for action in parser._actions if action.dest == "command").choices
