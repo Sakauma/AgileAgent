@@ -92,7 +92,7 @@
     window.setTimeout(() => toast.remove(), 4200);
   }
 
-  function setLoading(visible, title = "正在分析图像", message = "正在等待GPU推理队列") {
+  function setLoading(visible, title = "正在分析图像", message = "正在准备识别") {
     $("#loadingTitle").textContent = title;
     $("#loadingMessage").textContent = message;
     $("#loadingOverlay").classList.toggle("is-hidden", !visible);
@@ -131,12 +131,10 @@
       const payload = await response.json();
       const busy = Boolean(payload.queue && (payload.queue.active || payload.queue.waiting));
       node.className = `service-status ${busy ? "is-busy" : "is-ready"}`;
-      node.querySelector("b").textContent = busy
-        ? `GPU繁忙 · 等待${payload.queue.waiting || 0}`
-        : "GPU服务就绪";
+      node.querySelector("b").textContent = busy ? "正在处理" : "服务就绪";
     } catch (_error) {
       node.className = "service-status is-error";
-      node.querySelector("b").textContent = "服务未连接";
+      node.querySelector("b").textContent = "暂未连接";
     }
   }
 
@@ -166,7 +164,6 @@
         ? `${dimensions.width} × ${dimensions.height} · ${formatBytes(file.size)}`
         : `服务端读取尺寸 · ${formatBytes(file.size)}`;
       $("#inputPreview").classList.toggle("is-unavailable", !dimensions.width);
-      $("#singleTaskId").textContent = `任务 ${shortId(hash)}`;
       $("#singleDropzone").classList.add("is-hidden");
       $("#inputPreview").classList.remove("is-hidden");
       $("#detectButton").disabled = false;
@@ -219,7 +216,7 @@
       ["传感器", sensorLabel(context.sensor), `${Math.round((context.sensor_confidence || 0) * 100)}% 置信度`],
       ["场景", sceneLabel(context.scene), `${Math.round((context.scene_confidence || 0) * 100)}% 置信度`],
       ["检测目标", String(result.detection_count || 0), "已完成定位"],
-      ["处理耗时", `${Number(result.elapsed_ms || 0).toFixed(1)} ms`, `排队 ${Number(result.queue_wait_ms || 0).toFixed(1)} ms`],
+      ["处理耗时", `${Number(result.elapsed_ms || 0).toFixed(1)} ms`, "分析完成"],
     ];
     const summaryNode = $("#resultSummary");
     summaryNode.replaceChildren();
@@ -283,7 +280,7 @@
     $("#detectButton").disabled = true;
     $("#resultState").textContent = "正在分析";
     $("#resultState").className = "result-state is-busy";
-    setLoading(true, "正在分析图像", "场景认知与目标检测正在GPU 0上执行");
+    setLoading(true, "正在分析图像", "正在完成场景与目标分析");
     try {
       const form = new FormData();
       form.append("file", state.singleFile, state.singleFile.name);
@@ -415,7 +412,7 @@
   async function detectBatch() {
     if (!state.batchFiles.length) return;
     $("#batchButton").disabled = true;
-    setLoading(true, "正在执行批量检测", `共${state.batchFiles.length}张图像，将按顺序使用GPU 0处理`);
+    setLoading(true, "正在执行批量检测", `正在依次处理${state.batchFiles.length}张图像`);
     try {
       const form = new FormData();
       state.batchFiles.forEach(({ file }) => form.append("files", file, file.name));

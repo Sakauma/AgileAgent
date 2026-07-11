@@ -64,6 +64,8 @@ def test_health_and_static_product_contract() -> None:
     assert "会话记录" in page.text
     for private_term in ["SHA256SUMS", "lock-all", "增量协议", "部署门禁"]:
         assert private_term not in page.text
+    for internal_hint in ["不会写入训练数据", "当前会话处理", "任务ID", "GPU推理队列", "边界框 XYXY"]:
+        assert internal_hint not in page.text
     assert page.headers["x-frame-options"] == "DENY"
     assert "default-src 'self'" in page.headers["content-security-policy"]
 
@@ -167,3 +169,5 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "@media (max-width: 620px)" in styles
     assert ".main-nav.is-open" in styles
     assert "streamlit" not in (html + script + styles).lower()
+    for internal_hint in ["不会写入训练数据", "当前会话处理", "任务ID", "GPU推理队列", "边界框 XYXY"]:
+        assert internal_hint not in (html + script)
