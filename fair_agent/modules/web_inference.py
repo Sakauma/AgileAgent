@@ -239,7 +239,7 @@ class WebInferenceEngine:
         self.detector.predict(
             source=warmup_image,
             imgsz=self.imgsz,
-            conf=0.15,
+            conf=0.50,
             iou=self.iou,
             max_det=self.max_det,
             device=self.device_index,
@@ -257,7 +257,7 @@ class WebInferenceEngine:
         self,
         image: Image.Image,
         filename: str,
-        confidence: float = 0.15,
+        confidence: float = 0.50,
         task_id: str | None = None,
         incremental_protocol: str | None = None,
     ) -> Dict[str, Any]:

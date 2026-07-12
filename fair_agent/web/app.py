@@ -231,7 +231,7 @@ async def detect(request: Request) -> JSONResponse:
                 raise ValueError("请选择一张图像。")
             data = await upload.read()
             image, task_id = validate_image_bytes(data, upload.filename or "image")
-            confidence = parse_confidence(form.get("confidence", 0.15))
+            confidence = parse_confidence(form.get("confidence", 0.50))
             protocol_value = str(form.get("incremental_protocol", "")).strip()
             incremental_protocol = protocol_value or None
         provider: EngineProvider = request.app.state.engine_provider
@@ -266,7 +266,7 @@ async def batch_detect(request: Request) -> Response:
             uploads = [item for item in form.getlist("files") if isinstance(item, UploadFile)]
             rows = [(item.filename or "image", await item.read()) for item in uploads]
             validated = validate_batch_uploads(rows)
-            confidence = parse_confidence(form.get("confidence", 0.15))
+            confidence = parse_confidence(form.get("confidence", 0.50))
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         results = []

@@ -19,7 +19,7 @@ class FakeEngine:
     def queue_status(self):
         return {"waiting": 0, "active": False, "completed": len(self.calls)}
 
-    def predict(self, image, filename, confidence=0.15, task_id=None, incremental_protocol=None):
+    def predict(self, image, filename, confidence=0.50, task_id=None, incremental_protocol=None):
         self.calls.append((filename, confidence, task_id, incremental_protocol))
         return {
             "filename": filename,
@@ -140,6 +140,16 @@ def test_single_detection_forwards_incremental_protocol() -> None:
     )
     assert response.status_code == 200
     assert engine.calls == [("sample.png", 0.20, content_task_id(image), "p02_new_warship")]
+
+
+def test_single_detection_defaults_to_half_confidence() -> None:
+    client, engine = client_with_engine()
+    response = client.post(
+        "/api/detect",
+        files={"file": ("sample.png", png(), "image/png")},
+    )
+    assert response.status_code == 200
+    assert engine.calls[0][1] == 0.50
 
 
 def test_single_detection_rejects_invalid_upload_and_confidence() -> None:
