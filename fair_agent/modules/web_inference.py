@@ -137,6 +137,11 @@ def summarize_records(records: Iterable[Dict[str, Any]]) -> Dict[str, int]:
     return dict(sorted(Counter(str(item["class_name"]) for item in records).items()))
 
 
+def yolo_inference_ms(result: Any) -> float:
+    speed = getattr(result, "speed", None) or {}
+    return max(0.0, float(speed.get("inference", 0.0)))
+
+
 def remap_specialist_records(records: Iterable[Dict[str, Any]], global_class_id: int) -> List[Dict[str, Any]]:
     class_name = CLASS_NAMES[global_class_id]
     return [
@@ -220,7 +225,7 @@ class WebInferenceEngine:
     ) -> None:
         from ultralytics import YOLO
 
-        from fair_agent.models.context import load_context_model
+        from fair_agent.models.context import load_context_model, predict_context
 
         self.device_index = str(device_index)
         self.device = f"cuda:{self.device_index}"
@@ -231,6 +236,23 @@ class WebInferenceEngine:
         self.imgsz = int(options.get("imgsz", 640))
         self.iou = float(options.get("iou", 0.7))
         self.max_det = int(options.get("max_det", 300))
+        context_size = int(self.context_checkpoint["preprocessing"]["image_size"])
+        warmup_image = Image.new("RGB", (self.imgsz, self.imgsz))
+        predict_context(
+            self.context_model,
+            self.context_checkpoint,
+            Image.new("RGB", (context_size, context_size)),
+            self.device,
+        )
+        self.detector.predict(
+            source=warmup_image,
+            imgsz=self.imgsz,
+            conf=0.15,
+            iou=self.iou,
+            max_det=self.max_det,
+            device=self.device_index,
+            verbose=False,
+        )
         self.incremental_protocols = {name: dict(value) for name, value in (incremental_protocols or {}).items()}
         self.specialist_protocol: str | None = None
         self.specialist_detector: Any = None
@@ -263,9 +285,10 @@ class WebInferenceEngine:
     ) -> Dict[str, Any]:
         from fair_agent.models.context import predict_context
 
-        started = time.perf_counter()
+        processing_started = time.perf_counter()
         rgb_image = image.convert("RGB")
         context = predict_context(self.context_model, self.context_checkpoint, rgb_image, self.device)
+        inference_ms = float(context.pop("_inference_ms", 0.0))
         prediction = self.detector.predict(
             source=rgb_image,
             imgsz=self.imgsz,
@@ -275,6 +298,7 @@ class WebInferenceEngine:
             device=self.device_index,
             verbose=False,
         )[0]
+        inference_ms += yolo_inference_ms(prediction)
         base_records = result_records(prediction)
         protocol_result = None
         if incremental_protocol:
@@ -294,6 +318,7 @@ class WebInferenceEngine:
                 device=self.device_index,
                 verbose=False,
             )[0]
+            inference_ms += yolo_inference_ms(specialist_prediction)
             records = compose_incremental_records(
                 base_records,
                 result_records(specialist_prediction),
@@ -313,7 +338,7 @@ class WebInferenceEngine:
             records = base_records
             plotted = prediction.plot(labels=True, conf=True, line_width=2)
             annotated = Image.fromarray(plotted[:, :, ::-1])
-        elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        processing_ms = round((time.perf_counter() - processing_started) * 1000, 1)
         models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
         if protocol_result:
             models_used.append("incremental_model_bank_v1")
@@ -324,7 +349,8 @@ class WebInferenceEngine:
             "detections": records,
             "class_counts": summarize_records(records),
             "detection_count": len(records),
-            "elapsed_ms": elapsed_ms,
+            "inference_ms": round(inference_ms, 1),
+            "processing_ms": processing_ms,
             "agent": {
                 "mode": "incremental_demo" if protocol_result else "standard_detection",
                 "models_used": models_used,

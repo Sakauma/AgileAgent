@@ -85,7 +85,12 @@ def predict_context(model: SceneSensorNet, checkpoint: Dict[str, Any], image: Im
     resolved_device = require_cuda_device(device)
     image_size = int(checkpoint["preprocessing"]["image_size"])
     tensor = evaluation_transform(image_size)(image.convert("RGB")).unsqueeze(0).to(resolved_device)
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    start_event.record()
     sensor_logits, scene_logits = model(tensor)
+    end_event.record()
+    end_event.synchronize()
     sensor_prob = sensor_logits.softmax(dim=1)[0]
     scene_prob = scene_logits.softmax(dim=1)[0]
     sensor_id = int(sensor_prob.argmax())
@@ -95,6 +100,7 @@ def predict_context(model: SceneSensorNet, checkpoint: Dict[str, Any], image: Im
         "sensor_confidence": float(sensor_prob[sensor_id]),
         "scene": SCENE_NAMES[scene_id],
         "scene_confidence": float(scene_prob[scene_id]),
+        "_inference_ms": float(start_event.elapsed_time(end_event)),
     }
 
 

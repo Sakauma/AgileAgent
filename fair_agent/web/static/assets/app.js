@@ -253,7 +253,7 @@
       ["传感器", sensorLabel(context.sensor), `${Math.round((context.sensor_confidence || 0) * 100)}% 置信度`],
       ["场景", sceneLabel(context.scene), `${Math.round((context.scene_confidence || 0) * 100)}% 置信度`],
       ["检测目标", String(result.detection_count || 0), "已完成定位"],
-      ["处理耗时", `${Number(result.elapsed_ms || 0).toFixed(1)} ms`, "分析完成"],
+      ["纯推理时间", `${Number(result.inference_ms || 0).toFixed(1)} ms`, "模型前向计算"],
     ];
     const summaryNode = $("#resultSummary");
     summaryNode.replaceChildren();
@@ -369,7 +369,7 @@
         sensor: result.context && result.context.sensor,
         scene: result.context && result.context.scene,
         detectionCount: Number(result.detection_count || 0),
-        elapsedMs: Number(result.elapsed_ms || 0),
+        inferenceMs: Number(result.inference_ms || 0),
         mode: result.agent && result.agent.mode,
         createdAt: new Date().toISOString(),
       });
@@ -495,8 +495,8 @@
       state.batchArchive = await response.blob();
       const imageCount = Number(response.headers.get("X-Image-Count") || state.batchFiles.length);
       const detectionCount = Number(response.headers.get("X-Detection-Count") || 0);
-      const elapsedMs = Number(response.headers.get("X-Elapsed-Ms") || 0);
-      $("#batchResultText").textContent = `${imageCount}张图像 · ${detectionCount}个目标 · ${elapsedMs.toFixed(1)} ms`;
+      const inferenceMs = Number(response.headers.get("X-Inference-Ms") || 0);
+      $("#batchResultText").textContent = `${imageCount}张图像 · ${detectionCount}个目标 · 纯推理 ${inferenceMs.toFixed(1)} ms`;
       $("#batchResult").classList.remove("is-hidden");
       addHistory({
         type: "batch",
@@ -505,7 +505,7 @@
         sensor: "mixed",
         scene: "mixed",
         detectionCount,
-        elapsedMs,
+        inferenceMs,
         createdAt: new Date().toISOString(),
       });
       showToast(`批量检测完成，共发现${detectionCount}个目标。`);
@@ -584,7 +584,9 @@
       targets.textContent = `${item.detectionCount || 0} 个目标`;
       const elapsed = document.createElement("span");
       elapsed.className = "history-cell";
-      elapsed.textContent = `${Number(item.elapsedMs || 0).toFixed(1)} ms`;
+      elapsed.textContent = item.inferenceMs == null
+        ? "纯推理时间暂无"
+        : `纯推理 ${Number(item.inferenceMs).toFixed(1)} ms`;
       row.append(identity, context, targets, elapsed);
       list.appendChild(row);
     });

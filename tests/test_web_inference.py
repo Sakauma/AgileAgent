@@ -18,6 +18,7 @@ from fair_agent.modules.web_inference import (
     summarize_records,
     compose_incremental_records,
     remap_specialist_records,
+    yolo_inference_ms,
     validate_batch_uploads,
     validate_image_bytes,
 )
@@ -49,6 +50,7 @@ class FakeBoxes:
 
 class FakeResult:
     boxes = FakeBoxes()
+    speed = {"preprocess": 1.2, "inference": 7.35, "postprocess": 2.1}
 
 
 def test_detection_records_are_public_and_serializable() -> None:
@@ -60,6 +62,7 @@ def test_detection_records_are_public_and_serializable() -> None:
         "xyxy": [1.0, 2.0, 30.0, 40.0],
     }
     assert summarize_records(records) == {"soldier": 1, "tank": 1}
+    assert yolo_inference_ms(FakeResult()) == 7.35
     json.dumps(records)
 
 
@@ -71,7 +74,7 @@ def test_batch_zip_contains_images_and_json() -> None:
         "detections": [],
         "class_counts": {},
         "detection_count": 0,
-        "elapsed_ms": 12.3,
+        "inference_ms": 12.3,
         "annotated_image": Image.new("RGB", (16, 16), "white"),
         "annotated_png": annotated,
     }

@@ -232,7 +232,7 @@ async def batch_detect(request: Request) -> Response:
             results.append(result)
         archive = build_batch_zip(results)
         total_detections = sum(int(item["detection_count"]) for item in results)
-        total_elapsed = round(sum(float(item["elapsed_ms"]) for item in results), 1)
+        total_inference = round(sum(float(item["inference_ms"]) for item in results), 1)
         return Response(
             archive,
             media_type="application/zip",
@@ -240,7 +240,7 @@ async def batch_detect(request: Request) -> Response:
                 "Content-Disposition": 'attachment; filename="agile-agent-results.zip"',
                 "X-Image-Count": str(len(results)),
                 "X-Detection-Count": str(total_detections),
-                "X-Elapsed-Ms": str(total_elapsed),
+                "X-Inference-Ms": str(total_inference),
             },
         )
     except HTTPException as exc:
