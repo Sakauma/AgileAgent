@@ -118,7 +118,7 @@ def test_single_detection_api_returns_public_json() -> None:
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["task_id"] == content_task_id(image)
+    assert "task_id" not in payload
     assert payload["detection_count"] == 1
     assert payload["context"]["sensor"] == "sar"
     assert "annotated_base64" in payload
@@ -225,8 +225,10 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert '<script src="/assets/app.js" defer></script>' in html
     for endpoint in ["/api/health", "/api/capabilities", "/api/detect", "/api/batch"]:
         assert endpoint in script
-    for capability in ["crypto.subtle.digest", "sessionStorage", "dataTransfer.files", "finally"]:
+    for capability in ["sessionStorage", "dataTransfer.files", "finally"]:
         assert capability in script
+    for internal_term in ["crypto.subtle.digest", "已校验", "singleHash"]:
+        assert internal_term not in script
     assert "annotated_base64" in script
     assert "incremental_protocol" in script
     assert "纯推理时间" in script

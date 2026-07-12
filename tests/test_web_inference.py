@@ -80,7 +80,7 @@ def test_batch_zip_contains_images_and_json() -> None:
     }
     archive_bytes = build_batch_zip([payload])
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-        assert sorted(archive.namelist()) == ["annotated/001_sample_unknown.png", "results.json"]
+        assert sorted(archive.namelist()) == ["annotated/001_sample.png", "results.json"]
         metadata = json.loads(archive.read("results.json"))
     assert metadata["image_count"] == 1
     assert metadata["results"][0]["filename"] == "sample.png"
@@ -164,8 +164,8 @@ def test_batch_zip_uses_index_and_task_hash_for_duplicate_stems() -> None:
     ]
     with zipfile.ZipFile(io.BytesIO(build_batch_zip(items))) as archive:
         names = archive.namelist()
-    assert "annotated/001_same_aaaaaaaa.png" in names
-    assert "annotated/002_same_bbbbbbbb.png" in names
+    assert "annotated/001_same.png" in names
+    assert "annotated/002_same.png" in names
 
 
 def test_incremental_composition_keeps_old_classes_and_remaps_specialist() -> None:

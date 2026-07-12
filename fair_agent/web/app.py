@@ -137,7 +137,7 @@ def default_engine_provider() -> WebInferenceEngine:
 
 
 def public_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {key: value for key, value in result.items() if key != "annotated_png"}
+    payload = {key: value for key, value in result.items() if key not in {"annotated_png", "task_id"}}
     payload["annotated_base64"] = base64.b64encode(result["annotated_png"]).decode("ascii")
     return payload
 
@@ -279,7 +279,7 @@ async def batch_detect(request: Request) -> Response:
         batch_id = request.app.state.batch_store.put(archive, results)
         public_results = []
         for index, item in enumerate(results):
-            row = {key: value for key, value in item.items() if key != "annotated_png"}
+            row = {key: value for key, value in item.items() if key not in {"annotated_png", "task_id"}}
             row["preview_url"] = f"/api/batch/{batch_id}/preview/{index}"
             public_results.append(row)
         system_total = round((time.perf_counter() - request_started) * 1000, 1)

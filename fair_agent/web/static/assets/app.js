@@ -25,7 +25,6 @@
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   const state = {
     singleFile: null,
-    singleHash: null,
     singlePreviewUrl: null,
     singleResult: null,
     batchFiles: [],
@@ -44,10 +43,6 @@
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  function shortId(value) {
-    return value ? value.slice(0, 12) : "-";
   }
 
   function classLabel(value) {
@@ -69,11 +64,6 @@
     }
     if (!file.size) throw new Error(`图像为空：${file.name}`);
     if (file.size > LIMITS.fileBytes) throw new Error(`单张图像不能超过20MB：${file.name}`);
-  }
-
-  async function sha256(file) {
-    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
   }
 
   function imageDimensions(url) {
@@ -191,12 +181,8 @@
       state.singleFile = file;
       state.singlePreviewUrl = URL.createObjectURL(file);
       $("#previewImage").src = state.singlePreviewUrl;
-      const [hash, dimensions] = await Promise.all([
-        sha256(file),
-        imageDimensions(state.singlePreviewUrl).catch(() => ({ width: null, height: null })),
-      ]);
+      const dimensions = await imageDimensions(state.singlePreviewUrl).catch(() => ({ width: null, height: null }));
       if (state.singleFile !== file) return;
-      state.singleHash = hash;
       $("#singleFilename").textContent = file.name;
       $("#singleMeta").textContent = dimensions.width
         ? `${dimensions.width} × ${dimensions.height} · ${formatBytes(file.size)}`
@@ -216,7 +202,6 @@
   function clearSingle(notify = true) {
     if (state.singlePreviewUrl) URL.revokeObjectURL(state.singlePreviewUrl);
     state.singleFile = null;
-    state.singleHash = null;
     state.singlePreviewUrl = null;
     state.singleResult = null;
     $("#singleFile").value = "";
@@ -372,7 +357,6 @@
       addHistory({
         type: "single",
         filename: result.filename || state.singleFile.name,
-        taskId: result.task_id || state.singleHash,
         sensor: result.context && result.context.sensor,
         scene: result.context && result.context.scene,
         detectionCount: Number(result.detection_count || 0),
@@ -414,16 +398,14 @@
 
   function downloadSingleImage() {
     if (!state.singleResult) return;
-    const id = shortId(state.singleResult.task_id || state.singleHash);
-    downloadBlob(base64Blob(state.singleResult.annotated_base64, "image/png"), `agile-agent-${id}.png`);
+    downloadBlob(base64Blob(state.singleResult.annotated_base64, "image/png"), `agile-agent-${Date.now()}.png`);
   }
 
   function downloadSingleJson() {
     if (!state.singleResult) return;
     const payload = { ...state.singleResult };
     delete payload.annotated_base64;
-    const id = shortId(payload.task_id || state.singleHash);
-    downloadBlob(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }), `agile-agent-${id}.json`);
+    downloadBlob(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }), `agile-agent-${Date.now()}.json`);
   }
 
   async function selectBatch(fileList) {
@@ -434,28 +416,19 @@
       const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
       if (totalBytes > LIMITS.batchBytes) throw new Error("单批图像总大小不能超过200MB。");
       files.forEach(validateFile);
-      setLoading(true, "正在检查批量图像", "正在生成内容指纹并排除重复文件");
-      const hashes = await Promise.all(files.map(sha256));
-      const seen = new Set();
-      hashes.forEach((hash, index) => {
-        if (seen.has(hash)) throw new Error(`批次中存在重复图像：${files[index].name}`);
-        seen.add(hash);
-      });
       clearBatch(false);
-      state.batchFiles = files.map((file, index) => ({ file, hash: hashes[index] }));
+      state.batchFiles = files;
       renderBatchQueue();
     } catch (error) {
       clearBatch(false);
       showToast(error.message || "无法读取批量图像。", "error");
-    } finally {
-      setLoading(false);
     }
   }
 
   function renderBatchQueue() {
     const queue = $("#batchQueue");
     queue.replaceChildren();
-    state.batchFiles.forEach(({ file, hash }) => {
+    state.batchFiles.forEach((file) => {
       const row = document.createElement("div");
       row.className = "queue-row";
       row.innerHTML = icon("image");
@@ -465,14 +438,10 @@
       const small = document.createElement("small");
       small.textContent = formatBytes(file.size);
       name.append(strong, small);
-      const code = document.createElement("code");
-      code.textContent = shortId(hash);
-      const status = document.createElement("small");
-      status.textContent = "已校验";
-      row.append(name, code, status);
+      row.append(name);
       queue.appendChild(row);
     });
-    const totalBytes = state.batchFiles.reduce((sum, item) => sum + item.file.size, 0);
+    const totalBytes = state.batchFiles.reduce((sum, file) => sum + file.size, 0);
     $("#batchCount").textContent = `${state.batchFiles.length}张`;
     $("#batchSize").textContent = formatBytes(totalBytes);
     $("#batchToolbar").classList.toggle("is-hidden", !state.batchFiles.length);
@@ -499,7 +468,7 @@
     setLoading(true, "正在执行批量检测", `正在依次处理${state.batchFiles.length}张图像`);
     try {
       const form = new FormData();
-      state.batchFiles.forEach(({ file }) => form.append("files", file, file.name));
+      state.batchFiles.forEach((file) => form.append("files", file, file.name));
       form.append("confidence", $("#batchConfidence").value);
       const response = await fetch("/api/batch", { method: "POST", body: form });
       if (!response.ok) throw new Error(await responseError(response));
@@ -516,7 +485,6 @@
       addHistory({
         type: "batch",
         filename: `批量任务（${imageCount}张）`,
-        taskId: state.batchFiles[0] ? state.batchFiles[0].hash : null,
         sensor: "mixed",
         scene: "mixed",
         detectionCount,
@@ -618,7 +586,7 @@
   }
 
   function rememberResult(type, payload) {
-    const identity = type === "batch" ? payload.batch_id : payload.task_id;
+    const identity = type === "batch" ? payload.batch_id : payload.filename;
     const key = `${type}:${identity || "result"}:${Date.now()}`;
     state.resultCache.set(key, { type, payload });
     while (state.resultCache.size > RESULT_CACHE_LIMIT) {

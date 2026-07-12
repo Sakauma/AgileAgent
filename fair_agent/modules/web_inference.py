@@ -205,10 +205,13 @@ def build_batch_zip(results: Iterable[Dict[str, Any]]) -> bytes:
         for index, item in enumerate(rows, 1):
             source_stem = Path(str(item["filename"])).stem
             safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", source_stem).strip("._") or "image"
-            task_suffix = str(item.get("task_id") or "unknown")[:8]
-            archive.writestr(f"annotated/{index:03d}_{safe_stem}_{task_suffix}.png", item["annotated_png"])
+            archive.writestr(f"annotated/{index:03d}_{safe_stem}.png", item["annotated_png"])
             metadata.append(
-                {key: value for key, value in item.items() if key not in {"annotated_png", "annotated_image"}}
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"annotated_png", "annotated_image", "task_id"}
+                }
             )
         archive.writestr("results.json", result_json_bytes({"image_count": len(rows), "results": metadata}))
     return buffer.getvalue()
