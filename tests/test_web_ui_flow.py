@@ -85,6 +85,9 @@ def test_health_and_static_product_contract() -> None:
     page = client.get("/")
     assert page.status_code == 200
     assert "智能目标检测" in page.text
+    assert "灵动Agent" in page.text
+    assert '<span class="brand-glyph">灵</span>' in page.text
+    assert "AgileAgent 首页" not in page.text
     assert "批量检测" in page.text
     assert "会话记录" in page.text
     for private_term in ["SHA256SUMS", "lock-all", "增量协议", "部署门禁"]:
