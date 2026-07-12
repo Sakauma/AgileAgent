@@ -12,6 +12,7 @@ from fair_agent.modules.web_inference import (
     FairInferenceQueue,
     MAX_BATCH_FILES,
     annotate_records,
+    box_iou,
     build_batch_zip,
     content_task_id,
     image_png_bytes,
@@ -19,6 +20,7 @@ from fair_agent.modules.web_inference import (
     summarize_records,
     compose_incremental_records,
     remap_specialist_records,
+    consensus_specialist_records,
     yolo_inference_ms,
     validate_batch_uploads,
     validate_image_bytes,
@@ -193,3 +195,14 @@ def test_incremental_composition_keeps_old_classes_and_remaps_specialist() -> No
     composed = compose_incremental_records(base, specialist, 2)
     assert [item["class_id"] for item in composed] == [0, 2]
     assert [item["source"] for item in composed] == ["frozen_base_model", "incremental_model"]
+
+
+def test_specialist_candidates_require_spatial_consensus() -> None:
+    base = [{"class_id": 2, "xyxy": [10, 10, 30, 30]}]
+    candidates = [
+        {"class_id": 2, "xyxy": [11, 11, 29, 29]},
+        {"class_id": 2, "xyxy": [40, 40, 55, 55]},
+    ]
+    assert box_iou(base[0]["xyxy"], candidates[0]["xyxy"]) > 0.30
+    assert consensus_specialist_records(base, candidates, 2, 0.30) == [candidates[0]]
+    assert consensus_specialist_records([], candidates, 2, 0.30) == []

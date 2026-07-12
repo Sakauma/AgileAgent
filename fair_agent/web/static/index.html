@@ -49,14 +49,6 @@
             <img id="previewImage" alt="待检测图像预览">
           <div class="file-summary"><strong id="singleFilename"></strong><span id="singleMeta"></span></div>
           </div>
-          <div class="mode-selector">
-            <span>识别模式</span>
-            <div class="mode-buttons" role="group" aria-label="识别模式">
-              <button type="button" class="mode-button is-active" data-mode="standard">标准识别</button>
-              <button type="button" class="mode-button" data-mode="incremental">增量演示</button>
-            </div>
-            <select id="incrementalProtocol" class="is-hidden" aria-label="增量类别"></select>
-          </div>
           <details class="advanced-settings">
             <summary><svg><use href="/assets/icons.svg#settings"/></svg>检测设置<span id="confidenceLabel">置信度 0.50</span></summary>
             <label for="confidence">最低置信度</label><input id="confidence" type="range" min="0.01" max="1.00" value="0.50" step="0.01">

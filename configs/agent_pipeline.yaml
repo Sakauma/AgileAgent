@@ -18,6 +18,7 @@ web:
   incremental_demo:
     enabled: true
     require_acceptance_passed: true
+    auto_consensus_iou: 0.30
 
 model:
   weights: models/base/yolo11s_ir_sar_imgsz640.pt

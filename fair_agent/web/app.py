@@ -91,6 +91,7 @@ def build_web_settings() -> Dict[str, Any]:
     manifest_path = resolve_path(web.get("model_manifest", "models/manifest.json"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     require_passed = bool(web.get("incremental_demo", {}).get("require_acceptance_passed", True))
+    consensus_iou = float(web.get("incremental_demo", {}).get("auto_consensus_iou", 0.30))
     protocols: Dict[str, Dict[str, Any]] = {}
     class_ids = {name: class_id for class_id, name in CLASS_NAMES.items()}
     for item in manifest.get("incremental_models", []):
@@ -107,6 +108,7 @@ def build_web_settings() -> Dict[str, Any]:
             "new_map50": float(item["new_map50"]),
             "krr": float(item["krr"]),
             "available": accepted or not require_passed,
+            "consensus_iou": consensus_iou,
         }
     return {
         "detector_path": resolve_path(web.get("detector_weights", config["model"]["weights"])),
@@ -232,8 +234,6 @@ async def detect(request: Request) -> JSONResponse:
             data = await upload.read()
             image, task_id = validate_image_bytes(data, upload.filename or "image")
             confidence = parse_confidence(form.get("confidence", 0.50))
-            protocol_value = str(form.get("incremental_protocol", "")).strip()
-            incremental_protocol = protocol_value or None
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         result = await run_in_threadpool(
@@ -242,7 +242,7 @@ async def detect(request: Request) -> JSONResponse:
             upload.filename or "image",
             confidence,
             task_id,
-            incremental_protocol,
+            "auto",
         )
         payload = public_result(result)
         payload["system_total_ms"] = round((time.perf_counter() - request_started) * 1000, 1)
@@ -271,7 +271,7 @@ async def batch_detect(request: Request) -> Response:
         engine = await run_in_threadpool(provider)
         results = []
         for filename, _data, image, task_id in validated:
-            result = await run_in_threadpool(engine.predict, image, filename, confidence, task_id)
+            result = await run_in_threadpool(engine.predict, image, filename, confidence, task_id, "auto")
             results.append(result)
         archive = build_batch_zip(results)
         total_detections = sum(int(item["detection_count"]) for item in results)

@@ -39,9 +39,16 @@ class FakeEngine:
             "inference_ms": 18.2,
             "queue_wait_ms": 0.4,
             "agent": {
-                "mode": "incremental_demo" if incremental_protocol else "standard_detection",
-                "models_used": ["scene_sensor_net_v1", "unified_yolo11s_v1"],
+                "mode": "automatic_orchestration",
+                "models_used": ["scene_sensor_net_v1", "unified_yolo11s_v1", "incremental_model_bank_v1"],
                 "protocol": None,
+                "protocols": [],
+                "decision": {
+                    "mode": "automatic",
+                    "evaluated_specialists": 3,
+                    "activated_classes": [],
+                    "reason": "test",
+                },
             },
             "annotated_png": image_png_bytes(image),
         }
@@ -95,6 +102,7 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
     assert settings["predict"] == {"imgsz": 640, "iou": 0.7, "max_det": 300}
     assert settings["protocols"]["p01_new_small_aircraft"]["available"] is False
     assert settings["protocols"]["p02_new_warship"]["available"] is True
+    assert settings["protocols"]["p02_new_warship"]["consensus_iou"] == 0.30
     assert "allowed_scenes" not in settings["protocols"]["p02_new_warship"]
 
 
@@ -127,10 +135,10 @@ def test_single_detection_api_returns_public_json() -> None:
     assert payload["inference_ms"] == 18.2
     assert payload["confidence_threshold"] == 0.21
     assert payload["system_total_ms"] >= 0
-    assert engine.calls == [("sample.png", 0.21, content_task_id(image), None)]
+    assert engine.calls == [("sample.png", 0.21, content_task_id(image), "auto")]
 
 
-def test_single_detection_forwards_incremental_protocol() -> None:
+def test_single_detection_ignores_manual_protocol_and_uses_agent_auto_mode() -> None:
     client, engine = client_with_engine()
     image = png()
     response = client.post(
@@ -139,7 +147,7 @@ def test_single_detection_forwards_incremental_protocol() -> None:
         data={"confidence": "0.20", "incremental_protocol": "p02_new_warship"},
     )
     assert response.status_code == 200
-    assert engine.calls == [("sample.png", 0.20, content_task_id(image), "p02_new_warship")]
+    assert engine.calls == [("sample.png", 0.20, content_task_id(image), "auto")]
 
 
 def test_single_detection_defaults_to_half_confidence() -> None:
@@ -150,6 +158,7 @@ def test_single_detection_defaults_to_half_confidence() -> None:
     )
     assert response.status_code == 200
     assert engine.calls[0][1] == 0.50
+    assert engine.calls[0][3] == "auto"
 
 
 def test_single_detection_rejects_invalid_upload_and_confidence() -> None:
@@ -246,14 +255,17 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     script = Path("fair_agent/web/static/assets/app.js").read_text(encoding="utf-8")
     styles = Path("fair_agent/web/static/assets/app.css").read_text(encoding="utf-8")
     assert '<script src="/assets/app.js" defer></script>' in html
-    for endpoint in ["/api/health", "/api/capabilities", "/api/detect", "/api/batch"]:
+    for endpoint in ["/api/health", "/api/detect", "/api/batch"]:
         assert endpoint in script
     for capability in ["sessionStorage", "dataTransfer.files", "finally"]:
         assert capability in script
     for internal_term in ["crypto.subtle.digest", "已校验", "singleHash"]:
         assert internal_term not in script
     assert "annotated_base64" in script
-    assert "incremental_protocol" in script
+    assert "incremental_protocol" not in script
+    assert "incrementalProtocol" not in html
+    assert "增量演示" not in html
+    assert "Agent 自动决策" in script
     assert "纯推理时间" in script
     assert "系统总用时" in script
     assert "本次阈值" in script

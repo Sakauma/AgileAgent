@@ -31,8 +31,6 @@
     batchResult: null,
     resultCache: new Map(),
     history: readHistory(),
-    recognitionMode: "standard",
-    capabilities: null,
   };
 
   function icon(name) {
@@ -130,40 +128,6 @@
       node.className = "service-status is-error";
       node.querySelector("b").textContent = "暂未连接";
     }
-  }
-
-  async function loadCapabilities() {
-    const incrementalButton = $("[data-mode='incremental']");
-    const select = $("#incrementalProtocol");
-    try {
-      const response = await fetch("/api/capabilities", { cache: "no-store" });
-      if (!response.ok) throw new Error("capabilities unavailable");
-      const payload = await response.json();
-      state.capabilities = payload;
-      select.replaceChildren();
-      payload.protocols.forEach((protocol) => {
-        const option = document.createElement("option");
-        option.value = protocol.id;
-        option.disabled = !protocol.available;
-        option.textContent = protocol.available
-          ? `${classLabel(protocol.new_class)}增量模型`
-          : `${classLabel(protocol.new_class)}（优化中）`;
-        select.appendChild(option);
-      });
-      const firstAvailable = payload.protocols.find((protocol) => protocol.available);
-      incrementalButton.disabled = !payload.incremental_enabled || !firstAvailable;
-      if (firstAvailable) select.value = firstAvailable.id;
-    } catch (_error) {
-      incrementalButton.disabled = true;
-    }
-  }
-
-  function setRecognitionMode(mode) {
-    const incrementalButton = $("[data-mode='incremental']");
-    if (mode === "incremental" && incrementalButton.disabled) return;
-    state.recognitionMode = mode;
-    $$("[data-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.mode === mode));
-    $("#incrementalProtocol").classList.toggle("is-hidden", mode !== "incremental");
   }
 
   function setWorkflow(step) {
@@ -306,21 +270,18 @@
   function renderCollaboration(result) {
     const context = result.context || {};
     const agent = result.agent || {};
-    const protocol = agent.protocol || null;
-    $("#collaborationMode").textContent = protocol ? "增量协同" : "标准识别";
+    const decision = agent.decision || {};
+    const activated = Array.isArray(decision.activated_classes) ? decision.activated_classes : [];
+    $("#collaborationMode").textContent = "Agent 自动决策";
     const flow = $("#collaborationFlow");
     flow.replaceChildren();
-    const steps = protocol
-      ? [
-          ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "理解输入模态与任务场景"],
-          ["02 历史能力", "冻结旧类检测器", "保持原有类别识别能力"],
-          ["03 快速学习", `${classLabel(protocol.new_class)}增量模型`, `New-mAP50 ${Number(protocol.new_map50).toFixed(3)} · KRR ${Number(protocol.krr).toFixed(3)}`],
-        ]
-      : [
-          ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "理解输入模态与任务场景"],
-          ["02 策略选择", "统一多模态识别", "根据场景选择当前识别策略"],
-          ["03 目标检测", `${result.detection_count || 0} 个目标`, "完成类别判断与目标定位"],
-        ];
+    const steps = [
+      ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "自动理解输入模态与任务场景"],
+      ["02 交叉验证", `${Number(decision.evaluated_specialists || 0)} 项候选能力`, "统一检测与增量能力自动相互验证"],
+      activated.length
+        ? ["03 自动融合", activated.map(classLabel).join("、"), "融合增量候选与统一检测结果"]
+        : ["03 自动决策", `${result.detection_count || 0} 个目标`, "保持统一检测结果，无需人工选择模型"],
+    ];
     steps.forEach(([stage, title, detail]) => {
       const node = document.createElement("div");
       node.className = "collaboration-step";
@@ -345,9 +306,6 @@
       const form = new FormData();
       form.append("file", state.singleFile, state.singleFile.name);
       form.append("confidence", $("#confidence").value);
-      if (state.recognitionMode === "incremental") {
-        form.append("incremental_protocol", $("#incrementalProtocol").value);
-      }
       const response = await fetch("/api/detect", { method: "POST", body: form });
       if (!response.ok) throw new Error(await responseError(response));
       const result = await response.json();
@@ -722,7 +680,6 @@
     });
     $("#downloadImage").addEventListener("click", downloadSingleImage);
     $("#downloadJson").addEventListener("click", downloadSingleJson);
-    $$("[data-mode]").forEach((button) => button.addEventListener("click", () => setRecognitionMode(button.dataset.mode)));
 
     $("#batchDropzone").addEventListener("click", () => $("#batchFiles").click());
     $("#batchFiles").addEventListener("change", (event) => selectBatch(event.target.files));
@@ -753,7 +710,6 @@
       if (["detect", "batch", "history"].includes(nextView)) switchView(nextView);
     });
     renderHistory();
-    loadCapabilities();
     refreshHealth();
     window.setInterval(refreshHealth, 15000);
   }

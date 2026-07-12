@@ -150,6 +150,30 @@ def remap_specialist_records(records: Iterable[Dict[str, Any]], global_class_id:
     ]
 
 
+def box_iou(first: Iterable[float], second: Iterable[float]) -> float:
+    ax1, ay1, ax2, ay2 = [float(value) for value in first]
+    bx1, by1, bx2, by2 = [float(value) for value in second]
+    intersection = max(0.0, min(ax2, bx2) - max(ax1, bx1)) * max(0.0, min(ay2, by2) - max(ay1, by1))
+    first_area = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    second_area = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = first_area + second_area - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def consensus_specialist_records(
+    base_records: Iterable[Dict[str, Any]],
+    specialist_records: Iterable[Dict[str, Any]],
+    global_class_id: int,
+    min_iou: float,
+) -> List[Dict[str, Any]]:
+    references = [item for item in base_records if int(item["class_id"]) == global_class_id]
+    return [
+        item
+        for item in specialist_records
+        if any(box_iou(item["xyxy"], reference["xyxy"]) >= min_iou for reference in references)
+    ]
+
+
 def compose_incremental_records(
     base_records: Iterable[Dict[str, Any]],
     specialist_records: Iterable[Dict[str, Any]],
@@ -246,8 +270,7 @@ class WebInferenceEngine:
             verbose=False,
         )
         self.incremental_protocols = {name: dict(value) for name, value in (incremental_protocols or {}).items()}
-        self.specialist_protocol: str | None = None
-        self.specialist_detector: Any = None
+        self.specialist_detectors: Dict[str, Any] = {}
         self.queue = FairInferenceQueue()
 
     def queue_status(self) -> Dict[str, int | bool]:
@@ -291,16 +314,28 @@ class WebInferenceEngine:
         )[0]
         inference_ms += yolo_inference_ms(prediction)
         base_records = result_records(prediction)
-        protocol_result = None
-        if incremental_protocol:
+        automatic = incremental_protocol == "auto"
+        if automatic:
+            selected_protocols = [
+                (protocol_id, protocol)
+                for protocol_id, protocol in self.incremental_protocols.items()
+                if protocol.get("available")
+            ]
+        elif incremental_protocol:
             protocol = self.incremental_protocols.get(incremental_protocol)
             if protocol is None or not protocol.get("available"):
-                raise ValueError("所选增量协议当前不可用于演示。")
-            global_class_id = int(protocol["global_class_id"])
-            if self.specialist_protocol != incremental_protocol:
-                self.specialist_detector = self._yolo_class(str(protocol["weights"]))
-                self.specialist_protocol = incremental_protocol
-            specialist_prediction = self.specialist_detector.predict(
+                raise ValueError("所选增量能力当前不可用。")
+            selected_protocols = [(incremental_protocol, protocol)]
+        else:
+            selected_protocols = []
+
+        protocol_results = []
+        activated_class_ids = set()
+        specialist_records: List[Dict[str, Any]] = []
+        for protocol_id, protocol in selected_protocols:
+            if protocol_id not in self.specialist_detectors:
+                self.specialist_detectors[protocol_id] = self._yolo_class(str(protocol["weights"]))
+            specialist_prediction = self.specialist_detectors[protocol_id].predict(
                 source=rgb_image,
                 imgsz=self.imgsz,
                 conf=float(confidence),
@@ -310,27 +345,52 @@ class WebInferenceEngine:
                 verbose=False,
             )[0]
             inference_ms += yolo_inference_ms(specialist_prediction)
-            records = compose_incremental_records(
+            global_class_id = int(protocol["global_class_id"])
+            raw_candidates = remap_specialist_records(result_records(specialist_prediction), global_class_id)
+            candidates = consensus_specialist_records(
                 base_records,
-                result_records(specialist_prediction),
+                raw_candidates,
                 global_class_id,
+                float(protocol.get("consensus_iou", 0.30)),
             )
-            annotated = annotate_records(rgb_image, records)
-            protocol_result = {
-                "id": incremental_protocol,
+            activated = bool(candidates)
+            if activated:
+                activated_class_ids.add(global_class_id)
+                specialist_records.extend(candidates)
+            protocol_results.append({
+                "id": protocol_id,
                 "new_class": protocol["new_class"],
                 "new_map50": protocol["new_map50"],
                 "krr": protocol["krr"],
-                "status": "activated",
-                "activated": True,
-                "reason": None,
-            }
+                "status": "activated" if activated else "no_candidate",
+                "activated": activated,
+                "raw_candidate_count": len(raw_candidates),
+                "candidate_count": len(candidates),
+            })
+
+        if activated_class_ids:
+            records = [
+                {**item, "source": "frozen_base_model"}
+                for item in base_records
+                if int(item["class_id"]) not in activated_class_ids
+            ] + specialist_records
         else:
-            records = base_records
-            annotated = annotate_records(rgb_image, records)
+            records = [{**item, "source": "frozen_base_model"} for item in base_records]
+        annotated = annotate_records(rgb_image, records)
         models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
-        if protocol_result:
+        if selected_protocols:
             models_used.append("incremental_model_bank_v1")
+        activated_classes = [item["new_class"] for item in protocol_results if item["activated"]]
+        decision = {
+            "mode": "automatic" if automatic else ("manual" if selected_protocols else "unified_only"),
+            "evaluated_specialists": len(selected_protocols),
+            "activated_classes": activated_classes,
+            "reason": (
+                "自动融合通过置信度与跨模型空间一致性检查的增量候选"
+                if activated_classes
+                else "未发现通过置信度与跨模型空间一致性检查的增量候选，保持统一检测结果"
+            ),
+        }
         return {
             "filename": filename,
             "task_id": task_id,
@@ -341,9 +401,11 @@ class WebInferenceEngine:
             "confidence_threshold": round(float(confidence), 2),
             "inference_ms": round(inference_ms, 1),
             "agent": {
-                "mode": "incremental_demo" if protocol_result else "standard_detection",
+                "mode": "automatic_orchestration" if automatic else "standard_detection",
                 "models_used": models_used,
-                "protocol": protocol_result,
+                "protocol": protocol_results[0] if not automatic and protocol_results else None,
+                "protocols": protocol_results,
+                "decision": decision,
             },
             "annotated_png": image_png_bytes(annotated),
         }
