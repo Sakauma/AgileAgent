@@ -173,17 +173,6 @@ def annotate_records(image: Image.Image, records: Iterable[Dict[str, Any]]) -> I
         color = colors.get(class_id, "#159a91")
         x1, y1, x2, y2 = [float(value) for value in item["xyxy"]]
         draw.rectangle((x1, y1, x2, y2), outline=color, width=line_width)
-        label = f'{item["class_name"]} {float(item["confidence"]):.2f}'
-        text_box = draw.textbbox((0, 0), label)
-        text_width = text_box[2] - text_box[0]
-        text_height = text_box[3] - text_box[1]
-        text_y = max(0.0, y1 - text_height - 7)
-        draw.rounded_rectangle(
-            (x1, text_y, x1 + text_width + 8, text_y + text_height + 6),
-            radius=3,
-            fill=color,
-        )
-        draw.text((x1 + 4, text_y + 2), label, fill="white")
     return canvas
 
 
@@ -338,7 +327,7 @@ class WebInferenceEngine:
             }
         else:
             records = base_records
-            plotted = prediction.plot(labels=True, conf=True, line_width=2)
+            plotted = prediction.plot(labels=False, conf=False, line_width=2)
             annotated = Image.fromarray(plotted[:, :, ::-1])
         models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
         if protocol_result:

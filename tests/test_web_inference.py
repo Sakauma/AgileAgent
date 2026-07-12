@@ -11,6 +11,7 @@ from PIL import Image
 from fair_agent.modules.web_inference import (
     FairInferenceQueue,
     MAX_BATCH_FILES,
+    annotate_records,
     build_batch_zip,
     content_task_id,
     image_png_bytes,
@@ -64,6 +65,16 @@ def test_detection_records_are_public_and_serializable() -> None:
     assert summarize_records(records) == {"soldier": 1, "tank": 1}
     assert yolo_inference_ms(FakeResult()) == 7.35
     json.dumps(records)
+
+
+def test_annotation_draws_boxes_without_label_background() -> None:
+    source = Image.new("RGB", (64, 64), "black")
+    annotated = annotate_records(
+        source,
+        [{"class_id": 2, "class_name": "warship", "confidence": 0.91, "xyxy": [10, 20, 50, 50]}],
+    )
+    assert annotated.crop((0, 0, 64, 20)).tobytes() == source.crop((0, 0, 64, 20)).tobytes()
+    assert annotated.getpixel((10, 20)) != source.getpixel((10, 20))
 
 
 def test_batch_zip_contains_images_and_json() -> None:
