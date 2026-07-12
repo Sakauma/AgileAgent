@@ -254,6 +254,7 @@
       ["场景", sceneLabel(context.scene), `${Math.round((context.scene_confidence || 0) * 100)}% 置信度`],
       ["检测目标", String(result.detection_count || 0), "已完成定位"],
       ["纯推理时间", `${Number(result.inference_ms || 0).toFixed(1)} ms`, "模型前向计算"],
+      ["系统总用时", `${Number(result.system_total_ms || 0).toFixed(1)} ms`, "完整处理链路"],
     ];
     const summaryNode = $("#resultSummary");
     summaryNode.replaceChildren();
@@ -370,6 +371,7 @@
         scene: result.context && result.context.scene,
         detectionCount: Number(result.detection_count || 0),
         inferenceMs: Number(result.inference_ms || 0),
+        systemTotalMs: Number(result.system_total_ms || 0),
         mode: result.agent && result.agent.mode,
         createdAt: new Date().toISOString(),
       });
@@ -496,7 +498,8 @@
       const imageCount = Number(response.headers.get("X-Image-Count") || state.batchFiles.length);
       const detectionCount = Number(response.headers.get("X-Detection-Count") || 0);
       const inferenceMs = Number(response.headers.get("X-Inference-Ms") || 0);
-      $("#batchResultText").textContent = `${imageCount}张图像 · ${detectionCount}个目标 · 纯推理 ${inferenceMs.toFixed(1)} ms`;
+      const systemTotalMs = Number(response.headers.get("X-System-Total-Ms") || 0);
+      $("#batchResultText").textContent = `${imageCount}张图像 · ${detectionCount}个目标 · 纯推理 ${inferenceMs.toFixed(1)} ms · 总用时 ${systemTotalMs.toFixed(1)} ms`;
       $("#batchResult").classList.remove("is-hidden");
       addHistory({
         type: "batch",
@@ -506,6 +509,7 @@
         scene: "mixed",
         detectionCount,
         inferenceMs,
+        systemTotalMs,
         createdAt: new Date().toISOString(),
       });
       showToast(`批量检测完成，共发现${detectionCount}个目标。`);
@@ -585,8 +589,8 @@
       const elapsed = document.createElement("span");
       elapsed.className = "history-cell";
       elapsed.textContent = item.inferenceMs == null
-        ? "纯推理时间暂无"
-        : `纯推理 ${Number(item.inferenceMs).toFixed(1)} ms`;
+        ? "耗时数据暂无"
+        : `推理 ${Number(item.inferenceMs).toFixed(1)} / 总用时 ${Number(item.systemTotalMs || 0).toFixed(1)} ms`;
       row.append(identity, context, targets, elapsed);
       list.appendChild(row);
     });

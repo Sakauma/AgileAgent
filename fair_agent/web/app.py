@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict
 
@@ -184,6 +185,7 @@ async def capabilities(_request: Request) -> JSONResponse:
 
 
 async def detect(request: Request) -> JSONResponse:
+    request_started = time.perf_counter()
     try:
         async with request.form(max_files=1, max_fields=4, max_part_size=MAX_FILE_BYTES) as form:
             upload = form.get("file")
@@ -204,7 +206,9 @@ async def detect(request: Request) -> JSONResponse:
             task_id,
             incremental_protocol,
         )
-        return JSONResponse(public_result(result))
+        payload = public_result(result)
+        payload["system_total_ms"] = round((time.perf_counter() - request_started) * 1000, 1)
+        return JSONResponse(payload)
     except HTTPException as exc:
         return JSONResponse({"error": multipart_error(exc)}, status_code=400)
     except ValueError as exc:
@@ -214,6 +218,7 @@ async def detect(request: Request) -> JSONResponse:
 
 
 async def batch_detect(request: Request) -> Response:
+    request_started = time.perf_counter()
     try:
         async with request.form(
             max_files=MAX_BATCH_FILES,
@@ -233,6 +238,7 @@ async def batch_detect(request: Request) -> Response:
         archive = build_batch_zip(results)
         total_detections = sum(int(item["detection_count"]) for item in results)
         total_inference = round(sum(float(item["inference_ms"]) for item in results), 1)
+        system_total = round((time.perf_counter() - request_started) * 1000, 1)
         return Response(
             archive,
             media_type="application/zip",
@@ -241,6 +247,7 @@ async def batch_detect(request: Request) -> Response:
                 "X-Image-Count": str(len(results)),
                 "X-Detection-Count": str(total_detections),
                 "X-Inference-Ms": str(total_inference),
+                "X-System-Total-Ms": str(system_total),
             },
         )
     except HTTPException as exc:

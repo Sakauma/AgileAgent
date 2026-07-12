@@ -36,7 +36,6 @@ class FakeEngine:
             "class_counts": {"warship": 1},
             "detection_count": 1,
             "inference_ms": 18.2,
-            "processing_ms": 24.8,
             "queue_wait_ms": 0.4,
             "agent": {
                 "mode": "incremental_demo" if incremental_protocol else "standard_detection",
@@ -117,6 +116,7 @@ def test_single_detection_api_returns_public_json() -> None:
     assert "annotated_base64" in payload
     assert "annotated_png" not in payload
     assert payload["inference_ms"] == 18.2
+    assert payload["system_total_ms"] >= 0
     assert engine.calls == [("sample.png", 0.21, content_task_id(image), None)]
 
 
@@ -178,6 +178,7 @@ def test_batch_api_returns_archive_and_summary_headers() -> None:
     assert response.headers["x-image-count"] == "2"
     assert response.headers["x-detection-count"] == "2"
     assert float(response.headers["x-inference-ms"]) == 36.4
+    assert float(response.headers["x-system-total-ms"]) >= 0
     assert len(engine.calls) == 2
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         assert len([name for name in archive.namelist() if name.startswith("annotated/")]) == 2
@@ -212,7 +213,9 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "annotated_base64" in script
     assert "incremental_protocol" in script
     assert "纯推理时间" in script
+    assert "系统总用时" in script
     assert "X-Inference-Ms" in script
+    assert "X-System-Total-Ms" in script
     assert "collaborationFlow" in html
     assert "@media (max-width: 620px)" in styles
     assert ".main-nav.is-open" in styles

@@ -285,7 +285,6 @@ class WebInferenceEngine:
     ) -> Dict[str, Any]:
         from fair_agent.models.context import predict_context
 
-        processing_started = time.perf_counter()
         rgb_image = image.convert("RGB")
         context = predict_context(self.context_model, self.context_checkpoint, rgb_image, self.device)
         inference_ms = float(context.pop("_inference_ms", 0.0))
@@ -338,7 +337,6 @@ class WebInferenceEngine:
             records = base_records
             plotted = prediction.plot(labels=True, conf=True, line_width=2)
             annotated = Image.fromarray(plotted[:, :, ::-1])
-        processing_ms = round((time.perf_counter() - processing_started) * 1000, 1)
         models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
         if protocol_result:
             models_used.append("incremental_model_bank_v1")
@@ -350,7 +348,6 @@ class WebInferenceEngine:
             "class_counts": summarize_records(records),
             "detection_count": len(records),
             "inference_ms": round(inference_ms, 1),
-            "processing_ms": processing_ms,
             "agent": {
                 "mode": "incremental_demo" if protocol_result else "standard_detection",
                 "models_used": models_used,
