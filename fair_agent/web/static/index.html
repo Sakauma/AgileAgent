@@ -59,7 +59,7 @@
           </div>
           <details class="advanced-settings">
             <summary><svg><use href="/assets/icons.svg#settings"/></svg>检测设置<span id="confidenceLabel">置信度 0.50</span></summary>
-            <label for="confidence">最低置信度</label><input id="confidence" type="range" min="0.01" max="0.80" value="0.50" step="0.01">
+            <label for="confidence">最低置信度</label><input id="confidence" type="range" min="0.01" max="1.00" value="0.50" step="0.01">
           </details>
           <button class="primary-button" id="detectButton" disabled><svg><use href="/assets/icons.svg#scan"/></svg><span>开始智能检测</span><svg class="button-arrow"><use href="/assets/icons.svg#arrow"/></svg></button>
         </section>
@@ -91,7 +91,7 @@
         <button class="batch-dropzone" id="batchDropzone"><span class="drop-icon"><svg><use href="/assets/icons.svg#layers"/></svg></span><div><strong>选择批量图像</strong><small>单批最多20张，总计不超过200MB</small></div><span class="outline-action">选择文件</span></button>
         <div class="batch-toolbar is-hidden" id="batchToolbar"><div><b id="batchCount">0张</b><span id="batchSize">0 MB</span></div><button class="text-button" id="clearBatch"><svg><use href="/assets/icons.svg#trash"/></svg>清空列表</button></div>
         <div class="file-queue" id="batchQueue"></div>
-        <div class="batch-actions"><label>最低置信度 <b id="batchConfidenceLabel">0.50</b><input id="batchConfidence" type="range" min="0.01" max="0.80" value="0.50" step="0.01"></label><button class="primary-button compact" id="batchButton" disabled><svg><use href="/assets/icons.svg#layers"/></svg>开始批量检测</button></div>
+        <div class="batch-actions"><label>最低置信度 <b id="batchConfidenceLabel">0.50</b><input id="batchConfidence" type="range" min="0.01" max="1.00" value="0.50" step="0.01"></label><button class="primary-button compact" id="batchButton" disabled><svg><use href="/assets/icons.svg#layers"/></svg>开始批量检测</button></div>
         <div class="batch-result is-hidden" id="batchResult"><div class="batch-success"><svg><use href="/assets/icons.svg#check"/></svg><div><strong>批量任务已完成</strong><span id="batchResultText"></span></div></div><button class="secondary-button" id="downloadBatch"><svg><use href="/assets/icons.svg#archive"/></svg>下载结果包</button></div>
         <section class="batch-gallery is-hidden" id="batchGallery" aria-label="批量检测结果">
           <div class="section-heading"><div><p class="eyebrow">逐张查看</p><h2>检测结果</h2></div><span id="batchPreviewPosition"></span></div>

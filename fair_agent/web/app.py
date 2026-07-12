@@ -147,8 +147,8 @@ def parse_confidence(value: Any) -> float:
         confidence = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError("置信度参数无效。") from exc
-    if not 0.01 <= confidence <= 0.80:
-        raise ValueError("置信度必须位于0.01到0.80之间。")
+    if not 0.01 <= confidence <= 1.00:
+        raise ValueError("置信度必须位于0.01到1.00之间。")
     return confidence
 
 

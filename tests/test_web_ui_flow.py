@@ -164,11 +164,22 @@ def test_single_detection_rejects_invalid_upload_and_confidence() -> None:
     confidence = client.post(
         "/api/detect",
         files={"file": ("sample.png", png(), "image/png")},
-        data={"confidence": "0.99"},
+        data={"confidence": "1.01"},
     )
     assert confidence.status_code == 400
-    assert "0.01到0.80" in confidence.json()["error"]
+    assert "0.01到1.00" in confidence.json()["error"]
     assert not engine.calls
+
+
+def test_single_detection_accepts_full_confidence_upper_bound() -> None:
+    client, engine = client_with_engine()
+    response = client.post(
+        "/api/detect",
+        files={"file": ("sample.png", png(), "image/png")},
+        data={"confidence": "1.00"},
+    )
+    assert response.status_code == 200
+    assert engine.calls[0][1] == 1.00
 
 
 def test_single_detection_rejects_oversized_multipart() -> None:
@@ -252,6 +263,7 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "preview_url" in script
     assert "download_url" in script
     assert "renderDetectionRows" in script
+    assert html.count('max="1.00"') == 2
     assert "openHistoryItem" in script
     assert "resultCache" in script
     assert "collaborationFlow" in html
