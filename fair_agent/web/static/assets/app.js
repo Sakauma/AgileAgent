@@ -30,6 +30,8 @@
     batchFiles: [],
     batchArchive: null,
     history: readHistory(),
+    recognitionMode: "standard",
+    capabilities: null,
   };
 
   function icon(name) {
@@ -138,6 +140,40 @@
     }
   }
 
+  async function loadCapabilities() {
+    const incrementalButton = $("[data-mode='incremental']");
+    const select = $("#incrementalProtocol");
+    try {
+      const response = await fetch("/api/capabilities", { cache: "no-store" });
+      if (!response.ok) throw new Error("capabilities unavailable");
+      const payload = await response.json();
+      state.capabilities = payload;
+      select.replaceChildren();
+      payload.protocols.forEach((protocol) => {
+        const option = document.createElement("option");
+        option.value = protocol.id;
+        option.disabled = !protocol.available;
+        option.textContent = protocol.available
+          ? `${classLabel(protocol.new_class)}增量模型`
+          : `${classLabel(protocol.new_class)}（优化中）`;
+        select.appendChild(option);
+      });
+      const firstAvailable = payload.protocols.find((protocol) => protocol.available);
+      incrementalButton.disabled = !payload.incremental_enabled || !firstAvailable;
+      if (firstAvailable) select.value = firstAvailable.id;
+    } catch (_error) {
+      incrementalButton.disabled = true;
+    }
+  }
+
+  function setRecognitionMode(mode) {
+    const incrementalButton = $("[data-mode='incremental']");
+    if (mode === "incremental" && incrementalButton.disabled) return;
+    state.recognitionMode = mode;
+    $$("[data-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.mode === mode));
+    $("#incrementalProtocol").classList.toggle("is-hidden", mode !== "incremental");
+  }
+
   function setWorkflow(step) {
     $$("[data-step]").forEach((node) => {
       const value = Number(node.dataset.step);
@@ -211,6 +247,7 @@
     $("#resultDetails").classList.remove("is-hidden");
     $("#resultState").textContent = "分析完成";
     $("#resultState").className = "result-state is-complete";
+    renderCollaboration(result);
 
     const summary = [
       ["传感器", sensorLabel(context.sensor), `${Math.round((context.sensor_confidence || 0) * 100)}% 置信度`],
@@ -275,6 +312,42 @@
     setWorkflow(3);
   }
 
+  function renderCollaboration(result) {
+    const context = result.context || {};
+    const agent = result.agent || {};
+    const protocol = agent.protocol || null;
+    $("#collaborationMode").textContent = protocol
+      ? (protocol.activated ? "增量协同" : "场景门控")
+      : "标准识别";
+    const flow = $("#collaborationFlow");
+    flow.replaceChildren();
+    const steps = protocol
+      ? [
+          ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "理解输入模态与任务场景"],
+          ["02 历史能力", "冻结旧类检测器", "保持原有类别识别能力"],
+          protocol.activated
+            ? ["03 快速学习", `${classLabel(protocol.new_class)}增量模型`, `New-mAP50 ${Number(protocol.new_map50).toFixed(3)} · KRR ${Number(protocol.krr).toFixed(3)}`]
+            : ["03 场景门控", "保持历史能力", "当前场景无需启用所选增量模型"],
+        ]
+      : [
+          ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "理解输入模态与任务场景"],
+          ["02 策略选择", "统一多模态识别", "根据场景选择当前识别策略"],
+          ["03 目标检测", `${result.detection_count || 0} 个目标`, "完成类别判断与目标定位"],
+        ];
+    steps.forEach(([stage, title, detail]) => {
+      const node = document.createElement("div");
+      node.className = "collaboration-step";
+      const stageNode = document.createElement("span");
+      stageNode.textContent = stage;
+      const titleNode = document.createElement("strong");
+      titleNode.textContent = title;
+      const detailNode = document.createElement("small");
+      detailNode.textContent = detail;
+      node.append(stageNode, titleNode, detailNode);
+      flow.appendChild(node);
+    });
+  }
+
   async function detectSingle() {
     if (!state.singleFile) return;
     $("#detectButton").disabled = true;
@@ -285,6 +358,9 @@
       const form = new FormData();
       form.append("file", state.singleFile, state.singleFile.name);
       form.append("confidence", $("#confidence").value);
+      if (state.recognitionMode === "incremental") {
+        form.append("incremental_protocol", $("#incrementalProtocol").value);
+      }
       const response = await fetch("/api/detect", { method: "POST", body: form });
       if (!response.ok) throw new Error(await responseError(response));
       const result = await response.json();
@@ -298,6 +374,7 @@
         scene: result.context && result.context.scene,
         detectionCount: Number(result.detection_count || 0),
         elapsedMs: Number(result.elapsed_ms || 0),
+        mode: result.agent && result.agent.mode,
         createdAt: new Date().toISOString(),
       });
       showToast(`检测完成，共发现${result.detection_count || 0}个目标。`);
@@ -550,6 +627,7 @@
     });
     $("#downloadImage").addEventListener("click", downloadSingleImage);
     $("#downloadJson").addEventListener("click", downloadSingleJson);
+    $$("[data-mode]").forEach((button) => button.addEventListener("click", () => setRecognitionMode(button.dataset.mode)));
 
     $("#batchDropzone").addEventListener("click", () => $("#batchFiles").click());
     $("#batchFiles").addEventListener("change", (event) => selectBatch(event.target.files));
@@ -580,6 +658,7 @@
       if (["detect", "batch", "history"].includes(nextView)) switchView(nextView);
     });
     renderHistory();
+    loadCapabilities();
     refreshHealth();
     window.setInterval(refreshHealth, 15000);
   }

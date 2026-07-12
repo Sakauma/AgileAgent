@@ -7,6 +7,23 @@ runtime:
   server_host: 127.0.0.1
   server_port: 8501
 
+web:
+  detector_weights: models/base/yolo11s_ir_sar_imgsz640.pt
+  functional_registry: configs/functional_models.yaml
+  model_manifest: models/manifest.json
+  predict:
+    imgsz: 640
+    iou: 0.70
+    max_det: 300
+  incremental_demo:
+    enabled: true
+    require_acceptance_passed: true
+    scene_gates:
+      small_aircraft: [air]
+      warship: [sea]
+      tank: [forest, urban]
+      soldier: [forest, sea, urban]
+
 model:
   weights: models/base/yolo11s_ir_sar_imgsz640.pt
   expected_sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c

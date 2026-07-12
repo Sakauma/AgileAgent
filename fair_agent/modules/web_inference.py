@@ -9,9 +9,9 @@ import time
 import zipfile
 from collections import Counter
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, TypeVar
+from typing import Any, Callable, Dict, Iterable, List, Mapping, TypeVar
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageDraw, UnidentifiedImageError
 
 
 CLASS_NAMES = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
@@ -137,6 +137,56 @@ def summarize_records(records: Iterable[Dict[str, Any]]) -> Dict[str, int]:
     return dict(sorted(Counter(str(item["class_name"]) for item in records).items()))
 
 
+def remap_specialist_records(records: Iterable[Dict[str, Any]], global_class_id: int) -> List[Dict[str, Any]]:
+    class_name = CLASS_NAMES[global_class_id]
+    return [
+        {**item, "class_id": global_class_id, "class_name": class_name, "source": "incremental_model"}
+        for item in records
+    ]
+
+
+def compose_incremental_records(
+    base_records: Iterable[Dict[str, Any]],
+    specialist_records: Iterable[Dict[str, Any]],
+    global_class_id: int,
+) -> List[Dict[str, Any]]:
+    old_records = [
+        {**item, "source": "frozen_base_model"}
+        for item in base_records
+        if int(item["class_id"]) != global_class_id
+    ]
+    return old_records + remap_specialist_records(specialist_records, global_class_id)
+
+
+def protocol_scene_allowed(protocol: Mapping[str, Any], scene: str) -> bool:
+    allowed_scenes = set(protocol.get("allowed_scenes", []))
+    return not allowed_scenes or scene in allowed_scenes
+
+
+def annotate_records(image: Image.Image, records: Iterable[Dict[str, Any]]) -> Image.Image:
+    canvas = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(canvas)
+    colors = {0: "#159a91", 1: "#3978d4", 2: "#d17a35", 3: "#8b65c8"}
+    line_width = max(2, round(min(canvas.size) / 320))
+    for item in records:
+        class_id = int(item["class_id"])
+        color = colors.get(class_id, "#159a91")
+        x1, y1, x2, y2 = [float(value) for value in item["xyxy"]]
+        draw.rectangle((x1, y1, x2, y2), outline=color, width=line_width)
+        label = f'{item["class_name"]} {float(item["confidence"]):.2f}'
+        text_box = draw.textbbox((0, 0), label)
+        text_width = text_box[2] - text_box[0]
+        text_height = text_box[3] - text_box[1]
+        text_y = max(0.0, y1 - text_height - 7)
+        draw.rounded_rectangle(
+            (x1, text_y, x1 + text_width + 8, text_y + text_height + 6),
+            radius=3,
+            fill=color,
+        )
+        draw.text((x1 + 4, text_y + 2), label, fill="white")
+    return canvas
+
+
 def image_png_bytes(image: Image.Image) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -165,15 +215,30 @@ def build_batch_zip(results: Iterable[Dict[str, Any]]) -> bytes:
 
 
 class WebInferenceEngine:
-    def __init__(self, detector_path: Path, context_path: Path, device_index: str = "0") -> None:
+    def __init__(
+        self,
+        detector_path: Path,
+        context_path: Path,
+        device_index: str = "0",
+        predict_options: Mapping[str, Any] | None = None,
+        incremental_protocols: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
         from ultralytics import YOLO
 
         from fair_agent.models.context import load_context_model
 
         self.device_index = str(device_index)
         self.device = f"cuda:{self.device_index}"
+        self._yolo_class = YOLO
         self.detector = YOLO(str(detector_path))
         self.context_model, self.context_checkpoint = load_context_model(context_path, self.device)
+        options = dict(predict_options or {})
+        self.imgsz = int(options.get("imgsz", 640))
+        self.iou = float(options.get("iou", 0.7))
+        self.max_det = int(options.get("max_det", 300))
+        self.incremental_protocols = {name: dict(value) for name, value in (incremental_protocols or {}).items()}
+        self.specialist_protocol: str | None = None
+        self.specialist_detector: Any = None
         self.queue = FairInferenceQueue()
 
     def queue_status(self) -> Dict[str, int | bool]:
@@ -185,9 +250,10 @@ class WebInferenceEngine:
         filename: str,
         confidence: float = 0.15,
         task_id: str | None = None,
+        incremental_protocol: str | None = None,
     ) -> Dict[str, Any]:
         result, queue_wait_ms = self.queue.run(
-            lambda: self._predict_unlocked(image, filename, confidence, task_id)
+            lambda: self._predict_unlocked(image, filename, confidence, task_id, incremental_protocol)
         )
         result["queue_wait_ms"] = queue_wait_ms
         return result
@@ -198,6 +264,7 @@ class WebInferenceEngine:
         filename: str,
         confidence: float,
         task_id: str | None,
+        incremental_protocol: str | None,
     ) -> Dict[str, Any]:
         from fair_agent.models.context import predict_context
 
@@ -206,17 +273,63 @@ class WebInferenceEngine:
         context = predict_context(self.context_model, self.context_checkpoint, rgb_image, self.device)
         prediction = self.detector.predict(
             source=rgb_image,
-            imgsz=640,
+            imgsz=self.imgsz,
             conf=float(confidence),
-            iou=0.7,
-            max_det=300,
+            iou=self.iou,
+            max_det=self.max_det,
             device=self.device_index,
             verbose=False,
         )[0]
-        records = result_records(prediction)
-        plotted = prediction.plot(labels=True, conf=True, line_width=2)
-        annotated = Image.fromarray(plotted[:, :, ::-1])
+        base_records = result_records(prediction)
+        protocol_result = None
+        if incremental_protocol:
+            protocol = self.incremental_protocols.get(incremental_protocol)
+            if protocol is None or not protocol.get("available"):
+                raise ValueError("所选增量协议当前不可用于演示。")
+            global_class_id = int(protocol["global_class_id"])
+            activated = protocol_scene_allowed(protocol, context["scene"])
+            if activated:
+                if self.specialist_protocol != incremental_protocol:
+                    self.specialist_detector = self._yolo_class(str(protocol["weights"]))
+                    self.specialist_protocol = incremental_protocol
+                specialist_prediction = self.specialist_detector.predict(
+                    source=rgb_image,
+                    imgsz=self.imgsz,
+                    conf=float(confidence),
+                    iou=self.iou,
+                    max_det=self.max_det,
+                    device=self.device_index,
+                    verbose=False,
+                )[0]
+                records = compose_incremental_records(
+                    base_records,
+                    result_records(specialist_prediction),
+                    global_class_id,
+                )
+            else:
+                records = [
+                    {**item, "source": "frozen_base_model"}
+                    for item in base_records
+                    if int(item["class_id"]) != global_class_id
+                ]
+            annotated = annotate_records(rgb_image, records)
+            protocol_result = {
+                "id": incremental_protocol,
+                "new_class": protocol["new_class"],
+                "new_map50": protocol["new_map50"],
+                "krr": protocol["krr"],
+                "status": "activated" if activated else "scene_blocked",
+                "activated": activated,
+                "reason": None if activated else "当前场景与所选增量类别不匹配",
+            }
+        else:
+            records = base_records
+            plotted = prediction.plot(labels=True, conf=True, line_width=2)
+            annotated = Image.fromarray(plotted[:, :, ::-1])
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+        models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
+        if protocol_result and protocol_result["activated"]:
+            models_used.append("incremental_model_bank_v1")
         return {
             "filename": filename,
             "task_id": task_id,
@@ -225,5 +338,10 @@ class WebInferenceEngine:
             "class_counts": summarize_records(records),
             "detection_count": len(records),
             "elapsed_ms": elapsed_ms,
+            "agent": {
+                "mode": "incremental_demo" if protocol_result else "standard_detection",
+                "models_used": models_used,
+                "protocol": protocol_result,
+            },
             "annotated_png": image_png_bytes(annotated),
         }

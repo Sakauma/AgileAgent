@@ -16,6 +16,9 @@ from fair_agent.modules.web_inference import (
     image_png_bytes,
     result_records,
     summarize_records,
+    compose_incremental_records,
+    remap_specialist_records,
+    protocol_scene_allowed,
     validate_batch_uploads,
     validate_image_bytes,
 )
@@ -161,3 +164,21 @@ def test_batch_zip_uses_index_and_task_hash_for_duplicate_stems() -> None:
         names = archive.namelist()
     assert "annotated/001_same_aaaaaaaa.png" in names
     assert "annotated/002_same_bbbbbbbb.png" in names
+
+
+def test_incremental_composition_keeps_old_classes_and_remaps_specialist() -> None:
+    base = [
+        {"class_id": 0, "class_name": "soldier", "confidence": 0.8, "xyxy": [1, 1, 2, 2]},
+        {"class_id": 2, "class_name": "warship", "confidence": 0.7, "xyxy": [3, 3, 4, 4]},
+    ]
+    specialist = [
+        {"class_id": 0, "class_name": "specialist", "confidence": 0.9, "xyxy": [5, 5, 6, 6]},
+    ]
+    remapped = remap_specialist_records(specialist, 2)
+    assert remapped[0]["class_name"] == "warship"
+    assert remapped[0]["source"] == "incremental_model"
+    composed = compose_incremental_records(base, specialist, 2)
+    assert [item["class_id"] for item in composed] == [0, 2]
+    assert [item["source"] for item in composed] == ["frozen_base_model", "incremental_model"]
+    assert protocol_scene_allowed({"allowed_scenes": ["sea"]}, "sea") is True
+    assert protocol_scene_allowed({"allowed_scenes": ["sea"]}, "air") is False

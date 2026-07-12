@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
 import threading
 from pathlib import Path
 from typing import Any, Callable, Dict
+
+import yaml
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -27,16 +30,58 @@ from fair_agent.modules.web_inference import (
     validate_batch_uploads,
     validate_image_bytes,
 )
+from fair_agent.core.config import load_config, resolve_path
 
 
-ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
-DETECTOR_PATH = ROOT / "models" / "base" / "yolo11s_ir_sar_imgsz640.pt"
-CONTEXT_PATH = ROOT / "models" / "context" / "scene_sensor_net.pt"
 EngineProvider = Callable[[], WebInferenceEngine]
 
 _engine: WebInferenceEngine | None = None
 _engine_lock = threading.Lock()
+
+
+def build_web_settings() -> Dict[str, Any]:
+    config = load_config()
+    web = config.get("web", {})
+    registry_path = resolve_path(web.get("functional_registry", "configs/functional_models.yaml"))
+    registry = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    context_entry = next(
+        item for item in registry["models"] if item.get("function") == "context_perception"
+    )
+    context_path = resolve_path(context_entry["artifacts"][0]["path"])
+    manifest_path = resolve_path(web.get("model_manifest", "models/manifest.json"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    require_passed = bool(web.get("incremental_demo", {}).get("require_acceptance_passed", True))
+    scene_gates = dict(web.get("incremental_demo", {}).get("scene_gates", {}))
+    protocols: Dict[str, Dict[str, Any]] = {}
+    class_ids = {name: class_id for class_id, name in CLASS_NAMES.items()}
+    for item in manifest.get("incremental_models", []):
+        protocol_id = str(item["protocol"])
+        new_class = protocol_id.split("_new_", 1)[-1]
+        if new_class not in class_ids:
+            continue
+        accepted = item.get("acceptance") == "passed"
+        protocols[protocol_id] = {
+            "id": protocol_id,
+            "new_class": new_class,
+            "global_class_id": class_ids[new_class],
+            "weights": resolve_path(item["path"]),
+            "new_map50": float(item["new_map50"]),
+            "krr": float(item["krr"]),
+            "available": accepted or not require_passed,
+            "allowed_scenes": list(scene_gates.get(new_class, [])),
+        }
+    return {
+        "detector_path": resolve_path(web.get("detector_weights", config["model"]["weights"])),
+        "context_path": context_path,
+        "device_index": str(config.get("runtime", {}).get("default_device", "0")),
+        "predict": dict(web.get("predict", {})),
+        "incremental_enabled": bool(web.get("incremental_demo", {}).get("enabled", True)),
+        "protocols": protocols,
+    }
+
+
+WEB_SETTINGS = build_web_settings()
 
 
 def default_engine_provider() -> WebInferenceEngine:
@@ -44,7 +89,13 @@ def default_engine_provider() -> WebInferenceEngine:
     if _engine is None:
         with _engine_lock:
             if _engine is None:
-                _engine = WebInferenceEngine(DETECTOR_PATH, CONTEXT_PATH, device_index="0")
+                _engine = WebInferenceEngine(
+                    WEB_SETTINGS["detector_path"],
+                    WEB_SETTINGS["context_path"],
+                    device_index=WEB_SETTINGS["device_index"],
+                    predict_options=WEB_SETTINGS["predict"],
+                    incremental_protocols=WEB_SETTINGS["protocols"],
+                )
     return _engine
 
 
@@ -89,21 +140,47 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 async def health(request: Request) -> JSONResponse:
     provider: EngineProvider = request.app.state.engine_provider
-    queue = {"waiting": 0, "active": False, "completed": 0}
-    if provider is default_engine_provider and _engine is not None:
-        queue = _engine.queue_status()
+    try:
+        engine = await run_in_threadpool(provider)
+        queue = engine.queue_status()
+        return JSONResponse(
+            {
+                "status": "ready",
+                "device": f'cuda:{WEB_SETTINGS["device_index"]}',
+                "queue": queue,
+                "limits": {
+                    "max_file_mb": MAX_FILE_BYTES // (1024 * 1024),
+                    "max_batch_files": MAX_BATCH_FILES,
+                    "max_batch_mb": MAX_BATCH_BYTES // (1024 * 1024),
+                    "max_image_pixels": MAX_IMAGE_PIXELS,
+                },
+                "classes": list(CLASS_NAMES.values()),
+            }
+        )
+    except (RuntimeError, OSError, ValueError) as exc:
+        return JSONResponse({"status": "error", "error": f"模型服务初始化失败：{exc}"}, status_code=503)
+
+
+async def capabilities(_request: Request) -> JSONResponse:
+    protocols = [
+        {
+            "id": item["id"],
+            "new_class": item["new_class"],
+            "new_map50": item["new_map50"],
+            "krr": item["krr"],
+            "available": item["available"],
+        }
+        for item in WEB_SETTINGS["protocols"].values()
+    ]
     return JSONResponse(
         {
-            "status": "ready",
-            "device": "cuda:0",
-            "queue": queue,
-            "limits": {
-                "max_file_mb": MAX_FILE_BYTES // (1024 * 1024),
-                "max_batch_files": MAX_BATCH_FILES,
-                "max_batch_mb": MAX_BATCH_BYTES // (1024 * 1024),
-                "max_image_pixels": MAX_IMAGE_PIXELS,
-            },
-            "classes": list(CLASS_NAMES.values()),
+            "models": [
+                {"id": "scene_sensor_net_v1", "name": "场景认知"},
+                {"id": "unified_yolo11s_v1", "name": "统一目标检测"},
+                {"id": "incremental_model_bank_v1", "name": "增量模型库"},
+            ],
+            "incremental_enabled": WEB_SETTINGS["incremental_enabled"],
+            "protocols": protocols,
         }
     )
 
@@ -117,6 +194,8 @@ async def detect(request: Request) -> JSONResponse:
             data = await upload.read()
             image, task_id = validate_image_bytes(data, upload.filename or "image")
             confidence = parse_confidence(form.get("confidence", 0.15))
+            protocol_value = str(form.get("incremental_protocol", "")).strip()
+            incremental_protocol = protocol_value or None
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         result = await run_in_threadpool(
@@ -125,6 +204,7 @@ async def detect(request: Request) -> JSONResponse:
             upload.filename or "image",
             confidence,
             task_id,
+            incremental_protocol,
         )
         return JSONResponse(public_result(result))
     except HTTPException as exc:
@@ -182,6 +262,7 @@ def create_app(engine_provider: EngineProvider | None = None) -> Starlette:
         debug=False,
         routes=[
             Route("/api/health", health, methods=["GET"]),
+            Route("/api/capabilities", capabilities, methods=["GET"]),
             Route("/api/detect", detect, methods=["POST"]),
             Route("/api/batch", batch_detect, methods=["POST"]),
             Mount("/", app=StaticFiles(directory=STATIC_ROOT, html=True), name="static"),

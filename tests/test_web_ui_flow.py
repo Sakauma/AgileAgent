@@ -9,7 +9,7 @@ from PIL import Image
 from starlette.testclient import TestClient
 
 from fair_agent.modules.web_inference import content_task_id, image_png_bytes
-from fair_agent.web.app import create_app
+from fair_agent.web.app import build_web_settings, create_app
 
 
 class FakeEngine:
@@ -19,8 +19,8 @@ class FakeEngine:
     def queue_status(self):
         return {"waiting": 0, "active": False, "completed": len(self.calls)}
 
-    def predict(self, image, filename, confidence=0.15, task_id=None):
-        self.calls.append((filename, confidence, task_id))
+    def predict(self, image, filename, confidence=0.15, task_id=None, incremental_protocol=None):
+        self.calls.append((filename, confidence, task_id, incremental_protocol))
         return {
             "filename": filename,
             "task_id": task_id,
@@ -37,6 +37,11 @@ class FakeEngine:
             "detection_count": 1,
             "elapsed_ms": 18.2,
             "queue_wait_ms": 0.4,
+            "agent": {
+                "mode": "incremental_demo" if incremental_protocol else "standard_detection",
+                "models_used": ["scene_sensor_net_v1", "unified_yolo11s_v1"],
+                "protocol": None,
+            },
             "annotated_png": image_png_bytes(image),
         }
 
@@ -56,6 +61,10 @@ def test_health_and_static_product_contract() -> None:
     assert health.status_code == 200
     assert health.json()["device"] == "cuda:0"
     assert health.json()["limits"]["max_batch_files"] == 20
+    capabilities = client.get("/api/capabilities")
+    assert capabilities.status_code == 200
+    assert len(capabilities.json()["models"]) == 3
+    assert any(item["available"] for item in capabilities.json()["protocols"])
 
     page = client.get("/")
     assert page.status_code == 200
@@ -68,6 +77,27 @@ def test_health_and_static_product_contract() -> None:
         assert internal_hint not in page.text
     assert page.headers["x-frame-options"] == "DENY"
     assert "default-src 'self'" in page.headers["content-security-policy"]
+
+
+def test_web_settings_follow_active_config_and_manifest() -> None:
+    settings = build_web_settings()
+    assert settings["detector_path"].name == "yolo11s_ir_sar_imgsz640.pt"
+    assert settings["device_index"] == "0"
+    assert settings["predict"] == {"imgsz": 640, "iou": 0.7, "max_det": 300}
+    assert settings["protocols"]["p01_new_small_aircraft"]["available"] is False
+    assert settings["protocols"]["p02_new_warship"]["available"] is True
+    assert settings["protocols"]["p02_new_warship"]["allowed_scenes"] == ["sea"]
+
+
+def test_health_reports_model_initialization_failure() -> None:
+    def broken_provider():
+        raise RuntimeError("test failure")
+
+    client = TestClient(create_app(engine_provider=broken_provider))
+    response = client.get("/api/health")
+    assert response.status_code == 503
+    assert response.json()["status"] == "error"
+    assert "模型服务初始化失败" in response.json()["error"]
 
 
 def test_single_detection_api_returns_public_json() -> None:
@@ -85,7 +115,19 @@ def test_single_detection_api_returns_public_json() -> None:
     assert payload["context"]["sensor"] == "sar"
     assert "annotated_base64" in payload
     assert "annotated_png" not in payload
-    assert engine.calls == [("sample.png", 0.21, content_task_id(image))]
+    assert engine.calls == [("sample.png", 0.21, content_task_id(image), None)]
+
+
+def test_single_detection_forwards_incremental_protocol() -> None:
+    client, engine = client_with_engine()
+    image = png()
+    response = client.post(
+        "/api/detect",
+        files={"file": ("sample.png", image, "image/png")},
+        data={"confidence": "0.20", "incremental_protocol": "p02_new_warship"},
+    )
+    assert response.status_code == 200
+    assert engine.calls == [("sample.png", 0.20, content_task_id(image), "p02_new_warship")]
 
 
 def test_single_detection_rejects_invalid_upload_and_confidence() -> None:
@@ -161,11 +203,13 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     script = Path("fair_agent/web/static/assets/app.js").read_text(encoding="utf-8")
     styles = Path("fair_agent/web/static/assets/app.css").read_text(encoding="utf-8")
     assert '<script src="/assets/app.js" defer></script>' in html
-    for endpoint in ["/api/health", "/api/detect", "/api/batch"]:
+    for endpoint in ["/api/health", "/api/capabilities", "/api/detect", "/api/batch"]:
         assert endpoint in script
     for capability in ["crypto.subtle.digest", "sessionStorage", "dataTransfer.files", "finally"]:
         assert capability in script
     assert "annotated_base64" in script
+    assert "incremental_protocol" in script
+    assert "collaborationFlow" in html
     assert "@media (max-width: 620px)" in styles
     assert ".main-nav.is-open" in styles
     assert "streamlit" not in (html + script + styles).lower()
