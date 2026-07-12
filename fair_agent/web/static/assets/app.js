@@ -28,7 +28,7 @@
     singlePreviewUrl: null,
     singleResult: null,
     batchFiles: [],
-    batchArchive: null,
+    batchResult: null,
     history: readHistory(),
     recognitionMode: "standard",
     capabilities: null,
@@ -471,15 +471,17 @@
     $("#batchToolbar").classList.toggle("is-hidden", !state.batchFiles.length);
     $("#batchButton").disabled = !state.batchFiles.length;
     $("#batchResult").classList.add("is-hidden");
+    $("#batchGallery").classList.add("is-hidden");
   }
 
   function clearBatch(notify = true) {
     state.batchFiles = [];
-    state.batchArchive = null;
+    state.batchResult = null;
     $("#batchFiles").value = "";
     $("#batchQueue").replaceChildren();
     $("#batchToolbar").classList.add("is-hidden");
     $("#batchResult").classList.add("is-hidden");
+    $("#batchGallery").classList.add("is-hidden");
     $("#batchButton").disabled = true;
     if (notify) showToast("批量任务列表已清空。", "success");
   }
@@ -494,13 +496,15 @@
       form.append("confidence", $("#batchConfidence").value);
       const response = await fetch("/api/batch", { method: "POST", body: form });
       if (!response.ok) throw new Error(await responseError(response));
-      state.batchArchive = await response.blob();
-      const imageCount = Number(response.headers.get("X-Image-Count") || state.batchFiles.length);
-      const detectionCount = Number(response.headers.get("X-Detection-Count") || 0);
-      const inferenceMs = Number(response.headers.get("X-Inference-Ms") || 0);
-      const systemTotalMs = Number(response.headers.get("X-System-Total-Ms") || 0);
+      const payload = await response.json();
+      state.batchResult = payload;
+      const imageCount = Number(payload.image_count || state.batchFiles.length);
+      const detectionCount = Number(payload.detection_count || 0);
+      const inferenceMs = Number(payload.inference_ms || 0);
+      const systemTotalMs = Number(payload.system_total_ms || 0);
       $("#batchResultText").textContent = `${imageCount}张图像 · ${detectionCount}个目标 · 纯推理 ${inferenceMs.toFixed(1)} ms · 总用时 ${systemTotalMs.toFixed(1)} ms`;
       $("#batchResult").classList.remove("is-hidden");
+      renderBatchResults(payload);
       addHistory({
         type: "batch",
         filename: `批量任务（${imageCount}张）`,
@@ -519,6 +523,56 @@
       setLoading(false);
       $("#batchButton").disabled = !state.batchFiles.length;
       refreshHealth();
+    }
+  }
+
+  function renderBatchResults(payload) {
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    const list = $("#batchPreviewList");
+    list.replaceChildren();
+    results.forEach((result, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "batch-preview-item";
+      button.dataset.index = String(index);
+      const image = document.createElement("img");
+      image.src = result.preview_url;
+      image.alt = "";
+      image.loading = "lazy";
+      const label = document.createElement("span");
+      const name = document.createElement("strong");
+      name.textContent = result.filename || `结果 ${index + 1}`;
+      const detail = document.createElement("small");
+      detail.textContent = `${result.detection_count || 0} 个目标`;
+      label.append(name, detail);
+      button.append(image, label);
+      button.addEventListener("click", () => selectBatchResult(index));
+      list.appendChild(button);
+    });
+    $("#batchGallery").classList.toggle("is-hidden", !results.length);
+    if (results.length) selectBatchResult(0);
+  }
+
+  function selectBatchResult(index) {
+    const results = state.batchResult && Array.isArray(state.batchResult.results) ? state.batchResult.results : [];
+    const result = results[index];
+    if (!result) return;
+    $$(".batch-preview-item").forEach((button) => button.classList.toggle("is-active", Number(button.dataset.index) === index));
+    $("#batchPreviewImage").src = result.preview_url;
+    $("#batchPreviewName").textContent = result.filename || `结果 ${index + 1}`;
+    $("#batchPreviewMeta").textContent = `${sensorLabel(result.context && result.context.sensor)} · ${sceneLabel(result.context && result.context.scene)} · 纯推理 ${Number(result.inference_ms || 0).toFixed(1)} ms`;
+    $("#batchPreviewPosition").textContent = `${index + 1} / ${results.length}`;
+    const classes = $("#batchPreviewClasses");
+    classes.replaceChildren();
+    Object.entries(result.class_counts || {}).forEach(([name, count]) => {
+      const chip = document.createElement("b");
+      chip.textContent = `${classLabel(name)} ${count}`;
+      classes.appendChild(chip);
+    });
+    if (!classes.children.length) {
+      const empty = document.createElement("span");
+      empty.textContent = "未检测到目标";
+      classes.appendChild(empty);
     }
   }
 
@@ -640,7 +694,7 @@
       $("#batchConfidenceLabel").textContent = Number(event.target.value).toFixed(2);
     });
     $("#downloadBatch").addEventListener("click", () => {
-      if (state.batchArchive) downloadBlob(state.batchArchive, `agile-agent-batch-${Date.now()}.zip`);
+      if (state.batchResult && state.batchResult.download_url) window.location.assign(state.batchResult.download_url);
     });
     $("#clearHistory").addEventListener("click", clearHistory);
     document.addEventListener("keydown", (event) => {

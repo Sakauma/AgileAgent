@@ -4,6 +4,8 @@ import base64
 import json
 import threading
 import time
+import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict
 
@@ -39,6 +41,42 @@ EngineProvider = Callable[[], WebInferenceEngine]
 
 _engine: WebInferenceEngine | None = None
 _engine_lock = threading.Lock()
+
+
+class BatchResultStore:
+    def __init__(self, max_items: int = 4, ttl_seconds: int = 1800) -> None:
+        self.max_items = max_items
+        self.ttl_seconds = ttl_seconds
+        self._items: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def put(self, archive: bytes, results: list[Dict[str, Any]]) -> str:
+        batch_id = uuid.uuid4().hex
+        now = time.monotonic()
+        with self._lock:
+            self._remove_expired(now)
+            self._items[batch_id] = {"created_at": now, "archive": archive, "results": results}
+            while len(self._items) > self.max_items:
+                self._items.popitem(last=False)
+        return batch_id
+
+    def get(self, batch_id: str) -> Dict[str, Any] | None:
+        now = time.monotonic()
+        with self._lock:
+            self._remove_expired(now)
+            item = self._items.get(batch_id)
+            if item is not None:
+                self._items.move_to_end(batch_id)
+            return item
+
+    def _remove_expired(self, now: float) -> None:
+        expired = [
+            batch_id
+            for batch_id, item in self._items.items()
+            if now - float(item["created_at"]) > self.ttl_seconds
+        ]
+        for batch_id in expired:
+            self._items.pop(batch_id, None)
 
 
 def build_web_settings() -> Dict[str, Any]:
@@ -238,17 +276,23 @@ async def batch_detect(request: Request) -> Response:
         archive = build_batch_zip(results)
         total_detections = sum(int(item["detection_count"]) for item in results)
         total_inference = round(sum(float(item["inference_ms"]) for item in results), 1)
+        batch_id = request.app.state.batch_store.put(archive, results)
+        public_results = []
+        for index, item in enumerate(results):
+            row = {key: value for key, value in item.items() if key != "annotated_png"}
+            row["preview_url"] = f"/api/batch/{batch_id}/preview/{index}"
+            public_results.append(row)
         system_total = round((time.perf_counter() - request_started) * 1000, 1)
-        return Response(
-            archive,
-            media_type="application/zip",
-            headers={
-                "Content-Disposition": 'attachment; filename="agile-agent-results.zip"',
-                "X-Image-Count": str(len(results)),
-                "X-Detection-Count": str(total_detections),
-                "X-Inference-Ms": str(total_inference),
-                "X-System-Total-Ms": str(system_total),
-            },
+        return JSONResponse(
+            {
+                "batch_id": batch_id,
+                "image_count": len(results),
+                "detection_count": total_detections,
+                "inference_ms": total_inference,
+                "system_total_ms": system_total,
+                "results": public_results,
+                "download_url": f"/api/batch/{batch_id}/download",
+            }
         )
     except HTTPException as exc:
         return JSONResponse({"error": multipart_error(exc)}, status_code=400)
@@ -256,6 +300,25 @@ async def batch_detect(request: Request) -> Response:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except (RuntimeError, OSError) as exc:
         return JSONResponse({"error": f"推理服务暂时不可用：{exc}"}, status_code=503)
+
+
+async def batch_preview(request: Request) -> Response:
+    item = request.app.state.batch_store.get(request.path_params["batch_id"])
+    index = int(request.path_params["index"])
+    if item is None or not 0 <= index < len(item["results"]):
+        return JSONResponse({"error": "批量预览已过期或不存在。"}, status_code=404)
+    return Response(item["results"][index]["annotated_png"], media_type="image/png")
+
+
+async def batch_download(request: Request) -> Response:
+    item = request.app.state.batch_store.get(request.path_params["batch_id"])
+    if item is None:
+        return JSONResponse({"error": "批量结果包已过期或不存在。"}, status_code=404)
+    return Response(
+        item["archive"],
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="agile-agent-results.zip"'},
+    )
 
 
 async def not_found(_request: Request, _exc: HTTPException) -> JSONResponse:
@@ -270,12 +333,15 @@ def create_app(engine_provider: EngineProvider | None = None) -> Starlette:
             Route("/api/capabilities", capabilities, methods=["GET"]),
             Route("/api/detect", detect, methods=["POST"]),
             Route("/api/batch", batch_detect, methods=["POST"]),
+            Route("/api/batch/{batch_id:str}/preview/{index:int}", batch_preview, methods=["GET"]),
+            Route("/api/batch/{batch_id:str}/download", batch_download, methods=["GET"]),
             Mount("/", app=StaticFiles(directory=STATIC_ROOT, html=True), name="static"),
         ],
         middleware=[Middleware(SecurityHeadersMiddleware)],
         exception_handlers={404: not_found},
     )
     application.state.engine_provider = engine_provider or default_engine_provider
+    application.state.batch_store = BatchResultStore()
     return application
 
 

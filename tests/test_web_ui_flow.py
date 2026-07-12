@@ -9,7 +9,7 @@ from PIL import Image
 from starlette.testclient import TestClient
 
 from fair_agent.modules.web_inference import content_task_id, image_png_bytes
-from fair_agent.web.app import build_web_settings, create_app
+from fair_agent.web.app import BatchResultStore, build_web_settings, create_app
 
 
 class FakeEngine:
@@ -53,6 +53,14 @@ def client_with_engine() -> tuple[TestClient, FakeEngine]:
 
 def png(color: str = "white") -> bytes:
     return image_png_bytes(Image.new("RGB", (32, 24), color))
+
+
+def test_batch_result_store_evicts_old_batches() -> None:
+    store = BatchResultStore(max_items=1)
+    first = store.put(b"first", [])
+    second = store.put(b"second", [])
+    assert store.get(first) is None
+    assert store.get(second)["archive"] == b"second"
 
 
 def test_health_and_static_product_contract() -> None:
@@ -174,13 +182,22 @@ def test_batch_api_returns_archive_and_summary_headers() -> None:
         data={"confidence": "0.18"},
     )
     assert response.status_code == 200
-    assert response.headers["content-type"] == "application/zip"
-    assert response.headers["x-image-count"] == "2"
-    assert response.headers["x-detection-count"] == "2"
-    assert float(response.headers["x-inference-ms"]) == 36.4
-    assert float(response.headers["x-system-total-ms"]) >= 0
+    payload = response.json()
+    assert payload["image_count"] == 2
+    assert payload["detection_count"] == 2
+    assert payload["inference_ms"] == 36.4
+    assert payload["system_total_ms"] >= 0
+    assert len(payload["results"]) == 2
+    assert payload["results"][0]["preview_url"].endswith("/preview/0")
+    assert "annotated_png" not in payload["results"][0]
     assert len(engine.calls) == 2
-    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+    preview = client.get(payload["results"][0]["preview_url"])
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "image/png"
+    download = client.get(payload["download_url"])
+    assert download.status_code == 200
+    assert download.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
         assert len([name for name in archive.namelist() if name.startswith("annotated/")]) == 2
         summary = json.loads(archive.read("results.json"))
     assert summary["image_count"] == 2
@@ -214,8 +231,9 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "incremental_protocol" in script
     assert "纯推理时间" in script
     assert "系统总用时" in script
-    assert "X-Inference-Ms" in script
-    assert "X-System-Total-Ms" in script
+    assert "batchPreviewList" in html
+    assert "preview_url" in script
+    assert "download_url" in script
     assert "collaborationFlow" in html
     assert "@media (max-width: 620px)" in styles
     assert ".main-nav.is-open" in styles
