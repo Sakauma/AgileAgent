@@ -384,6 +384,8 @@ class WebInferenceEngine:
         decision = {
             "mode": "automatic" if automatic else ("manual" if selected_protocols else "unified_only"),
             "evaluated_specialists": len(selected_protocols),
+            "base_detection_count": len(base_records),
+            "final_detection_count": len(records),
             "activated_classes": activated_classes,
             "reason": (
                 "自动融合通过置信度与跨模型空间一致性检查的增量候选"

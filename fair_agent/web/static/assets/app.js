@@ -178,6 +178,7 @@
     $("#clearSingle").disabled = true;
     $("#resultEmpty").classList.remove("is-hidden");
     $("#resultCanvas").classList.add("is-hidden");
+    $("#collaborationPanel").classList.add("is-hidden");
     $("#resultDetails").classList.add("is-hidden");
     $("#resultState").textContent = "等待输入";
     $("#resultState").className = "result-state";
@@ -196,6 +197,7 @@
     $("#resultEmpty").classList.add("is-hidden");
     $("#resultCanvas").classList.remove("is-hidden");
     $("#resultDetails").classList.remove("is-hidden");
+    $("#collaborationPanel").classList.remove("is-hidden");
     $("#resultState").textContent = "分析完成";
     $("#resultState").className = "result-state is-complete";
     renderCollaboration(result);
@@ -271,16 +273,21 @@
     const context = result.context || {};
     const agent = result.agent || {};
     const decision = agent.decision || {};
+    const protocols = Array.isArray(agent.protocols) ? agent.protocols : [];
     const activated = Array.isArray(decision.activated_classes) ? decision.activated_classes : [];
     $("#collaborationMode").textContent = "Agent 自动决策";
     const flow = $("#collaborationFlow");
     flow.replaceChildren();
+    const evaluations = protocols.length
+      ? protocols.map((item) => `${classLabel(item.new_class)} ${item.activated ? "通过" : "拒绝"}`).join(" · ")
+      : "没有可评估的增量能力";
     const steps = [
       ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "自动理解输入模态与任务场景"],
-      ["02 交叉验证", `${Number(decision.evaluated_specialists || 0)} 项候选能力`, "统一检测与增量能力自动相互验证"],
+      ["02 统一检测", `${Number(decision.base_detection_count || 0)} 个基础候选`, "建立当前图像的统一检测结果"],
+      ["03 交叉验证", `${Number(decision.evaluated_specialists || 0)} 项候选能力`, evaluations],
       activated.length
-        ? ["03 自动融合", activated.map(classLabel).join("、"), "融合增量候选与统一检测结果"]
-        : ["03 自动决策", `${result.detection_count || 0} 个目标`, "保持统一检测结果，无需人工选择模型"],
+        ? ["04 自动融合", activated.map(classLabel).join("、"), "融合通过验证的增量候选"]
+        : ["04 自动决策", `${result.detection_count || 0} 个目标`, "保持统一检测结果，无需人工选择模型"],
     ];
     steps.forEach(([stage, title, detail]) => {
       const node = document.createElement("div");

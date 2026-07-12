@@ -60,14 +60,14 @@
         <div class="panel-heading"><div><span class="panel-index">结果</span><h2 id="result-title">检测结果</h2></div><span class="result-state" id="resultState">等待输入</span></div>
         <div class="result-empty" id="resultEmpty"><div class="scan-frame"><span></span><span></span><span></span><span></span><svg><use href="/assets/icons.svg#image"/></svg></div><strong>结果将在这里呈现</strong></div>
           <div class="result-canvas is-hidden" id="resultCanvas"><img id="resultImage" alt="目标检测标注结果"><div class="result-overlay"><span id="overlaySensor"></span><span id="overlayScene"></span><span id="overlayCount"></span></div></div>
+          <section class="agent-decision-panel is-hidden" id="collaborationPanel" aria-label="Agent决策过程">
+            <div class="section-heading"><div><p class="eyebrow">Agent 决策</p><h2>本次识别过程</h2></div><span id="collaborationMode"></span></div>
+            <div class="collaboration-flow" id="collaborationFlow"></div>
+          </section>
         </section>
       </div>
 
       <section class="result-details is-hidden" id="resultDetails">
-        <section class="collaboration-panel" id="collaborationPanel">
-          <div class="section-heading"><div><p class="eyebrow">智能协同</p><h2>本次识别流程</h2></div><span id="collaborationMode"></span></div>
-          <div class="collaboration-flow" id="collaborationFlow"></div>
-        </section>
         <div class="result-summary" id="resultSummary"></div>
         <div class="details-grid">
           <div><div class="section-heading"><div><p class="eyebrow">识别明细</p><h2>目标明细</h2></div><span id="detectionTotal"></span></div><div class="detection-table-wrap"><table class="data-table"><thead><tr><th>类别</th><th>置信度</th><th>位置坐标</th></tr></thead><tbody id="detectionRows"></tbody></table></div></div>

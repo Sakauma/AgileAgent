@@ -46,6 +46,8 @@ class FakeEngine:
                 "decision": {
                     "mode": "automatic",
                     "evaluated_specialists": 3,
+                    "base_detection_count": 1,
+                    "final_detection_count": 1,
                     "activated_classes": [],
                     "reason": "test",
                 },
@@ -282,6 +284,10 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "openHistoryItem" in script
     assert "resultCache" in script
     assert "collaborationFlow" in html
+    assert 'class="agent-decision-panel is-hidden"' in html
+    assert "本次识别过程" in html
+    assert "基础候选" in script
+    assert "通过" in script and "拒绝" in script
     assert "@media (max-width: 620px)" in styles
     assert ".main-nav.is-open" in styles
     assert ".history-row.is-available" in styles
