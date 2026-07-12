@@ -86,7 +86,7 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
     assert settings["predict"] == {"imgsz": 640, "iou": 0.7, "max_det": 300}
     assert settings["protocols"]["p01_new_small_aircraft"]["available"] is False
     assert settings["protocols"]["p02_new_warship"]["available"] is True
-    assert settings["protocols"]["p02_new_warship"]["allowed_scenes"] == ["sea"]
+    assert "allowed_scenes" not in settings["protocols"]["p02_new_warship"]
 
 
 def test_health_reports_model_initialization_failure() -> None:

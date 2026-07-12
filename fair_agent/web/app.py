@@ -52,7 +52,6 @@ def build_web_settings() -> Dict[str, Any]:
     manifest_path = resolve_path(web.get("model_manifest", "models/manifest.json"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     require_passed = bool(web.get("incremental_demo", {}).get("require_acceptance_passed", True))
-    scene_gates = dict(web.get("incremental_demo", {}).get("scene_gates", {}))
     protocols: Dict[str, Dict[str, Any]] = {}
     class_ids = {name: class_id for class_id, name in CLASS_NAMES.items()}
     for item in manifest.get("incremental_models", []):
@@ -69,7 +68,6 @@ def build_web_settings() -> Dict[str, Any]:
             "new_map50": float(item["new_map50"]),
             "krr": float(item["krr"]),
             "available": accepted or not require_passed,
-            "allowed_scenes": list(scene_gates.get(new_class, [])),
         }
     return {
         "detector_path": resolve_path(web.get("detector_weights", config["model"]["weights"])),

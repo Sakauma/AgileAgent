@@ -18,7 +18,6 @@ from fair_agent.modules.web_inference import (
     summarize_records,
     compose_incremental_records,
     remap_specialist_records,
-    protocol_scene_allowed,
     validate_batch_uploads,
     validate_image_bytes,
 )
@@ -180,5 +179,3 @@ def test_incremental_composition_keeps_old_classes_and_remaps_specialist() -> No
     composed = compose_incremental_records(base, specialist, 2)
     assert [item["class_id"] for item in composed] == [0, 2]
     assert [item["source"] for item in composed] == ["frozen_base_model", "incremental_model"]
-    assert protocol_scene_allowed({"allowed_scenes": ["sea"]}, "sea") is True
-    assert protocol_scene_allowed({"allowed_scenes": ["sea"]}, "air") is False

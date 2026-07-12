@@ -316,18 +316,14 @@
     const context = result.context || {};
     const agent = result.agent || {};
     const protocol = agent.protocol || null;
-    $("#collaborationMode").textContent = protocol
-      ? (protocol.activated ? "增量协同" : "场景门控")
-      : "标准识别";
+    $("#collaborationMode").textContent = protocol ? "增量协同" : "标准识别";
     const flow = $("#collaborationFlow");
     flow.replaceChildren();
     const steps = protocol
       ? [
           ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "理解输入模态与任务场景"],
           ["02 历史能力", "冻结旧类检测器", "保持原有类别识别能力"],
-          protocol.activated
-            ? ["03 快速学习", `${classLabel(protocol.new_class)}增量模型`, `New-mAP50 ${Number(protocol.new_map50).toFixed(3)} · KRR ${Number(protocol.krr).toFixed(3)}`]
-            : ["03 场景门控", "保持历史能力", "当前场景无需启用所选增量模型"],
+          ["03 快速学习", `${classLabel(protocol.new_class)}增量模型`, `New-mAP50 ${Number(protocol.new_map50).toFixed(3)} · KRR ${Number(protocol.krr).toFixed(3)}`],
         ]
       : [
           ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "理解输入模态与任务场景"],

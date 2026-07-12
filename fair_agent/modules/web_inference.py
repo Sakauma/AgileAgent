@@ -158,11 +158,6 @@ def compose_incremental_records(
     return old_records + remap_specialist_records(specialist_records, global_class_id)
 
 
-def protocol_scene_allowed(protocol: Mapping[str, Any], scene: str) -> bool:
-    allowed_scenes = set(protocol.get("allowed_scenes", []))
-    return not allowed_scenes or scene in allowed_scenes
-
-
 def annotate_records(image: Image.Image, records: Iterable[Dict[str, Any]]) -> Image.Image:
     canvas = image.convert("RGB").copy()
     draw = ImageDraw.Draw(canvas)
@@ -287,40 +282,32 @@ class WebInferenceEngine:
             if protocol is None or not protocol.get("available"):
                 raise ValueError("所选增量协议当前不可用于演示。")
             global_class_id = int(protocol["global_class_id"])
-            activated = protocol_scene_allowed(protocol, context["scene"])
-            if activated:
-                if self.specialist_protocol != incremental_protocol:
-                    self.specialist_detector = self._yolo_class(str(protocol["weights"]))
-                    self.specialist_protocol = incremental_protocol
-                specialist_prediction = self.specialist_detector.predict(
-                    source=rgb_image,
-                    imgsz=self.imgsz,
-                    conf=float(confidence),
-                    iou=self.iou,
-                    max_det=self.max_det,
-                    device=self.device_index,
-                    verbose=False,
-                )[0]
-                records = compose_incremental_records(
-                    base_records,
-                    result_records(specialist_prediction),
-                    global_class_id,
-                )
-            else:
-                records = [
-                    {**item, "source": "frozen_base_model"}
-                    for item in base_records
-                    if int(item["class_id"]) != global_class_id
-                ]
+            if self.specialist_protocol != incremental_protocol:
+                self.specialist_detector = self._yolo_class(str(protocol["weights"]))
+                self.specialist_protocol = incremental_protocol
+            specialist_prediction = self.specialist_detector.predict(
+                source=rgb_image,
+                imgsz=self.imgsz,
+                conf=float(confidence),
+                iou=self.iou,
+                max_det=self.max_det,
+                device=self.device_index,
+                verbose=False,
+            )[0]
+            records = compose_incremental_records(
+                base_records,
+                result_records(specialist_prediction),
+                global_class_id,
+            )
             annotated = annotate_records(rgb_image, records)
             protocol_result = {
                 "id": incremental_protocol,
                 "new_class": protocol["new_class"],
                 "new_map50": protocol["new_map50"],
                 "krr": protocol["krr"],
-                "status": "activated" if activated else "scene_blocked",
-                "activated": activated,
-                "reason": None if activated else "当前场景与所选增量类别不匹配",
+                "status": "activated",
+                "activated": True,
+                "reason": None,
             }
         else:
             records = base_records
@@ -328,7 +315,7 @@ class WebInferenceEngine:
             annotated = Image.fromarray(plotted[:, :, ::-1])
         elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
         models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
-        if protocol_result and protocol_result["activated"]:
+        if protocol_result:
             models_used.append("incremental_model_bank_v1")
         return {
             "filename": filename,

@@ -76,4 +76,4 @@ collaboration:
     payload: gated_incremental_predictions
     status: implemented
     proof_command: python -m pytest -q tests/test_web_inference.py tests/test_web_ui_flow.py
-    purpose: 场景匹配且通过 New-mAP/KRR 门禁时，组合冻结旧类检测结果与全局类别映射后的增量结果
+    purpose: 协议通过 New-mAP/KRR 门禁后，组合冻结旧类检测结果与全局类别映射后的增量结果；场景认知不限制增量模型激活

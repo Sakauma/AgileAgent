@@ -18,11 +18,6 @@ web:
   incremental_demo:
     enabled: true
     require_acceptance_passed: true
-    scene_gates:
-      small_aircraft: [air]
-      warship: [sea]
-      tank: [forest, urban]
-      soldier: [forest, sea, urban]
 
 model:
   weights: models/base/yolo11s_ir_sar_imgsz640.pt
