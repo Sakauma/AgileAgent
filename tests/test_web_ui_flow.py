@@ -237,9 +237,12 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "preview_url" in script
     assert "download_url" in script
     assert "renderDetectionRows" in script
+    assert "openHistoryItem" in script
+    assert "resultCache" in script
     assert "collaborationFlow" in html
     assert "@media (max-width: 620px)" in styles
     assert ".main-nav.is-open" in styles
+    assert ".history-row.is-available" in styles
     assert "streamlit" not in (html + script + styles).lower()
     for internal_hint in ["不会写入训练数据", "当前会话处理", "任务ID", "GPU推理队列", "边界框 XYXY"]:
         assert internal_hint not in (html + script)

@@ -7,6 +7,7 @@
     batchBytes: 200 * 1024 * 1024,
   };
   const HISTORY_KEY = "agile-agent-session-history-v1";
+  const RESULT_CACHE_LIMIT = 10;
   const SENSOR_LABELS = { ir: "红外", sar: "SAR" };
   const SCENE_LABELS = { air: "空域", forest: "林地", sea: "海域", urban: "城市场景" };
   const CLASS_LABELS = {
@@ -29,6 +30,7 @@
     singleResult: null,
     batchFiles: [],
     batchResult: null,
+    resultCache: new Map(),
     history: readHistory(),
     recognitionMode: "standard",
     capabilities: null,
@@ -366,6 +368,7 @@
       const result = await response.json();
       state.singleResult = result;
       renderSingleResult(result);
+      const resultKey = rememberResult("single", result);
       addHistory({
         type: "single",
         filename: result.filename || state.singleFile.name,
@@ -376,6 +379,7 @@
         inferenceMs: Number(result.inference_ms || 0),
         systemTotalMs: Number(result.system_total_ms || 0),
         mode: result.agent && result.agent.mode,
+        resultKey,
         createdAt: new Date().toISOString(),
       });
       showToast(`检测完成，共发现${result.detection_count || 0}个目标。`);
@@ -508,6 +512,7 @@
       $("#batchResultText").textContent = `${imageCount}张图像 · ${detectionCount}个目标 · 纯推理 ${inferenceMs.toFixed(1)} ms · 总用时 ${systemTotalMs.toFixed(1)} ms`;
       $("#batchResult").classList.remove("is-hidden");
       renderBatchResults(payload);
+      const resultKey = rememberResult("batch", payload);
       addHistory({
         type: "batch",
         filename: `批量任务（${imageCount}张）`,
@@ -517,6 +522,7 @@
         detectionCount,
         inferenceMs,
         systemTotalMs,
+        resultKey,
         createdAt: new Date().toISOString(),
       });
       showToast(`批量检测完成，共发现${detectionCount}个目标。`);
@@ -611,6 +617,38 @@
     }
   }
 
+  function rememberResult(type, payload) {
+    const identity = type === "batch" ? payload.batch_id : payload.task_id;
+    const key = `${type}:${identity || "result"}:${Date.now()}`;
+    state.resultCache.set(key, { type, payload });
+    while (state.resultCache.size > RESULT_CACHE_LIMIT) {
+      state.resultCache.delete(state.resultCache.keys().next().value);
+    }
+    return key;
+  }
+
+  function openHistoryItem(item) {
+    const cached = state.resultCache.get(item.resultKey);
+    if (!cached) {
+      showToast("该记录的完整详情已过期，请重新执行检测。", "error");
+      return;
+    }
+    if (cached.type === "single") {
+      state.singleResult = cached.payload;
+      switchView("detect");
+      renderSingleResult(cached.payload);
+      window.requestAnimationFrame(() => $("#resultDetails").scrollIntoView({ behavior: "smooth", block: "start" }));
+      return;
+    }
+    state.batchResult = cached.payload;
+    const payload = cached.payload;
+    $("#batchResultText").textContent = `${Number(payload.image_count || 0)}张图像 · ${Number(payload.detection_count || 0)}个目标 · 纯推理 ${Number(payload.inference_ms || 0).toFixed(1)} ms · 总用时 ${Number(payload.system_total_ms || 0).toFixed(1)} ms`;
+    $("#batchResult").classList.remove("is-hidden");
+    renderBatchResults(payload);
+    switchView("batch");
+    window.requestAnimationFrame(() => $("#batchGallery").scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
   function addHistory(item) {
     state.history = [item, ...state.history].slice(0, 20);
     sessionStorage.setItem(HISTORY_KEY, JSON.stringify(state.history));
@@ -619,6 +657,7 @@
 
   function clearHistory() {
     state.history = [];
+    state.resultCache.clear();
     sessionStorage.removeItem(HISTORY_KEY);
     renderHistory();
     showToast("当前会话记录已清空。", "success");
@@ -651,14 +690,19 @@
       return;
     }
     state.history.forEach((item) => {
-      const row = document.createElement("div");
+      const available = state.resultCache.has(item.resultKey);
+      const row = document.createElement("button");
+      row.type = "button";
       row.className = "history-row";
+      row.classList.toggle("is-available", available);
+      row.classList.toggle("is-expired", !available);
+      row.setAttribute("aria-label", `${item.filename || "未命名任务"}，${available ? "查看详情" : "详情已过期"}`);
       row.innerHTML = icon(item.type === "batch" ? "layers" : "image");
       const identity = document.createElement("div");
       const name = document.createElement("strong");
       name.textContent = item.filename || "未命名任务";
       const detail = document.createElement("small");
-      detail.textContent = `${new Date(item.createdAt).toLocaleString("zh-CN", { hour12: false })} · ${shortId(item.taskId)}`;
+      detail.textContent = `${new Date(item.createdAt).toLocaleString("zh-CN", { hour12: false })} · ${available ? "查看详情" : "详情已过期"}`;
       identity.append(name, detail);
       const context = document.createElement("span");
       context.className = "history-cell";
@@ -672,6 +716,7 @@
         ? "耗时数据暂无"
         : `推理 ${Number(item.inferenceMs).toFixed(1)} / 总用时 ${Number(item.systemTotalMs || 0).toFixed(1)} ms`;
       row.append(identity, context, targets, elapsed);
+      row.addEventListener("click", () => openHistoryItem(item));
       list.appendChild(row);
     });
   }
