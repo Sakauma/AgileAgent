@@ -99,7 +99,12 @@
             <div class="batch-preview-list" id="batchPreviewList" aria-label="结果图像列表"></div>
             <div class="batch-preview-stage">
               <img id="batchPreviewImage" alt="批量检测标注结果">
-              <div class="batch-preview-caption"><div><strong id="batchPreviewName"></strong><span id="batchPreviewMeta"></span></div><div class="batch-preview-classes" id="batchPreviewClasses"></div></div>
+              <div class="batch-preview-caption"><div><strong id="batchPreviewName"></strong><span>当前选中结果</span></div><div class="batch-preview-classes" id="batchPreviewClasses"></div></div>
+              <div class="batch-detail-summary" id="batchPreviewSummary"></div>
+              <div class="batch-detail-table">
+                <div class="section-heading"><div><p class="eyebrow">识别明细</p><h2>目标明细</h2></div><span id="batchDetectionTotal"></span></div>
+                <div class="detection-table-wrap"><table class="data-table"><thead><tr><th>类别</th><th>置信度</th><th>位置坐标</th></tr></thead><tbody id="batchDetectionRows"></tbody></table></div>
+              </div>
             </div>
           </div>
         </section>

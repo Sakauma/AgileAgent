@@ -239,6 +239,15 @@ h2 { margin: 0; font-size: 14px; line-height: 1.2; }
 .batch-preview-caption span { margin-top: 5px; color: var(--muted); font-size: 9px; }
 .batch-preview-classes { display: flex; flex-wrap: wrap; justify-content: end; gap: 5px; }
 .batch-preview-classes b { padding: 5px 7px; border-radius: 5px; color: #567d2d; background: var(--lime-soft); font-size: 9px; }
+.batch-detail-summary { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: #fbfdfd; }
+.batch-detail-item { min-width: 0; min-height: 88px; padding: 14px; border-right: 1px solid var(--line); }
+.batch-detail-item:last-child { border-right: 0; }
+.batch-detail-item span, .batch-detail-item strong, .batch-detail-item small { display: block; }
+.batch-detail-item span { color: var(--muted); font-size: 9px; font-weight: 700; }
+.batch-detail-item strong { margin-top: 9px; overflow-wrap: anywhere; font-size: 18px; }
+.batch-detail-item small { margin-top: 5px; color: var(--green); font-size: 9px; }
+.batch-detail-table { padding: 16px; background: #fff; }
+.batch-detail-table .section-heading { margin-bottom: 10px; }
 
 .history-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
 .history-stat { min-height: 94px; padding: 16px; border: 1px solid var(--line); border-top: 2px solid var(--cyan); background: var(--panel); }
@@ -416,6 +425,10 @@ body::before { border-top-color: var(--cyan); opacity: .45; }
   .batch-preview-stage > img { height: 280px; }
   .batch-preview-caption { align-items: start; flex-direction: column; }
   .batch-preview-classes { justify-content: start; }
+  .batch-detail-summary { grid-template-columns: repeat(2, 1fr); }
+  .batch-detail-item:nth-child(even) { border-right: 0; }
+  .batch-detail-item:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .batch-detail-table { padding: 12px; }
   .history-stats { grid-template-columns: 1fr; }
   .history-row { grid-template-columns: 26px minmax(0, 1fr) 64px; }
   .history-row .history-cell:nth-last-child(-n+2) { display: none; }

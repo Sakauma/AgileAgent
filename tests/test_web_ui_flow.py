@@ -232,8 +232,11 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "纯推理时间" in script
     assert "系统总用时" in script
     assert "batchPreviewList" in html
+    assert "batchPreviewSummary" in html
+    assert "batchDetectionRows" in html
     assert "preview_url" in script
     assert "download_url" in script
+    assert "renderDetectionRows" in script
     assert "collaborationFlow" in html
     assert "@media (max-width: 620px)" in styles
     assert ".main-nav.is-open" in styles

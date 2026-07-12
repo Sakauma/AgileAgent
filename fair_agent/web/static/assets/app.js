@@ -281,7 +281,12 @@
       summaryNode.appendChild(item);
     });
 
-    const rows = $("#detectionRows");
+    renderDetectionRows($("#detectionRows"), detections);
+    $("#detectionTotal").textContent = `${detections.length} 条结果`;
+    setWorkflow(3);
+  }
+
+  function renderDetectionRows(rows, detections) {
     rows.replaceChildren();
     if (!detections.length) {
       const row = document.createElement("tr");
@@ -309,8 +314,6 @@
         rows.appendChild(row);
       });
     }
-    $("#detectionTotal").textContent = `${detections.length} 条结果`;
-    setWorkflow(3);
   }
 
   function renderCollaboration(result) {
@@ -560,8 +563,28 @@
     $$(".batch-preview-item").forEach((button) => button.classList.toggle("is-active", Number(button.dataset.index) === index));
     $("#batchPreviewImage").src = result.preview_url;
     $("#batchPreviewName").textContent = result.filename || `结果 ${index + 1}`;
-    $("#batchPreviewMeta").textContent = `${sensorLabel(result.context && result.context.sensor)} · ${sceneLabel(result.context && result.context.scene)} · 纯推理 ${Number(result.inference_ms || 0).toFixed(1)} ms`;
     $("#batchPreviewPosition").textContent = `${index + 1} / ${results.length}`;
+    const context = result.context || {};
+    const metrics = [
+      ["传感器", sensorLabel(context.sensor), `${Math.round((context.sensor_confidence || 0) * 100)}% 置信度`],
+      ["场景", sceneLabel(context.scene), `${Math.round((context.scene_confidence || 0) * 100)}% 置信度`],
+      ["检测目标", String(result.detection_count || 0), "已完成定位"],
+      ["纯推理时间", `${Number(result.inference_ms || 0).toFixed(1)} ms`, "模型前向计算"],
+    ];
+    const summary = $("#batchPreviewSummary");
+    summary.replaceChildren();
+    metrics.forEach(([label, value, hint]) => {
+      const item = document.createElement("div");
+      item.className = "batch-detail-item";
+      const labelNode = document.createElement("span");
+      labelNode.textContent = label;
+      const valueNode = document.createElement("strong");
+      valueNode.textContent = value;
+      const hintNode = document.createElement("small");
+      hintNode.textContent = hint;
+      item.append(labelNode, valueNode, hintNode);
+      summary.appendChild(item);
+    });
     const classes = $("#batchPreviewClasses");
     classes.replaceChildren();
     Object.entries(result.class_counts || {}).forEach(([name, count]) => {
@@ -574,6 +597,9 @@
       empty.textContent = "未检测到目标";
       classes.appendChild(empty);
     }
+    const detections = Array.isArray(result.detections) ? result.detections : [];
+    renderDetectionRows($("#batchDetectionRows"), detections);
+    $("#batchDetectionTotal").textContent = `${detections.length} 条结果`;
   }
 
   function readHistory() {
