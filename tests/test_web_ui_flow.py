@@ -35,6 +35,7 @@ class FakeEngine:
             ],
             "class_counts": {"warship": 1},
             "detection_count": 1,
+            "confidence_threshold": float(confidence),
             "inference_ms": 18.2,
             "queue_wait_ms": 0.4,
             "agent": {
@@ -124,6 +125,7 @@ def test_single_detection_api_returns_public_json() -> None:
     assert "annotated_base64" in payload
     assert "annotated_png" not in payload
     assert payload["inference_ms"] == 18.2
+    assert payload["confidence_threshold"] == 0.21
     assert payload["system_total_ms"] >= 0
     assert engine.calls == [("sample.png", 0.21, content_task_id(image), None)]
 
@@ -233,6 +235,7 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "incremental_protocol" in script
     assert "纯推理时间" in script
     assert "系统总用时" in script
+    assert "本次阈值" in script
     assert "batchPreviewList" in html
     assert "batchPreviewSummary" in html
     assert "batchDetectionRows" in html

@@ -239,7 +239,7 @@
     const summary = [
       ["传感器", sensorLabel(context.sensor), `${Math.round((context.sensor_confidence || 0) * 100)}% 置信度`],
       ["场景", sceneLabel(context.scene), `${Math.round((context.scene_confidence || 0) * 100)}% 置信度`],
-      ["检测目标", String(result.detection_count || 0), "已完成定位"],
+      ["检测目标", String(result.detection_count || 0), `本次阈值 ${Number(result.confidence_threshold || 0).toFixed(2)}`],
       ["纯推理时间", `${Number(result.inference_ms || 0).toFixed(1)} ms`, "模型前向计算"],
       ["系统总用时", `${Number(result.system_total_ms || 0).toFixed(1)} ms`, "完整处理链路"],
     ];
@@ -542,7 +542,7 @@
     const metrics = [
       ["传感器", sensorLabel(context.sensor), `${Math.round((context.sensor_confidence || 0) * 100)}% 置信度`],
       ["场景", sceneLabel(context.scene), `${Math.round((context.scene_confidence || 0) * 100)}% 置信度`],
-      ["检测目标", String(result.detection_count || 0), "已完成定位"],
+      ["检测目标", String(result.detection_count || 0), `本次阈值 ${Number(result.confidence_threshold || 0).toFixed(2)}`],
       ["纯推理时间", `${Number(result.inference_ms || 0).toFixed(1)} ms`, "模型前向计算"],
     ];
     const summary = $("#batchPreviewSummary");

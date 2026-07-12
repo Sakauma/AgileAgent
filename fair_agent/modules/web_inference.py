@@ -327,8 +327,7 @@ class WebInferenceEngine:
             }
         else:
             records = base_records
-            plotted = prediction.plot(labels=False, conf=False, line_width=2)
-            annotated = Image.fromarray(plotted[:, :, ::-1])
+            annotated = annotate_records(rgb_image, records)
         models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
         if protocol_result:
             models_used.append("incremental_model_bank_v1")
@@ -339,6 +338,7 @@ class WebInferenceEngine:
             "detections": records,
             "class_counts": summarize_records(records),
             "detection_count": len(records),
+            "confidence_threshold": round(float(confidence), 2),
             "inference_ms": round(inference_ms, 1),
             "agent": {
                 "mode": "incremental_demo" if protocol_result else "standard_detection",
