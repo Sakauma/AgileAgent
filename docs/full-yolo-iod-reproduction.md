@@ -22,7 +22,7 @@
 - **IKS**：直接使用官方 GPS Loop，根据梯度和参数变化选择卷积核单元。
 - **CAKD**：直接使用官方旧教师/当前教师检测头完成 Cross-Stage Asymmetric Knowledge Distillation。
 
-官方固定提交在单类 GPS 阶段可能遇到没有梯度重要性条目的参数，但正式更新时仍强制索引掩码。仓库内的 `patches/yolo_iod_single_class_grad_mask.patch` 只启用作者源码中已经写出但被注释的保护分支；runner 会校验并应用该一行补丁，同时记录补丁 SHA256。
+官方固定提交在单类 GPS 阶段可能遇到没有梯度重要性条目的参数，但正式更新时仍强制索引掩码；同时，GPS 重要性扫描会消耗梯度累积计数，导致真实训练最后一轮的 `loss_factor` 变成 0。仓库内的 `patches/yolo_iod_single_class_grad_mask.patch` 同时启用掩码保护并在扫描后恢复训练迭代计数，runner 会校验补丁状态并记录 SHA256。
 
 ## 环境与预检
 
@@ -58,7 +58,7 @@ cd /project/IDIP/MAJ/code/tiaozhanbei
 
 脚本依次完成：三类基础模型、当前舰船教师、CPR 数据门禁、完整 YOLO-IOD、基础/最终 lock-val 评测。r05 所有阶段固定使用 GPU 3；配置校验会拒绝多卡或阶段间设备不一致。所有阶段写入独立日志和 `action_log.jsonl`，任一步失败立即停止。
 
-显存允许的 micro-batch 分别为 base/current 的 4 和 final 的 2。YAML 使用梯度累积 `4/4/8`，使三个阶段的有效 batch 都等于 16；command manifest 会记录 micro-batch、累积步数和有效 batch。runner 会识别 `last_checkpoint` 并使用显式检查点路径续训。
+显存允许的 micro-batch 分别为 base/current 的 4 和 final 的 2。YAML 使用梯度累积 `4/4/8`，使三个阶段的有效 batch 都等于 16；command manifest 会记录 micro-batch、累积步数和有效 batch。base、current 和 final 都会识别 `last_checkpoint` 并使用显式检查点路径续训。
 
 r04/r05 的 final 验证配置只引用 `current_dev.json`，不读取旧类验证图像。旧类保持率只能在权重冻结后通过 lock-val 评分，不能用于调参或早停。
 
