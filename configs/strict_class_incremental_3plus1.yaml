@@ -1,0 +1,98 @@
+schema_version: 1
+seed: 20260705
+model: yolo11s.pt
+
+paths:
+  source_splits:
+    train: splits/train.txt
+    val: splits/dev_val.txt
+    lock: splits/lock_val.txt
+  dataset_root: incremental_strict_3plus1
+  run_root: runs/detect/strict_3plus1
+  report_root: reports/strict_3plus1
+  freeze_root: models/experiments/strict_3plus1
+
+runtime:
+  preferred_devices: ["0", "1"]
+  parallel: true
+  workers: 8
+  env:
+    NCCL_P2P_DISABLE: "1"
+    NCCL_IB_DISABLE: "1"
+
+common:
+  imgsz: 640
+  batch: 32
+  optimizer: AdamW
+  patience: 30
+  cache: false
+  plots: true
+  amp: true
+  weight_decay: 0.0005
+
+base_train:
+  epochs: 120
+  lr0: 0.001
+  lrf: 0.01
+  cos_lr: true
+  close_mosaic: 10
+
+incremental_train:
+  epochs: 80
+  lr0: 0.001
+  lrf: 0.01
+  cos_lr: true
+  close_mosaic: 10
+  mosaic: 1.0
+  mixup: 0.0
+  copy_paste: 0.0
+
+predict:
+  conf: 0.001
+  iou: 0.70
+  max_det: 300
+  batch: 32
+  evaluation_batch: 1
+  rect: true
+
+fusion:
+  nms_iou: 0.60
+
+calibration:
+  threshold_min: 0.01
+  threshold_max: 0.99
+  threshold_step: 0.01
+  target_precision: 0.90
+
+bootstrap:
+  iterations: 1000
+  seed: 20260705
+  strata: [sensor, class_presence]
+
+acceptance:
+  min_new_map50: 0.60
+  min_krr: 0.95
+  min_calibration_precision: 0.90
+  max_evaluator_error: 0.005
+  max_base_weight_drift: 0.0
+
+reference:
+  unified_four_class_map50: 0.91202
+
+protocols:
+  - id: strict-p01
+    display_name: 小型飞行器严格 3+1
+    base_classes: [soldier, warship, tank]
+    new_class: small_aircraft
+    new_global_id: 1
+    base_local_to_global: {0: 0, 1: 2, 2: 3}
+    expected_incremental_counts: {train: 131, val: 22, lock_positive: 22}
+    preferred_device: "0"
+  - id: strict-p02
+    display_name: 舰船严格 3+1
+    base_classes: [soldier, small_aircraft, tank]
+    new_class: warship
+    new_global_id: 2
+    base_local_to_global: {0: 0, 1: 1, 2: 3}
+    expected_incremental_counts: {train: 126, val: 22, lock_positive: 21}
+    preferred_device: "1"

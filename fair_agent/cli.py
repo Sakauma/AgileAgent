@@ -362,6 +362,65 @@ def cmd_context_predict(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_detect(args: argparse.Namespace) -> int:
+    from fair_agent.modules.web_inference import WebInferenceEngine, validate_image_bytes
+    from fair_agent.modules.strict_incremental import load_experiment_profile
+    from fair_agent.web.app import build_web_settings
+
+    source = resolve_path(args.source)
+    try:
+        if not 0.01 <= float(args.confidence) <= 1.0:
+            raise ValueError("置信度必须位于0.01到1.00之间。")
+        data = source.read_bytes()
+        image, task_id = validate_image_bytes(data, source.name)
+        settings = build_web_settings()
+        if args.profile:
+            profile = load_experiment_profile(args.profile)
+            class_names = {int(key): str(value) for key, value in profile["class_names"].items()}
+            base_mapping = {int(key): int(value) for key, value in profile["base_local_to_global"].items()}
+            settings.update({
+                "detector_path": resolve_path(profile["base_weight"]),
+                "class_names": class_names,
+                "base_class_ids": list(base_mapping.values()),
+                "base_local_to_global": base_mapping,
+                "protocols": {
+                    profile["profile_id"]: {
+                        "id": profile["profile_id"],
+                        "class_name": profile["new_class"],
+                        "new_class": profile["new_class"],
+                        "global_class_id": int(profile["new_global_id"]),
+                        "incremental_mode": "class_incremental",
+                        "weights": resolve_path(profile["specialist_weight"]),
+                        "new_map50": float(profile["new_map50"]),
+                        "krr": float(profile["krr"]),
+                        "available": True,
+                        "activation_threshold": float(profile["activation_threshold"]),
+                        "calibration_source": profile["calibration_source"],
+                        "routing_prior": 0.5,
+                        "context_prior": {},
+                    }
+                },
+            })
+        engine = WebInferenceEngine(
+            settings["detector_path"],
+            settings["context_path"],
+            device_index=settings["device_index"],
+            predict_options=settings["predict"],
+            incremental_protocols=settings["protocols"],
+            class_names=settings["class_names"],
+            base_class_ids=settings["base_class_ids"],
+            base_local_to_global=settings.get("base_local_to_global"),
+            routing_options=settings["routing"],
+        )
+        result = engine.predict(image, source.name, float(args.confidence), task_id, "auto")
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"自动检测失败：{exc}")
+        return 1
+    public = {key: value for key, value in result.items() if key not in {"annotated_png", "task_id"}}
+    print(json.dumps(public, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="IR/SAR 快速学习智能体工作台")
     parser.add_argument("--config", default="configs/agent_pipeline.yaml")
@@ -405,6 +464,12 @@ def build_parser() -> argparse.ArgumentParser:
     context_predict = sub.add_parser("context-predict")
     context_predict.add_argument("--source", required=True)
     context_predict.set_defaults(func=cmd_context_predict)
+
+    detect = sub.add_parser("detect", help="执行完整自动路由检测并输出详细决策轨迹。")
+    detect.add_argument("--source", required=True)
+    detect.add_argument("--confidence", type=float, default=0.50)
+    detect.add_argument("--profile", choices=["strict-p01", "strict-p02"], help="使用已通过验收的严格 3+1 实验档。")
+    detect.set_defaults(func=cmd_detect)
 
     sub.add_parser("serve").set_defaults(func=cmd_serve)
     return parser

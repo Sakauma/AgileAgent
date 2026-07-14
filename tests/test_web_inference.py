@@ -19,11 +19,16 @@ from fair_agent.modules.web_inference import (
     result_records,
     summarize_records,
     compose_incremental_records,
+    class_aware_nms,
+    context_affinity,
+    plan_specialist_routes,
     remap_specialist_records,
+    remap_base_records,
     consensus_specialist_records,
     yolo_inference_ms,
     validate_batch_uploads,
     validate_image_bytes,
+    WebInferenceEngine,
 )
 
 
@@ -54,6 +59,30 @@ class FakeBoxes:
 class FakeResult:
     boxes = FakeBoxes()
     speed = {"preprocess": 1.2, "inference": 7.35, "postprocess": 2.1}
+
+
+class DynamicBoxes:
+    def __init__(self, rows):
+        self.xyxy = FakeTensor([row[0] for row in rows])
+        self.conf = FakeTensor([row[1] for row in rows])
+        self.cls = FakeTensor([row[2] for row in rows])
+
+    def __len__(self):
+        return len(self.conf.values)
+
+
+class DynamicResult:
+    def __init__(self, rows, inference=1.0):
+        self.boxes = DynamicBoxes(rows)
+        self.speed = {"inference": inference}
+
+
+class FakeDetector:
+    def __init__(self, result):
+        self.result = result
+
+    def predict(self, **_kwargs):
+        return [self.result]
 
 
 def test_detection_records_are_public_and_serializable() -> None:
@@ -193,8 +222,10 @@ def test_incremental_composition_keeps_old_classes_and_remaps_specialist() -> No
     assert remapped[0]["class_name"] == "warship"
     assert remapped[0]["source"] == "incremental_model"
     composed = compose_incremental_records(base, specialist, 2)
-    assert [item["class_id"] for item in composed] == [0, 2]
-    assert [item["source"] for item in composed] == ["frozen_base_model", "incremental_model"]
+    assert [item["class_id"] for item in composed] == [0, 2, 2]
+    assert [item["source"] for item in composed] == [
+        "frozen_base_model", "frozen_base_model", "incremental_model"
+    ]
 
 
 def test_specialist_candidates_require_spatial_consensus() -> None:
@@ -206,3 +237,162 @@ def test_specialist_candidates_require_spatial_consensus() -> None:
     assert box_iou(base[0]["xyxy"], candidates[0]["xyxy"]) > 0.30
     assert consensus_specialist_records(base, candidates, 2, 0.30) == [candidates[0]]
     assert consensus_specialist_records([], candidates, 2, 0.30) == []
+
+
+def test_class_incremental_route_does_not_require_base_same_class() -> None:
+    protocols = {
+        "p05_new_vehicle": {
+            "available": True,
+            "incremental_mode": "class_incremental",
+            "global_class_id": 4,
+            "activation_threshold": 0.65,
+            "calibration_source": "incremental_val/calibration.json",
+            "routing_prior": 0.8,
+            "context_prior": {},
+        }
+    }
+    eligible, executed, skipped = plan_specialist_routes(
+        protocols,
+        [{"class_id": 0, "confidence": 0.8, "xyxy": [1, 1, 2, 2]}],
+        {"sensor": "sar", "scene": "urban"},
+        {0, 1, 2, 3},
+    )
+    assert [item["id"] for item in eligible] == ["p05_new_vehicle"]
+    assert [item["id"] for item in executed] == ["p05_new_vehicle"]
+    assert skipped == []
+
+
+def test_target_incremental_route_requires_base_class_but_not_scene_match() -> None:
+    protocol = {
+        "available": True,
+        "incremental_mode": "target_incremental",
+        "global_class_id": 2,
+        "activation_threshold": 0.5,
+        "context_prior": {"scene": {"sea": 1.0, "urban": 0.0}},
+    }
+    eligible, executed, skipped = plan_specialist_routes(
+        {"p02": protocol},
+        [{"class_id": 2, "confidence": 0.9, "xyxy": [1, 1, 2, 2]}],
+        {"scene_probabilities": {"sea": 0.0, "urban": 1.0}},
+        {0, 1, 2, 3},
+    )
+    assert len(eligible) == len(executed) == 1
+    assert eligible[0]["context_score"] == 0.0
+    assert skipped == []
+
+    _eligible, _executed, skipped = plan_specialist_routes(
+        {"p02": protocol}, [], {}, {0, 1, 2, 3}
+    )
+    assert skipped == [{"id": "p02", "reason": "base_class_not_detected"}]
+
+
+def test_fusion_preserves_unmatched_base_and_removes_same_class_duplicate() -> None:
+    rows = [
+        {"class_id": 2, "class_name": "warship", "confidence": 0.80, "xyxy": [0, 0, 20, 20], "source": "frozen_base_model"},
+        {"class_id": 2, "class_name": "warship", "confidence": 0.70, "xyxy": [40, 40, 60, 60], "source": "frozen_base_model"},
+        {"class_id": 2, "class_name": "warship", "confidence": 0.90, "xyxy": [1, 1, 19, 19], "source": "incremental_model", "protocol_id": "p02"},
+    ]
+    fused, summary = class_aware_nms(rows, 0.60)
+    assert len(fused) == 2
+    assert any(item["xyxy"] == [40, 40, 60, 60] for item in fused)
+    assert any(item["source"] == "incremental_model" for item in fused)
+    assert summary == {"input_count": 3, "output_count": 2, "suppressed_count": 1}
+
+
+def test_dynamic_new_class_mapping_and_neutral_context() -> None:
+    remapped = remap_specialist_records(
+        [{"class_id": 0, "confidence": 0.9, "xyxy": [1, 1, 2, 2]}],
+        7,
+        {7: "new_vehicle"},
+        "p07",
+    )
+    assert remapped[0]["class_id"] == 7
+    assert remapped[0]["class_name"] == "new_vehicle"
+    assert remapped[0]["protocol_id"] == "p07"
+    assert context_affinity({}, {}) == 0.5
+
+
+def test_strict_base_local_ids_remap_to_global_space() -> None:
+    records = [
+        {"class_id": 0, "class_name": "soldier", "confidence": 0.9, "xyxy": [1, 1, 2, 2]},
+        {"class_id": 1, "class_name": "warship", "confidence": 0.8, "xyxy": [3, 3, 4, 4]},
+        {"class_id": 2, "class_name": "tank", "confidence": 0.7, "xyxy": [5, 5, 6, 6]},
+    ]
+    remapped = remap_base_records(records, {0: 0, 1: 2, 2: 3}, {0: "soldier", 2: "warship", 3: "tank"})
+    assert [item["class_id"] for item in remapped] == [0, 2, 3]
+    assert [item["class_name"] for item in remapped] == ["soldier", "warship", "tank"]
+
+
+def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "fair_agent.models.context.predict_context",
+        lambda *_args, **_kwargs: {
+            "sensor": "sar",
+            "sensor_confidence": 0.9,
+            "sensor_probabilities": {"ir": 0.1, "sar": 0.9},
+            "scene": "urban",
+            "scene_confidence": 0.8,
+            "scene_probabilities": {"air": 0.0, "forest": 0.1, "sea": 0.1, "urban": 0.8},
+            "_inference_ms": 1.0,
+        },
+    )
+    engine = WebInferenceEngine.__new__(WebInferenceEngine)
+    engine.context_model = object()
+    engine.context_checkpoint = {}
+    engine.device = "cuda:0"
+    engine.device_index = "0"
+    engine.imgsz = 640
+    engine.iou = 0.7
+    engine.max_det = 300
+    engine.fusion_iou = 0.60
+    engine.max_specialists = 4
+    engine.class_names = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank", 4: "new_vehicle"}
+    engine.base_class_ids = {0, 1, 2, 3}
+    engine.base_local_to_global = {0: 0, 1: 1, 2: 2, 3: 3}
+    engine.base_local_names = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
+    engine.detector = FakeDetector(
+        DynamicResult([
+            ([0, 0, 20, 20], 0.80, 2),
+            ([40, 40, 60, 60], 0.70, 2),
+        ])
+    )
+    specialist_results = {
+        "target.pt": DynamicResult([([1, 1, 19, 19], 0.95, 0)]),
+        "new.pt": DynamicResult([([70, 70, 90, 90], 0.88, 0)]),
+    }
+    engine._yolo_class = lambda path: FakeDetector(specialist_results[path])
+    engine.specialist_detectors = {}
+    engine.incremental_protocols = {
+        "p05_new_vehicle": {
+            "available": True,
+            "incremental_mode": "class_incremental",
+            "global_class_id": 4,
+            "class_name": "new_vehicle",
+            "activation_threshold": 0.5,
+            "calibration_source": "incremental_val/calibration.json",
+            "routing_prior": 0.8,
+            "context_prior": {},
+            "weights": "new.pt",
+            "new_map50": 0.8,
+            "krr": 0.95,
+        },
+        "p02_warship": {
+            "available": True,
+            "incremental_mode": "target_incremental",
+            "global_class_id": 2,
+            "class_name": "warship",
+            "activation_threshold": 0.5,
+            "context_prior": {},
+            "consensus_iou": 0.3,
+            "weights": "target.pt",
+            "new_map50": 0.83,
+            "krr": 1.0,
+        },
+    }
+    engine.queue = FairInferenceQueue()
+
+    result = engine.predict(Image.new("RGB", (100, 100)), "sample.png", 0.5, "task", "auto")
+    assert result["class_counts"] == {"new_vehicle": 1, "warship": 2}
+    assert result["agent"]["decision"]["executed_protocols"] == ["p05_new_vehicle", "p02_warship"]
+    assert result["agent"]["decision"]["fusion_summary"]["suppressed_count"] == 1
+    assert all("fusion_status" in item for item in result["detections"])

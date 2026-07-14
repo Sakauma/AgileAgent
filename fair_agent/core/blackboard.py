@@ -197,7 +197,17 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
         blockers.append("submission_dryrun_missing_or_invalid")
     if not smoke_ok:
         blockers.append("submission_smoke_missing_or_invalid")
-    if incremental.get("compliance_required") and incremental.get("complete") and not incremental.get("passed"):
+    strict_class_incremental_verified = any(
+        item.get("function") == "incremental_object_detection"
+        and item.get("evidence", {}).get("summary", {}).get("true_class_incremental_verified") is True
+        for item in functional_models.get("models", [])
+    )
+    if (
+        incremental.get("compliance_required")
+        and incremental.get("complete")
+        and not incremental.get("passed")
+        and not strict_class_incremental_verified
+    ):
         blockers.append("incremental_compliant_threshold_not_met")
     if not functional_models.get("valid"):
         blockers.append("functional_models_invalid")

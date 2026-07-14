@@ -42,6 +42,8 @@ def main() -> int:
         from ultralytics import YOLO
         import torch
         from fair_agent.models.context import evaluate_context_paths, load_context_model, predict_context
+        from fair_agent.modules.web_inference import WebInferenceEngine
+        from fair_agent.web.app import build_web_settings
     except ImportError as exc:
         raise SystemExit("缺少 Ultralytics 或 PyTorch，请安装推理依赖。") from exc
 
@@ -95,6 +97,7 @@ def main() -> int:
     context_model, context_checkpoint = load_context_model(context_weights, f"cuda:{device}")
     context_prediction = None
     context_lock_evaluation = None
+    lock_paths = []
     if not args.load_only:
         context_prediction = predict_context(context_model, context_checkpoint, image, f"cuda:{device}")
         lock_split = ROOT / "splits" / "lock_val.txt"
@@ -105,6 +108,51 @@ def main() -> int:
             for name in ["sensor_accuracy", "scene_accuracy", "joint_accuracy"]:
                 if abs(float(context_lock_evaluation[name]) - float(expected_metrics[name])) > 1e-9:
                     raise RuntimeError(f"Scene-SensorNet lock 指标不一致：{name}")
+
+    orchestration_results = []
+    if not args.load_only:
+        del base_model
+        del model
+        del prediction
+        del batch_results
+        del context_model
+        torch.cuda.empty_cache()
+        settings = build_web_settings()
+        engine = WebInferenceEngine(
+            settings["detector_path"],
+            settings["context_path"],
+            device_index=settings["device_index"],
+            predict_options=settings["predict"],
+            incremental_protocols=settings["protocols"],
+            class_names=settings["class_names"],
+            base_class_ids=settings["base_class_ids"],
+            routing_options=settings["routing"],
+        )
+        samples = []
+        for sensor in ("ir", "sar"):
+            sample = next((path for path in lock_paths if path.name.startswith(f"{sensor}_")), None)
+            if sample is not None:
+                with Image.open(sample) as source:
+                    samples.append((sample.name, source.convert("RGB")))
+        if not samples:
+            samples = [("synthetic.png", image)]
+        for filename, sample_image in samples:
+            prediction = engine.predict(sample_image, filename, confidence=0.50, incremental_protocol="auto")
+            decision = prediction.get("agent", {}).get("decision", {})
+            if decision.get("final_detection_count") != prediction.get("detection_count"):
+                raise RuntimeError(f"Agent 编排结果数量不一致：{filename}")
+            if not isinstance(decision.get("executed_protocols"), list) or not isinstance(
+                decision.get("fusion_summary"), dict
+            ):
+                raise RuntimeError(f"Agent 编排缺少决策轨迹：{filename}")
+            orchestration_results.append({
+                "sample": filename,
+                "detection_count": prediction["detection_count"],
+                "models_used": prediction["agent"]["models_used"],
+                "executed_protocols": decision["executed_protocols"],
+                "skipped_protocols": decision["skipped_protocols"],
+                "fusion_summary": decision["fusion_summary"],
+            })
 
     print(json.dumps({
         "checksums": checksums,
@@ -122,6 +170,7 @@ def main() -> int:
             "synthetic_prediction": context_prediction,
             "lock_evaluation": context_lock_evaluation,
         },
+        "agent_orchestration": orchestration_results,
         "yolo_models": results,
     }, ensure_ascii=False, indent=2))
     return 0

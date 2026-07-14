@@ -31,7 +31,7 @@ models:
         sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
     evidence:
       path: models/manifest.json
-      sha256: 81b5b26248c9aabb7b3e934fa09d6f62273f222e4c83eb1406f49621e96fdd59
+      sha256: 239e8ead823c0a08767dc15dd77d46dbf05b314f4b973803fc6b5608b91253de
     runtime:
       x86_gpu: true
       ascend_310b: false
@@ -39,10 +39,10 @@ models:
   - id: incremental_model_bank_v1
     function: incremental_object_detection
     display_name: 增量目标检测模型库
-    implementation: incremental_data_only_frozen_base_plus_class_specialists
+    implementation: mode_aware_incremental_router_and_specialist_bank
     status: partially_verified
     inputs: [incremental_images_labels, frozen_base_weights, class_focus]
-    outputs: [incremental_boxes, incremental_mode, new_map50, krr, acceptance]
+    outputs: [incremental_boxes, incremental_mode, routing_trace, new_map50, krr, acceptance]
     artifacts:
       - path: models/incremental/p01_new_small_aircraft_best.pt
         sha256: dec95184c44d168bfe5b3760cf55fa71fdbd93ff8fdd4542be63c32a6233f37b
@@ -54,7 +54,7 @@ models:
         sha256: c22face61219ebf6d7a887f57dd3b90030b7a50324789283e66a12532372ccee
     evidence:
       path: models/manifest.json
-      sha256: 81b5b26248c9aabb7b3e934fa09d6f62273f222e4c83eb1406f49621e96fdd59
+      sha256: 239e8ead823c0a08767dc15dd77d46dbf05b314f4b973803fc6b5608b91253de
     runtime:
       x86_gpu: true
       ascend_310b: false
@@ -65,15 +65,15 @@ collaboration:
     payload: agent_policy_context
     status: implemented
     proof_command: python -m fair_agent.cli decide --source IMAGE --class-focus soldier
-    purpose: 认知结果进入 Agent 策略，用于选择检测配置和分组诊断；不改变 YOLO 输入张量
+    purpose: 认知概率作为软路由分数参与专项模型排序，不作为场景硬拒绝条件
   - from: unified_yolo11s_v1
     to: incremental_model_bank_v1
     payload: weak_class_and_error_cases
     status: implemented
-    purpose: 触发新类学习或弱类专项复核
+    purpose: 基础检测为目标增量专项模型提供候选类别证据；真正新类协议不依赖旧模型同类框
   - from: incremental_model_bank_v1
     to: unified_yolo11s_v1
     payload: gated_incremental_predictions
     status: implemented
     proof_command: python -m pytest -q tests/test_web_inference.py tests/test_web_ui_flow.py
-    purpose: Agent 自动评估通过 New-mAP/KRR 门禁的增量能力，并组合冻结旧类检测结果与全局类别映射后的增量结果；无需用户选择模型
+    purpose: Agent 按增量模式执行门控，以逐框 NMS 融合基础结果和专项候选；当前专项权重仅作为目标增量演练

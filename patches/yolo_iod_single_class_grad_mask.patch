@@ -1,0 +1,15 @@
+diff --git a/yolo_world/engine/runner/gps_loops.py b/yolo_world/engine/runner/gps_loops.py
+--- a/yolo_world/engine/runner/gps_loops.py
++++ b/yolo_world/engine/runner/gps_loops.py
+@@ -315,8 +315,8 @@ class EpochBasedTrainGPSLoop(BaseLoop):
+             for param_name, param in self.runner.model.named_parameters():
+
+                 if not param.requires_grad:
+                     continue
+-                # if param_name not in self.grad_mask:
+-                #     continue
++                if param_name not in self.grad_mask:
++                    continue
+                 if len(param.shape) > 2:
+                     with torch.no_grad():
+                         ori_param = self.ori_model[param_name]

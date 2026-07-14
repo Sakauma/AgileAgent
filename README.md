@@ -1,4 +1,4 @@
-# AgileAgent
+# 灵动Agent
 
 面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。系统包含场景/传感器认知模型、统一 YOLO11s 检测模型和增量目标检测模型库三种不同功能模型，以及面向检测用户的 Web 产品和面向运维人员的 CLI。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
 
@@ -43,7 +43,7 @@ python -m fair_agent.cli doctor
 python scripts/verify_release.py
 ```
 
-GPU 冒烟验收读取推理配置和功能模型注册表，验证 Scene-SensorNet、基础检测器及四个增量权重，并执行 `imgsz=640、batch=32` 的基础模型批量推理：
+GPU 冒烟验收读取推理配置和功能模型注册表，验证 Scene-SensorNet、基础检测器及四个专项权重，执行 `imgsz=640、batch=32` 批量推理，并调用完整 Agent 自动路由与融合链路；本地存在 lock-val 时会自动抽取 IR/SAR 样本：
 
 ```bash
 python scripts/smoke_models.py
@@ -114,12 +114,13 @@ python tools/42_predict_submission.py --config configs/local_infer_gpu.yaml
 | --- | --- | --- | --- |
 | `models/context/scene_sensor_net.pt` | IR/SAR 与 air/forest/sea/urban 认知 | lock sensor 0.98947 / scene 0.76842 | 通过 |
 | `models/base/yolo11s_ir_sar_imgsz640.pt` | IR/SAR 四类统一检测 | lock-all 0.91202 | 已冻结 |
-| `p01_new_small_aircraft_best.pt` | 新类 small_aircraft | 0.55860 / 1.0 | 未通过 |
-| `p02_new_warship_best.pt` | 新类 warship | 0.83539 / 1.0 | 通过 |
-| `p03_new_tank_best.pt` | 新类 tank | 0.74989 / 1.0 | 通过 |
-| `p04_new_soldier_best.pt` | 新类 soldier | 0.76914 / 1.0 | 通过 |
+| `p01_new_small_aircraft_best.pt` | small_aircraft 专项增强演练 | 0.55860 / 1.0 | 未通过、禁用 |
+| `p02_new_warship_best.pt` | warship 目标增量演练 | 0.83539 / 1.0 | 通过 |
+| `p03_new_tank_best.pt` | tank 目标增量演练 | 0.74989 / 1.0 | 通过 |
+| `p04_new_soldier_best.pt` | soldier 目标增量演练 | 0.76914 / 1.0 | 通过 |
+| `strict-p02` 实验档 | warship 严格 3+1 类别增量 | 0.90903 / 1.0 | 通过、CLI 可用 |
 
-检测与增量指标均为 mAP50。p01 权重仅用于复现与后续改进，未达到 `New-mAP50 >= 0.60` 门槛。三模型输入输出契约和协同链路见 `configs/functional_models.yaml` 与 `docs/functional-models.md`；完整路径、状态和摘要见 `models/manifest.json`，文件哈希见 `models/SHA256SUMS.txt`。
+检测与增量指标均为 mAP50。现有 p01-p04 的目标类别已经包含在统一模型中，因此只作为目标增量/专项增强演练。严格 3+1 双折使用三类基础模型模拟未知新类，其中舰船折通过全部门禁并证明类别增量链路成立；飞行器折 New-mAP50 为 0.54062，未注册。三模型输入输出契约和协同链路见 `configs/functional_models.yaml` 与 `docs/functional-models.md`；默认四类模型清单见 `models/manifest.json`，严格实验档独立位于 `models/experiments/strict_3plus1/`。
 
 ## 常用命令
 
@@ -128,6 +129,7 @@ python -m fair_agent.cli doctor
 python -m fair_agent.cli refresh
 python -m fair_agent.cli status --refresh
 python -m fair_agent.cli console
+python -m fair_agent.cli detect --source path/to/image.png --confidence 0.50
 python -m fair_agent.cli decide --sensor sar --class-focus soldier
 python -m fair_agent.cli pipeline --mode execute
 pytest -q
@@ -141,6 +143,57 @@ pytest -q
 
 增量任务统一按增量目标检测处理，以类别增量为主，同时支持目标增量。训练、验证、早停和调参只能读取增量数据集，禁止旧样本 replay；旧类测试数据只允许在增量权重冻结后的评分阶段使用。机器规则位于 `configs/incremental_detection_policy.yaml`，完整流程见 `docs/compliant-incremental-learning.md`。
 
+真正类别增量模型必须使用基础类别集合之外的全局类别 ID，并用增量验证集校准激活阈值。其候选框不依赖旧模型产生同类检测；目标增量模型则使用旧模型同类框进行空间一致性复核。场景识别只参与软路由排序，不会按场景硬拒绝新增能力。
+
+### 严格 3+1 双折实验
+
+仓库提供 small_aircraft 与 warship 两个严格留一类别实验。基础模型只有三个检测通道，基础训练图像与新增类训练图像完全隔离；人员和坦克因始终共现，不用于严格留一实验。所有参数位于 `configs/strict_class_incremental_3plus1.yaml`，在 4090 服务器执行：
+
+```bash
+python tools/70_run_strict_3plus1.py --config configs/strict_class_incremental_3plus1.yaml
+```
+
+双 GPU 可用时两个协议分别使用 GPU 0/1 并行，否则在 GPU 0 按顺序运行。lock-val 只会在基础权重、specialist 权重和阈值冻结后物化。通过全部门禁的实验会生成独立 CLI 档案，不替换默认 Web 模型：
+
+```bash
+python -m fair_agent.cli detect --profile strict-p01 --source path/to/aircraft.png
+python -m fair_agent.cli detect --profile strict-p02 --source path/to/warship.png
+```
+
+当前冻结结果中，`strict-p02` 舰船折通过：New-mAP50 0.90903、KRR 1.00000、四类组合 mAP50 0.84700；`strict-p01` 飞行器折未通过。舰船折在 lock-val 的图像误激活率为 0.33784，因此它是可审计的实验能力，尚不替换默认生产检测链路。
+
+`strict-p02` 属于“冻结基础模型 + 独立 specialist”的历史系统级证据，不作为最终单模型增量结论。新的 clean-room v2 方案将三类教师检测头扩展为一个四类学生检测头，仅开放新增类通道训练，最终只部署 `student_4class.pt`。训练前先运行只读预检：
+
+```bash
+python tools/70_run_strict_3plus1.py --config configs/clean_class_incremental_v2.yaml --check-only
+```
+
+配置和执行边界见 `configs/clean_class_incremental_v2.yaml` 与 `docs/clean-class-incremental-v2.md`；该候选在重新训练并通过全部门禁前不会进入 Web。
+
+最新 `clean-ci-v2-warship-r02` 已完成合规训练，但未通过模型门禁：New-mAP50 为0.28421、KRR为0.99909、四类 mAP50为0.67547。它证明了快速更新、数据隔离和旧类保持闭环，不证明新增类别学习能力已经成立。
+
+### 无旧样本方法比较
+
+仓库提供同一基础权重和同一 p02 数据上的 `DuET-YOLO11s` 与 `YOLO-IOD-lite` 对照实验。全部参数位于 `configs/incremental_method_comparison.yaml`，唯一运行入口为：
+
+```bash
+python tools/71_compare_incremental_methods.py --check-only
+python tools/71_compare_incremental_methods.py
+```
+
+两个方法分别在 GPU 1/2 并行执行；脚本自动核对基础权重 SHA256，并生成不可覆盖的逐方法指标和统一比较报告。实现边界、指标门禁和复核规则见 `docs/incremental-method-comparison.md`。两者均未通过全部门禁前，不注册为 Agent 的活动增量能力。
+
+### 官方完整 YOLO-IOD 复现
+
+为验证轻量适配失败是否来自实现简化，仓库另提供基于官方 YOLO-World(X) 的 strict-p02 复现。r04 根据数据审计禁用不适用的 CPR，保留 IKS 和 CAKD，并在 GPU 1 上通过梯度累积统一为有效 batch 16：
+
+```bash
+python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r04.yaml --check-only
+python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r04.yaml
+```
+
+类别、数据隔离、三阶段训练、lock-val 冻结和验收说明见 `docs/full-yolo-iod-reproduction.md`。完整模型只作为方法参考；只有全部门禁通过后才讨论压缩或蒸馏回 YOLO11s。
+
 Scene-SensorNet 的训练参数全部位于 `configs/scene_sensor_model.yaml`，训练入口为 `python tools/60_train_scene_sensor.py`。固定权重已经随仓库发布，日常启动不会重新训练。
 
 ## 已知限制
@@ -148,6 +201,7 @@ Scene-SensorNet 的训练参数全部位于 `configs/scene_sensor_model.yaml`，
 - x86 版本默认使用 NVIDIA GPU；GPU 推理速度不代表 Ascend 310B 端侧 FPS。
 - 仓库不包含竞赛数据、标签、PDF、SSH 凭据、预测结果或训练运行产物。
 - 官方隐藏测试目录和提交格式尚未确认，因此正式提交门禁默认关闭。
+- 尚未获得外部真实新增类别数据；当前已用严格 3+1 舰船折证明类别增量机制，但其泛化仍需新数据复核。
 - Ascend 310B 转换与推理接口仍待板卡就绪后补充。
 
 Web 与 CLI 的操作说明见 `docs/agent-operations.md`。

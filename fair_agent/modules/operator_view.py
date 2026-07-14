@@ -111,7 +111,7 @@ def render_console(snapshot: Dict[str, Any]) -> str:
     deployment = snapshot["deployment"]
     recommended = snapshot["recommended_action"]
     lines = [
-        "AgileAgent 终端工作台",
+        "灵动Agent终端工作台",
         "=" * 72,
         f"状态        {snapshot['health']}    证据 {snapshot['evidence_mode']}    更新时间 {snapshot.get('generated_at')}",
         "-" * 72,

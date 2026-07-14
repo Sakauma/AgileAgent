@@ -19,6 +19,60 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
     return data
 
 
+def _validate_model_manifest(manifest: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    if int(manifest.get("schema_version") or 0) < 2:
+        errors.append("manifest_schema_version_invalid")
+    raw_class_map = manifest.get("base_model", {}).get("class_map")
+    if not isinstance(raw_class_map, dict) or not raw_class_map:
+        return errors + ["manifest_base_class_map_invalid"]
+    try:
+        base_class_map = {int(class_id): str(name) for class_id, name in raw_class_map.items()}
+    except (TypeError, ValueError):
+        return errors + ["manifest_base_class_map_invalid"]
+    if len(base_class_map) != len(set(base_class_map.values())) or any(not name for name in base_class_map.values()):
+        errors.append("manifest_base_class_map_invalid")
+
+    protocols = manifest.get("incremental_models")
+    if not isinstance(protocols, list) or not protocols:
+        return errors + ["manifest_incremental_models_missing"]
+    protocol_ids: List[str] = []
+    for item in protocols:
+        if not isinstance(item, dict):
+            errors.append("manifest_incremental_model_invalid")
+            continue
+        protocol_id = str(item.get("protocol") or "")
+        protocol_ids.append(protocol_id)
+        mode = item.get("incremental_mode")
+        class_name = str(item.get("class_name") or "")
+        try:
+            global_class_id = int(item.get("global_class_id"))
+            threshold = float(item.get("activation_threshold"))
+        except (TypeError, ValueError):
+            errors.append(f"manifest_incremental_fields_invalid:{protocol_id}")
+            continue
+        if mode not in {"class_incremental", "target_incremental"}:
+            errors.append(f"manifest_incremental_mode_invalid:{protocol_id}")
+        if not class_name or not 0.01 <= threshold <= 1.0 or item.get("evidence_level") not in {
+            "unavailable", "rehearsal_only", "verified"
+        }:
+            errors.append(f"manifest_incremental_fields_invalid:{protocol_id}")
+        if mode == "target_incremental" and base_class_map.get(global_class_id) != class_name:
+            errors.append(f"manifest_target_class_mapping_invalid:{protocol_id}")
+        if mode == "class_incremental":
+            if global_class_id in base_class_map:
+                errors.append(f"manifest_new_class_overlaps_base:{protocol_id}")
+            if item.get("acceptance") == "passed" and (
+                not item.get("calibration_source") or item.get("evidence_level") != "verified"
+            ):
+                errors.append(f"manifest_new_class_calibration_missing:{protocol_id}")
+        if item.get("available") and item.get("acceptance") != "passed":
+            errors.append(f"manifest_unaccepted_protocol_available:{protocol_id}")
+    if any(not value for value in protocol_ids) or len(protocol_ids) != len(set(protocol_ids)):
+        errors.append("manifest_incremental_protocol_ids_invalid")
+    return errors
+
+
 def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> Dict[str, Any]:
     config = load_config(config_path)
     errors: List[str] = []
@@ -43,8 +97,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
     if manifest.get("base_model", {}).get("sha256") != model["expected_sha256"]:
         errors.append("manifest_base_hash_mismatch")
     incremental_models = manifest.get("incremental_models", [])
-    if len(incremental_models) != 4:
-        errors.append("manifest_incremental_model_count_invalid")
+    errors.extend(_validate_model_manifest(manifest))
     functional = validate_functional_models(config["functional_models"]["registry"])
     if not functional["valid"]:
         errors.extend(f"functional_models:{item}" for item in functional["errors"])
@@ -123,7 +176,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
     state = build_blackboard(config)
     if int(state.get("dataset", {}).get("image_count") or 0) != 750:
         errors.append("blackboard_dataset_evidence_missing")
-    if len(state.get("incremental_learning", {}).get("protocols", [])) != 4:
+    if len(state.get("incremental_learning", {}).get("protocols", [])) != len(incremental_models):
         errors.append("blackboard_incremental_evidence_missing")
     if config["runtime"]["server_host"] not in {"127.0.0.1", "localhost", "::1"}:
         errors.append("server_not_loopback")

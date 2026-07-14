@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "profile_id": "strict-p02",
+  "run_id": "strict-20260712-102534",
+  "acceptance": "passed",
+  "incremental_mode": "class_incremental",
+  "base_weight": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/base.pt",
+  "base_sha256": "9616dda7577b1a33cb2210e4a63d2967083017726e6b2cc236f2f86d77c3d1b6",
+  "specialist_weight": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/specialist.pt",
+  "specialist_sha256": "88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3",
+  "base_local_to_global": {
+    "0": 0,
+    "1": 1,
+    "2": 3
+  },
+  "base_local_names": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "tank"
+  },
+  "class_names": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "warship",
+    "3": "tank"
+  },
+  "new_class": "warship",
+  "new_global_id": 2,
+  "activation_threshold": 0.51,
+  "calibration_source": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/calibration.json",
+  "metrics_source": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/metrics.json",
+  "evidence_level": "verified",
+  "new_map50": 0.9090260372388763,
+  "krr": 1.0,
+  "lock_precision": 0.541095890410959,
+  "lock_recall": 0.9753086419753086,
+  "lock_false_activation_rate": 0.33783783783783783
+}

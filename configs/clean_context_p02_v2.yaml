@@ -1,0 +1,51 @@
+seed: 20260713
+
+experiment:
+  id: clean-ci-v2-warship
+  run_id: clean-ci-v2-warship-r02
+  data_scope: base_stage_only
+
+data:
+  train: incremental_clean_v2/clean-ci-v2-warship-r02/strict-p02/base/splits/train.txt
+  dev: incremental_clean_v2/clean-ci-v2-warship-r02/strict-p02/base/splits/val.txt
+  incremental_train: incremental_clean_v2/clean-ci-v2-warship-r02/strict-p02/student/splits/train.txt
+  incremental_dev: incremental_clean_v2/clean-ci-v2-warship-r02/strict-p02/student/splits/val.txt
+  lock: splits/lock_val.txt
+  image_size: 160
+  num_workers: 4
+
+model:
+  channels: [24, 48, 96, 160]
+  dropout: 0.20
+
+train:
+  device: "2"
+  epochs: 80
+  batch: 64
+  learning_rate: 0.002
+  min_learning_rate: 0.00005
+  weight_decay: 0.0001
+  label_smoothing: 0.05
+  sensor_loss_weight: 0.5
+  scene_loss_weight: 1.0
+  patience: 15
+  amp: true
+
+incremental_train:
+  epochs: 30
+  learning_rate: 0.01
+  min_learning_rate: 0.0001
+  patience: 8
+  amp: true
+
+output:
+  weights: runs/detect/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/context/scene_sensor_net.pt
+  metrics: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/context_metrics.json
+  report: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/context_report.md
+
+acceptance:
+  min_lock_sensor_accuracy: 0.90
+  min_lock_scene_accuracy: 0.70
+  min_lock_joint_accuracy: 0.65
+  min_incremental_scene_accuracy: 0.90
+  max_old_scene_row_drift: 0.000001
