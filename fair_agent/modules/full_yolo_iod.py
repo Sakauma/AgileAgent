@@ -58,8 +58,16 @@ def validate_full_yolo_iod_config(config: Mapping[str, Any]) -> None:
     if not devices or len(devices) != len(set(devices)):
         raise ValueError("runtime.devices 必须声明不重复的 GPU")
     if int(config.get("schema_version", 1)) >= 2:
-        if devices != ["1"]:
-            raise ValueError("完整 YOLO-IOD r04 及后续实验只允许使用 GPU 1")
+        if len(devices) != 1 or not devices[0].isdigit():
+            raise ValueError("完整 YOLO-IOD r04 及后续实验必须绑定一张有效 GPU")
+        final_devices = [
+            str(item)
+            for item in config.get("training", {}).get("final", {}).get("devices", devices)
+        ]
+        if final_devices != devices:
+            raise ValueError("最终训练设备必须与 runtime.devices 一致")
+        if str(config.get("evaluation", {}).get("device", "")) != devices[0]:
+            raise ValueError("评测设备必须与 runtime.devices 一致")
         dataset = config.get("dataset", {})
         if dataset.get("incremental_validation_only") is not True:
             raise ValueError("增量阶段验证必须只读取增量数据")
