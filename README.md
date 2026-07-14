@@ -2,30 +2,70 @@
 
 面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。系统登记场景/传感器认知、冻结旧类检测和增量类别专家三种不同功能模型，并提供面向检测用户的 Web 产品和面向运维人员的 CLI。当前 production 为 `generation-1-recheck-v2`：三类基础检测器负责人员、小型飞行器和坦克，舰船由已通过部署复核的类别增量专家负责。四类统一 YOLO11s 仅作上限基准，不参与默认推理、融合或回滚。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
 
-## 首次配置环境
+## 快速开始
 
-要求：x86-64 电脑、NVIDIA GPU、可用的显卡驱动、Python 3.10-3.12、Git，以及约 5 GB 可用空间。仓库为私有仓库，克隆前需获得 GitHub 访问权限。配置脚本按 `python3.12`、`python3.11`、`python3.10` 顺序选择兼容解释器；安装了 `uv` 时由它可靠地创建环境，并仅在本机没有兼容解释器时获取 Python 3.12。脚本不会误用 WSL 中常见的 Python 3.8，也可通过 `PYTHON_BIN` 显式指定。
+### 支持环境
 
-### WSL / Linux
+- x86-64 WSL 2 或 Linux、NVIDIA GPU、可用的 NVIDIA 驱动和 Git。
+- Python `3.10-3.12`；首次安装建议预留至少 `10 GB` 可用空间。
+- 发布包内的 TensorRT engine 使用 TensorRT `10.8.0.43` 构建，并已在 RTX 4060 Laptop（SM `8.9`）验证。其他 TensorRT 版本或 GPU 架构不属于开箱即用范围，Agent 不会自动回退到 CPU 或 PyTorch。
+- 仓库为私有仓库，克隆前需获得 GitHub 访问权限。
+
+先在 WSL/Linux 终端确认 GPU 可见：
+
+```bash
+nvidia-smi
+```
+
+通过 HTTPS 克隆仓库：
+
+```bash
+git clone https://github.com/Sakauma/AgileAgent.git
+cd AgileAgent
+```
+
+已配置 GitHub SSH 密钥时，也可使用：
 
 ```bash
 git clone git@github.com:Sakauma/AgileAgent.git
 cd AgileAgent
-chmod +x scripts/bootstrap_x86.sh
+```
+
+首次克隆只需执行一次环境配置：
+
+```bash
+chmod +x scripts/bootstrap_x86.sh scripts/start_agent.sh
 ./scripts/bootstrap_x86.sh
 ```
 
-首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch、TensorRT 和智能体依赖、运行环境诊断，并在 GPU 0 上校验模型权重、TensorRT engine 及三种功能。配置完成后脚本退出，不启动工作台。
-
-配置脚本优先复用显式指定的 `AGILE_AGENT_PYTHON`、项目 `.venv` 或当前激活的 Conda/venv。现有环境只要满足 Python 3.10-3.12、`torch>=2.0`、CUDA 可用、`torch.version.cuda` 有效且 torchvision CUDA NMS 可执行，就会跳过 PyTorch 安装；其余依赖达到 `pyproject.toml` 的最低兼容版本且 `pip check` 无冲突时也会整体跳过安装。当前 RTX 4060 engine 因序列化 ABI 要求固定使用 TensorRT `10.8.0.43` 和 SM `8.9`，不匹配时必须重新导出，禁止自动回退。`2.5.1+cu124` 和 `constraints-agent.txt` 仅作为新环境的已验证默认组合与严格复现选项。
-
-例如直接复用已有的 `egor` 环境：
+配置成功后启动 Web 工作台：
 
 ```bash
-AGILE_AGENT_PYTHON=/home/sakauma/data/miniconda3/envs/egor/bin/python ./scripts/bootstrap_x86.sh
+./scripts/start_agent.sh
 ```
 
-通过全部验收后，脚本会把选中的解释器路径写入本地 `.agent-python`；后续直接运行 `./scripts/start_agent.sh` 即可，无需再次传入环境变量。若兼容环境不存在，脚本才会创建 `.venv` 并安装默认组合。若显卡驱动需要其他 CUDA 软件包版本，可按 PyTorch 官方安装页设置 `PYTORCH_INDEX_URL`、`TORCH_VERSION` 和 `TORCHVISION_VERSION`。`doctor` 会列出 CUDA状态、GPU数量和显卡名称；默认GPU不可用时脚本会停止。
+浏览器访问 `http://127.0.0.1:8501`。终端按 `Ctrl+C` 停止服务；以后启动只需重新运行 `./scripts/start_agent.sh`，不会安装或修改依赖。
+
+## 首次配置说明
+
+`bootstrap_x86.sh` 会创建或复用 Python 环境、补齐 CUDA 版 PyTorch、TensorRT 和 Agent 依赖，然后在 GPU 0 上执行环境诊断、权重校验、TensorRT engine 校验和三种功能模型冒烟测试。配置完成后脚本退出，不会启动 Web 服务。
+
+脚本按以下顺序选择环境：显式指定的 `AGILE_AGENT_PYTHON`、项目 `.venv`、当前激活的 venv/Conda，最后才创建新的 `.venv`。现有环境满足 Python 3.10-3.12、`torch>=2.0`、CUDA 可用、`torch.version.cuda` 有效且 torchvision CUDA NMS 可执行时，会跳过 PyTorch 安装；其余依赖达到 `pyproject.toml` 的最低版本且 `pip check` 无冲突时也会跳过安装。
+
+复用已有兼容环境时，传入其 Python 绝对路径：
+
+```bash
+AGILE_AGENT_PYTHON=/path/to/compatible/env/bin/python ./scripts/bootstrap_x86.sh
+```
+
+没有兼容环境时，脚本按 `python3.12`、`python3.11`、`python3.10` 顺序选择解释器；安装了 `uv` 时可由 `uv` 创建环境。也可通过 `PYTHON_BIN` 指定解释器。脚本不会使用 Python 3.8。
+
+配置通过后，所选解释器会写入本地 `.agent-python`。`start_agent.sh` 会自动读取它；无需激活环境。执行本文后续的 `python` 或 `agile-agent` 手动命令前，请在每个新终端运行：
+
+```bash
+AGENT_PYTHON="$(cat .agent-python)"
+source "$(dirname "$AGENT_PYTHON")/activate"
+```
 
 需要严格复现已验收依赖组合时，可手动安装：
 
@@ -35,7 +75,7 @@ python -m pip install -c constraints-agent.txt -e ".[workbench,inference,export,
 python -m fair_agent.cli doctor
 ```
 
-本机已验证组合为：Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124`、Ultralytics `8.4.92`、TensorRT `10.8.0.43`、ONNX `1.17.0`、ONNX Runtime GPU `1.23.2`，部署显卡为 RTX 4060 Laptop（SM `8.9`）。开发环境路径为 `/home/sakauma/data/miniconda3/envs/sam_hq2_dinov3`；其他机器不要求使用同名环境。
+已验证组合为：Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124`、Ultralytics `8.4.92`、TensorRT `10.8.0.43`、ONNX `1.17.0`、ONNX Runtime GPU `1.23.2`，部署显卡为 RTX 4060 Laptop（SM `8.9`）。环境名称和安装路径不作要求。
 
 ## 发布验收
 
@@ -115,8 +155,8 @@ python tools/42_predict_submission.py --config configs/local_infer_gpu.yaml
 | 模型 | 功能 | 核心指标 | 验收 |
 | --- | --- | --- | --- |
 | `models/context/scene_sensor_net.pt` | IR/SAR 与 air/forest/sea/urban 认知 | lock sensor 0.98947 / scene 0.76842 | 通过 |
-| `strict_p02_base_v1` | 三类冻结基础检测 | TensorRT复核旧类 mAP50 0.82738 | `generation-1-recheck-v2`旧类所有者 |
-| `strict_p02_warship_recheck_v2` | 舰船类别增量专家 | TensorRT复核 New-mAP50 0.79500 / KRR 1.0 | production，precision 1.0 / 误激活率 0.0 |
+| `strict_p02_base_v1` | 三类冻结基础检测 | 单模型旧类 mAP50 0.82738 | `generation-1-recheck-v2`旧类所有者 |
+| `strict_p02_warship_recheck_v2` | 舰船类别增量专家 | 组合系统 New-mAP50 0.79500 / KRR 1.0 | production，precision 1.0 / 误激活率 0.0 |
 | `models/base/yolo11s_ir_sar_imgsz640.pt` | IR/SAR 四类统一检测 | lock-all 0.91202 | `benchmark_only` |
 | `p01_new_small_aircraft_best.pt` | small_aircraft 专项增强演练 | 0.55860 / 1.0 | 未通过、禁用 |
 | `p02_new_warship_best.pt` | warship 目标增量演练 | 0.83539 / 1.0 | 通过 |
@@ -200,7 +240,7 @@ python -m fair_agent.cli detect --profile strict-p01 --source path/to/aircraft.p
 python -m fair_agent.cli detect --profile strict-p02 --source path/to/warship.png
 ```
 
-历史 `strict-p02` 阈值 0.51 的原始舰船折虽然通过核心门槛，但 lock precision 约 0.5411、图像误激活率约 0.3378，因此仍作为未上线的 `generation-1` 证据保留。独立复核版本仅依据增量 dev 将阈值固定为 0.63，并加入跨类别冲突抑制；`generation-1-recheck-v2` 在完整 lock-val 上取得旧类 mAP50 0.81694、New-mAP50 0.80500、KRR 1.0、组合 mAP50 0.81396、precision 1.0 和误激活率 0.0，现已切入 production。`generation-0` 始终保留为回滚点。
+历史 `strict-p02` 阈值 0.51 的原始舰船折虽然通过核心门槛，但 lock precision 约 0.5411、图像误激活率约 0.3378，因此仍作为未上线的 `generation-1` 证据保留。独立复核版本仅依据增量 dev 将阈值固定为 0.63，并加入跨类别冲突抑制；当前注册表记录的 `generation-1-recheck-v2` 完整 lock-val 指标为旧类 mAP50 0.82738、New-mAP50 0.79500、KRR 1.0、组合 mAP50 0.81929、precision 1.0 和误激活率 0.0，现已切入 production。`generation-0` 始终保留为回滚点。
 
 `strict-p02` 属于“冻结基础模型 + 独立 specialist”的历史系统级证据，不作为最终单模型增量结论。新的 clean-room v2 方案将三类教师检测头扩展为一个四类学生检测头，仅开放新增类通道训练，最终只部署 `student_4class.pt`。训练前先运行只读预检：
 
@@ -236,13 +276,21 @@ python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r05_gpu3
 
 Scene-SensorNet 的训练参数全部位于 `configs/scene_sensor_model.yaml`，训练入口为 `python tools/60_train_scene_sensor.py`。固定权重已经随仓库发布，日常启动不会重新训练。
 
+## 常见问题
+
+- `nvidia-smi` 不可用：先修复 WSL/Linux 的 NVIDIA 驱动可见性，再运行配置脚本。不要通过关闭 GPU 门禁继续安装。
+- `doctor` 报告 TensorRT 版本或 engine 不兼容：不要绕过检查。发布 engine 只保证在 README 声明的组合上可用；其他 GPU 或 TensorRT 版本需要由维护者重新导出 engine、更新受保护哈希并重新执行发布验收。
+- 端口 `8501` 已占用：激活记录在 `.agent-python` 中的环境后，使用 `agile-agent config set runtime.server_port 8502 --config configs/agent_pipeline.yaml` 修改端口，再重启 Agent。
+- 新终端中找不到 `agile-agent`：先按“首次配置说明”激活 `.agent-python` 对应环境；直接运行 `start_agent.sh` 不需要激活。
+- 首次启动比后续启动慢：TensorRT engine 和模型需要首次载入 GPU，等待终端出现工作台地址后再打开页面。
+
 ## 已知限制
 
 - x86 版本默认使用 NVIDIA GPU；GPU 推理速度不代表 Ascend 310B 端侧 FPS。
 - 仓库不包含竞赛数据、标签、PDF、SSH 凭据、预测结果或训练运行产物。
 - 官方隐藏测试目录和提交格式尚未确认，因此正式提交门禁默认关闭。
 - 尚未获得外部真实新增类别数据；当前舰船 3+1 已通过内部部署门禁，但外部数据泛化仍需官方隐藏测试验证。
-- RTX 4060 上 TensorRT FP16 三轮 API 复核的中位轮平均为 `32.88 ms`、P95 为 `39.58 ms`、20张批量为 `47.81 FPS`，8并发请求全部成功，已通过 `33.3 ms / 50 ms / 30 FPS` 门禁。报告位于 `reports/api_performance/20260715-002017-036971/benchmark.json`。这些 engine 仅适用于 TensorRT `10.8.0.43` 与 SM `8.9`；完整 C++ ABI 尚未切入 production。
+- RTX 4060 上 TensorRT FP16 三轮 API 复核的中位轮平均为 `32.88 ms`、P95 为 `39.58 ms`、20张批量为 `47.81 FPS`，8并发请求全部成功，已通过 `33.3 ms / 50 ms / 30 FPS` 门禁。原始性能报告属于本地 `reports/` 产物，不随仓库分发。这些 engine 仅在 TensorRT `10.8.0.43` 与 RTX 4060 Laptop（SM `8.9`）完成验证；完整 C++ ABI 尚未切入 production。
 - Ascend 310B 转换与推理接口仍待板卡就绪后补充。
 
 Web 与 CLI 的操作说明见 `docs/agent-operations.md`。
