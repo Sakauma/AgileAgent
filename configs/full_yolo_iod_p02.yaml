@@ -10,7 +10,7 @@ experiment:
 
 official_patch:
   path: patches/yolo_iod_single_class_grad_mask.patch
-  purpose: 单类 GPS 阶段跳过没有重要性掩码的参数
+  purpose: 修复 GPS 掩码缺失与重要性扫描后的梯度累积计数
 
 paths:
   official_repo: /project/IDIP/MAJ/code/YOLO-IOD

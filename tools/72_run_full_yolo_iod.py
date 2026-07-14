@@ -380,9 +380,11 @@ def run_all(config: Mapping[str, Any], *, prepare_only: bool = False) -> Dict[st
     if base_checkpoint.is_file():
         _record_skip(action_log, "01_base_train", base_checkpoint)
     else:
+        base_work_dir = Path(manifest["generated_configs"]["base_work_dir"])
+        base_command = _resume_command(command_manifest["commands"]["base"], base_work_dir)
         _run_logged(
             "01_base_train",
-            command_manifest["commands"]["base"],
+            base_command,
             cwd=cwd,
             env=environment,
             log_root=report_root,
@@ -391,9 +393,13 @@ def run_all(config: Mapping[str, Any], *, prepare_only: bool = False) -> Dict[st
     if current_checkpoint.is_file():
         _record_skip(action_log, "02_current_teacher_train", current_checkpoint)
     else:
+        current_work_dir = Path(manifest["generated_configs"]["current_work_dir"])
+        current_command = _resume_command(
+            command_manifest["commands"]["current"], current_work_dir
+        )
         _run_logged(
             "02_current_teacher_train",
-            command_manifest["commands"]["current"],
+            current_command,
             cwd=cwd,
             env=environment,
             log_root=report_root,

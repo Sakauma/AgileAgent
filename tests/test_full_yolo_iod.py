@@ -113,6 +113,16 @@ def test_resume_command_passes_explicit_checkpoint(tmp_path: Path) -> None:
     assert command == ["python", "train.py", "--resume", str(checkpoint)]
 
 
+def test_official_patch_restores_accumulation_count_after_gps_scan() -> None:
+    root = Path(__file__).resolve().parents[1]
+    patch = (root / "patches/yolo_iod_single_class_grad_mask.patch").read_text(
+        encoding="utf-8"
+    )
+    assert "train_iter = self._train_loop.iter" in patch
+    assert "self._train_loop._iter = train_iter" in patch
+    assert "self.optim_wrapper.initialize_count_status(" in patch
+
+
 def test_r04_disables_cpr_and_reaches_effective_batch_16() -> None:
     root = Path(__file__).resolve().parents[1]
     config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_p02_r04.yaml")
