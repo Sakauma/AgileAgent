@@ -9,3 +9,6 @@ pillow==12.0.0
 pyyaml==6.0.3
 pytest==9.0.2
 httpx2==2.5.0
+tensorrt-cu12==10.8.0.43
+onnx==1.17.0
+onnxslim==0.1.94

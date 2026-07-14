@@ -1,3 +1,4 @@
+schema_version: 2
 seed: 20260705
 
 runtime:
@@ -8,23 +9,137 @@ runtime:
   server_port: 8501
 
 web:
+  generation_registry: models/generations.json
+  generation_channel: production
   detector_weights: models/base/yolo11s_ir_sar_imgsz640.pt
   functional_registry: configs/functional_models.yaml
   model_manifest: models/manifest.json
-  predict:
-    imgsz: 640
-    iou: 0.70
-    max_det: 300
-  incremental_demo:
-    enabled: true
-    require_acceptance_passed: true
-    auto_consensus_iou: 0.30
-    fusion_iou: 0.60
-    max_specialists_per_image: 4
-  cache:
-    max_items: 4
-    ttl_seconds: 1800
-    max_bytes: 536870912
+
+inference:
+  backend: tensorrt_engine
+  imgsz: 640
+  specialist_imgsz: 512
+  iou: 0.70
+  max_det: 300
+  batch_size: 1
+  confidence_min: 0.01
+  confidence_max: 1.00
+  confidence_default: 0.50
+  warmup_iterations: 1
+  warmup_batch_size: 1
+  warmup_width: 640
+  warmup_height: 512
+  preload_specialists: true
+  quantize: null
+  cudnn_benchmark: true
+  compile: false
+
+routing:
+  incremental_enabled: true
+  require_acceptance_passed: true
+  consensus_iou: 0.30
+  fusion_iou: 0.60
+  max_specialists_per_image: 4
+  conflict_iou: 0.50
+  conflict_base_confidence: 0.50
+  specialist_margin: 0.15
+  detection_evidence_weight: 0.70
+  context_evidence_weight: 0.30
+  neutral_context_score: 0.50
+  default_routing_prior: 0.50
+  parallel_model_execution: true
+  parallel_context_execution: true
+  parallel_context_batch_execution: true
+  max_model_workers: 6
+
+limits:
+  max_file_bytes: 20971520
+  max_batch_files: 20
+  max_batch_bytes: 209715200
+  max_image_pixels: 25000000
+  allowed_image_formats: [PNG, JPEG, BMP, TIFF]
+  decode_backend: opencv
+  decode_workers: 4
+
+storage:
+  max_items: 4
+  ttl_seconds: 1800
+  max_bytes: 536870912
+
+ui:
+  history_limit: 20
+  result_cache_limit: 10
+  health_poll_ms: 15000
+  toast_duration_ms: 4200
+  default_view: detect
+
+performance:
+  target_api_fps: 30
+  target_p95_ms: 50
+  auto_start_server: true
+  server_start_timeout_seconds: 180
+  request_timeout_seconds: 180
+  benchmark_rounds: 3
+  warmup_requests: 3
+  benchmark_split: splits/lock_val.txt
+  report_root: reports/api_performance
+  concurrent_requests: 8
+  batch_probe_size: 20
+
+generation:
+  registry: models/generations.json
+  recheck_lock_split: splits/lock_val.txt
+  report_root: reports/generation_rechecks
+  candidate_id: generation-1-recheck-v2
+  calibrated_threshold: 0.63
+  acceptance:
+    min_base_map50: 0.80
+    min_new_map50: 0.60
+    min_krr: 0.95
+    min_combined_map50: 0.80
+    min_lock_precision: 0.70
+    max_false_activation_rate: 0.15
+
+native_backend:
+  library: build/native/libagile_agent_tensorrt.so
+  base_engine: models/engines/strict_p02_base_v1_fp16.engine
+  context_engine: models/engines/scene_sensor_net_v1_fp16.engine
+  precision: fp16
+  require_exact_gpu: true
+  validated: false
+
+tensorrt_backend:
+  expected_version: 10.8.0.43
+  expected_compute_capability: "8.9"
+  require_exact_gpu: true
+  validated: true
+  precision: fp16
+  workspace_gib: 4
+  dynamic: false
+  export:
+    device: "0"
+    overwrite: false
+    onnx_opset: 17
+    simplify: true
+    context_checkpoint: models/context/scene_sensor_net.pt
+    context_min_batch: 1
+    context_opt_batch: 8
+  context_engine:
+    path: models/engines/rtx4060_trt10_8/scene_sensor_net_fp16_dynamic_b1_20_160.engine
+    sha256: 1cec699d884eb31e7ba81a1b1e515b5b1f33b33cd4ea19640975f832481c7be6
+    imgsz: 160
+    batch_size: 20
+  engines:
+    models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/base.pt:
+      path: models/engines/rtx4060_trt10_8/strict_p02_base_fp16_b1_640.engine
+      sha256: 95ce788ed8be933c7d06b8d77bfe1382b26d68fdd6668478c070543cee494d04
+      imgsz: 640
+      batch_size: 1
+    models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/specialist.pt:
+      path: models/engines/rtx4060_trt10_8/strict_p02_warship_fp16_b1_512.engine
+      sha256: 5927599daa96068efa6b2dcc70946818aae7cb5a2f901fc13aaebad838ed665d
+      imgsz: 512
+      batch_size: 1
 
 model:
   weights: models/base/yolo11s_ir_sar_imgsz640.pt
@@ -32,6 +147,7 @@ model:
 
 assets:
   manifest: models/manifest.json
+  generation_registry: models/generations.json
   checksums: models/SHA256SUMS.txt
   required:
     - models/base/yolo11s_ir_sar_imgsz640.pt
@@ -42,6 +158,7 @@ assets:
     - models/context/scene_sensor_net.pt
     - models/context/scene_sensor_metrics.json
     - models/manifest.json
+    - models/generations.json
     - demo_artifacts/agent_demo_state.json
 
 automation:

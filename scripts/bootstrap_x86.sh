@@ -108,6 +108,7 @@ requirements = {
     "cv2": (4, 8),
     "pytest": (8, 0),
     "httpx2": (2, 5),
+    "tensorrt": (10, 8),
 }
 
 for module_name, minimum in requirements.items():
@@ -118,6 +119,10 @@ for module_name, minimum in requirements.items():
     numbers = tuple(int(value) for value in re.findall(r"\d+", str(raw_version))[:len(minimum)])
     if len(numbers) < len(minimum) or numbers < minimum:
         raise SystemExit(1)
+
+import tensorrt
+if tensorrt.__version__ != "10.8.0.43":
+    raise SystemExit(1)
 PY
   "${AGENT_PYTHON}" -m pip check >/dev/null 2>&1
 }
@@ -138,7 +143,7 @@ if dependencies_compatible; then
   printf '现有 Agent 依赖完整且无冲突，跳过安装。\n'
 else
   printf '检测到缺失或不兼容依赖，按最低兼容范围补充安装。\n'
-  "${AGENT_PYTHON}" -m pip install -e ".[workbench,inference,dev]"
+  "${AGENT_PYTHON}" -m pip install -e ".[workbench,inference,export,dev]"
   if ! dependencies_compatible; then
     printf '依赖安装后仍存在缺失、版本过低或包冲突。\n' >&2
     "${AGENT_PYTHON}" -m pip check >&2 || true

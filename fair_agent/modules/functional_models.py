@@ -8,6 +8,7 @@ import yaml
 
 from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.hashes import hash_if_exists
+from fair_agent.modules.model_generations import load_generation_registry
 from fair_agent.modules.strict_incremental import discover_experiment_profiles
 
 
@@ -42,6 +43,39 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
     strict_profiles = discover_experiment_profiles()
     if strict_profiles["errors"]:
         errors.extend(f"strict_class_incremental_profile_invalid:{item}" for item in strict_profiles["errors"])
+    production_incremental: Dict[str, Any] | None = None
+    generation_registry_path = registry.get("generation_registry")
+    if not generation_registry_path:
+        errors.append("functional_generation_registry_missing")
+    else:
+        try:
+            generations = load_generation_registry(generation_registry_path)
+            production_id = str(generations["channels"]["production"])
+            production = generations["generations_by_id"][production_id]
+            if (
+                production.get("status") == "active"
+                and production.get("acceptance", {}).get("deployment_recheck_passed") is True
+            ):
+                owner_ids = set(production.get("class_owners", {}).values())
+                experts = [
+                    generations["models_by_id"][str(model_id)]
+                    for model_id in owner_ids
+                    if generations["models_by_id"][str(model_id)].get("role") == "class_incremental_expert"
+                ]
+                if experts:
+                    expert = experts[0]
+                    global_class_id = int(next(iter(expert["owns_classes"])))
+                    production_incremental = {
+                        "generation_id": production_id,
+                        "model_id": expert["id"],
+                        "class_name": generations["class_map"][global_class_id],
+                        "global_class_id": global_class_id,
+                        "activation_threshold": float(expert["activation_threshold"]),
+                        "metrics": dict(production.get("metrics", {})),
+                        "deployment_accepted": True,
+                    }
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            errors.append(f"functional_generation_registry_invalid:{exc}")
     summaries = []
     for item in entries:
         if not isinstance(item, dict):
@@ -173,6 +207,7 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     "true_class_incremental_verified": bool(
                         manifest_entry.get("true_class_incremental_verified")
                         or strict_profiles["true_class_incremental_verified"]
+                        or production_incremental
                     ),
                     "supported_modes": manifest_entry.get("supported_modes"),
                     "learning_data_scope": manifest_entry.get("learning_data_scope"),
@@ -180,6 +215,8 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     "protocol_count": len(protocols),
                     "passed_protocol_count": passed_count,
                     "strict_verified_count": strict_profiles["verified_count"],
+                    "strict_core_verified_count": strict_profiles["core_verified_count"],
+                    "production_class_incremental": production_incremental,
                     "strict_verified_profiles": [
                         {
                             "profile_id": profile["profile_id"],
@@ -188,6 +225,7 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                             "krr": profile["krr"],
                             "activation_threshold": profile["activation_threshold"],
                             "lock_false_activation_rate": profile.get("lock_false_activation_rate"),
+                            "deployment_accepted": profile.get("deployment_accepted"),
                         }
                         for profile in strict_profiles["profiles"]
                     ],
@@ -224,6 +262,13 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
     if len(collaboration) < 2:
         errors.append("functional_collaboration_incomplete")
 
+    effective_strict_profiles = {
+        **strict_profiles,
+        "true_class_incremental_verified": bool(
+            strict_profiles["true_class_incremental_verified"] or production_incremental
+        ),
+        "production_profile": production_incremental,
+    }
     return {
         "valid": not errors,
         "errors": errors,
@@ -235,5 +280,5 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
         "all_ascend_310b_ready": bool(summaries) and all(item["ascend_310b"] for item in summaries),
         "models": summaries,
         "collaboration": collaboration,
-        "strict_class_incremental": strict_profiles,
+        "strict_class_incremental": effective_strict_profiles,
     }

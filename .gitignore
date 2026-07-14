@@ -34,6 +34,8 @@ venv/
 # Versioned release weights. Other checkpoints remain ignored.
 !/models/
 !/models/**
+/models/**/*.onnx
+/models/experiments/**/*.engine
 /data/
 
 # Local credentials and environment files
@@ -58,8 +60,11 @@ venv/
 !/tools/70_run_strict_3plus1.py
 !/tools/71_compare_incremental_methods.py
 !/tools/72_run_full_yolo_iod.py
+!/tools/80_export_tensorrt_engines.py
 
 /configs/*
+!/configs/incremental/
+!/configs/incremental/warship_3plus1.yaml
 !/configs/agent_pipeline.yaml
 !/configs/base_dataset.yaml
 !/configs/incremental_no_old_distill_yolo11s.yaml

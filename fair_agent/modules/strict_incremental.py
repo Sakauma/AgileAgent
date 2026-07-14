@@ -228,6 +228,34 @@ def build_protocol_dataset(
     if any(intersections.values()):
         raise RuntimeError(f"严格增量集合存在交集：{intersections}")
 
+    old_raw_stems = sorted(
+        (base_train_stems | base_val_stems) & (incremental_train_stems | incremental_val_stems)
+    )
+    base_source_files = selected["base"]["train"] + selected["base"]["val"]
+    incremental_source_files = selected["incremental"]["train"] + selected["incremental"]["val"]
+    base_image_hashes = {sha256_file(path) for path in base_source_files}
+    incremental_image_hashes = {sha256_file(path) for path in incremental_source_files}
+    base_label_hashes = {sha256_file(source_label(path)) for path in base_source_files}
+    incremental_label_hashes = {sha256_file(source_label(path)) for path in incremental_source_files}
+    old_raw_content_hashes = sorted(base_image_hashes & incremental_image_hashes)
+    old_raw_label_hashes = sorted(base_label_hashes & incremental_label_hashes)
+    old_raw_image_paths = sorted(
+        rel_path(path)
+        for path in incremental_source_files
+        if path.stem in base_train_stems | base_val_stems or sha256_file(path) in base_image_hashes
+    )
+    old_raw_label_paths = sorted(
+        rel_path(source_label(path))
+        for path in incremental_source_files
+        if path.stem in base_train_stems | base_val_stems
+        or sha256_file(source_label(path)) in base_label_hashes
+    )
+    feature_cache_files = sorted(
+        rel_path(path)
+        for path in (output_dir / "incremental").rglob("*")
+        if path.is_file() and path.suffix.lower() in {".cache", ".npy", ".npz", ".pt"}
+    )
+
     source_hashes = {
         name: sha256_file(resolve_path(path)) for name, path in source_splits.items()
     }
@@ -257,7 +285,15 @@ def build_protocol_dataset(
         "specialist_nc": 1,
         "student_nc": 4 if unified_student else None,
         "unified_student_enabled": unified_student,
-        "old_raw_image_count": 0,
+        "old_raw_stems": old_raw_stems,
+        "old_raw_content_hashes": old_raw_content_hashes,
+        "old_raw_label_hashes": old_raw_label_hashes,
+        "old_raw_image_paths": old_raw_image_paths,
+        "old_raw_label_paths": old_raw_label_paths,
+        "old_raw_image_count": len(old_raw_image_paths),
+        "old_raw_label_count": len(old_raw_label_paths),
+        "old_feature_cache_count": len(feature_cache_files),
+        "feature_cache_files": feature_cache_files,
         "original_data_modified": False,
         "lock_materialized_after_freeze": include_lock,
         "base_dataset": rel_path(output_dir / "base" / "dataset.yaml"),
@@ -267,6 +303,14 @@ def build_protocol_dataset(
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    if (
+        manifest["old_raw_image_count"]
+        or manifest["old_raw_label_count"]
+        or manifest["old_feature_cache_count"]
+    ):
+        raise RuntimeError(
+            "增量训练视图包含旧图、旧标签或旧特征缓存；已在manifest中记录并拒绝训练"
+        )
     return manifest
 
 
@@ -418,6 +462,41 @@ def evaluate_ap50(
     return {
         "map50": mean(per_class.values()) if per_class else 0.0,
         "per_class_ap50": per_class,
+    }
+
+
+def retention_metrics(
+    before_predictions: Sequence[Mapping[str, Any]],
+    after_predictions: Sequence[Mapping[str, Any]],
+    ground_truth: Sequence[Mapping[str, Any]],
+    old_class_ids: Iterable[int],
+) -> Dict[str, Any]:
+    """Recompute old-class retention from the actual pre/post prediction records."""
+    old_ids = {int(value) for value in old_class_ids}
+    before_metrics = evaluate_ap50(before_predictions, ground_truth, old_ids)
+    after_metrics = evaluate_ap50(after_predictions, ground_truth, old_ids)
+
+    def canonical(rows: Sequence[Mapping[str, Any]]) -> list[tuple[Any, ...]]:
+        return sorted(
+            (
+                str(row["image_id"]),
+                int(row["class_id"]),
+                -float(row["confidence"]),
+                tuple(float(value) for value in row["xyxy"]),
+            )
+            for row in rows
+            if int(row["class_id"]) in old_ids
+        )
+
+    before = float(before_metrics["map50"])
+    after = float(after_metrics["map50"])
+    return {
+        "old_map50_before": before,
+        "old_map50_after": after,
+        "krr": after / before if before else 0.0,
+        "old_prediction_equivalent": canonical(before_predictions) == canonical(after_predictions),
+        "before_metrics": before_metrics,
+        "after_metrics": after_metrics,
     }
 
 
@@ -580,6 +659,10 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     profile["lock_precision"] = metrics.get("lock_deployment_metrics", {}).get("precision")
     profile["lock_recall"] = metrics.get("lock_deployment_metrics", {}).get("recall")
     profile["lock_false_activation_rate"] = metrics.get("false_activation", {}).get("false_activation_rate")
+    profile["deployment_accepted"] = bool(
+        float(profile["lock_precision"] or 0.0) >= 0.70
+        and float(profile["lock_false_activation_rate"] or 1.0) <= 0.15
+    )
     return profile
 
 
@@ -594,10 +677,13 @@ def discover_experiment_profiles(root: str | Path | None = None) -> Dict[str, An
                 profiles.append(load_experiment_profile(profile_id, profile_root))
             except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
                 errors.append(f"{profile_id}:{exc}")
+    deployment_profiles = [profile for profile in profiles if profile.get("deployment_accepted")]
     return {
         "registry": rel_path(profile_root),
-        "verified_count": len(profiles),
-        "true_class_incremental_verified": bool(profiles),
+        "core_verified_count": len(profiles),
+        "verified_count": len(deployment_profiles),
+        "core_class_incremental_verified": bool(profiles),
+        "true_class_incremental_verified": bool(deployment_profiles),
         "profiles": profiles,
         "errors": errors,
     }

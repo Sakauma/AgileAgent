@@ -3,15 +3,19 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 from fair_agent.core.audit import make_run_dir, write_pipeline_artifacts
 from fair_agent.core.blackboard import build_blackboard, write_blackboard
-from fair_agent.core.config import ROOT, configured_python, load_config, rel_path, resolve_path
+from fair_agent.core.config import ROOT, configured_python, get_key, load_config, rel_path, resolve_path
+from fair_agent.core.hashes import sha256_file
 from fair_agent.executors.local import append_log, run_command
 from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.functional_models import validate_functional_models
@@ -24,7 +28,13 @@ from fair_agent.ui.console import run_console_frontend
 REQUIRED_MODULES = ["yaml", "PIL"]
 WORKBENCH_MODULES = ["pandas", "starlette", "uvicorn", "multipart"]
 INFERENCE_MODULES = ["ultralytics", "cv2", "torch", "torchvision"]
-ALL_MODULES = REQUIRED_MODULES + WORKBENCH_MODULES + INFERENCE_MODULES
+TENSORRT_MODULES = ["tensorrt"]
+ALL_MODULES = REQUIRED_MODULES + WORKBENCH_MODULES + INFERENCE_MODULES + TENSORRT_MODULES
+
+
+def load_args_config(args: argparse.Namespace) -> Dict[str, Any]:
+    overrides = list(getattr(args, "config_overrides", []) or [])
+    return load_config(args.config, overrides) if overrides else load_config(args.config)
 
 
 def check_module(module: str) -> bool:
@@ -48,8 +58,13 @@ def check_external_python(path: Path) -> Dict[str, Any]:
         "        'cuda_available': bool(torch.cuda.is_available()),",
         "        'cuda_device_count': int(torch.cuda.device_count()),",
         "        'cuda_devices': [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())],",
+        "        'cuda_capabilities': ['.'.join(map(str, torch.cuda.get_device_capability(i))) for i in range(torch.cuda.device_count())],",
         "    }",
-        "print(json.dumps({'executable': sys.executable, 'version': sys.version.split()[0], 'modules': module_status, 'accelerator': accelerator}, ensure_ascii=False))",
+        "tensorrt_version = None",
+        "if module_status.get('tensorrt'):",
+        "    import tensorrt",
+        "    tensorrt_version = tensorrt.__version__",
+        "print(json.dumps({'executable': sys.executable, 'version': sys.version.split()[0], 'modules': module_status, 'accelerator': accelerator, 'tensorrt_version': tensorrt_version}, ensure_ascii=False))",
     ])
     proc = subprocess.run([str(path), "-c", code], text=True, capture_output=True, timeout=60)
     result["returncode"] = proc.returncode
@@ -61,7 +76,7 @@ def check_external_python(path: Path) -> Dict[str, Any]:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_args_config(args)
     py = configured_python(config)
     external = check_external_python(py)
     runtime_cfg = config.get("runtime", {})
@@ -72,6 +87,50 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         and int(default_device) < int(accelerator.get("cuda_device_count") or 0)
     )
     state = build_blackboard(config)
+    backend_name = str(config["inference"]["backend"])
+    native_assets = {
+        key: resolve_path(config["native_backend"][key]).is_file()
+        for key in ("library", "base_engine", "context_engine")
+    }
+    tensorrt_cfg = config["tensorrt_backend"]
+    tensorrt_assets = {}
+    for source, entry in tensorrt_cfg["engines"].items():
+        path = resolve_path(entry["path"])
+        actual = sha256_file(path) if path.is_file() else None
+        tensorrt_assets[source] = {
+            "path": rel_path(path),
+            "exists": path.is_file(),
+            "sha256_valid": actual == str(entry["sha256"]),
+        }
+    context_entry = tensorrt_cfg["context_engine"]
+    context_path = resolve_path(context_entry["path"])
+    context_actual = sha256_file(context_path) if context_path.is_file() else None
+    tensorrt_assets["scene_sensor_net"] = {
+        "path": rel_path(context_path),
+        "exists": context_path.is_file(),
+        "sha256_valid": context_actual == str(context_entry["sha256"]),
+    }
+    capabilities = list(accelerator.get("cuda_capabilities") or [])
+    capability = capabilities[int(default_device)] if int(default_device) < len(capabilities) else None
+    tensorrt_ready = (
+        bool(external.get("modules", {}).get("tensorrt"))
+        and str(external.get("tensorrt_version")) == str(tensorrt_cfg["expected_version"])
+        and (
+            not tensorrt_cfg["require_exact_gpu"]
+            or capability == str(tensorrt_cfg["expected_compute_capability"])
+        )
+        and tensorrt_cfg["validated"] is True
+        and all(item["exists"] and item["sha256_valid"] for item in tensorrt_assets.values())
+    )
+    backend_ready = (
+        backend_name == "ultralytics_cuda"
+        or (backend_name == "tensorrt_engine" and tensorrt_ready)
+        or (
+            backend_name == "tensorrt_native"
+            and all(native_assets.values())
+            and config["native_backend"]["validated"] is True
+        )
+    )
     artifacts = state.get("frozen_assets", {}).get("artifacts", {})
     result = {
         "runtime": external,
@@ -83,6 +142,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "server": {
             "host": runtime_cfg.get("server_host"),
             "port": runtime_cfg.get("server_port"),
+        },
+        "inference_backend": {
+            "name": backend_name,
+            "ready": backend_ready,
+            "native_assets": native_assets if backend_name == "tensorrt_native" else None,
+            "tensorrt_assets": tensorrt_assets if backend_name == "tensorrt_engine" else None,
+            "cpu_fallback": False,
         },
         "dependency_groups": {
             "required": REQUIRED_MODULES,
@@ -102,7 +168,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     modules = external.get("modules", {})
     missing_required = [name for name in REQUIRED_MODULES if not modules.get(name)]
     missing_workbench = [name for name in WORKBENCH_MODULES if not modules.get(name)]
-    missing_inference = [name for name in INFERENCE_MODULES if not modules.get(name)]
+    required_inference_modules = INFERENCE_MODULES + (
+        TENSORRT_MODULES if backend_name in {"tensorrt_engine", "tensorrt_native"} else []
+    )
+    missing_inference = [name for name in required_inference_modules if not modules.get(name)]
     if missing_required:
         print("缺少必需模块：", ", ".join(missing_required))
     if missing_workbench:
@@ -112,15 +181,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print("缺少推理模块：", ", ".join(missing_inference))
     if not gpu_ready:
         print("默认设备为 NVIDIA GPU，但当前环境无法使用 CUDA。请安装 CUDA 版 PyTorch 并检查显卡驱动。")
+    if not backend_ready:
+        print("推理后端依赖、资产、GPU或验收状态不完整；已拒绝启动，且不会回退到CPU。")
     inference_ok = bool(result["inference_weights"].get("matches_expected")) and bool(result["inference_weights"].get("same_frozen_path"))
     core_artifacts_ok = all(bool(value) for value in artifacts.values())
     checksums_ok = bool(result["frozen_checksums"].get("valid"))
     functional_ok = bool(result["functional_models"].get("valid")) and bool(result["functional_models"].get("all_x86_gpu_ready"))
-    return 1 if missing_required or missing_workbench or missing_inference or not gpu_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or not functional_ok or external.get("returncode") != 0 else 0
+    return 1 if missing_required or missing_workbench or missing_inference or not gpu_ready or not backend_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or not functional_ok or external.get("returncode") != 0 else 0
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_args_config(args)
     state = build_blackboard(config)
     paths = write_blackboard(config, state)
     print(rel_path(paths["state"]))
@@ -140,7 +211,7 @@ def load_or_build_state(config: Dict[str, Any], refresh: bool = False) -> Dict[s
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_args_config(args)
     state = load_or_build_state(config, refresh=args.refresh)
     decision_path = resolve_path(
         config.get("decision", {}).get("outputs", {}).get(
@@ -159,7 +230,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_console(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_args_config(args)
     state = load_or_build_state(config, refresh=True)
     context = decision_context(config, args)
     decision = build_decision(config, state, context)
@@ -202,7 +273,7 @@ def decision_context(config: Dict[str, Any], args: argparse.Namespace) -> Dict[s
 
 
 def cmd_decide(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_args_config(args)
     state_path = resolve_path(config.get("blackboard", {}).get("output_dir", "reports/agent_blackboard")) / config.get("blackboard", {}).get("state_json", "blackboard_state.json")
     if state_path.exists() and args.cached and not args.refresh:
         state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -218,7 +289,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
 
 def cmd_pipeline(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_args_config(args)
     state = build_blackboard(config)
     context = decision_context(config, args)
     decision = build_decision(config, state, context)
@@ -305,7 +376,7 @@ def execute_low_risk_action(config: Dict[str, Any], action: Dict[str, Any], log_
     argv = [str(value) for value in action.get("argv", [])]
     if not argv:
         return {"action": name, "returncode": 2, "status": "missing_command"}
-    timeout = action.get("timeout_seconds") or config.get("automation", {}).get("default_timeout_seconds", 300)
+    timeout = action.get("timeout_seconds") or config["automation"]["default_timeout_seconds"]
     code = run_command(argv, ROOT, log_path, name, int(timeout))
     return {"action": name, "returncode": code, "status": "completed" if code == 0 else "failed"}
 
@@ -322,10 +393,10 @@ def validate_action_outputs(config: Dict[str, Any], action: Dict[str, Any]) -> O
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
-    runtime = config.get("runtime", {})
-    host = str(runtime.get("server_host", "127.0.0.1"))
-    port = int(runtime.get("server_port", 8501))
+    config = load_args_config(args)
+    runtime = config["runtime"]
+    host = str(runtime["server_host"])
+    port = int(runtime["server_port"])
     missing = [name for name in ("starlette", "uvicorn", "multipart") if not check_module(name)]
     if missing:
         print(f"缺少 Web 服务模块：{', '.join(missing)}。请先运行 scripts/bootstrap_x86.sh 完成环境配置。")
@@ -342,7 +413,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
         "--no-access-log",
     ]
     try:
-        return subprocess.call(command, cwd=str(ROOT))
+        environment = dict(os.environ)
+        environment["AGILE_AGENT_CONFIG"] = str(resolve_path(args.config))
+        environment["AGILE_AGENT_OVERRIDES"] = json.dumps(list(getattr(args, "config_overrides", []) or []))
+        return subprocess.call(command, cwd=str(ROOT), env=environment)
     except KeyboardInterrupt:
         print("\n工作台已停止。")
         return 0
@@ -352,7 +426,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_context_predict(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    config = load_args_config(args)
     try:
         result = infer_image_context(config, args.source)
     except (OSError, RuntimeError, ValueError) as exc:
@@ -369,11 +443,19 @@ def cmd_detect(args: argparse.Namespace) -> int:
 
     source = resolve_path(args.source)
     try:
-        if not 0.01 <= float(args.confidence) <= 1.0:
-            raise ValueError("置信度必须位于0.01到1.00之间。")
+        config = load_args_config(args)
+        inference = config["inference"]
+        confidence = float(
+            inference["confidence_default"] if args.confidence is None else args.confidence
+        )
+        if not float(inference["confidence_min"]) <= confidence <= float(inference["confidence_max"]):
+            raise ValueError(
+                f"置信度必须位于{float(inference['confidence_min']):.2f}到"
+                f"{float(inference['confidence_max']):.2f}之间。"
+            )
         data = source.read_bytes()
-        image, task_id = validate_image_bytes(data, source.name)
-        settings = build_web_settings()
+        image, task_id = validate_image_bytes(data, source.name, config["limits"])
+        settings = build_web_settings(config)
         if args.profile:
             profile = load_experiment_profile(args.profile)
             class_names = {int(key): str(value) for key, value in profile["class_names"].items()}
@@ -383,6 +465,12 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 "class_names": class_names,
                 "base_class_ids": list(base_mapping.values()),
                 "base_local_to_global": base_mapping,
+                "generation_id": f"experiment-{profile['profile_id']}",
+                "base_model_id": f"{profile['profile_id']}_base",
+                "class_owners": {
+                    **{global_id: f"{profile['profile_id']}_base" for global_id in base_mapping.values()},
+                    int(profile["new_global_id"]): profile["profile_id"],
+                },
                 "protocols": {
                     profile["profile_id"]: {
                         "id": profile["profile_id"],
@@ -396,7 +484,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
                         "available": True,
                         "activation_threshold": float(profile["activation_threshold"]),
                         "calibration_source": profile["calibration_source"],
-                        "routing_prior": 0.5,
+                        "routing_prior": float(config["routing"]["default_routing_prior"]),
                         "context_prior": {},
                     }
                 },
@@ -411,8 +499,13 @@ def cmd_detect(args: argparse.Namespace) -> int:
             base_class_ids=settings["base_class_ids"],
             base_local_to_global=settings.get("base_local_to_global"),
             routing_options=settings["routing"],
+            generation_id=settings["generation_id"],
+            base_model_id=settings["base_model_id"],
+            class_owners=settings["class_owners"],
+            backend_name=settings["backend"],
+            native_options=settings["native_backend"],
         )
-        result = engine.predict(image, source.name, float(args.confidence), task_id, "auto")
+        result = engine.predict(image, source.name, confidence, task_id, "auto")
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"自动检测失败：{exc}")
         return 1
@@ -421,10 +514,129 @@ def cmd_detect(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_experiment(args: argparse.Namespace) -> int:
+    from fair_agent.modules.incremental_experiment import (
+        reproduce_experiment,
+        run_experiment,
+        validate_experiment,
+    )
+
+    try:
+        if args.experiment_action == "validate":
+            result = validate_experiment(args.experiment_config)
+        elif args.experiment_action == "run":
+            result = run_experiment(args.experiment_config, run_id=args.run_id)
+        else:
+            result = reproduce_experiment(args.manifest, run_id=args.run_id)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"增量实验失败：{exc}")
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("valid", result.get("returncode", 0) == 0) else 1
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    from fair_agent.modules.configuration import (
+        config_diff,
+        migrate_config,
+        render_effective_config,
+        set_persistent_value,
+        unset_persistent_value,
+    )
+
+    overrides = list(getattr(args, "config_overrides", []) or [])
+    try:
+        if args.config_action == "validate":
+            config = load_config(args.config, overrides)
+            print(json.dumps({
+                "valid": True,
+                "config": config["_config_path"],
+                "sha256": config["_config_sha256"],
+                "overrides": overrides,
+                "restart_required": bool(overrides),
+            }, ensure_ascii=False, indent=2))
+        elif args.config_action == "show":
+            print(render_effective_config(args.config, overrides, args.format))
+        elif args.config_action == "get":
+            value = get_key(load_config(args.config, overrides), args.key)
+            print(yaml.safe_dump(value, allow_unicode=True, sort_keys=False).rstrip())
+        elif args.config_action == "set":
+            path = set_persistent_value(args.config, args.key, args.value)
+            print(json.dumps({"updated": rel_path(path), "key": args.key, "restart_required": True}, ensure_ascii=False))
+        elif args.config_action == "unset":
+            path = unset_persistent_value(args.config, args.key)
+            print(json.dumps({"updated": rel_path(path), "key": args.key, "restart_required": True}, ensure_ascii=False))
+        elif args.config_action == "diff":
+            print(json.dumps(config_diff(args.config, overrides), ensure_ascii=False, indent=2))
+        else:
+            path = migrate_config(args.input, args.output)
+            print(json.dumps({"migrated": rel_path(path), "restart_required": True}, ensure_ascii=False))
+    except (FileExistsError, KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"配置操作失败：{exc}")
+        return 1
+    return 0
+
+
+def cmd_generation(args: argparse.Namespace) -> int:
+    from fair_agent.modules.generation_management import (
+        promote_generation,
+        recheck_generation,
+        rollback_generation,
+    )
+
+    config = load_args_config(args)
+    try:
+        if args.generation_action == "recheck":
+            result = recheck_generation(config, args.candidate)
+        elif args.generation_action == "promote":
+            result = promote_generation(config, args.candidate, args.manifest)
+        else:
+            result = rollback_generation(config, args.to)
+    except (KeyError, OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"代际操作失败：{exc}")
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_benchmark_api(args: argparse.Namespace) -> int:
+    from httpx import HTTPError
+
+    from fair_agent.modules.api_benchmark import benchmark_api
+
+    try:
+        result = benchmark_api(load_args_config(args))
+    except (HTTPError, OSError, RuntimeError, ValueError) as exc:
+        print(f"API性能验收失败：{exc}")
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["accepted"] else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="IR/SAR 快速学习智能体工作台")
     parser.add_argument("--config", default="configs/agent_pipeline.yaml")
+    parser.add_argument("--set", dest="config_overrides", action="append", default=[], metavar="KEY=VALUE", help="仅覆盖当前命令的配置，可重复使用。")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    config_cmd = sub.add_parser("config", help="校验、查看或修改Agent配置。")
+    config_sub = config_cmd.add_subparsers(dest="config_action", required=True)
+    for name in ("validate", "show", "get", "set", "unset", "diff"):
+        action = config_sub.add_parser(name)
+        action.add_argument("--config", default=argparse.SUPPRESS)
+        action.set_defaults(func=cmd_config)
+        if name == "show":
+            action.add_argument("--effective", action="store_true", help="显示环境变量与CLI覆盖后的有效配置。")
+            action.add_argument("--format", choices=["yaml", "json"], default="yaml")
+        elif name in {"get", "unset"}:
+            action.add_argument("key")
+        elif name == "set":
+            action.add_argument("key")
+            action.add_argument("value")
+    migrate = config_sub.add_parser("migrate")
+    migrate.add_argument("--input", required=True)
+    migrate.add_argument("--output", required=True)
+    migrate.set_defaults(func=cmd_config)
 
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--quiet", action="store_true", help="成功时不输出完整诊断信息。")
@@ -467,9 +679,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     detect = sub.add_parser("detect", help="执行完整自动路由检测并输出详细决策轨迹。")
     detect.add_argument("--source", required=True)
-    detect.add_argument("--confidence", type=float, default=0.50)
+    detect.add_argument("--confidence", type=float)
     detect.add_argument("--profile", choices=["strict-p01", "strict-p02"], help="使用已通过验收的严格 3+1 实验档。")
     detect.set_defaults(func=cmd_detect)
+
+    experiment = sub.add_parser("experiment", help="验证、执行或复现可审计的增量学习实验。")
+    experiment_sub = experiment.add_subparsers(dest="experiment_action", required=True)
+    experiment_validate = experiment_sub.add_parser("validate", help="只读校验配置、数据划分和访问边界。")
+    experiment_validate.add_argument("--config", dest="experiment_config", required=True)
+    experiment_validate.set_defaults(func=cmd_experiment)
+    experiment_run = experiment_sub.add_parser("run", help="创建不可变run并执行训练适配器。")
+    experiment_run.add_argument("--config", dest="experiment_config", required=True)
+    experiment_run.add_argument("--run-id")
+    experiment_run.set_defaults(func=cmd_experiment)
+    experiment_reproduce = experiment_sub.add_parser("reproduce", help="按父manifest和相同数据指纹复现实验。")
+    experiment_reproduce.add_argument("--manifest", required=True)
+    experiment_reproduce.add_argument("--run-id")
+    experiment_reproduce.set_defaults(func=cmd_experiment)
+
+    generation = sub.add_parser("generation", help="复核、上线或回滚模型代际。")
+    generation_sub = generation.add_subparsers(dest="generation_action", required=True)
+    generation_recheck = generation_sub.add_parser("recheck", help="在lock-val上执行一次不可调参的部署复核。")
+    generation_recheck.add_argument("--candidate", required=True)
+    generation_recheck.set_defaults(func=cmd_generation)
+    generation_promote = generation_sub.add_parser("promote", help="依据通过门禁的manifest原子切换production。")
+    generation_promote.add_argument("--candidate", required=True)
+    generation_promote.add_argument("--manifest", required=True)
+    generation_promote.set_defaults(func=cmd_generation)
+    generation_rollback = generation_sub.add_parser("rollback", help="回滚到已验证的历史代际。")
+    generation_rollback.add_argument("--to", required=True)
+    generation_rollback.set_defaults(func=cmd_generation)
+
+    sub.add_parser("benchmark-api", help="按YAML配置执行检测API端到端性能验收。").set_defaults(func=cmd_benchmark_api)
 
     sub.add_parser("serve").set_defaults(func=cmd_serve)
     return parser

@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "class_map": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "warship",
+    "3": "tank"
+  },
+  "models": [
+    {
+      "id": "strict_p02_base_v1",
+      "role": "frozen_base",
+      "backend": "ultralytics",
+      "path": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/base.pt",
+      "sha256": "9616dda7577b1a33cb2210e4a63d2967083017726e6b2cc236f2f86d77c3d1b6",
+      "owns_classes": [
+        0,
+        1,
+        3
+      ],
+      "local_to_global": {
+        "0": 0,
+        "1": 1,
+        "2": 3
+      },
+      "evidence": "未接触赛题舰船图像和标签"
+    },
+    {
+      "id": "strict_p02_warship_v1",
+      "role": "class_incremental_expert",
+      "backend": "ultralytics",
+      "path": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/specialist.pt",
+      "sha256": "88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3",
+      "owns_classes": [
+        2
+      ],
+      "local_to_global": {
+        "0": 2
+      },
+      "activation_threshold": 0.51,
+      "calibration_source": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/calibration.json",
+      "metrics": {
+        "new_map50": 0.9090260372388763
+      },
+      "deployment_metrics": {
+        "lock_precision": 0.5411,
+        "false_activation_rate": 0.3378
+      },
+      "acceptance": {
+        "min_lock_precision": 0.7,
+        "max_false_activation_rate": 0.15,
+        "passed": false
+      },
+      "status": "pending_deployment_recheck"
+    },
+    {
+      "id": "unified_yolo11s_benchmark",
+      "role": "benchmark_only",
+      "backend": "ultralytics",
+      "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
+      "sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c",
+      "owns_classes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "local_to_global": {
+        "0": 0,
+        "1": 1,
+        "2": 2,
+        "3": 3
+      },
+      "status": "benchmark_only"
+    },
+    {
+      "id": "strict_p02_warship_recheck_v2",
+      "role": "class_incremental_expert",
+      "backend": "ultralytics",
+      "path": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/specialist.pt",
+      "sha256": "88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3",
+      "owns_classes": [
+        2
+      ],
+      "local_to_global": {
+        "0": 2
+      },
+      "activation_threshold": 0.63,
+      "calibration_source": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/calibration.json",
+      "metrics": {
+        "new_map50": 0.9090260372388763
+      },
+      "deployment_metrics": {
+        "lock_precision": 1.0,
+        "false_activation_rate": 0.0
+      },
+      "acceptance": {
+        "min_lock_precision": 0.7,
+        "max_false_activation_rate": 0.15,
+        "passed": true
+      },
+      "status": "active"
+    }
+  ],
+  "generations": [
+    {
+      "id": "generation-0",
+      "parent": null,
+      "classes": [
+        0,
+        1,
+        3
+      ],
+      "class_owners": {
+        "0": "strict_p02_base_v1",
+        "1": "strict_p02_base_v1",
+        "3": "strict_p02_base_v1"
+      },
+      "status": "active",
+      "metrics": {
+        "base_map50": 0.8284863676564004
+      }
+    },
+    {
+      "id": "generation-1",
+      "parent": "generation-0",
+      "classes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "class_owners": {
+        "0": "strict_p02_base_v1",
+        "1": "strict_p02_base_v1",
+        "2": "strict_p02_warship_v1",
+        "3": "strict_p02_base_v1"
+      },
+      "status": "pending_deployment_recheck",
+      "metrics": {
+        "base_map50": 0.8284863676564004,
+        "new_map50": 0.9090260372388763,
+        "krr": 1.0,
+        "full_map50": 0.8470003751445625,
+        "lock_precision": 0.5411,
+        "false_activation_rate": 0.3378
+      },
+      "acceptance": {
+        "core_metrics_passed": true,
+        "deployment_recheck_passed": false
+      }
+    },
+    {
+      "id": "generation-1-recheck-v2",
+      "parent": "generation-0",
+      "classes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "class_owners": {
+        "0": "strict_p02_base_v1",
+        "1": "strict_p02_base_v1",
+        "2": "strict_p02_warship_recheck_v2",
+        "3": "strict_p02_base_v1"
+      },
+      "status": "active",
+      "metrics": {
+        "base_map50": 0.8273816344198973,
+        "new_map50": 0.795,
+        "krr": 1.0,
+        "combined_map50": 0.8192862258149229,
+        "lock_precision": 1.0,
+        "lock_recall": 0.7901234567901234,
+        "false_activation_rate": 0.0,
+        "old_prediction_equivalent": true,
+        "image_count": 95,
+        "negative_image_count": 74,
+        "false_positive_image_count": 0,
+        "mean_inference_ms": 25.405263157894733
+      },
+      "acceptance": {
+        "core_metrics_passed": true,
+        "deployment_recheck_passed": true
+      }
+    }
+  ],
+  "channels": {
+    "production": "generation-1-recheck-v2",
+    "candidate": "generation-1-recheck-v2",
+    "benchmark": "unified_yolo11s_benchmark"
+  },
+  "external_blockers": [
+    "ascend_310b_not_available"
+  ]
+}

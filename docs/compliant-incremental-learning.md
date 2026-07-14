@@ -2,7 +2,7 @@
 
 ## 规则解释
 
-本赛题任务统一建模为**增量目标检测**。当前数据和四组实验以类别增量为主，同时保留目标增量能力：
+本赛题任务统一建模为**增量目标检测**，以类别增量为主，同时保留目标增量能力：
 
 - `class_incremental`：新增类别集合 `C_new` 与基础类别 `C_old` 互不重叠，增量后输出 `C_old ∪ C_new`。
 - `target_incremental`：新增目标样本可以属于已有类别，不强制类别集合互斥，用于补充新实例、新外观、新场景或新传感器条件下的目标。
@@ -19,7 +19,7 @@
 
 ## 当前主线实现
 
-当前四组实验采用类别增量模式下的 `冻结旧类检测器 + 新类 specialist`：
+当前可复现主线采用类别增量模式下的 `冻结旧类检测器 + 新类 specialist`。舰船 3+1 协议中，三类基础检测器未接触赛题舰船图像和标签，舰船专家只读取舰船增量 train/dev：
 
 1. 基础检测器完全冻结，继续负责 `C_old`。
 2. 将新增类别映射为 specialist 类别 `0`。
@@ -47,15 +47,9 @@
 ## 运行顺序
 
 ```bash
-python tools/27_build_new_class_specialist_dataset.py \
-  --config configs/incremental_no_old_distill_yolo11s.yaml
-
-python tools/24_run_no_old_distill.py \
-  --config configs/incremental_no_old_distill_yolo11s.yaml \
-  --protocol p01_new_small_aircraft --device 0
-
-python tools/25_aggregate_no_old_distill.py \
-  --config configs/incremental_no_old_distill_yolo11s.yaml
+agile-agent experiment validate --config configs/incremental/warship_3plus1.yaml
+agile-agent experiment run --config configs/incremental/warship_3plus1.yaml
+agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run_id>/run_manifest.json
 ```
 
 训练参数保留在 YAML，命令行只选择协议和 GPU。
@@ -72,4 +66,4 @@ New-mAP50 >= 0.60
 KRR >= 0.95
 ```
 
-当前合规实验中 p02-p04 达到满分阈值；p01 New-mAP50 为 `0.55860`，按官方分档可获得部分分，但仍标记为未达到内部满分门槛。
+历史 p01-p04 权重的目标类别已被当时的四类基础模型见过，因此只作为目标增量/专项增强演练，不作为严格类别增量证据。strict-p02 舰船折达到核心指标，但尚未通过部署 precision 与误激活门禁，production 仍为三类 `generation-0`。完整说明见 `docs/warship-3plus1-reproducibility.md`。

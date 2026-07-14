@@ -1,13 +1,9 @@
 (() => {
   "use strict";
 
-  const LIMITS = {
-    fileBytes: 20 * 1024 * 1024,
-    batchFiles: 20,
-    batchBytes: 200 * 1024 * 1024,
-  };
+  const LIMITS = { fileBytes: 0, batchFiles: 0, batchBytes: 0 };
+  const UI = { historyLimit: 0, resultCacheLimit: 0, healthPollMs: 0, toastDurationMs: 0 };
   const HISTORY_KEY = "agile-agent-session-history-v1";
-  const RESULT_CACHE_LIMIT = 10;
   const SENSOR_LABELS = { ir: "红外", sar: "SAR" };
   const SCENE_LABELS = { air: "空域", forest: "林地", sea: "海域", urban: "城市场景" };
   const CLASS_LABELS = {
@@ -30,7 +26,7 @@
     batchFiles: [],
     batchResult: null,
     resultCache: new Map(),
-    history: readHistory(),
+    history: [],
   };
 
   function icon(name) {
@@ -61,7 +57,7 @@
       throw new Error(`不支持的图像格式：${file.name}`);
     }
     if (!file.size) throw new Error(`图像为空：${file.name}`);
-    if (file.size > LIMITS.fileBytes) throw new Error(`单张图像不能超过20MB：${file.name}`);
+    if (file.size > LIMITS.fileBytes) throw new Error(`单张图像不能超过${formatBytes(LIMITS.fileBytes)}：${file.name}`);
   }
 
   function imageDimensions(url) {
@@ -81,7 +77,7 @@
     text.textContent = message;
     toast.appendChild(text);
     $("#toastRegion").appendChild(toast);
-    window.setTimeout(() => toast.remove(), 4200);
+    window.setTimeout(() => toast.remove(), UI.toastDurationMs);
   }
 
   function setLoading(visible, title = "正在分析图像", message = "正在准备识别") {
@@ -170,7 +166,9 @@
     state.singleResult = null;
     $("#singleFile").value = "";
     $("#previewImage").removeAttribute("src");
-    $("#resultImage").removeAttribute("src");
+    const canvas = $("#resultImage");
+    canvas.width = 0;
+    canvas.height = 0;
     $("#singleDropzone").classList.remove("is-hidden", "is-dragging");
     $("#inputPreview").classList.add("is-hidden");
     $("#inputPreview").classList.remove("is-unavailable");
@@ -186,11 +184,33 @@
     if (notify) showToast("当前检测任务已清除。", "success");
   }
 
-  function renderSingleResult(result) {
+  async function drawDetectionCanvas(result, imageUrl) {
+    if (!imageUrl) throw new Error("原始图像预览已过期。");
+    const image = new Image();
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error("浏览器无法绘制结果图。"));
+      image.src = imageUrl;
+    });
+    const canvas = $("#resultImage");
+    canvas.width = Number(result.image_width || image.naturalWidth);
+    canvas.height = Number(result.image_height || image.naturalHeight);
+    const context = canvas.getContext("2d");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const colors = { 0: "#159a91", 1: "#3978d4", 2: "#d17a35", 3: "#8b65c8" };
+    context.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 320));
+    (result.detections || []).forEach((detection) => {
+      const [x1, y1, x2, y2] = detection.xyxy.map(Number);
+      context.strokeStyle = colors[detection.class_id] || "#159a91";
+      context.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    });
+  }
+
+  async function renderSingleResult(result) {
     const context = result.context || {};
     const detections = Array.isArray(result.detections) ? result.detections : [];
     const counts = result.class_counts || {};
-    $("#resultImage").src = `data:image/png;base64,${result.annotated_base64}`;
+    await drawDetectionCanvas(result, result._preview_url || state.singlePreviewUrl);
     $("#overlaySensor").textContent = sensorLabel(context.sensor);
     $("#overlayScene").textContent = sceneLabel(context.scene);
     $("#overlayCount").textContent = `${result.detection_count || 0} 个目标`;
@@ -320,7 +340,8 @@
       if (!response.ok) throw new Error(await responseError(response));
       const result = await response.json();
       state.singleResult = result;
-      renderSingleResult(result);
+      result._preview_url = state.singlePreviewUrl;
+      await renderSingleResult(result);
       const resultKey = rememberResult("single", result);
       addHistory({
         type: "single",
@@ -346,13 +367,6 @@
     }
   }
 
-  function base64Blob(base64, type) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    return new Blob([bytes], { type });
-  }
-
   function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -366,13 +380,15 @@
 
   function downloadSingleImage() {
     if (!state.singleResult) return;
-    downloadBlob(base64Blob(state.singleResult.annotated_base64, "image/png"), `agile-agent-${Date.now()}.png`);
+    $("#resultImage").toBlob((blob) => {
+      if (blob) downloadBlob(blob, `lingdong-agent-${Date.now()}.png`);
+    }, "image/png");
   }
 
   function downloadSingleJson() {
     if (!state.singleResult) return;
     const payload = { ...state.singleResult };
-    delete payload.annotated_base64;
+    delete payload._preview_url;
     downloadBlob(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }), `agile-agent-${Date.now()}.json`);
   }
 
@@ -380,9 +396,9 @@
     try {
       const files = Array.from(fileList);
       if (!files.length) return;
-      if (files.length > LIMITS.batchFiles) throw new Error("单批最多选择20张图像。");
+      if (files.length > LIMITS.batchFiles) throw new Error(`单批最多选择${LIMITS.batchFiles}张图像。`);
       const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-      if (totalBytes > LIMITS.batchBytes) throw new Error("单批图像总大小不能超过200MB。");
+      if (totalBytes > LIMITS.batchBytes) throw new Error(`单批图像总大小不能超过${formatBytes(LIMITS.batchBytes)}。`);
       files.forEach(validateFile);
       clearBatch(false);
       state.batchFiles = files;
@@ -433,7 +449,7 @@
   async function detectBatch() {
     if (!state.batchFiles.length) return;
     $("#batchButton").disabled = true;
-    setLoading(true, "正在执行批量检测", `正在依次处理${state.batchFiles.length}张图像`);
+      setLoading(true, "正在执行批量检测", `正在批量处理${state.batchFiles.length}张图像`);
     try {
       const form = new FormData();
       state.batchFiles.forEach((file) => form.append("files", file, file.name));
@@ -547,7 +563,7 @@
   function readHistory() {
     try {
       const payload = JSON.parse(sessionStorage.getItem(HISTORY_KEY) || "[]");
-      return Array.isArray(payload) ? payload.slice(0, 20) : [];
+      return Array.isArray(payload) ? payload.slice(0, UI.historyLimit) : [];
     } catch (_error) {
       return [];
     }
@@ -557,7 +573,7 @@
     const identity = type === "batch" ? payload.batch_id : payload.filename;
     const key = `${type}:${identity || "result"}:${Date.now()}`;
     state.resultCache.set(key, { type, payload });
-    while (state.resultCache.size > RESULT_CACHE_LIMIT) {
+    while (state.resultCache.size > UI.resultCacheLimit) {
       state.resultCache.delete(state.resultCache.keys().next().value);
     }
     return key;
@@ -572,7 +588,7 @@
     if (cached.type === "single") {
       state.singleResult = cached.payload;
       switchView("detect");
-      renderSingleResult(cached.payload);
+      renderSingleResult(cached.payload).catch((error) => showToast(error.message, "error"));
       window.requestAnimationFrame(() => $("#resultDetails").scrollIntoView({ behavior: "smooth", block: "start" }));
       return;
     }
@@ -586,7 +602,7 @@
   }
 
   function addHistory(item) {
-    state.history = [item, ...state.history].slice(0, 20);
+    state.history = [item, ...state.history].slice(0, UI.historyLimit);
     sessionStorage.setItem(HISTORY_KEY, JSON.stringify(state.history));
     renderHistory();
   }
@@ -669,7 +685,38 @@
     node.addEventListener("drop", (event) => handler(event.dataTransfer.files));
   }
 
-  function initialize() {
+  async function loadPublicConfig() {
+    const response = await fetch("/api/config/public", { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseError(response));
+    const config = await response.json();
+    LIMITS.fileBytes = Number(config.limits.max_file_bytes);
+    LIMITS.batchFiles = Number(config.limits.max_batch_files);
+    LIMITS.batchBytes = Number(config.limits.max_batch_bytes);
+    UI.historyLimit = Number(config.ui.history_limit);
+    UI.resultCacheLimit = Number(config.ui.result_cache_limit);
+    UI.healthPollMs = Number(config.ui.health_poll_ms);
+    UI.toastDurationMs = Number(config.ui.toast_duration_ms);
+    state.history = readHistory();
+    const confidence = config.confidence;
+    [$("#confidence"), $("#batchConfidence")].forEach((input) => {
+      input.min = String(confidence.min);
+      input.max = String(confidence.max);
+      input.value = String(confidence.default);
+    });
+    $("#confidenceLabel").textContent = `置信度 ${Number(confidence.default).toFixed(2)}`;
+    $("#batchConfidenceLabel").textContent = Number(confidence.default).toFixed(2);
+    $("#singleLimitText").textContent = `或点击选择文件 · 最大${formatBytes(LIMITS.fileBytes)}`;
+    $("#batchLimitText").textContent = `单批最多${LIMITS.batchFiles}张，总计不超过${formatBytes(LIMITS.batchBytes)}`;
+    $("#batchIntro").textContent = `一次处理最多${LIMITS.batchFiles}张图像，完成后可逐张查看标注图和结果清单。`;
+  }
+
+  async function initialize() {
+    try {
+      await loadPublicConfig();
+    } catch (error) {
+      showToast(error.message || "无法读取服务配置。", "error");
+      return;
+    }
     $(".brand").addEventListener("click", (event) => {
       event.preventDefault();
       switchView("detect");
@@ -721,7 +768,7 @@
     });
     renderHistory();
     refreshHealth();
-    window.setInterval(refreshHealth, 15000);
+    window.setInterval(refreshHealth, UI.healthPollMs);
   }
 
   initialize();

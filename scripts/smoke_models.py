@@ -126,7 +126,11 @@ def main() -> int:
             incremental_protocols=settings["protocols"],
             class_names=settings["class_names"],
             base_class_ids=settings["base_class_ids"],
+            base_local_to_global=settings.get("base_local_to_global"),
             routing_options=settings["routing"],
+            generation_id=settings["generation_id"],
+            base_model_id=settings["base_model_id"],
+            class_owners=settings["class_owners"],
         )
         samples = []
         for sensor in ("ir", "sar"):
@@ -145,6 +149,8 @@ def main() -> int:
                 decision.get("fusion_summary"), dict
             ):
                 raise RuntimeError(f"Agent 编排缺少决策轨迹：{filename}")
+            if decision.get("generation_id") != settings["generation_id"]:
+                raise RuntimeError(f"Agent 编排使用了错误模型代际：{filename}")
             orchestration_results.append({
                 "sample": filename,
                 "detection_count": prediction["detection_count"],

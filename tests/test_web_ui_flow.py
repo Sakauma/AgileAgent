@@ -24,6 +24,8 @@ class FakeEngine:
         return {
             "filename": filename,
             "task_id": task_id,
+            "image_width": image.width,
+            "image_height": image.height,
             "context": {
                 "sensor": "sar",
                 "sensor_confidence": 0.97,
@@ -40,7 +42,7 @@ class FakeEngine:
             "queue_wait_ms": 0.4,
             "agent": {
                 "mode": "automatic_orchestration",
-                "models_used": ["scene_sensor_net_v1", "unified_yolo11s_v1", "incremental_model_bank_v1"],
+                "models_used": ["scene_sensor_net_v1", "strict_p02_base_v1"],
                 "protocol": None,
                 "protocols": [],
                 "decision": {
@@ -52,8 +54,13 @@ class FakeEngine:
                     "reason": "test",
                 },
             },
-            "annotated_png": image_png_bytes(image),
         }
+
+    def predict_batch(self, items, confidence=0.50, incremental_protocol=None):
+        return [
+            self.predict(image, filename, confidence, task_id, incremental_protocol)
+            for image, filename, task_id in items
+        ]
 
 
 def client_with_engine() -> tuple[TestClient, FakeEngine]:
@@ -66,7 +73,7 @@ def png(color: str = "white") -> bytes:
 
 
 def test_batch_result_store_evicts_old_batches() -> None:
-    store = BatchResultStore(max_items=1)
+    store = BatchResultStore(max_items=1, ttl_seconds=1800, max_bytes=1024)
     first = store.put([])
     second = store.put([])
     assert store.get(first) is None
@@ -74,9 +81,9 @@ def test_batch_result_store_evicts_old_batches() -> None:
 
 
 def test_batch_result_store_evicts_by_total_bytes() -> None:
-    store = BatchResultStore(max_items=4, max_bytes=70)
-    first = store.put([{"annotated_png": b"a" * 40}])
-    second = store.put([{"annotated_png": b"b" * 40}])
+    store = BatchResultStore(max_items=4, ttl_seconds=1800, max_bytes=70)
+    first = store.put([{"source_bytes": b"a" * 40}])
+    second = store.put([{"source_bytes": b"b" * 40}])
     assert store.get(first) is None
     assert store.get(second) is not None
     assert store.total_bytes <= 70
@@ -88,10 +95,16 @@ def test_health_and_static_product_contract() -> None:
     assert health.status_code == 200
     assert health.json()["device"] == "cuda:0"
     assert health.json()["limits"]["max_batch_files"] == 20
+    public_config = client.get("/api/config/public")
+    assert public_config.status_code == 200
+    assert public_config.json()["confidence"] == {"min": 0.01, "max": 1.0, "default": 0.5}
+    assert "registry" not in json.dumps(public_config.json())
     capabilities = client.get("/api/capabilities")
     assert capabilities.status_code == 200
+    assert capabilities.json()["generation_id"] == "generation-1-recheck-v2"
+    assert capabilities.json()["active_classes"] == ["soldier", "small_aircraft", "warship", "tank"]
     assert len(capabilities.json()["models"]) == 3
-    assert any(item["available"] for item in capabilities.json()["protocols"])
+    assert capabilities.json()["protocols"][0]["available"] is True
 
     page = client.get("/")
     assert page.status_code == 200
@@ -111,16 +124,22 @@ def test_health_and_static_product_contract() -> None:
 
 def test_web_settings_follow_active_config_and_manifest() -> None:
     settings = build_web_settings()
-    assert settings["detector_path"].name == "yolo11s_ir_sar_imgsz640.pt"
+    assert settings["detector_path"].name == "base.pt"
     assert settings["device_index"] == "0"
-    assert settings["predict"] == {"imgsz": 640, "iou": 0.7, "max_det": 300}
-    assert settings["protocols"]["p01_new_small_aircraft"]["available"] is False
-    assert settings["protocols"]["p02_new_warship"]["available"] is True
-    assert settings["protocols"]["p02_new_warship"]["incremental_mode"] == "target_incremental"
-    assert settings["protocols"]["p02_new_warship"]["evidence_level"] == "rehearsal_only"
-    assert settings["protocols"]["p02_new_warship"]["consensus_iou"] == 0.30
+    assert settings["predict"] == {
+            "imgsz": 640, "specialist_imgsz": 512, "iou": 0.7, "max_det": 300, "batch_size": 1,
+            "warmup_iterations": 1, "warmup_batch_size": 1,
+        "warmup_width": 640, "warmup_height": 512,
+        "confidence_default": 0.5, "preload_specialists": True,
+        "quantize": None, "cudnn_benchmark": True, "compile": False,
+    }
+    assert settings["generation_id"] == "generation-1-recheck-v2"
+    assert settings["base_model_id"] == "strict_p02_base_v1"
+    assert settings["active_class_ids"] == [0, 1, 2, 3]
+    assert settings["base_local_to_global"] == {0: 0, 1: 1, 2: 3}
+    assert list(settings["protocols"]) == ["strict_p02_warship_recheck_v2"]
+    assert settings["protocols"]["strict_p02_warship_recheck_v2"]["activation_threshold"] == 0.63
     assert settings["class_names"] == {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
-    assert "allowed_scenes" not in settings["protocols"]["p02_new_warship"]
 
 
 def test_health_reports_model_initialization_failure() -> None:
@@ -147,7 +166,9 @@ def test_single_detection_api_returns_public_json() -> None:
     assert "task_id" not in payload
     assert payload["detection_count"] == 1
     assert payload["context"]["sensor"] == "sar"
-    assert "annotated_base64" in payload
+    assert "annotated_base64" not in payload
+    assert payload["image_width"] == 32
+    assert payload["image_height"] == 24
     assert "annotated_png" not in payload
     assert payload["inference_ms"] == 18.2
     assert payload["confidence_threshold"] == 0.21
@@ -216,7 +237,7 @@ def test_single_detection_rejects_oversized_multipart() -> None:
         data={"confidence": "0.15"},
     )
     assert response.status_code == 400
-    assert "超过 20MB" in response.json()["error"]
+    assert "20MB" in response.json()["error"]
     assert not engine.calls
 
 
@@ -236,6 +257,9 @@ def test_batch_api_returns_archive_and_summary_headers() -> None:
     assert payload["detection_count"] == 2
     assert payload["inference_ms"] == 36.4
     assert payload["system_total_ms"] >= 0
+    assert set(payload["timings"]) == {
+        "upload_parse_ms", "decode_ms", "queue_wait_ms", "batch_engine_ms", "cache_store_ms"
+    }
     assert len(payload["results"]) == 2
     assert payload["results"][0]["preview_url"].endswith("/preview/0")
     assert "annotated_png" not in payload["results"][0]
@@ -278,7 +302,9 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
         assert capability in script
     for internal_term in ["crypto.subtle.digest", "已校验", "singleHash"]:
         assert internal_term not in script
-    assert "annotated_base64" in script
+    assert "annotated_base64" not in script
+    assert "/api/config/public" in script
+    assert "drawDetectionCanvas" in script
     assert "incremental_protocol" not in script
     assert "incrementalProtocol" not in html
     assert "增量演示" not in html
@@ -292,7 +318,7 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "preview_url" in script
     assert "download_url" in script
     assert "renderDetectionRows" in script
-    assert html.count('max="1.00"') == 2
+    assert html.count('max="1.00"') == 0
     assert "openHistoryItem" in script
     assert "resultCache" in script
     assert "collaborationFlow" in html

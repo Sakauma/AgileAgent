@@ -12,6 +12,7 @@ import yaml
 from .config import rel_path, resolve_path
 from .hashes import hash_if_exists, verify_sha256s
 from fair_agent.modules.functional_models import validate_functional_models
+from fair_agent.modules.model_generations import load_generation_registry
 from fair_agent.modules.status import fingerprints, output_freshness, parse_incremental, parse_specialist
 
 
@@ -158,6 +159,32 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
         incremental_cfg.get("inputs", []), incremental_cfg.get("outputs", [])
     )
     specialist = parse_specialist(config)
+    generation_registry_path = assets_cfg.get("generation_registry", "models/generations.json")
+    generation_summary: Dict[str, Any] = {"valid": False, "path": str(generation_registry_path)}
+    production_incremental_verified = False
+    try:
+        generation_registry = load_generation_registry(generation_registry_path)
+        production_id = str(generation_registry["channels"]["production"])
+        production = generation_registry["generations_by_id"][production_id]
+        production_model_ids = set(production["class_owners"].values())
+        production_experts = [
+            generation_registry["models_by_id"][model_id]
+            for model_id in production_model_ids
+            if generation_registry["models_by_id"][model_id].get("role") == "class_incremental_expert"
+        ]
+        production_incremental_verified = bool(production_experts) and all(
+            model.get("acceptance", {}).get("passed") is True for model in production_experts
+        )
+        generation_summary = {
+            "valid": True,
+            "path": str(generation_registry_path),
+            "production": production_id,
+            "classes": sorted(int(value) for value in production["classes"]),
+            "incremental_verified": production_incremental_verified,
+            "metrics": dict(production.get("metrics", {})),
+        }
+    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        generation_summary["error"] = str(exc)
     case_summary = summarize_case_bank(case_bank)
     sar_reason = "案例库专用模型略微改善了 SAR soldier，但降低了 lock_all 和 IR soldier 指标，因此主线继续使用统一 YOLO11s。"
     if not case_bank and demo:
@@ -207,8 +234,11 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
         and incremental.get("complete")
         and not incremental.get("passed")
         and not strict_class_incremental_verified
+        and not production_incremental_verified
     ):
         blockers.append("incremental_compliant_threshold_not_met")
+    if not generation_summary["valid"]:
+        blockers.append("model_generation_registry_invalid")
     if not functional_models.get("valid"):
         blockers.append("functional_models_invalid")
     elif not functional_models.get("all_x86_gpu_ready"):
@@ -269,6 +299,7 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
             "reason": sar_reason,
         },
         "incremental_learning": incremental,
+        "model_generation": generation_summary,
         "submission": {
             "official_test_ready": official_ready,
             "official_format_confirmed": format_confirmed,

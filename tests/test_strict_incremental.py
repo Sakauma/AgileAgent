@@ -27,7 +27,8 @@ from fair_agent.modules.strict_incremental import (
 
 def make_image(root: Path, stem: str, labels: list[int]) -> Path:
     image = root / f"{stem}.png"
-    Image.new("RGB", (100, 100), "white").save(image)
+    color = tuple(hashlib.sha256(stem.encode("utf-8")).digest()[:3])
+    Image.new("RGB", (100, 100), color).save(image)
     image.with_suffix(".txt").write_text(
         "".join(f"{class_id} 0.5 0.5 0.2 0.2\n" for class_id in labels),
         encoding="utf-8",
@@ -63,6 +64,9 @@ def test_repository_strict_config_has_only_disjoint_aircraft_and_warship_folds()
     assert 'getattr(result, "path", "")' in runner
     assert '"image_id": image_id' in runner
     assert "multi_label=True" in runner
+    smoke = Path("scripts/smoke_models.py").read_text(encoding="utf-8")
+    assert 'base_local_to_global=settings.get("base_local_to_global")' in smoke
+    assert 'generation_id=settings["generation_id"]' in smoke
 
 
 def test_clean_v2_configs_share_run_id_and_enforce_strict_gates() -> None:
@@ -169,6 +173,26 @@ def test_strict_dataset_rejects_new_old_class_cooccurrence(tmp_path: Path) -> No
         write_split(split, images)
         splits[name] = split
     with pytest.raises(ValueError, match="旧类共现"):
+        build_protocol_dataset(protocol(), splits, tmp_path / "strict")
+
+
+def test_strict_dataset_rejects_renamed_old_image_content(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    old = make_image(source, "ir_old", [0])
+    renamed_old = make_image(source, "ir_new_name", [1])
+    renamed_old.write_bytes(old.read_bytes())
+    lock = make_image(source, "sar_lock", [1])
+    splits = {}
+    for name, images in {
+        "train": [old, renamed_old],
+        "val": [],
+        "lock": [lock],
+    }.items():
+        split = tmp_path / f"{name}.txt"
+        write_split(split, images)
+        splits[name] = split
+    with pytest.raises(RuntimeError, match="包含旧图"):
         build_protocol_dataset(protocol(), splits, tmp_path / "strict")
 
 
@@ -366,6 +390,21 @@ def test_expanded_student_initializes_ema_and_freezes_batchnorm() -> None:
     assert student.stem[1].training is False
 
 
+def test_training_history_records_epochs_best_epoch_and_early_stop(tmp_path: Path) -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+    (tmp_path / "results.csv").write_text(
+        "epoch,metrics/mAP50(B),train/box_loss\n0,0.40,1.2\n1,0.75,0.8\n",
+        encoding="utf-8",
+    )
+    model = SimpleNamespace(trainer=SimpleNamespace(save_dir=tmp_path))
+    history = script["training_history"](model, "base", 5)
+    assert history["completed_epochs"] == 2
+    assert history["best_epoch"] == 1
+    assert history["best_metric_value"] == 0.75
+    assert history["stopped_early"] is True
+    assert len(history["epochs"]) == 2
+
+
 def test_context_class_weights_allow_a_missing_incremental_scene() -> None:
     script = runpy.run_path("tools/60_train_scene_sensor.py")
     images = [
@@ -418,6 +457,7 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
     discovered = strict.discover_experiment_profiles(profile_root.parent)
     assert discovered["true_class_incremental_verified"] is True
     assert discovered["verified_count"] == 1
+    assert discovered["core_verified_count"] == 1
     specialist.write_bytes(b"changed")
     try:
         load_experiment_profile("strict-p01")
