@@ -38,6 +38,16 @@ def test_active_inference_uses_verified_frozen_weight() -> None:
     assert state["detector"]["candidate_status"] == "gpu_smoke_verified"
 
 
+@pytest.mark.skipif(not RELEASE_ASSETS_AVAILABLE, reason="release weights are not present")
+def test_blackboard_uses_verified_production_generation() -> None:
+    state = build_blackboard(load_config())
+    generation = state["model_generation"]
+    assert generation["valid"] is True
+    assert generation["production"] == "generation-1-recheck-v2"
+    assert generation["incremental_verified"] is True
+    assert "incremental_compliant_threshold_not_met" not in state["current_blockers"]
+
+
 @pytest.mark.skipif(not PRIVATE_REPORTS_AVAILABLE, reason="private competition reports are not distributed")
 def test_completed_diagnosis_does_not_loop() -> None:
     config = load_config()

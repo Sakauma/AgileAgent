@@ -25,7 +25,7 @@
   <main class="app-main">
     <section class="view is-active" id="view-detect" aria-labelledby="detect-title">
       <div class="page-heading">
-        <div><p class="eyebrow">清晰、可靠的多模态识别</p><h1 id="detect-title">智能目标检测</h1><p>自动判断红外与SAR场景，识别人员、小型飞行器、舰船和坦克。</p></div>
+        <div><p class="eyebrow">清晰、可靠的多模态识别</p><h1 id="detect-title">智能目标检测</h1><p>自动理解红外与SAR场景，并按当前已验收模型代际完成目标识别。</p></div>
       </div>
 
       <div class="stepper" aria-label="检测流程">
@@ -43,15 +43,15 @@
           <button class="dropzone" id="singleDropzone" type="button">
             <span class="drop-icon"><svg><use href="/assets/icons.svg#upload"/></svg></span>
             <strong>拖放图像到这里</strong>
-            <small>或点击选择文件 · 最大20MB</small>
+            <small id="singleLimitText">或点击选择文件</small>
           </button>
           <div class="input-preview is-hidden" id="inputPreview">
             <img id="previewImage" alt="待检测图像预览">
           <div class="file-summary"><strong id="singleFilename"></strong><span id="singleMeta"></span></div>
           </div>
           <details class="advanced-settings">
-            <summary><svg><use href="/assets/icons.svg#settings"/></svg>检测设置<span id="confidenceLabel">置信度 0.50</span></summary>
-            <label for="confidence">最低置信度</label><input id="confidence" type="range" min="0.01" max="1.00" value="0.50" step="0.01">
+            <summary><svg><use href="/assets/icons.svg#settings"/></svg>检测设置<span id="confidenceLabel">置信度</span></summary>
+            <label for="confidence">最低置信度</label><input id="confidence" type="range" step="0.01">
           </details>
           <button class="primary-button" id="detectButton" disabled><svg><use href="/assets/icons.svg#scan"/></svg><span>开始智能检测</span><svg class="button-arrow"><use href="/assets/icons.svg#arrow"/></svg></button>
         </section>
@@ -59,7 +59,7 @@
         <section class="tool-panel result-panel" aria-labelledby="result-title">
         <div class="panel-heading"><div><span class="panel-index">结果</span><h2 id="result-title">检测结果</h2></div><span class="result-state" id="resultState">等待输入</span></div>
         <div class="result-empty" id="resultEmpty"><div class="scan-frame"><span></span><span></span><span></span><span></span><svg><use href="/assets/icons.svg#image"/></svg></div><strong>结果将在这里呈现</strong></div>
-          <div class="result-canvas is-hidden" id="resultCanvas"><img id="resultImage" alt="目标检测标注结果"><div class="result-overlay"><span id="overlaySensor"></span><span id="overlayScene"></span><span id="overlayCount"></span></div></div>
+          <div class="result-canvas is-hidden" id="resultCanvas"><canvas id="resultImage" aria-label="目标检测标注结果"></canvas><div class="result-overlay"><span id="overlaySensor"></span><span id="overlayScene"></span><span id="overlayCount"></span></div></div>
           <section class="agent-decision-panel is-hidden" id="collaborationPanel" aria-label="Agent决策过程">
             <div class="section-heading"><div><p class="eyebrow">Agent 决策</p><h2>本次识别过程</h2></div><span id="collaborationMode"></span></div>
             <div class="collaboration-flow" id="collaborationFlow"></div>
@@ -77,13 +77,13 @@
     </section>
 
     <section class="view" id="view-batch" aria-labelledby="batch-title">
-      <div class="page-heading"><div><p class="eyebrow">高效处理，结果可追踪</p><h1 id="batch-title">批量检测</h1><p>一次处理最多20张图像，完成后生成独立标注图和结果清单。</p></div></div>
+      <div class="page-heading"><div><p class="eyebrow">高效处理，结果可追踪</p><h1 id="batch-title">批量检测</h1><p id="batchIntro">完成后可逐张查看标注图和结果清单。</p></div></div>
       <section class="batch-shell">
         <input id="batchFiles" type="file" accept="image/png,image/jpeg,image/bmp,image/tiff" multiple hidden>
-        <button class="batch-dropzone" id="batchDropzone"><span class="drop-icon"><svg><use href="/assets/icons.svg#layers"/></svg></span><div><strong>选择批量图像</strong><small>单批最多20张，总计不超过200MB</small></div><span class="outline-action">选择文件</span></button>
+        <button class="batch-dropzone" id="batchDropzone"><span class="drop-icon"><svg><use href="/assets/icons.svg#layers"/></svg></span><div><strong>选择批量图像</strong><small id="batchLimitText">支持多图批量处理</small></div><span class="outline-action">选择文件</span></button>
         <div class="batch-toolbar is-hidden" id="batchToolbar"><div><b id="batchCount">0张</b><span id="batchSize">0 MB</span></div><button class="text-button" id="clearBatch"><svg><use href="/assets/icons.svg#trash"/></svg>清空列表</button></div>
         <div class="file-queue" id="batchQueue"></div>
-        <div class="batch-actions"><label>最低置信度 <b id="batchConfidenceLabel">0.50</b><input id="batchConfidence" type="range" min="0.01" max="1.00" value="0.50" step="0.01"></label><button class="primary-button compact" id="batchButton" disabled><svg><use href="/assets/icons.svg#layers"/></svg>开始批量检测</button></div>
+        <div class="batch-actions"><label>最低置信度 <b id="batchConfidenceLabel"></b><input id="batchConfidence" type="range" step="0.01"></label><button class="primary-button compact" id="batchButton" disabled><svg><use href="/assets/icons.svg#layers"/></svg>开始批量检测</button></div>
         <div class="batch-result is-hidden" id="batchResult"><div class="batch-success"><svg><use href="/assets/icons.svg#check"/></svg><div><strong>批量任务已完成</strong><span id="batchResultText"></span></div></div><button class="secondary-button" id="downloadBatch"><svg><use href="/assets/icons.svg#archive"/></svg>下载结果包</button></div>
         <section class="batch-gallery is-hidden" id="batchGallery" aria-label="批量检测结果">
           <div class="section-heading"><div><p class="eyebrow">逐张查看</p><h2>检测结果</h2></div><span id="batchPreviewPosition"></span></div>

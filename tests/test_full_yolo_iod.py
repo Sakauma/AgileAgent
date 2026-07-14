@@ -11,6 +11,7 @@ from fair_agent.modules.full_yolo_iod import (
     GLOBAL_TO_OFFICIAL,
     OFFICIAL_ALL_CLASSES,
     _coco_document,
+    _configure_lock_evaluation,
     _ensure_runtime_directories,
     _inject_gradient_accumulation,
     _rewrite_base_dependency,
@@ -96,6 +97,13 @@ def test_generated_config_uses_stable_base_dependency() -> None:
     result = _rewrite_base_dependency(template, dependency)
     assert dependency in result
     assert "../../third_party" not in result
+
+
+def test_lock_evaluation_keeps_empty_old_class_images() -> None:
+    source = "filter_cfg=dict(filter_empty_gt=True, min_size=32)"
+    result = _configure_lock_evaluation(source)
+    assert "filter_empty_gt=False" in result
+    assert "filter_empty_gt=True" not in result
 
 
 def test_prepare_creates_gps_importance_directory(tmp_path: Path) -> None:

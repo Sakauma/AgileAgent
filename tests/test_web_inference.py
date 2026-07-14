@@ -10,7 +10,6 @@ from PIL import Image
 
 from fair_agent.modules.web_inference import (
     FairInferenceQueue,
-    MAX_BATCH_FILES,
     annotate_records,
     box_iou,
     build_batch_zip,
@@ -25,11 +24,24 @@ from fair_agent.modules.web_inference import (
     remap_specialist_records,
     remap_base_records,
     consensus_specialist_records,
+    suppress_specialist_conflicts,
     yolo_inference_ms,
     validate_batch_uploads,
     validate_image_bytes,
     WebInferenceEngine,
 )
+
+
+TEST_LIMITS = {
+    "max_file_bytes": 20 * 1024 * 1024,
+    "max_batch_files": 20,
+    "max_batch_bytes": 200 * 1024 * 1024,
+    "max_image_pixels": 25_000_000,
+    "allowed_image_formats": ["PNG", "JPEG", "BMP", "TIFF"],
+    "decode_backend": "pillow",
+    "decode_workers": 1,
+}
+ROUTING_ARGS = (4, 0.70, 0.30, 0.50, 0.50)
 
 
 class FakeTensor:
@@ -81,8 +93,11 @@ class FakeDetector:
     def __init__(self, result):
         self.result = result
 
-    def predict(self, **_kwargs):
-        return [self.result]
+    def predict(self, _image, **_kwargs):
+        return self.result
+
+    def predict_batch(self, images, **_kwargs):
+        return [self.result for _ in images]
 
 
 def test_detection_records_are_public_and_serializable() -> None:
@@ -133,7 +148,7 @@ def test_batch_zip_contains_images_and_json() -> None:
 def test_upload_validation_uses_content_hash_not_filename() -> None:
     first = image_png_bytes(Image.new("RGB", (16, 16), "white"))
     second = image_png_bytes(Image.new("RGB", (16, 16), "black"))
-    image, task_id = validate_image_bytes(first, "same.png")
+    image, task_id = validate_image_bytes(first, "same.png", TEST_LIMITS)
     assert image.size == (16, 16)
     assert task_id == content_task_id(first)
     assert task_id != content_task_id(second)
@@ -142,29 +157,52 @@ def test_upload_validation_uses_content_hash_not_filename() -> None:
 def test_upload_validation_rejects_size_pixels_and_duplicate_batch() -> None:
     data = image_png_bytes(Image.new("RGB", (16, 16), "white"))
     try:
-        validate_image_bytes(data, "large.png", max_bytes=10)
+        validate_image_bytes(data, "large.png", {**TEST_LIMITS, "max_file_bytes": 10})
     except ValueError as exc:
         assert "超过" in str(exc)
     else:
         raise AssertionError("oversized upload was accepted")
     try:
-        validate_image_bytes(data, "pixels.png", max_pixels=100)
+        validate_image_bytes(data, "pixels.png", {**TEST_LIMITS, "max_image_pixels": 100})
     except ValueError as exc:
         assert "像素超过限制" in str(exc)
     else:
         raise AssertionError("oversized image was accepted")
     try:
-        validate_batch_uploads([("a.png", data), ("copy.png", data)])
+        validate_batch_uploads([("a.png", data), ("copy.png", data)], TEST_LIMITS)
     except ValueError as exc:
         assert "重复图像" in str(exc)
     else:
         raise AssertionError("duplicate image was accepted")
     try:
-        validate_batch_uploads([(f"{index}.png", data + bytes([index])) for index in range(MAX_BATCH_FILES + 1)])
+        validate_batch_uploads(
+            [(f"{index}.png", data + bytes([index])) for index in range(TEST_LIMITS["max_batch_files"] + 1)],
+            TEST_LIMITS,
+        )
     except ValueError as exc:
         assert "最多处理" in str(exc)
     else:
         raise AssertionError("oversized batch was accepted")
+
+
+def test_parallel_opencv_decode_preserves_order_and_rejects_duplicates() -> None:
+    limits = {**TEST_LIMITS, "decode_backend": "opencv", "decode_workers": 4}
+    colors = ["red", "green", "blue", "white"]
+    rows = [
+        (f"{index}.png", image_png_bytes(Image.new("RGB", (16, 16), color)))
+        for index, color in enumerate(colors)
+    ]
+    validated = validate_batch_uploads(rows, limits)
+    assert [item[0] for item in validated] == [row[0] for row in rows]
+    assert [item[2].getpixel((0, 0)) for item in validated] == [
+        Image.new("RGB", (1, 1), color).getpixel((0, 0)) for color in colors
+    ]
+    try:
+        validate_batch_uploads([rows[0], ("duplicate.png", rows[0][1])], limits)
+    except ValueError as exc:
+        assert "重复图像" in str(exc)
+    else:
+        raise AssertionError("parallel decoder accepted duplicate content")
 
 
 def test_fair_inference_queue_serializes_concurrent_work() -> None:
@@ -256,6 +294,7 @@ def test_class_incremental_route_does_not_require_base_same_class() -> None:
         [{"class_id": 0, "confidence": 0.8, "xyxy": [1, 1, 2, 2]}],
         {"sensor": "sar", "scene": "urban"},
         {0, 1, 2, 3},
+        *ROUTING_ARGS,
     )
     assert [item["id"] for item in eligible] == ["p05_new_vehicle"]
     assert [item["id"] for item in executed] == ["p05_new_vehicle"]
@@ -275,13 +314,14 @@ def test_target_incremental_route_requires_base_class_but_not_scene_match() -> N
         [{"class_id": 2, "confidence": 0.9, "xyxy": [1, 1, 2, 2]}],
         {"scene_probabilities": {"sea": 0.0, "urban": 1.0}},
         {0, 1, 2, 3},
+        *ROUTING_ARGS,
     )
     assert len(eligible) == len(executed) == 1
     assert eligible[0]["context_score"] == 0.0
     assert skipped == []
 
     _eligible, _executed, skipped = plan_specialist_routes(
-        {"p02": protocol}, [], {}, {0, 1, 2, 3}
+        {"p02": protocol}, [], {}, {0, 1, 2, 3}, *ROUTING_ARGS
     )
     assert skipped == [{"id": "p02", "reason": "base_class_not_detected"}]
 
@@ -299,6 +339,17 @@ def test_fusion_preserves_unmatched_base_and_removes_same_class_duplicate() -> N
     assert summary == {"input_count": 3, "output_count": 2, "suppressed_count": 1}
 
 
+def test_cross_class_conflict_suppression_uses_configured_margin() -> None:
+    base = [{"class_id": 1, "confidence": 0.80, "xyxy": [0, 0, 20, 20]}]
+    candidates = [
+        {"class_id": 2, "confidence": 0.90, "xyxy": [1, 1, 19, 19], "protocol_id": "warship"},
+        {"class_id": 2, "confidence": 0.97, "xyxy": [1, 1, 19, 19], "protocol_id": "warship"},
+    ]
+    kept, rejected = suppress_specialist_conflicts(base, candidates, 0.50, 0.50, 0.15)
+    assert kept == [candidates[1]]
+    assert rejected[0]["reason"] == "cross_class_conflict"
+
+
 def test_dynamic_new_class_mapping_and_neutral_context() -> None:
     remapped = remap_specialist_records(
         [{"class_id": 0, "confidence": 0.9, "xyxy": [1, 1, 2, 2]}],
@@ -309,7 +360,7 @@ def test_dynamic_new_class_mapping_and_neutral_context() -> None:
     assert remapped[0]["class_id"] == 7
     assert remapped[0]["class_name"] == "new_vehicle"
     assert remapped[0]["protocol_id"] == "p07"
-    assert context_affinity({}, {}) == 0.5
+    assert context_affinity({}, {}, 0.5) == 0.5
 
 
 def test_strict_base_local_ids_remap_to_global_space() -> None:
@@ -342,10 +393,23 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     engine.device = "cuda:0"
     engine.device_index = "0"
     engine.imgsz = 640
+    engine.specialist_imgsz = 512
     engine.iou = 0.7
     engine.max_det = 300
+    engine.quantize = 16
+    engine.compile = False
     engine.fusion_iou = 0.60
     engine.max_specialists = 4
+    engine.conflict_iou = 0.50
+    engine.conflict_base_confidence = 0.50
+    engine.specialist_margin = 0.15
+    engine.detection_evidence_weight = 0.70
+    engine.context_evidence_weight = 0.30
+    engine.neutral_context_score = 0.50
+    engine.default_routing_prior = 0.50
+    engine.parallel_model_execution = False
+    engine.parallel_context_execution = False
+    engine.context_stream = None
     engine.class_names = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank", 4: "new_vehicle"}
     engine.base_class_ids = {0, 1, 2, 3}
     engine.base_local_to_global = {0: 0, 1: 1, 2: 2, 3: 3}
@@ -360,7 +424,9 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
         "target.pt": DynamicResult([([1, 1, 19, 19], 0.95, 0)]),
         "new.pt": DynamicResult([([70, 70, 90, 90], 0.88, 0)]),
     }
-    engine._yolo_class = lambda path: FakeDetector(specialist_results[path])
+    engine._create_backend = lambda _backend, path, _device, _native: FakeDetector(specialist_results[str(path)])
+    engine.backend_name = "ultralytics_cuda"
+    engine.native_options = {}
     engine.specialist_detectors = {}
     engine.incremental_protocols = {
         "p05_new_vehicle": {

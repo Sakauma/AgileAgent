@@ -235,6 +235,14 @@ def _rewrite_base_dependency(template: str, dependency: str | Path) -> str:
     return _replace_once(template, _RELATIVE_BASE_FRAGMENT, repr(Path(dependency).as_posix()))
 
 
+def _configure_lock_evaluation(text: str) -> str:
+    """Keep new-class-only images as backgrounds during old-class evaluation."""
+    return text.replace(
+        "filter_cfg=dict(filter_empty_gt=True, min_size=32)",
+        "filter_cfg=dict(filter_empty_gt=False, min_size=32)",
+    )
+
+
 def _inject_gradient_accumulation(text: str, steps: int) -> str:
     constructor = "    constructor='YOLOWv5OptimizerConstructor')"
     replacement = f"    accumulative_counts={int(steps)},\n{constructor}"
@@ -474,6 +482,7 @@ def generate_official_configs(
         f"ann_file='{relative_data_root}/{annotation_root}/base_dev.json'",
         f"ann_file='{relative_data_root}/annotations/lock_old.json'",
     )
+    base_lock_text = _configure_lock_evaluation(base_lock_text)
     final_lock_text = final_text.replace(
         f"ann_file='{annotation_root}/{final_val_name}'", "ann_file='annotations/lock_full.json'"
     ).replace("data_prefix=dict(img='images/val/')", "data_prefix=dict(img='images/lock/')")
@@ -481,6 +490,7 @@ def generate_official_configs(
         f"ann_file='{relative_data_root}/{annotation_root}/{final_val_name}'",
         f"ann_file='{relative_data_root}/annotations/lock_full.json'",
     )
+    final_lock_text = _configure_lock_evaluation(final_lock_text)
     for path, content in (
         (base_config, base_text),
         (current_config, current_text),

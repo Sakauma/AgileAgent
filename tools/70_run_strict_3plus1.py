@@ -38,6 +38,7 @@ from fair_agent.modules.strict_incremental import (
     materialize_lock_data,
     precision_recall,
     read_split,
+    retention_metrics,
     sha256_file,
     source_label,
     subset_rows,
@@ -52,6 +53,30 @@ from fair_agent.modules.incremental_methods import (
     restore_protected_old_rows,
     shared_parameter_relative_drift,
 )
+
+
+def _audit_event(
+    config: Mapping[str, Any],
+    protocol_id: str,
+    state: str,
+    status: str = "completed",
+    **details: Any,
+) -> None:
+    configured = config.get("experiment_audit", {}).get("events")
+    if not configured:
+        return
+    path = Path(str(configured)).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "time": datetime.now().astimezone().isoformat(),
+        "monotonic_ns": time.monotonic_ns(),
+        "protocol": protocol_id,
+        "state": state,
+        "status": status,
+        **details,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]:
@@ -251,6 +276,42 @@ def best_weight(model: Any, train_result: Any) -> Path:
         if candidate.exists():
             return candidate
     raise FileNotFoundError("训练结束但未找到 best.pt 或 last.pt")
+
+
+def training_history(model: Any, phase: str, requested_epochs: int) -> Dict[str, Any]:
+    trainer = model.trainer
+    results_path = Path(trainer.save_dir) / "results.csv"
+    rows: list[Dict[str, Any]] = []
+    if results_path.exists():
+        with results_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            for raw in csv.DictReader(handle):
+                row: Dict[str, Any] = {}
+                for key, value in raw.items():
+                    name = str(key).strip()
+                    text = str(value).strip()
+                    try:
+                        row[name] = float(text)
+                    except ValueError:
+                        row[name] = text
+                rows.append(row)
+    metric_key = next(
+        (key for key in (rows[0] if rows else {}) if "mAP50(B)" in key),
+        None,
+    )
+    best_row = max(rows, key=lambda row: float(row.get(metric_key, float("-inf")))) if metric_key else None
+    completed_epochs = len(rows)
+    return {
+        "phase": phase,
+        "results_csv": rel_path(results_path) if results_path.exists() else None,
+        "requested_epochs": int(requested_epochs),
+        "completed_epochs": completed_epochs,
+        "best_epoch": int(float(best_row.get("epoch", 0))) if best_row else None,
+        "best_metric": metric_key,
+        "best_metric_value": float(best_row[metric_key]) if best_row and metric_key else None,
+        "stopped_early": completed_epochs < int(requested_epochs),
+        "stop_reason": "early_stopping_or_interruption" if completed_epochs < int(requested_epochs) else "epoch_budget_reached",
+        "epochs": rows,
+    }
 
 
 def _trainer_model(trainer: Any) -> Any:
@@ -919,6 +980,7 @@ def run_protocol(
 
     config = load_yaml(config_path)
     protocol = protocol_by_id(config, protocol_id)
+    _audit_event(config, protocol_id, "CREATED", status="running", device=device)
     for key, value in config["runtime"].get("env", {}).items():
         os.environ[str(key)] = str(value)
     dataset_dir = resolve_path(config["paths"]["dataset_root"]) / run_id / protocol_id
@@ -939,6 +1001,8 @@ def run_protocol(
     unified_modes = {"expanded_single_student", "duet_yolo11s", "yolo_iod_lite"}
     unified_student = adaptation_mode in unified_modes
     method_audit: Dict[str, Any] = {"method": adaptation_mode}
+    base_history: Dict[str, Any] = {"phase": "base", "reused": bool(config.get("paths", {}).get("shared_base_checkpoint"))}
+    incremental_histories: list[Dict[str, Any]] = []
 
     started = time.monotonic()
     if recheck:
@@ -966,8 +1030,22 @@ def run_protocol(
                 **train_arguments(config, "base_train", base_dataset, run_dir, "base", device)
             )
             base_weight = best_weight(base_model, base_train_result)
+            base_history = training_history(
+                base_model,
+                "base",
+                int(config["base_train"]["epochs"]),
+            )
             method_audit["base_checkpoint_reused"] = False
+        _audit_event(
+            config,
+            protocol_id,
+            "BASE_TRAINED",
+            weight=rel_path(base_weight),
+            sha256=sha256_file(base_weight),
+            training_history=base_history,
+        )
         base_hash_before = sha256_file(base_weight)
+        _audit_event(config, protocol_id, "BASE_FROZEN", sha256=base_hash_before)
         mapping = {int(key): int(value) for key, value in protocol["base_local_to_global"].items()}
         new_id = int(protocol["new_global_id"])
         if adaptation_mode == "duet_yolo11s":
@@ -994,6 +1072,11 @@ def run_protocol(
                 )
             )
             current_weight = best_weight(current_model, current_result)
+            incremental_histories.append(training_history(
+                current_model,
+                "duet_current",
+                int(config["methods"][adaptation_mode]["current_task_train"]["epochs"]),
+            ))
             final_weight = run_dir / "duet_final" / "weights" / "best.pt"
             method_audit.update(
                 build_duet_checkpoint(
@@ -1032,6 +1115,11 @@ def run_protocol(
                 )
             )
             current_weight = best_weight(current_model, current_result)
+            incremental_histories.append(training_history(
+                current_model,
+                "yolo_iod_current_teacher",
+                int(config["methods"][adaptation_mode]["current_teacher_train"]["epochs"]),
+            ))
             student_model = YOLO(str(config.get("adaptation", {}).get("student_init", config["model"])))
             student_model.add_callback(
                 "on_pretrain_routine_end",
@@ -1060,6 +1148,11 @@ def run_protocol(
                 )
             )
             incremental_weight = best_weight(student_model, student_result)
+            incremental_histories.append(training_history(
+                student_model,
+                "yolo_iod_student",
+                int(config["methods"][adaptation_mode]["student_train"]["epochs"]),
+            ))
             method_audit.update(
                 dict(getattr(student_model.trainer, "_incremental_method_audit", {}))
             )
@@ -1081,12 +1174,31 @@ def run_protocol(
                 **train_arguments(config, "student_train", student_dataset, run_dir, "student", device)
             )
             incremental_weight = best_weight(student_model, student_train_result)
+            incremental_histories.append(training_history(
+                student_model,
+                "incremental_student",
+                int(config["student_train"]["epochs"]),
+            ))
         else:
             specialist_model = YOLO(str(base_weight))
             specialist_train_result = specialist_model.train(
                 **train_arguments(config, "incremental_train", incremental_dataset, run_dir, "specialist", device)
             )
             incremental_weight = best_weight(specialist_model, specialist_train_result)
+            incremental_histories.append(training_history(
+                specialist_model,
+                "incremental_specialist",
+                int(config["incremental_train"]["epochs"]),
+            ))
+        _audit_event(
+            config,
+            protocol_id,
+            "INCREMENT_TRAINED",
+            weight=rel_path(incremental_weight),
+            sha256=sha256_file(incremental_weight),
+            training_histories=incremental_histories,
+        )
+        _audit_event(config, protocol_id, "INCREMENT_FROZEN", sha256=sha256_file(incremental_weight))
     base_hash_after = sha256_file(base_weight)
     base_weight_drift = 0.0 if base_hash_before == base_hash_after else 1.0
 
@@ -1121,6 +1233,14 @@ def run_protocol(
         float(calibration_cfg["threshold_step"]),
         float(calibration_cfg["target_precision"]),
     )
+    _audit_event(
+        config,
+        protocol_id,
+        "THRESHOLD_CALIBRATED",
+        threshold=float(calibration["selected"]["threshold"]),
+        precision=float(calibration["selected"]["precision"]),
+        source="incremental_dev_only",
+    )
 
     # This is the first point where lock labels are read or transformed.
     manifest_path = dataset_dir / "manifest.json"
@@ -1128,6 +1248,7 @@ def run_protocol(
     dataset_manifest = existing_manifest if existing_manifest.get("lock_materialized_after_freeze") else materialize_lock_data(
         protocol, config["paths"]["source_splits"]["lock"], dataset_dir
     )
+    _audit_event(config, protocol_id, "LOCK_UNSEALED", split_sha256=dataset_manifest["source_split_sha256"]["lock"])
     lock_images = read_split(config["paths"]["source_splits"]["lock"])
     base_test_images = read_split(dataset_dir / "base" / "splits" / "test.txt")
     incremental_test_images = read_split(dataset_dir / incremental_phase / "splits" / "test.txt")
@@ -1166,15 +1287,14 @@ def run_protocol(
         else class_aware_nms(base_predictions + incremental_predictions, float(config["fusion"]["nms_iou"]))
     )
     old_ids = sorted(base_mapping.values())
-    old_metrics = evaluate_ap50(base_predictions, ground_truth, old_ids)
+    retention = retention_metrics(base_predictions, combined_predictions, ground_truth, old_ids)
+    old_metrics = retention["before_metrics"]
     new_metrics = evaluate_ap50(combined_predictions, ground_truth, [new_id])
     full_metrics = evaluate_ap50(combined_predictions, ground_truth, GLOBAL_CLASS_NAMES)
-    old_before = float(old_metrics["map50"])
-    old_after = (
-        float(evaluate_ap50(combined_predictions, ground_truth, old_ids)["map50"])
-        if unified_student else old_before
-    )
-    krr = old_after / old_before if old_before else 0.0
+    old_before = float(retention["old_map50_before"])
+    old_after = float(retention["old_map50_after"])
+    old_prediction_equivalent = bool(retention["old_prediction_equivalent"])
+    krr = float(retention["krr"])
     reference_map50 = incremental_reference_map50 if unified_student else base_reference_map50
     evaluator_error = abs(reference_map50 - (float(full_metrics["map50"]) if unified_student else old_before))
     old_channel_drift = (
@@ -1205,14 +1325,21 @@ def run_protocol(
 
     acceptance = config["acceptance"]
     gates = {
-        "data_compliance": dataset_manifest["old_raw_image_count"] == 0 and not any(dataset_manifest["intersections"].values()),
+        "data_compliance": (
+            dataset_manifest["old_raw_image_count"] == 0
+            and dataset_manifest.get("old_raw_label_count", 0) == 0
+            and dataset_manifest.get("old_feature_cache_count", 0) == 0
+            and not any(dataset_manifest["intersections"].values())
+        ),
         "base_nc": dataset_manifest["base_nc"] == 3,
         "incremental_output_shape": (
             dataset_manifest.get("student_nc") == 4 if unified_student
             else dataset_manifest["specialist_nc"] == 1
         ),
         "new_map50": float(new_metrics["map50"]) >= float(acceptance["min_new_map50"]),
+        "base_map50": old_before >= float(acceptance.get("min_base_map50", 0.0)),
         "krr": krr >= float(acceptance["min_krr"]),
+        "old_prediction_equivalence": old_prediction_equivalent,
         "calibration_precision": bool(calibration["passed"]) and float(calibration["selected"]["precision"]) >= float(acceptance["min_calibration_precision"]),
         "evaluator_consistency": evaluator_error <= float(acceptance["max_evaluator_error"]),
         "base_weight_unchanged": base_weight_drift <= float(acceptance["max_base_weight_drift"]),
@@ -1263,12 +1390,14 @@ def run_protocol(
         "shared_parameter_relative_drift": shared_drift,
         "method_audit": method_audit,
         "old_raw_image_count": dataset_manifest["old_raw_image_count"],
+        "old_raw_stems": dataset_manifest.get("old_raw_stems", []),
         "old_map50_before": old_before,
         "old_map50_after": old_after,
         "new_map50": float(new_metrics["map50"]),
         "full_map50": float(full_metrics["map50"]),
         "per_class_ap50": full_metrics["per_class_ap50"],
         "krr": krr,
+        "old_prediction_equivalent": old_prediction_equivalent,
         "ultralytics_base_map50": reference_map50,
         "evaluator_error": evaluator_error,
         "calibration": calibration,
@@ -1287,6 +1416,15 @@ def run_protocol(
         "reference_unified_four_class_map50": float(config["reference"]["unified_four_class_map50"]),
     }
     write_protocol_report(report_dir, result)
+    _audit_event(
+        config,
+        protocol_id,
+        "EVALUATED",
+        base_map50=old_before,
+        new_map50=float(new_metrics["map50"]),
+        krr=krr,
+        full_map50=float(full_metrics["map50"]),
+    )
     (report_dir / "calibration.json").write_text(
         json.dumps(calibration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -1302,6 +1440,10 @@ def run_protocol(
         (report_dir / "metrics.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        _audit_event(config, protocol_id, "ACCEPTED", gates=gates)
+        _audit_event(config, protocol_id, "REGISTERED", profile=result.get("profile"))
+    else:
+        _audit_event(config, protocol_id, "REJECTED", gates=gates)
     return result
 
 

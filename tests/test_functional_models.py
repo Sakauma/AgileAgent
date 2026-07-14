@@ -19,11 +19,18 @@ def test_three_distinct_functional_models_are_registered() -> None:
     assert result["distinct_function_count"] == 3
     assert result["all_x86_gpu_ready"] is True
     assert result["all_ascend_310b_ready"] is False
+    assert result["strict_class_incremental"]["true_class_incremental_verified"] is True
+    assert result["strict_class_incremental"]["production_profile"]["model_id"] == "strict_p02_warship_recheck_v2"
     assert {item["function"] for item in result["models"]} == {
         "context_perception",
         "multimodal_target_detection",
         "incremental_object_detection",
     }
+    incremental = next(
+        item for item in result["models"] if item["function"] == "incremental_object_detection"
+    )
+    assert incremental["evidence"]["summary"]["true_class_incremental_verified"] is True
+    assert incremental["evidence"]["summary"]["production_class_incremental"]["activation_threshold"] == 0.63
 
 
 def test_functional_registry_rejects_tampered_hash(tmp_path: Path) -> None:

@@ -62,7 +62,7 @@ calibration:
   threshold_min: 0.01
   threshold_max: 0.99
   threshold_step: 0.01
-  target_precision: 0.90
+  target_precision: 0.99
 
 bootstrap:
   iterations: 1000
@@ -70,9 +70,13 @@ bootstrap:
   strata: [sensor, class_presence]
 
 acceptance:
+  min_base_map50: 0.80
   min_new_map50: 0.60
   min_krr: 0.95
-  min_calibration_precision: 0.90
+  min_full_map50: 0.80
+  min_calibration_precision: 0.99
+  min_lock_precision: 0.70
+  max_false_activation_rate: 0.15
   max_evaluator_error: 0.005
   max_base_weight_drift: 0.0
 

@@ -22,7 +22,7 @@ def test_serve_is_bound_to_loopback(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(cli, "check_module", lambda _name: True)
 
-    def fake_call(command, cwd):
+    def fake_call(command, cwd, env=None):
         captured["command"] = command
         captured["cwd"] = cwd
         return 0
@@ -39,7 +39,7 @@ def test_serve_is_bound_to_loopback(monkeypatch) -> None:
 def test_serve_stops_cleanly_on_keyboard_interrupt(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "check_module", lambda _name: True)
 
-    def interrupted_call(_command, cwd):
+    def interrupted_call(_command, cwd, env=None):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli.subprocess, "call", interrupted_call)
@@ -56,11 +56,13 @@ def test_web_ui_has_no_collapsible_sidebar_dependency() -> None:
     assert "sidebar" not in content.lower()
 
 
-def test_web_upload_limits_are_owned_by_inference_module() -> None:
-    content = Path("fair_agent/modules/web_inference.py").read_text(encoding="utf-8")
-    assert "MAX_FILE_BYTES = 20 * 1024 * 1024" in content
-    assert "MAX_BATCH_FILES = 20" in content
-    assert "MAX_BATCH_BYTES = 200 * 1024 * 1024" in content
+def test_web_upload_limits_are_owned_by_main_yaml() -> None:
+    config = load_config()
+    assert config["limits"]["max_file_bytes"] == 20 * 1024 * 1024
+    assert config["limits"]["max_batch_files"] == 20
+    assert config["limits"]["max_batch_bytes"] == 200 * 1024 * 1024
+    runtime = Path("fair_agent/modules/web_inference.py").read_text(encoding="utf-8")
+    assert "MAX_FILE_BYTES" not in runtime
 
 
 def test_cli_has_no_retired_image_size_commands() -> None:
@@ -224,9 +226,12 @@ def test_static_release_verification_passes() -> None:
     result = verify_release()
     assert result["status"] == "passed", result["errors"]
     assert isinstance(result["required_assets"], dict)
-    assert len(result["required_assets"]) == 9
+    assert len(result["required_assets"]) == 10
     assert result["functional_models"]["valid"] is True
     assert result["functional_models"]["distinct_function_count"] == 3
+    assert result["model_generations"]["production"] == "generation-1-recheck-v2"
+    assert result["model_generations"]["production_classes"] == [0, 1, 2, 3]
+    assert result["model_generations"]["candidate_status"] == "active"
 
 
 def test_manifest_blocks_uncalibrated_or_overlapping_true_new_class() -> None:

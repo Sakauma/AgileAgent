@@ -8,8 +8,9 @@ import threading
 import time
 import zipfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, TypeVar
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, TypeVar
 
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
@@ -17,22 +18,16 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 CLASS_NAMES = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
 SENSOR_LABELS = {"ir": "红外", "sar": "SAR"}
 SCENE_LABELS = {"air": "空域", "forest": "林地", "sea": "海域", "urban": "城市场景"}
-MAX_FILE_BYTES = 20 * 1024 * 1024
-MAX_BATCH_FILES = 20
-MAX_BATCH_BYTES = 200 * 1024 * 1024
-MAX_IMAGE_PIXELS = 25_000_000
-ALLOWED_IMAGE_FORMATS = {"PNG", "JPEG", "BMP", "TIFF"}
 T = TypeVar("T")
 
 
 class FairInferenceQueue:
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._next_ticket = 0
-        self._serving_ticket = 0
         self._waiting = 0
         self._active = False
         self._completed = 0
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agile-agent-gpu")
 
     def status(self) -> Dict[str, int | bool]:
         with self._condition:
@@ -45,22 +40,22 @@ class FairInferenceQueue:
     def run(self, operation: Callable[[], T]) -> tuple[T, float]:
         queued_at = time.perf_counter()
         with self._condition:
-            ticket = self._next_ticket
-            self._next_ticket += 1
             self._waiting += 1
-            while ticket != self._serving_ticket:
-                self._condition.wait()
-            self._waiting -= 1
-            self._active = True
-        wait_ms = round((time.perf_counter() - queued_at) * 1000, 1)
-        try:
-            return operation(), wait_ms
-        finally:
+
+        def execute() -> tuple[T, float]:
             with self._condition:
-                self._active = False
-                self._completed += 1
-                self._serving_ticket += 1
-                self._condition.notify_all()
+                self._waiting -= 1
+                self._active = True
+            wait_ms = round((time.perf_counter() - queued_at) * 1000, 1)
+            try:
+                return operation(), wait_ms
+            finally:
+                with self._condition:
+                    self._active = False
+                    self._completed += 1
+                    self._condition.notify_all()
+
+        return self._executor.submit(execute).result()
 
 
 def content_task_id(data: bytes) -> str:
@@ -70,9 +65,11 @@ def content_task_id(data: bytes) -> str:
 def validate_image_bytes(
     data: bytes,
     filename: str,
-    max_bytes: int = MAX_FILE_BYTES,
-    max_pixels: int = MAX_IMAGE_PIXELS,
+    limits: Mapping[str, Any],
 ) -> tuple[Image.Image, str]:
+    max_bytes = int(limits["max_file_bytes"])
+    max_pixels = int(limits["max_image_pixels"])
+    allowed_formats = {str(value).upper() for value in limits["allowed_image_formats"]}
     if not data:
         raise ValueError(f"图像为空：{filename}")
     if len(data) > max_bytes:
@@ -81,30 +78,51 @@ def validate_image_bytes(
         with Image.open(io.BytesIO(data)) as source:
             image_format = str(source.format or "").upper()
             width, height = source.size
-            if image_format not in ALLOWED_IMAGE_FORMATS:
+            if image_format not in allowed_formats:
                 raise ValueError(f"不支持的图像格式：{image_format or 'unknown'}")
             if width <= 0 or height <= 0 or width * height > max_pixels:
                 raise ValueError(f"图像像素超过限制：{width}x{height}")
-            source.load()
-            image = source.convert("RGB")
+            if str(limits.get("decode_backend", "pillow")) == "pillow":
+                source.load()
+                image = source.convert("RGB")
+            else:
+                import cv2
+                import numpy as np
+
+                decoded = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if decoded is None or decoded.shape[1] != width or decoded.shape[0] != height:
+                    raise ValueError(f"无法读取图像：{filename}")
+                image = Image.fromarray(cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB))
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise ValueError(f"无法读取图像：{filename}") from exc
     return image, content_task_id(data)
 
 
-def validate_batch_uploads(items: Iterable[tuple[str, bytes]]) -> List[tuple[str, bytes, Image.Image, str]]:
+def validate_batch_uploads(
+    items: Iterable[tuple[str, bytes]],
+    limits: Mapping[str, Any],
+) -> List[tuple[str, bytes, Image.Image, str]]:
     rows = list(items)
     if not rows:
         raise ValueError("请选择至少一张图像。")
-    if len(rows) > MAX_BATCH_FILES:
-        raise ValueError(f"单批最多处理 {MAX_BATCH_FILES} 张图像。")
+    max_files = int(limits["max_batch_files"])
+    max_batch_bytes = int(limits["max_batch_bytes"])
+    if len(rows) > max_files:
+        raise ValueError(f"单批最多处理 {max_files} 张图像。")
     total_bytes = sum(len(data) for _, data in rows)
-    if total_bytes > MAX_BATCH_BYTES:
-        raise ValueError(f"单批总大小不能超过 {MAX_BATCH_BYTES // (1024 * 1024)}MB。")
+    if total_bytes > max_batch_bytes:
+        raise ValueError(f"单批总大小不能超过 {max_batch_bytes // (1024 * 1024)}MB。")
+    decode_workers = min(int(limits.get("decode_workers", 1)), len(rows))
+    if decode_workers > 1:
+        with ThreadPoolExecutor(max_workers=decode_workers) as pool:
+            decoded_rows = list(
+                pool.map(lambda item: validate_image_bytes(item[1], item[0], limits), rows)
+            )
+    else:
+        decoded_rows = [validate_image_bytes(data, filename, limits) for filename, data in rows]
     validated = []
     seen_ids = set()
-    for filename, data in rows:
-        image, task_id = validate_image_bytes(data, filename)
+    for (filename, data), (image, task_id) in zip(rows, decoded_rows):
         if task_id in seen_ids:
             raise ValueError(f"批次中存在重复图像：{filename}")
         seen_ids.add(task_id)
@@ -141,6 +159,15 @@ def summarize_records(records: Iterable[Dict[str, Any]]) -> Dict[str, int]:
 def yolo_inference_ms(result: Any) -> float:
     speed = getattr(result, "speed", None) or {}
     return max(0.0, float(speed.get("inference", 0.0)))
+
+
+def yolo_timings(result: Any) -> Dict[str, float]:
+    speed = getattr(result, "speed", None) or {}
+    return {
+        "preprocess_ms": max(0.0, float(speed.get("preprocess", 0.0))),
+        "inference_ms": max(0.0, float(speed.get("inference", 0.0))),
+        "postprocess_ms": max(0.0, float(speed.get("postprocess", 0.0))),
+    }
 
 
 def remap_specialist_records(
@@ -215,7 +242,11 @@ def compose_incremental_records(
     return old_records + remap_specialist_records(specialist_records, global_class_id)
 
 
-def context_affinity(context: Mapping[str, Any], prior: Mapping[str, Any] | None) -> float:
+def context_affinity(
+    context: Mapping[str, Any],
+    prior: Mapping[str, Any] | None,
+    neutral_score: float,
+) -> float:
     """Return a soft context score. Missing priors stay neutral and never reject a route."""
     prior = dict(prior or {})
     components: List[float] = []
@@ -225,7 +256,7 @@ def context_affinity(context: Mapping[str, Any], prior: Mapping[str, Any] | None
         if isinstance(weights, Mapping) and isinstance(probabilities, Mapping) and weights:
             score = sum(float(probabilities.get(name, 0.0)) * float(weight) for name, weight in weights.items())
             components.append(max(0.0, min(1.0, score)))
-    return sum(components) / len(components) if components else 0.5
+    return sum(components) / len(components) if components else float(neutral_score)
 
 
 def plan_specialist_routes(
@@ -233,7 +264,11 @@ def plan_specialist_routes(
     base_records: Iterable[Dict[str, Any]],
     context: Mapping[str, Any],
     base_class_ids: Iterable[int],
-    max_specialists: int = 4,
+    max_specialists: int,
+    detection_weight: float,
+    context_weight: float,
+    neutral_context_score: float,
+    default_routing_prior: float,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     base_rows = list(base_records)
     base_ids = {int(value) for value in base_class_ids}
@@ -253,7 +288,7 @@ def plan_specialist_routes(
             if protocol.get("activation_threshold") is None or not protocol.get("calibration_source"):
                 skipped.append({"id": protocol_id, "reason": "activation_threshold_not_calibrated"})
                 continue
-            evidence_score = float(protocol.get("routing_prior", 0.5))
+            evidence_score = float(protocol.get("routing_prior", default_routing_prior))
             mode_priority = 0
         elif mode == "target_incremental":
             references = [row for row in base_rows if int(row["class_id"]) == global_class_id]
@@ -265,14 +300,14 @@ def plan_specialist_routes(
         else:
             skipped.append({"id": protocol_id, "reason": "unsupported_incremental_mode"})
             continue
-        soft_context = context_affinity(context, protocol.get("context_prior"))
+        soft_context = context_affinity(context, protocol.get("context_prior"), neutral_context_score)
         route = {
             "id": protocol_id,
             "protocol": protocol,
             "incremental_mode": mode,
             "evidence_score": round(evidence_score, 6),
             "context_score": round(soft_context, 6),
-            "routing_score": round(0.7 * evidence_score + 0.3 * soft_context, 6),
+            "routing_score": round(detection_weight * evidence_score + context_weight * soft_context, 6),
             "mode_priority": mode_priority,
         }
         eligible.append(route)
@@ -308,6 +343,47 @@ def class_aware_nms(
     return kept, {"input_count": len(rows), "output_count": len(kept), "suppressed_count": suppressed}
 
 
+def suppress_specialist_conflicts(
+    base_records: Iterable[Dict[str, Any]],
+    specialist_records: Iterable[Dict[str, Any]],
+    conflict_iou: float,
+    base_confidence: float,
+    specialist_margin: float,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Reject specialist boxes that conflict with a confident old-class box."""
+    base_rows = list(base_records)
+    kept: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    for candidate in specialist_records:
+        conflict = None
+        for base in base_rows:
+            if int(base["class_id"]) == int(candidate["class_id"]):
+                continue
+            overlap = box_iou(candidate["xyxy"], base["xyxy"])
+            base_score = float(base.get("confidence", 0.0))
+            specialist_score = float(candidate.get("confidence", 0.0))
+            if (
+                overlap >= conflict_iou
+                and base_score >= base_confidence
+                and specialist_score <= base_score + specialist_margin
+            ):
+                conflict = {
+                    "protocol_id": candidate.get("protocol_id"),
+                    "specialist_class_id": int(candidate["class_id"]),
+                    "base_class_id": int(base["class_id"]),
+                    "iou": round(overlap, 6),
+                    "specialist_confidence": round(specialist_score, 6),
+                    "base_confidence": round(base_score, 6),
+                    "reason": "cross_class_conflict",
+                }
+                break
+        if conflict is None:
+            kept.append(candidate)
+        else:
+            rejected.append(conflict)
+    return kept, rejected
+
+
 def annotate_records(image: Image.Image, records: Iterable[Dict[str, Any]]) -> Image.Image:
     canvas = image.convert("RGB").copy()
     draw = ImageDraw.Draw(canvas)
@@ -327,6 +403,12 @@ def image_png_bytes(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
+def render_annotated_png(source_bytes: bytes, records: Iterable[Dict[str, Any]]) -> bytes:
+    with Image.open(io.BytesIO(source_bytes)) as source:
+        source.load()
+        return image_png_bytes(annotate_records(source.convert("RGB"), records))
+
+
 def result_json_bytes(payload: Dict[str, Any]) -> bytes:
     return (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
@@ -339,12 +421,15 @@ def build_batch_zip(results: Iterable[Dict[str, Any]]) -> bytes:
         for index, item in enumerate(rows, 1):
             source_stem = Path(str(item["filename"])).stem
             safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", source_stem).strip("._") or "image"
-            archive.writestr(f"annotated/{index:03d}_{safe_stem}.png", item["annotated_png"])
+            annotated_png = item.get("annotated_png")
+            if annotated_png is None:
+                annotated_png = render_annotated_png(item["source_bytes"], item.get("detections", []))
+            archive.writestr(f"annotated/{index:03d}_{safe_stem}.png", annotated_png)
             metadata.append(
                 {
                     key: value
                     for key, value in item.items()
-                    if key not in {"annotated_png", "annotated_image", "task_id"}
+                    if key not in {"annotated_png", "annotated_image", "source_bytes", "task_id"}
                 }
             )
         archive.writestr("results.json", result_json_bytes({"image_count": len(rows), "results": metadata}))
@@ -363,16 +448,36 @@ class WebInferenceEngine:
         base_class_ids: Iterable[int] | None = None,
         base_local_to_global: Mapping[int, int] | None = None,
         routing_options: Mapping[str, Any] | None = None,
+        generation_id: str = "legacy-unified",
+        base_model_id: str = "unified_yolo11s_v1",
+        class_owners: Mapping[int, str] | None = None,
+        backend_name: str = "ultralytics_cuda",
+        native_options: Mapping[str, Any] | None = None,
     ) -> None:
-        from ultralytics import YOLO
-
-        from fair_agent.models.context import load_context_model, predict_context
+        from fair_agent.backends.inference import create_backend
+        from fair_agent.models.context import (
+            load_context_model,
+            load_tensorrt_context_model,
+            predict_context,
+            predict_context_batch,
+        )
 
         self.device_index = str(device_index)
         self.device = f"cuda:{self.device_index}"
-        self._yolo_class = YOLO
-        self.detector = YOLO(str(detector_path))
-        self.context_model, self.context_checkpoint = load_context_model(context_path, self.device)
+        self.backend_name = str(backend_name)
+        self.native_options = dict(native_options or {})
+        self._create_backend = create_backend
+        self.detector = create_backend(
+            self.backend_name, detector_path, self.device_index, self.native_options
+        )
+        if self.backend_name == "tensorrt_engine":
+            self.context_model, self.context_checkpoint = load_tensorrt_context_model(
+                context_path,
+                dict(self.native_options["context_engine"]),
+                self.device,
+            )
+        else:
+            self.context_model, self.context_checkpoint = load_context_model(context_path, self.device)
         self.class_names = {int(key): str(value) for key, value in (class_names or CLASS_NAMES).items()}
         configured_base_ids = {int(value) for value in (base_class_ids or self.class_names)}
         self.base_local_to_global = {
@@ -380,35 +485,112 @@ class WebInferenceEngine:
             for key, value in (base_local_to_global or {class_id: class_id for class_id in configured_base_ids}).items()
         }
         self.base_class_ids = set(self.base_local_to_global.values())
+        self.generation_id = str(generation_id)
+        self.base_model_id = str(base_model_id)
+        self.class_owners = {
+            int(key): str(value)
+            for key, value in (class_owners or {class_id: self.base_model_id for class_id in self.base_class_ids}).items()
+        }
         self.base_local_names = {
             local_id: self.class_names[global_id] for local_id, global_id in self.base_local_to_global.items()
         }
         options = dict(predict_options or {})
         routing = dict(routing_options or {})
-        self.imgsz = int(options.get("imgsz", 640))
-        self.iou = float(options.get("iou", 0.7))
-        self.max_det = int(options.get("max_det", 300))
-        self.fusion_iou = float(routing.get("fusion_iou", 0.60))
-        self.max_specialists = int(routing.get("max_specialists_per_image", 4))
+        self.imgsz = int(options["imgsz"])
+        self.specialist_imgsz = int(options["specialist_imgsz"])
+        self.iou = float(options["iou"])
+        self.max_det = int(options["max_det"])
+        self.batch_size = int(options["batch_size"])
+        self.default_confidence = float(options["confidence_default"])
+        self.warmup_iterations = int(options["warmup_iterations"])
+        self.warmup_batch_size = int(options["warmup_batch_size"])
+        self.warmup_width = int(options["warmup_width"])
+        self.warmup_height = int(options["warmup_height"])
+        self.preload_specialists = bool(options["preload_specialists"])
+        self.quantize = options["quantize"]
+        self.compile = bool(options["compile"])
+        self.fusion_iou = float(routing["fusion_iou"])
+        self.max_specialists = int(routing["max_specialists_per_image"])
+        self.conflict_iou = float(routing["conflict_iou"])
+        self.conflict_base_confidence = float(routing["conflict_base_confidence"])
+        self.specialist_margin = float(routing["specialist_margin"])
+        self.detection_evidence_weight = float(routing["detection_evidence_weight"])
+        self.context_evidence_weight = float(routing["context_evidence_weight"])
+        self.neutral_context_score = float(routing["neutral_context_score"])
+        self.default_routing_prior = float(routing["default_routing_prior"])
+        self.parallel_model_execution = bool(routing["parallel_model_execution"])
+        self.parallel_context_execution = bool(routing["parallel_context_execution"])
+        self.parallel_context_batch_execution = bool(routing["parallel_context_batch_execution"])
+        self.max_model_workers = int(routing["max_model_workers"])
+        import torch
+        torch.backends.cudnn.benchmark = bool(options["cudnn_benchmark"])
+        self.context_stream = torch.cuda.Stream(device=int(self.device_index))
+        self._model_executor = ThreadPoolExecutor(max_workers=self.max_model_workers)
         context_size = int(self.context_checkpoint["preprocessing"]["image_size"])
-        warmup_image = Image.new("RGB", (self.imgsz, self.imgsz))
-        predict_context(
+        warmup_image = Image.new("RGB", (self.warmup_width, self.warmup_height))
+        context_warmup = Image.new("RGB", (context_size, context_size))
+        for _ in range(self.warmup_iterations):
+            predict_context(
+                self.context_model,
+                self.context_checkpoint,
+                context_warmup,
+                self.device,
+                self.context_stream,
+            )
+            self.detector.predict(
+                warmup_image,
+                imgsz=self.imgsz,
+                conf=self.default_confidence,
+                iou=self.iou,
+                max_det=self.max_det,
+                quantize=self.quantize,
+                compile=self.compile,
+            )
+        warmup_batch = [warmup_image] * self.warmup_batch_size
+        predict_context_batch(
             self.context_model,
             self.context_checkpoint,
-            Image.new("RGB", (context_size, context_size)),
+            [context_warmup] * self.warmup_batch_size,
             self.device,
+            self.context_stream,
         )
-        self.detector.predict(
-            source=warmup_image,
+        self.detector.predict_batch(
+            warmup_batch,
             imgsz=self.imgsz,
-            conf=0.50,
+            conf=self.default_confidence,
             iou=self.iou,
             max_det=self.max_det,
-            device=self.device_index,
-            verbose=False,
+            quantize=self.quantize,
+            compile=self.compile,
         )
         self.incremental_protocols = {name: dict(value) for name, value in (incremental_protocols or {}).items()}
         self.specialist_detectors: Dict[str, Any] = {}
+        if self.preload_specialists:
+            for protocol_id, protocol in self.incremental_protocols.items():
+                if not protocol.get("available"):
+                    continue
+                backend = self._create_backend(
+                    self.backend_name, protocol["weights"], self.device_index, self.native_options
+                )
+                backend.predict(
+                    warmup_image,
+                    imgsz=self.specialist_imgsz,
+                    conf=self.default_confidence,
+                    iou=self.iou,
+                    max_det=self.max_det,
+                    quantize=self.quantize,
+                    compile=self.compile,
+                )
+                backend.predict_batch(
+                    warmup_batch,
+                    imgsz=self.specialist_imgsz,
+                    conf=self.default_confidence,
+                    iou=self.iou,
+                    max_det=self.max_det,
+                    quantize=self.quantize,
+                    compile=self.compile,
+                )
+                self.specialist_detectors[protocol_id] = backend
         self.queue = FairInferenceQueue()
 
     def queue_status(self) -> Dict[str, int | bool]:
@@ -418,44 +600,50 @@ class WebInferenceEngine:
         self,
         image: Image.Image,
         filename: str,
-        confidence: float = 0.50,
+        confidence: float | None = None,
         task_id: str | None = None,
         incremental_protocol: str | None = None,
     ) -> Dict[str, Any]:
         result, queue_wait_ms = self.queue.run(
-            lambda: self._predict_unlocked(image, filename, confidence, task_id, incremental_protocol)
+            lambda: self._predict_unlocked(
+                image, filename, self.default_confidence if confidence is None else confidence,
+                task_id, incremental_protocol,
+            )
         )
         result["queue_wait_ms"] = queue_wait_ms
         return result
 
-    def _predict_unlocked(
+    def predict_batch(
         self,
-        image: Image.Image,
-        filename: str,
-        confidence: float,
-        task_id: str | None,
-        incremental_protocol: str | None,
-    ) -> Dict[str, Any]:
-        from fair_agent.models.context import predict_context
-
-        rgb_image = image.convert("RGB")
-        context = predict_context(self.context_model, self.context_checkpoint, rgb_image, self.device)
-        inference_ms = float(context.pop("_inference_ms", 0.0))
-        prediction = self.detector.predict(
-            source=rgb_image,
-            imgsz=self.imgsz,
-            conf=float(confidence),
-            iou=self.iou,
-            max_det=self.max_det,
-            device=self.device_index,
-            verbose=False,
-        )[0]
-        inference_ms += yolo_inference_ms(prediction)
-        base_records = remap_base_records(
-            result_records(prediction, self.base_local_names),
-            self.base_local_to_global,
-            self.class_names,
+        items: Iterable[tuple[Image.Image, str, str | None]],
+        confidence: float | None = None,
+        incremental_protocol: str | None = "auto",
+    ) -> List[Dict[str, Any]]:
+        rows = list(items)
+        if not rows:
+            return []
+        results, queue_wait_ms = self.queue.run(
+            lambda: self._predict_batch_unlocked(
+                rows, self.default_confidence if confidence is None else confidence, incremental_protocol
+            )
         )
+        for result in results:
+            result["queue_wait_ms"] = queue_wait_ms
+        return results
+
+    def _predict_batch_unlocked(
+        self,
+        items: List[tuple[Image.Image, str, str | None]],
+        confidence: float,
+        incremental_protocol: str | None,
+    ) -> List[Dict[str, Any]]:
+        from fair_agent.models.context import predict_context_batch
+
+        batch_started = time.perf_counter()
+        images = [
+            image if image.mode == "RGB" else image.convert("RGB")
+            for image, _filename, _task_id in items
+        ]
         automatic = incremental_protocol == "auto"
         if automatic:
             protocol_pool = self.incremental_protocols
@@ -467,31 +655,386 @@ class WebInferenceEngine:
         else:
             protocol_pool = {}
 
+        def context_batch_task() -> list[Dict[str, Any]]:
+            return predict_context_batch(
+                self.context_model,
+                self.context_checkpoint,
+                images,
+                self.device,
+                self.context_stream,
+            )
+
+        def detector_batch_task(
+            backend: Any, imgsz: int, selected_images: Sequence[Image.Image] | None = None
+        ) -> Sequence[Any]:
+            source_images = list(selected_images or images)
+            predictions: List[Any] = []
+            for start in range(0, len(source_images), self.batch_size):
+                predictions.extend(
+                    backend.predict_batch(
+                        source_images[start:start + self.batch_size],
+                        imgsz=imgsz,
+                        conf=float(confidence),
+                        iou=self.iou,
+                        max_det=self.max_det,
+                        quantize=self.quantize,
+                        compile=self.compile,
+                    )
+                )
+            return predictions
+
+        prefetch_ids = [
+            protocol_id for protocol_id, protocol in protocol_pool.items()
+            if protocol.get("available") and protocol.get("incremental_mode") == "class_incremental"
+        ][: self.max_specialists]
+        for protocol_id in prefetch_ids:
+            protocol = protocol_pool[protocol_id]
+            if protocol_id not in self.specialist_detectors:
+                self.specialist_detectors[protocol_id] = self._create_backend(
+                    self.backend_name, protocol["weights"], self.device_index, self.native_options
+                )
+        prefetched_batches: Dict[str, Sequence[Any]] = {}
+        if self.parallel_model_execution and prefetch_ids:
+            context_future = self._model_executor.submit(context_batch_task)
+            detector_future = self._model_executor.submit(detector_batch_task, self.detector, self.imgsz)
+            specialist_futures = {
+                protocol_id: self._model_executor.submit(
+                    detector_batch_task, self.specialist_detectors[protocol_id], self.specialist_imgsz
+                )
+                for protocol_id in prefetch_ids
+            }
+            contexts = context_future.result()
+            base_predictions = detector_future.result()
+            prefetched_batches = {
+                protocol_id: future.result() for protocol_id, future in specialist_futures.items()
+            }
+        elif self.parallel_context_batch_execution:
+            context_future = self._model_executor.submit(context_batch_task)
+            base_predictions = detector_batch_task(self.detector, self.imgsz)
+            contexts = context_future.result()
+        else:
+            contexts = context_batch_task()
+            base_predictions = detector_batch_task(self.detector, self.imgsz)
+        base_records_by_image = [
+            remap_base_records(
+                result_records(prediction, self.base_local_names),
+                self.base_local_to_global,
+                self.class_names,
+            )
+            for prediction in base_predictions
+        ]
+
+        route_rows = [
+            plan_specialist_routes(
+                protocol_pool,
+                base_records,
+                context,
+                self.base_class_ids,
+                self.max_specialists if automatic else 1,
+                self.detection_evidence_weight,
+                self.context_evidence_weight,
+                self.neutral_context_score,
+                self.default_routing_prior,
+            )
+            for base_records, context in zip(base_records_by_image, contexts)
+        ]
+        protocol_outputs: List[List[Dict[str, Any]]] = [[] for _ in images]
+        specialists_by_image: List[List[Dict[str, Any]]] = [[] for _ in images]
+        conflicts_by_image: List[List[Dict[str, Any]]] = [[] for _ in images]
+        specialist_timing_by_image = [
+            {"preprocess_ms": 0.0, "inference_ms": 0.0, "postprocess_ms": 0.0}
+            for _ in images
+        ]
+
+        for protocol_id, protocol_raw in protocol_pool.items():
+            selected = [
+                index
+                for index, (_eligible, executed, _skipped) in enumerate(route_rows)
+                if any(str(route["id"]) == str(protocol_id) for route in executed)
+            ]
+            if not selected:
+                continue
+            protocol = dict(protocol_raw)
+            if protocol_id not in self.specialist_detectors:
+                self.specialist_detectors[protocol_id] = self._create_backend(
+                    self.backend_name,
+                    protocol["weights"],
+                    self.device_index,
+                    self.native_options,
+                )
+            if protocol_id in prefetched_batches:
+                predictions = [prefetched_batches[protocol_id][index] for index in selected]
+            else:
+                predictions = detector_batch_task(
+                    self.specialist_detectors[protocol_id],
+                    self.specialist_imgsz,
+                    [images[index] for index in selected],
+                )
+            for image_index, prediction in zip(selected, predictions):
+                timing = yolo_timings(prediction)
+                for key in specialist_timing_by_image[image_index]:
+                    specialist_timing_by_image[image_index][key] += timing[key]
+                route = next(
+                    row for row in route_rows[image_index][1] if str(row["id"]) == str(protocol_id)
+                )
+                global_class_id = int(protocol["global_class_id"])
+                activation_threshold = max(
+                    float(confidence), float(protocol.get("activation_threshold", confidence))
+                )
+                raw_candidates = remap_specialist_records(
+                    result_records(prediction),
+                    global_class_id,
+                    self.class_names,
+                    str(protocol_id),
+                )
+                threshold_candidates = [
+                    item for item in raw_candidates
+                    if float(item.get("confidence", 0.0)) >= activation_threshold
+                ]
+                if protocol.get("incremental_mode") == "class_incremental":
+                    candidates = threshold_candidates
+                    activation_reason = "通过独立新类置信度门限"
+                else:
+                    candidates = consensus_specialist_records(
+                        base_records_by_image[image_index],
+                        threshold_candidates,
+                        global_class_id,
+                        float(protocol.get("consensus_iou", 0.30)),
+                    )
+                    activation_reason = "通过基础同类目标与空间一致性检查"
+                candidates, rejected = suppress_specialist_conflicts(
+                    base_records_by_image[image_index],
+                    candidates,
+                    self.conflict_iou,
+                    self.conflict_base_confidence,
+                    self.specialist_margin,
+                )
+                activated = bool(candidates)
+                specialists_by_image[image_index].extend(candidates)
+                conflicts_by_image[image_index].extend(rejected)
+                protocol_outputs[image_index].append({
+                    "id": str(protocol_id),
+                    "class_name": protocol["class_name"],
+                    "new_class": protocol["class_name"],
+                    "incremental_mode": protocol["incremental_mode"],
+                    "new_map50": protocol["new_map50"],
+                    "krr": protocol["krr"],
+                    "status": "activated" if activated else "no_candidate",
+                    "activated": activated,
+                    "raw_candidate_count": len(raw_candidates),
+                    "candidate_count": len(candidates),
+                    "conflict_suppressed_count": len(rejected),
+                    "activation_threshold": round(activation_threshold, 2),
+                    "routing_score": route["routing_score"],
+                    "activation_reason": activation_reason if activated else "未产生通过门限的候选框",
+                })
+
+        results: List[Dict[str, Any]] = []
+        batch_total_ms = (time.perf_counter() - batch_started) * 1000
+        per_image_batch_total = batch_total_ms / len(images)
+        for index, ((_, filename, task_id), image, context, base_prediction, base_records) in enumerate(
+            zip(items, images, contexts, base_predictions, base_records_by_image)
+        ):
+            context_inference_ms = float(context.pop("_inference_ms", 0.0))
+            detector_timing = yolo_timings(base_prediction)
+            specialist_timing = specialist_timing_by_image[index]
+            inference_ms = (
+                context_inference_ms
+                + detector_timing["inference_ms"]
+                + specialist_timing["inference_ms"]
+            )
+            base_with_source = [
+                {**item, "source": "frozen_base_model", "protocol_id": None}
+                for item in base_records
+            ]
+            records, fusion_summary = class_aware_nms(
+                base_with_source + specialists_by_image[index], self.fusion_iou
+            )
+            fusion_summary["conflict_suppressed_count"] = len(conflicts_by_image[index])
+            eligible, executed, skipped = route_rows[index]
+            activated_classes = [
+                item["class_name"] for item in protocol_outputs[index] if item["activated"]
+            ]
+            models_used = ["scene_sensor_net_v1", self.base_model_id]
+            models_used.extend(str(route["id"]) for route in executed)
+            decision = {
+                "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
+                "evaluated_specialists": len(executed),
+                "base_detection_count": len(base_records),
+                "final_detection_count": len(records),
+                "activated_classes": activated_classes,
+                "eligible_protocols": [
+                    {"id": row["id"], "routing_score": row["routing_score"], "incremental_mode": row["incremental_mode"]}
+                    for row in eligible
+                ],
+                "executed_protocols": [str(row["id"]) for row in executed],
+                "skipped_protocols": skipped,
+                "fusion_summary": fusion_summary,
+                "conflict_suppressions": conflicts_by_image[index],
+                "reason": "已融合通过模式感知门控的专项候选" if activated_classes else "未发现通过模式感知门控的专项候选，保持冻结基础检测结果",
+                "generation_id": self.generation_id,
+                "base_model_id": self.base_model_id,
+                "class_owners": {str(key): value for key, value in self.class_owners.items()},
+            }
+            results.append({
+                "filename": filename,
+                "task_id": task_id,
+                "image_width": int(image.width),
+                "image_height": int(image.height),
+                "context": context,
+                "detections": records,
+                "class_counts": summarize_records(records),
+                "detection_count": len(records),
+                "confidence_threshold": round(float(confidence), 2),
+                "inference_ms": round(inference_ms, 1),
+                "timings": {
+                    "context_inference_ms": round(context_inference_ms, 3),
+                    "detector_preprocess_ms": round(detector_timing["preprocess_ms"], 3),
+                    "detector_inference_ms": round(detector_timing["inference_ms"], 3),
+                    "detector_postprocess_ms": round(detector_timing["postprocess_ms"], 3),
+                    "specialist_preprocess_ms": round(specialist_timing["preprocess_ms"], 3),
+                    "specialist_inference_ms": round(specialist_timing["inference_ms"], 3),
+                    "specialist_postprocess_ms": round(specialist_timing["postprocess_ms"], 3),
+                    "batch_engine_total_per_image_ms": round(per_image_batch_total, 3),
+                },
+                "agent": {
+                    "mode": "automatic_orchestration" if automatic else "standard_detection",
+                    "models_used": models_used,
+                    "protocol": protocol_outputs[index][0] if not automatic and protocol_outputs[index] else None,
+                    "protocols": protocol_outputs[index],
+                    "decision": decision,
+                },
+            })
+        return results
+
+    def _predict_unlocked(
+        self,
+        image: Image.Image,
+        filename: str,
+        confidence: float,
+        task_id: str | None,
+        incremental_protocol: str | None,
+    ) -> Dict[str, Any]:
+        from fair_agent.models.context import predict_context
+
+        pipeline_started = time.perf_counter()
+        rgb_image = image if image.mode == "RGB" else image.convert("RGB")
+        automatic = incremental_protocol == "auto"
+        if automatic:
+            protocol_pool = self.incremental_protocols
+        elif incremental_protocol:
+            protocol = self.incremental_protocols.get(incremental_protocol)
+            if protocol is None or not protocol.get("available"):
+                raise ValueError("所选增量能力当前不可用。")
+            protocol_pool = {incremental_protocol: protocol}
+        else:
+            protocol_pool = {}
+
+        def context_task() -> tuple[Dict[str, Any], float]:
+            started = time.perf_counter()
+            value = predict_context(
+                self.context_model,
+                self.context_checkpoint,
+                rgb_image,
+                self.device,
+                self.context_stream,
+            )
+            return value, (time.perf_counter() - started) * 1000
+
+        def detector_task(backend: Any, imgsz: int) -> tuple[Any, float]:
+            started = time.perf_counter()
+            value = backend.predict(
+                rgb_image,
+                imgsz=imgsz,
+                conf=float(confidence),
+                iou=self.iou,
+                max_det=self.max_det,
+                quantize=self.quantize,
+                compile=self.compile,
+            )
+            return value, (time.perf_counter() - started) * 1000
+
+        prefetch_ids = [
+            protocol_id for protocol_id, protocol in protocol_pool.items()
+            if protocol.get("available") and protocol.get("incremental_mode") == "class_incremental"
+        ][: self.max_specialists]
+        for protocol_id in prefetch_ids:
+            protocol = protocol_pool[protocol_id]
+            if protocol_id not in self.specialist_detectors:
+                self.specialist_detectors[protocol_id] = self._create_backend(
+                    self.backend_name, protocol["weights"], self.device_index, self.native_options
+                )
+        prefetched_predictions: Dict[str, tuple[Any, float]] = {}
+        if self.parallel_model_execution and prefetch_ids:
+            context_future = self._model_executor.submit(context_task)
+            detector_future = self._model_executor.submit(detector_task, self.detector, self.imgsz)
+            specialist_futures = {
+                protocol_id: self._model_executor.submit(
+                    detector_task, self.specialist_detectors[protocol_id], self.specialist_imgsz
+                )
+                for protocol_id in prefetch_ids
+            }
+            context, context_total_ms = context_future.result()
+            prediction, detector_total_ms = detector_future.result()
+            prefetched_predictions = {
+                protocol_id: future.result() for protocol_id, future in specialist_futures.items()
+            }
+        elif self.parallel_context_execution:
+            context_future = self._model_executor.submit(context_task)
+            prediction, detector_total_ms = detector_task(self.detector, self.imgsz)
+            context, context_total_ms = context_future.result()
+        else:
+            context, context_total_ms = context_task()
+            prediction, detector_total_ms = detector_task(self.detector, self.imgsz)
+
+        context_inference_ms = float(context.pop("_inference_ms", 0.0))
+        detector_timings = yolo_timings(prediction)
+        inference_ms = context_inference_ms + detector_timings["inference_ms"]
+        base_records = remap_base_records(
+            result_records(prediction, self.base_local_names),
+            self.base_local_to_global,
+            self.class_names,
+        )
         eligible_routes, executed_routes, skipped_protocols = plan_specialist_routes(
             protocol_pool,
             base_records,
             context,
             self.base_class_ids,
             self.max_specialists if automatic else 1,
+            self.detection_evidence_weight,
+            self.context_evidence_weight,
+            self.neutral_context_score,
+            self.default_routing_prior,
         )
 
+        routing_started = time.perf_counter()
         protocol_results = []
         specialist_records: List[Dict[str, Any]] = []
+        specialist_preprocess_ms = 0.0
+        specialist_inference_ms = 0.0
+        specialist_postprocess_ms = 0.0
+        conflict_rejections: List[Dict[str, Any]] = []
         for route in executed_routes:
             protocol_id = str(route["id"])
             protocol = dict(route["protocol"])
             if protocol_id not in self.specialist_detectors:
-                self.specialist_detectors[protocol_id] = self._yolo_class(str(protocol["weights"]))
-            specialist_prediction = self.specialist_detectors[protocol_id].predict(
-                source=rgb_image,
-                imgsz=self.imgsz,
-                conf=float(confidence),
-                iou=self.iou,
-                max_det=self.max_det,
-                device=self.device_index,
-                verbose=False,
-            )[0]
-            inference_ms += yolo_inference_ms(specialist_prediction)
+                self.specialist_detectors[protocol_id] = self._create_backend(
+                    self.backend_name,
+                    protocol["weights"],
+                    self.device_index,
+                    self.native_options,
+                )
+            if protocol_id in prefetched_predictions:
+                specialist_prediction, _specialist_total_ms = prefetched_predictions[protocol_id]
+            else:
+                specialist_prediction, _specialist_total_ms = detector_task(
+                    self.specialist_detectors[protocol_id], self.specialist_imgsz
+                )
+            specialist_timing = yolo_timings(specialist_prediction)
+            specialist_preprocess_ms += specialist_timing["preprocess_ms"]
+            specialist_inference_ms += specialist_timing["inference_ms"]
+            specialist_postprocess_ms += specialist_timing["postprocess_ms"]
+            inference_ms += specialist_timing["inference_ms"]
             global_class_id = int(protocol["global_class_id"])
             activation_threshold = max(float(confidence), float(protocol.get("activation_threshold", confidence)))
             raw_candidates = remap_specialist_records(
@@ -514,6 +1057,14 @@ class WebInferenceEngine:
                     float(protocol.get("consensus_iou", 0.30)),
                 )
                 activation_reason = "通过基础同类目标与空间一致性检查"
+            candidates, rejected = suppress_specialist_conflicts(
+                base_records,
+                candidates,
+                self.conflict_iou,
+                self.conflict_base_confidence,
+                self.specialist_margin,
+            )
+            conflict_rejections.extend(rejected)
             activated = bool(candidates)
             if activated:
                 specialist_records.extend(candidates)
@@ -528,6 +1079,7 @@ class WebInferenceEngine:
                 "activated": activated,
                 "raw_candidate_count": len(raw_candidates),
                 "candidate_count": len(candidates),
+                "conflict_suppressed_count": len(rejected),
                 "activation_threshold": round(activation_threshold, 2),
                 "routing_score": route["routing_score"],
                 "activation_reason": activation_reason if activated else "未产生通过门限的候选框",
@@ -541,10 +1093,12 @@ class WebInferenceEngine:
             base_with_source + specialist_records,
             self.fusion_iou,
         )
-        annotated = annotate_records(rgb_image, records)
-        models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
-        if executed_routes:
-            models_used.append("incremental_model_bank_v1")
+        fusion_summary["conflict_suppressed_count"] = len(conflict_rejections)
+        routing_fusion_ms = (time.perf_counter() - routing_started) * 1000
+        base_model_id = getattr(self, "base_model_id", "unified_yolo11s_v1")
+        generation_id = getattr(self, "generation_id", "legacy-unified")
+        models_used = ["scene_sensor_net_v1", base_model_id]
+        models_used.extend(str(route["id"]) for route in executed_routes)
         activated_classes = [item["class_name"] for item in protocol_results if item["activated"]]
         decision = {
             "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
@@ -559,21 +1113,41 @@ class WebInferenceEngine:
             "executed_protocols": [str(row["id"]) for row in executed_routes],
             "skipped_protocols": skipped_protocols,
             "fusion_summary": fusion_summary,
+            "conflict_suppressions": conflict_rejections,
             "reason": (
                 "已融合通过模式感知门控的专项候选"
                 if activated_classes
-                else "未发现通过模式感知门控的专项候选，保持统一检测结果"
+                else "未发现通过模式感知门控的专项候选，保持冻结基础检测结果"
             ),
+            "generation_id": generation_id,
+            "base_model_id": base_model_id,
+            "class_owners": {
+                str(key): value for key, value in getattr(self, "class_owners", {}).items()
+            },
         }
-        return {
+        result = {
             "filename": filename,
             "task_id": task_id,
+            "image_width": int(rgb_image.width),
+            "image_height": int(rgb_image.height),
             "context": context,
             "detections": records,
             "class_counts": summarize_records(records),
             "detection_count": len(records),
             "confidence_threshold": round(float(confidence), 2),
             "inference_ms": round(inference_ms, 1),
+            "timings": {
+                "context_total_ms": round(context_total_ms, 3),
+                "context_inference_ms": round(context_inference_ms, 3),
+                "detector_total_ms": round(detector_total_ms, 3),
+                "detector_preprocess_ms": round(detector_timings["preprocess_ms"], 3),
+                "detector_inference_ms": round(detector_timings["inference_ms"], 3),
+                "detector_postprocess_ms": round(detector_timings["postprocess_ms"], 3),
+                "specialist_preprocess_ms": round(specialist_preprocess_ms, 3),
+                "specialist_inference_ms": round(specialist_inference_ms, 3),
+                "specialist_postprocess_ms": round(specialist_postprocess_ms, 3),
+                "routing_fusion_ms": round(routing_fusion_ms, 3),
+            },
             "agent": {
                 "mode": "automatic_orchestration" if automatic else "standard_detection",
                 "models_used": models_used,
@@ -581,5 +1155,6 @@ class WebInferenceEngine:
                 "protocols": protocol_results,
                 "decision": decision,
             },
-            "annotated_png": image_png_bytes(annotated),
         }
+        result["timings"]["engine_total_ms"] = round((time.perf_counter() - pipeline_started) * 1000, 3)
+        return result

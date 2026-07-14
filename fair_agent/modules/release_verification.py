@@ -10,6 +10,7 @@ from fair_agent.core.blackboard import build_blackboard
 from fair_agent.core.config import ROOT, load_config, rel_path, resolve_path
 from fair_agent.core.hashes import hash_if_exists, verify_sha256s
 from fair_agent.modules.functional_models import validate_functional_models
+from fair_agent.modules.model_generations import load_generation_registry
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -98,6 +99,39 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         errors.append("manifest_base_hash_mismatch")
     incremental_models = manifest.get("incremental_models", [])
     errors.extend(_validate_model_manifest(manifest))
+    generation_summary: Dict[str, Any] = {}
+    try:
+        generation_registry = load_generation_registry(assets["generation_registry"])
+        production_id = str(generation_registry["channels"]["production"])
+        candidate_id = str(generation_registry["channels"]["candidate"])
+        production = generation_registry["generations_by_id"][production_id]
+        candidate = generation_registry["generations_by_id"][candidate_id]
+        production_models = set(production["class_owners"].values())
+        production_experts = [
+            generation_registry["models_by_id"][model_id]
+            for model_id in production_models
+            if generation_registry["models_by_id"][model_id]["role"] == "class_incremental_expert"
+        ]
+        if any(model.get("acceptance", {}).get("passed") is not True for model in production_experts):
+            errors.append("unverified_incremental_expert_in_production")
+        if candidate.get("status") == "active" and candidate_id != production_id:
+            errors.append("candidate_generation_prematurely_active")
+        if any(
+            not generation_registry["models_by_id"][model_id]["hash_valid"]
+            for model_id in set(candidate["class_owners"].values()) | production_models
+        ):
+            errors.append("generation_model_hash_mismatch")
+        generation_summary = {
+            "path": rel_path(resolve_path(assets["generation_registry"])),
+            "production": production_id,
+            "production_classes": sorted(production["classes"]),
+            "candidate": candidate_id,
+            "candidate_status": candidate.get("status"),
+            "benchmark": generation_registry["channels"]["benchmark"],
+            "production_metrics": production.get("metrics", {}),
+        }
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        errors.append(f"generation_registry_invalid:{exc}")
     functional = validate_functional_models(config["functional_models"]["registry"])
     if not functional["valid"]:
         errors.extend(f"functional_models:{item}" for item in functional["errors"])
@@ -167,6 +201,18 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
     for forbidden in ["pip install", "-m venv", "torch==", "bootstrap_x86.sh\nexec"]:
         if forbidden in start_text:
             errors.append(f"start_script_mutates_environment:{forbidden}")
+    runtime_sources = {
+        "fair_agent/web/app.py": ("MAX_FILE_BYTES", "MAX_BATCH_FILES", "annotated_base64"),
+        "fair_agent/modules/web_inference.py": ("MAX_FILE_BYTES", "MAX_BATCH_FILES", "MAX_BATCH_BYTES"),
+        "fair_agent/web/static/assets/app.js": (
+            "20 * 1024 * 1024", "200 * 1024 * 1024", "RESULT_CACHE_LIMIT", "annotated_base64"
+        ),
+    }
+    for source_name, forbidden_literals in runtime_sources.items():
+        source_text = (ROOT / source_name).read_text(encoding="utf-8")
+        for literal in forbidden_literals:
+            if literal in source_text:
+                errors.append(f"runtime_config_literal:{source_name}:{literal}")
     bootstrap_script = ROOT / "scripts" / "bootstrap_x86.sh"
     bootstrap_text = bootstrap_script.read_text(encoding="utf-8") if bootstrap_script.exists() else ""
     for required_marker in ["python3.12 python3.11 python3.10", 'uv venv --python "${UV_PYTHON:-3.12}" --seed', "2.5.1+cu124", "nvidia-smi", "uname -m"]:
@@ -189,6 +235,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         "required_assets": required,
         "inference_configs": inference_configs,
         "functional_models": functional,
+        "model_generations": generation_summary,
         "incremental_detection_policy": {
             "path": rel_path(incremental_policy_path),
             "valid": not any(error.startswith("incremental_detection_") for error in errors),

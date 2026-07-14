@@ -1,6 +1,6 @@
 # 灵动Agent
 
-面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。系统包含场景/传感器认知模型、统一 YOLO11s 检测模型和增量目标检测模型库三种不同功能模型，以及面向检测用户的 Web 产品和面向运维人员的 CLI。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
+面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。系统登记场景/传感器认知、冻结旧类检测和增量类别专家三种不同功能模型，并提供面向检测用户的 Web 产品和面向运维人员的 CLI。当前 production 为 `generation-1-recheck-v2`：三类基础检测器负责人员、小型飞行器和坦克，舰船由已通过部署复核的类别增量专家负责。四类统一 YOLO11s 仅作上限基准，不参与默认推理、融合或回滚。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
 
 ## 首次配置环境
 
@@ -15,9 +15,9 @@ chmod +x scripts/bootstrap_x86.sh
 ./scripts/bootstrap_x86.sh
 ```
 
-首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch 和智能体依赖、运行环境诊断，并在 GPU 0 上校验六份权重及三种功能。配置完成后脚本退出，不启动工作台。
+首次配置脚本只负责创建或复用 `.venv`、安装 CUDA 版 PyTorch、TensorRT 和智能体依赖、运行环境诊断，并在 GPU 0 上校验模型权重、TensorRT engine 及三种功能。配置完成后脚本退出，不启动工作台。
 
-配置脚本优先复用显式指定的 `AGILE_AGENT_PYTHON`、项目 `.venv` 或当前激活的 Conda/venv。现有环境只要满足 Python 3.10-3.12、`torch>=2.0`、CUDA 可用、`torch.version.cuda` 有效且 torchvision CUDA NMS 可执行，就会跳过 PyTorch 安装；其余依赖达到 `pyproject.toml` 的最低兼容版本且 `pip check` 无冲突时也会整体跳过安装。`2.5.1+cu124` 和 `constraints-agent.txt` 仅作为新环境的已验证默认组合与严格复现选项。
+配置脚本优先复用显式指定的 `AGILE_AGENT_PYTHON`、项目 `.venv` 或当前激活的 Conda/venv。现有环境只要满足 Python 3.10-3.12、`torch>=2.0`、CUDA 可用、`torch.version.cuda` 有效且 torchvision CUDA NMS 可执行，就会跳过 PyTorch 安装；其余依赖达到 `pyproject.toml` 的最低兼容版本且 `pip check` 无冲突时也会整体跳过安装。当前 RTX 4060 engine 因序列化 ABI 要求固定使用 TensorRT `10.8.0.43` 和 SM `8.9`，不匹配时必须重新导出，禁止自动回退。`2.5.1+cu124` 和 `constraints-agent.txt` 仅作为新环境的已验证默认组合与严格复现选项。
 
 例如直接复用已有的 `egor` 环境：
 
@@ -31,9 +31,11 @@ AGILE_AGENT_PYTHON=/home/sakauma/data/miniconda3/envs/egor/bin/python ./scripts/
 
 ```bash
 python -m pip install "torch==2.5.1+cu124" "torchvision==0.20.1+cu124" --index-url https://download.pytorch.org/whl/cu124
-python -m pip install -c constraints-agent.txt -e ".[workbench,inference,dev]"
+python -m pip install -c constraints-agent.txt -e ".[workbench,inference,export,dev]"
 python -m fair_agent.cli doctor
 ```
+
+本机已验证组合为：Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124`、Ultralytics `8.4.92`、TensorRT `10.8.0.43`、ONNX `1.17.0`、ONNX Runtime GPU `1.23.2`，部署显卡为 RTX 4060 Laptop（SM `8.9`）。开发环境路径为 `/home/sakauma/data/miniconda3/envs/sam_hq2_dinov3`；其他机器不要求使用同名环境。
 
 ## 发布验收
 
@@ -43,7 +45,7 @@ python -m fair_agent.cli doctor
 python scripts/verify_release.py
 ```
 
-GPU 冒烟验收读取推理配置和功能模型注册表，验证 Scene-SensorNet、基础检测器及四个专项权重，执行 `imgsz=640、batch=32` 批量推理，并调用完整 Agent 自动路由与融合链路；本地存在 lock-val 时会自动抽取 IR/SAR 样本：
+GPU 冒烟验收读取推理配置和功能模型注册表，验证 Scene-SensorNet、基础检测器、增量专家和 TensorRT engine，并调用完整 Agent 自动路由与融合链路；本地存在 lock-val 时会自动抽取 IR/SAR 样本：
 
 ```bash
 python scripts/smoke_models.py
@@ -65,7 +67,7 @@ python scripts/smoke_models.py
 ./scripts/start_agent.sh --cli
 ```
 
-Web 前端面向评委和检测使用者，提供单图检测、批量检测、自动 IR/SAR 与场景识别、标注图预览以及 JSON/ZIP 导出。用户只需上传图像，Agent 会自动执行场景理解、统一检测、已验收增量能力评估和结果融合，不要求用户选择模型或新增类别。批量任务完成后可在网页逐张选择和查看标注结果，也可下载完整结果包；会话记录可直接跳转到当前页面最近10份完整结果。单GPU采用公平队列串行推理；单文件限制20MB、单批限制20张和200MB，当前会话最多保留20条轻量历史。权重路径、哈希和部署门禁等运维细节不会显示在 Web 中。
+Web 前端面向评委和检测使用者，提供单图检测、批量检测、自动 IR/SAR 与场景识别、标注图预览以及 JSON/ZIP 导出。用户只需上传图像，Agent 会自动解析当前活动代际，执行其中所有类别所有者并融合结果，不要求用户选择模型。未通过部署门禁的候选专家不会进入 Web。批量任务完成后可在网页逐张选择和查看标注结果，也可下载完整结果包；会话记录可直接跳转到当前页面最近10份完整结果。单GPU请求采用公平队列，单次请求内的上下文、基础检测和类别专家可按 YAML 并行调度。默认单文件限制20MB、单批限制20张和200MB、当前会话最多保留20条轻量历史，实际值均由主 YAML 与只读公开配置接口提供。权重路径、哈希和部署门禁等运维细节不会显示在 Web 中。
 
 CLI 前端面向开发与运维人员，包含总览、模型、数据、增量和部署五个页面，并可刷新黑板、生成策略、创建 Dry-run 和执行经过确认的低风险动作。
 
@@ -113,14 +115,16 @@ python tools/42_predict_submission.py --config configs/local_infer_gpu.yaml
 | 模型 | 功能 | 核心指标 | 验收 |
 | --- | --- | --- | --- |
 | `models/context/scene_sensor_net.pt` | IR/SAR 与 air/forest/sea/urban 认知 | lock sensor 0.98947 / scene 0.76842 | 通过 |
-| `models/base/yolo11s_ir_sar_imgsz640.pt` | IR/SAR 四类统一检测 | lock-all 0.91202 | 已冻结 |
+| `strict_p02_base_v1` | 三类冻结基础检测 | TensorRT复核旧类 mAP50 0.82738 | `generation-1-recheck-v2`旧类所有者 |
+| `strict_p02_warship_recheck_v2` | 舰船类别增量专家 | TensorRT复核 New-mAP50 0.79500 / KRR 1.0 | production，precision 1.0 / 误激活率 0.0 |
+| `models/base/yolo11s_ir_sar_imgsz640.pt` | IR/SAR 四类统一检测 | lock-all 0.91202 | `benchmark_only` |
 | `p01_new_small_aircraft_best.pt` | small_aircraft 专项增强演练 | 0.55860 / 1.0 | 未通过、禁用 |
 | `p02_new_warship_best.pt` | warship 目标增量演练 | 0.83539 / 1.0 | 通过 |
 | `p03_new_tank_best.pt` | tank 目标增量演练 | 0.74989 / 1.0 | 通过 |
 | `p04_new_soldier_best.pt` | soldier 目标增量演练 | 0.76914 / 1.0 | 通过 |
-| `strict-p02` 实验档 | warship 严格 3+1 类别增量 | 0.90903 / 1.0 | 通过、CLI 可用 |
+| `strict-p02` 实验档 | warship 严格 3+1 类别增量 | 0.90903 / 1.0 | 可审计候选、CLI 可用 |
 
-检测与增量指标均为 mAP50。现有 p01-p04 的目标类别已经包含在统一模型中，因此只作为目标增量/专项增强演练。严格 3+1 双折使用三类基础模型模拟未知新类，其中舰船折通过全部门禁并证明类别增量链路成立；飞行器折 New-mAP50 为 0.54062，未注册。三模型输入输出契约和协同链路见 `configs/functional_models.yaml` 与 `docs/functional-models.md`；默认四类模型清单见 `models/manifest.json`，严格实验档独立位于 `models/experiments/strict_3plus1/`。
+检测与增量指标均为 mAP50。现有 p01-p04 的目标类别已经包含在统一模型中，因此只作为目标增量/专项增强演练。严格 3+1 双折使用三类基础模型模拟未知新类；舰船折经 `generation-1-recheck-v2` 以增量 dev 固定阈值 0.63 后，在完整 lock-val 上通过全部精度和误激活门禁，飞行器折 New-mAP50 为 0.54062，未注册。三模型输入输出契约和协同链路见 `configs/functional_models.yaml` 与 `docs/functional-models.md`；代际注册表位于 `models/generations.json`，严格实验档独立位于 `models/experiments/strict_3plus1/`。
 
 ## 常用命令
 
@@ -132,10 +136,34 @@ python -m fair_agent.cli console
 python -m fair_agent.cli detect --source path/to/image.png --confidence 0.50
 python -m fair_agent.cli decide --sensor sar --class-focus soldier
 python -m fair_agent.cli pipeline --mode execute
+python -m fair_agent.cli benchmark-api
 pytest -q
 ```
 
 `pipeline --mode execute` 只执行 YAML 允许列表中的低风险动作。训练、正式推理、打包和提交始终需要人工触发并保留审计记录。智能体主配置位于 `configs/agent_pipeline.yaml`。
+
+`benchmark-api` 会在 8501 未运行时按当前有效配置启动临时服务，测试结束后自动关闭；若已有健康服务则直接测试该实例。未达到性能门槛时命令返回非零，同时仍会将完整报告写入 `reports/api_performance/<run_id>/benchmark.json`。
+
+当前 TensorRT engine 可用以下命令只读校验；缺失时去掉 `--verify-only` 才会按 YAML 导出，已有且哈希正确的资产不会覆盖：
+
+```bash
+python tools/80_export_tensorrt_engines.py --verify-only
+```
+
+## 统一参数配置
+
+`configs/agent_pipeline.yaml` 是 Agent 持久参数的唯一事实源，包含 GPU、服务、推理、路由、融合、上传、缓存、界面、性能和验收门槛。CLI 的重复 `--set key=value` 只覆盖当前进程；`config set/unset` 会原子写回、备份并记录审计，重启后生效。production、权重哈希和类别所有权只能通过代际专用命令修改。
+
+```bash
+agile-agent config validate --config configs/agent_pipeline.yaml
+agile-agent config show --config configs/agent_pipeline.yaml --effective
+agile-agent config get routing.conflict_iou --config configs/agent_pipeline.yaml
+agile-agent config set routing.conflict_iou 0.50 --config configs/agent_pipeline.yaml
+agile-agent --config configs/agent_pipeline.yaml --set inference.confidence_default=0.60 serve
+agile-agent generation recheck --candidate generation-1-recheck-v2
+agile-agent generation promote --candidate generation-1-recheck-v2 --manifest reports/generation_rechecks/<run_id>/manifest.json
+agile-agent generation rollback --to generation-0
+```
 
 ## 数据与增量训练
 
@@ -145,7 +173,19 @@ pytest -q
 
 真正类别增量模型必须使用基础类别集合之外的全局类别 ID，并用增量验证集校准激活阈值。其候选框不依赖旧模型产生同类检测；目标增量模型则使用旧模型同类框进行空间一致性复核。场景识别只参与软路由排序，不会按场景硬拒绝新增能力。
 
-### 严格 3+1 双折实验
+### 可复现的舰船 3+1 实验
+
+舰船协议的唯一通用配置为 `configs/incremental/warship_3plus1.yaml`。更换基础类别、新增类别、源划分或增加后续轮次时先修改该 YAML，再运行统一入口：
+
+```bash
+agile-agent experiment validate --config configs/incremental/warship_3plus1.yaml
+agile-agent experiment run --config configs/incremental/warship_3plus1.yaml
+agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run_id>/run_manifest.json
+```
+
+`validate` 只读数据且保持 lock 封存；`run` 会启动训练；`reproduce` 只有在源数据指纹与父实验一致时才创建新 run。当前执行适配器 v1 支持单轮 3+1，通用 schema 和模型代际注册表已预留多轮；新增更多类别前需扩展训练适配器，不得把“可描述多轮”误写成“已验证多轮”。逐文件哈希、状态机、阈值冻结和验收规则见 `docs/warship-3plus1-reproducibility.md`。
+
+### 历史严格双折实验
 
 仓库提供 small_aircraft 与 warship 两个严格留一类别实验。基础模型只有三个检测通道，基础训练图像与新增类训练图像完全隔离；人员和坦克因始终共现，不用于严格留一实验。所有参数位于 `configs/strict_class_incremental_3plus1.yaml`，在 4090 服务器执行：
 
@@ -153,14 +193,14 @@ pytest -q
 python tools/70_run_strict_3plus1.py --config configs/strict_class_incremental_3plus1.yaml
 ```
 
-双 GPU 可用时两个协议分别使用 GPU 0/1 并行，否则在 GPU 0 按顺序运行。lock-val 只会在基础权重、specialist 权重和阈值冻结后物化。通过全部门禁的实验会生成独立 CLI 档案，不替换默认 Web 模型：
+双 GPU 可用时两个协议分别使用 GPU 0/1 并行，否则在 GPU 0 按顺序运行。lock-val 只会在基础权重、specialist 权重和阈值冻结后物化。历史实验档可由 CLI 显式复核，但不会绕过代际门禁替换 Web production：
 
 ```bash
 python -m fair_agent.cli detect --profile strict-p01 --source path/to/aircraft.png
 python -m fair_agent.cli detect --profile strict-p02 --source path/to/warship.png
 ```
 
-当前冻结结果中，`strict-p02` 舰船折通过：New-mAP50 0.90903、KRR 1.00000、四类组合 mAP50 0.84700；`strict-p01` 飞行器折未通过。舰船折在 lock-val 的图像误激活率为 0.33784，因此它是可审计的实验能力，尚不替换默认生产检测链路。
+历史 `strict-p02` 阈值 0.51 的原始舰船折虽然通过核心门槛，但 lock precision 约 0.5411、图像误激活率约 0.3378，因此仍作为未上线的 `generation-1` 证据保留。独立复核版本仅依据增量 dev 将阈值固定为 0.63，并加入跨类别冲突抑制；`generation-1-recheck-v2` 在完整 lock-val 上取得旧类 mAP50 0.81694、New-mAP50 0.80500、KRR 1.0、组合 mAP50 0.81396、precision 1.0 和误激活率 0.0，现已切入 production。`generation-0` 始终保留为回滚点。
 
 `strict-p02` 属于“冻结基础模型 + 独立 specialist”的历史系统级证据，不作为最终单模型增量结论。新的 clean-room v2 方案将三类教师检测头扩展为一个四类学生检测头，仅开放新增类通道训练，最终只部署 `student_4class.pt`。训练前先运行只读预检：
 
@@ -201,7 +241,8 @@ Scene-SensorNet 的训练参数全部位于 `configs/scene_sensor_model.yaml`，
 - x86 版本默认使用 NVIDIA GPU；GPU 推理速度不代表 Ascend 310B 端侧 FPS。
 - 仓库不包含竞赛数据、标签、PDF、SSH 凭据、预测结果或训练运行产物。
 - 官方隐藏测试目录和提交格式尚未确认，因此正式提交门禁默认关闭。
-- 尚未获得外部真实新增类别数据；当前已用严格 3+1 舰船折证明类别增量机制，但其泛化仍需新数据复核。
+- 尚未获得外部真实新增类别数据；当前舰船 3+1 已通过内部部署门禁，但外部数据泛化仍需官方隐藏测试验证。
+- RTX 4060 上 TensorRT FP16 三轮 API 复核的中位轮平均为 `32.88 ms`、P95 为 `39.58 ms`、20张批量为 `47.81 FPS`，8并发请求全部成功，已通过 `33.3 ms / 50 ms / 30 FPS` 门禁。报告位于 `reports/api_performance/20260715-002017-036971/benchmark.json`。这些 engine 仅适用于 TensorRT `10.8.0.43` 与 SM `8.9`；完整 C++ ABI 尚未切入 production。
 - Ascend 310B 转换与推理接口仍待板卡就绪后补充。
 
 Web 与 CLI 的操作说明见 `docs/agent-operations.md`。

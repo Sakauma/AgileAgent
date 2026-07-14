@@ -1,4 +1,5 @@
 schema_version: 1
+generation_registry: models/generations.json
 
 models:
   - id: scene_sensor_net_v1
