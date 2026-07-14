@@ -67,10 +67,19 @@ def png(color: str = "white") -> bytes:
 
 def test_batch_result_store_evicts_old_batches() -> None:
     store = BatchResultStore(max_items=1)
-    first = store.put(b"first", [])
-    second = store.put(b"second", [])
+    first = store.put([])
+    second = store.put([])
     assert store.get(first) is None
-    assert store.get(second)["archive"] == b"second"
+    assert store.get(second)["results"] == []
+
+
+def test_batch_result_store_evicts_by_total_bytes() -> None:
+    store = BatchResultStore(max_items=4, max_bytes=70)
+    first = store.put([{"annotated_png": b"a" * 40}])
+    second = store.put([{"annotated_png": b"b" * 40}])
+    assert store.get(first) is None
+    assert store.get(second) is not None
+    assert store.total_bytes <= 70
 
 
 def test_health_and_static_product_contract() -> None:
@@ -107,7 +116,10 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
     assert settings["predict"] == {"imgsz": 640, "iou": 0.7, "max_det": 300}
     assert settings["protocols"]["p01_new_small_aircraft"]["available"] is False
     assert settings["protocols"]["p02_new_warship"]["available"] is True
+    assert settings["protocols"]["p02_new_warship"]["incremental_mode"] == "target_incremental"
+    assert settings["protocols"]["p02_new_warship"]["evidence_level"] == "rehearsal_only"
     assert settings["protocols"]["p02_new_warship"]["consensus_iou"] == 0.30
+    assert settings["class_names"] == {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
     assert "allowed_scenes" not in settings["protocols"]["p02_new_warship"]
 
 
@@ -287,7 +299,7 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert 'class="agent-decision-panel is-hidden"' in html
     assert "本次识别过程" in html
     assert "基础候选" in script
-    assert "通过" in script and "拒绝" in script
+    assert "已激活" in script and "未激活" in script
     assert "@media (max-width: 620px)" in styles
     assert ".main-nav.is-open" in styles
     assert ".history-row.is-available" in styles

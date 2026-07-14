@@ -275,19 +275,22 @@
     const decision = agent.decision || {};
     const protocols = Array.isArray(agent.protocols) ? agent.protocols : [];
     const activated = Array.isArray(decision.activated_classes) ? decision.activated_classes : [];
+    const eligible = Array.isArray(decision.eligible_protocols) ? decision.eligible_protocols : [];
+    const skipped = Array.isArray(decision.skipped_protocols) ? decision.skipped_protocols : [];
+    const fusion = decision.fusion_summary || {};
     $("#collaborationMode").textContent = "Agent 自动决策";
     const flow = $("#collaborationFlow");
     flow.replaceChildren();
     const evaluations = protocols.length
-      ? protocols.map((item) => `${classLabel(item.new_class)} ${item.activated ? "通过" : "拒绝"}`).join(" · ")
-      : "没有可评估的增量能力";
+      ? protocols.map((item) => `${classLabel(item.class_name || item.new_class)} ${item.activated ? "已激活" : "未激活"}`).join(" · ")
+      : skipped.length ? "当前输入无需调用专项模型" : "保持统一检测流程";
     const steps = [
       ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "自动理解输入模态与任务场景"],
       ["02 统一检测", `${Number(decision.base_detection_count || 0)} 个基础候选`, "建立当前图像的统一检测结果"],
-      ["03 交叉验证", `${Number(decision.evaluated_specialists || 0)} 项候选能力`, evaluations],
+      ["03 智能评估", `${eligible.length} 项候选 · ${Number(decision.evaluated_specialists || 0)} 项执行`, evaluations],
       activated.length
-        ? ["04 自动融合", activated.map(classLabel).join("、"), "融合通过验证的增量候选"]
-        : ["04 自动决策", `${result.detection_count || 0} 个目标`, "保持统一检测结果，无需人工选择模型"],
+        ? ["04 自动融合", activated.map(classLabel).join("、"), `保留 ${Number(fusion.output_count || result.detection_count || 0)} 个最终目标`]
+        : ["04 结果确认", `${result.detection_count || 0} 个目标`, "保持统一检测结果，无需人工选择模型"],
     ];
     steps.forEach(([stage, title, detail]) => {
       const node = document.createElement("div");

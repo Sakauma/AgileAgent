@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "verified_profiles": [
+    {
+      "profile_id": "strict-p02",
+      "run_id": "strict-20260712-102534",
+      "incremental_mode": "class_incremental",
+      "new_class": "warship",
+      "new_global_id": 2,
+      "active_profile": "models/experiments/strict_3plus1/strict-p02/active.json",
+      "new_map50": 0.9090260372388763,
+      "krr": 1.0,
+      "activation_threshold": 0.51,
+      "lock_false_activation_rate": 0.33783783783783783
+    }
+  ]
+}

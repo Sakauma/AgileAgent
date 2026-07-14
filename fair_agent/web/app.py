@@ -23,7 +23,6 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from fair_agent.modules.web_inference import (
-    CLASS_NAMES,
     MAX_BATCH_BYTES,
     MAX_BATCH_FILES,
     MAX_FILE_BYTES,
@@ -44,19 +43,39 @@ _engine_lock = threading.Lock()
 
 
 class BatchResultStore:
-    def __init__(self, max_items: int = 4, ttl_seconds: int = 1800) -> None:
+    def __init__(self, max_items: int = 4, ttl_seconds: int = 1800, max_bytes: int = 512 * 1024 * 1024) -> None:
         self.max_items = max_items
         self.ttl_seconds = ttl_seconds
+        self.max_bytes = max_bytes
         self._items: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._lock = threading.Lock()
 
-    def put(self, archive: bytes, results: list[Dict[str, Any]]) -> str:
+    @staticmethod
+    def _result_bytes(results: list[Dict[str, Any]]) -> int:
+        image_bytes = sum(len(item.get("annotated_png", b"")) for item in results)
+        metadata = [
+            {key: value for key, value in item.items() if key not in {"annotated_png", "annotated_image"}}
+            for item in results
+        ]
+        return image_bytes + len(json.dumps(metadata, ensure_ascii=False, default=str).encode("utf-8"))
+
+    @property
+    def total_bytes(self) -> int:
+        with self._lock:
+            return sum(int(item["size_bytes"]) for item in self._items.values())
+
+    def put(self, results: list[Dict[str, Any]]) -> str:
         batch_id = uuid.uuid4().hex
         now = time.monotonic()
+        size_bytes = self._result_bytes(results)
+        if size_bytes > self.max_bytes:
+            raise ValueError("批量结果超过会话缓存容量，请减少单批图像数量。")
         with self._lock:
             self._remove_expired(now)
-            self._items[batch_id] = {"created_at": now, "archive": archive, "results": results}
-            while len(self._items) > self.max_items:
+            self._items[batch_id] = {"created_at": now, "size_bytes": size_bytes, "results": results}
+            while len(self._items) > self.max_items or sum(
+                int(item["size_bytes"]) for item in self._items.values()
+            ) > self.max_bytes:
                 self._items.popitem(last=False)
         return batch_id
 
@@ -92,30 +111,50 @@ def build_web_settings() -> Dict[str, Any]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     require_passed = bool(web.get("incremental_demo", {}).get("require_acceptance_passed", True))
     consensus_iou = float(web.get("incremental_demo", {}).get("auto_consensus_iou", 0.30))
+    base = manifest.get("base_model", {})
+    raw_class_map = base.get("class_map") or {index: name for index, name in enumerate(base.get("classes", []))}
+    base_class_names = {int(class_id): str(name) for class_id, name in raw_class_map.items()}
+    class_names = dict(base_class_names)
     protocols: Dict[str, Dict[str, Any]] = {}
-    class_ids = {name: class_id for class_id, name in CLASS_NAMES.items()}
     for item in manifest.get("incremental_models", []):
         protocol_id = str(item["protocol"])
-        new_class = protocol_id.split("_new_", 1)[-1]
-        if new_class not in class_ids:
-            continue
+        class_name = str(item["class_name"])
+        global_class_id = int(item["global_class_id"])
+        class_names[global_class_id] = class_name
+        mode = str(item["incremental_mode"])
         accepted = item.get("acceptance") == "passed"
+        available = bool(item.get("available", accepted)) and (accepted or not require_passed)
+        if mode == "class_incremental":
+            available = available and global_class_id not in base_class_names
+            available = available and item.get("activation_threshold") is not None and bool(item.get("calibration_source"))
         protocols[protocol_id] = {
             "id": protocol_id,
-            "new_class": new_class,
-            "global_class_id": class_ids[new_class],
+            "class_name": class_name,
+            "new_class": class_name,
+            "global_class_id": global_class_id,
+            "incremental_mode": mode,
             "weights": resolve_path(item["path"]),
             "new_map50": float(item["new_map50"]),
             "krr": float(item["krr"]),
-            "available": accepted or not require_passed,
+            "available": available,
+            "activation_threshold": item.get("activation_threshold"),
+            "calibration_source": item.get("calibration_source"),
+            "routing_prior": float(item.get("routing_prior", 0.5)),
+            "context_prior": dict(item.get("context_prior") or {}),
+            "evidence_level": item.get("evidence_level"),
             "consensus_iou": consensus_iou,
         }
+    incremental_options = dict(web.get("incremental_demo", {}))
     return {
         "detector_path": resolve_path(web.get("detector_weights", config["model"]["weights"])),
         "context_path": context_path,
         "device_index": str(config.get("runtime", {}).get("default_device", "0")),
         "predict": dict(web.get("predict", {})),
         "incremental_enabled": bool(web.get("incremental_demo", {}).get("enabled", True)),
+        "class_names": class_names,
+        "base_class_ids": list(base_class_names),
+        "routing": incremental_options,
+        "cache": dict(web.get("cache", {})),
         "protocols": protocols,
     }
 
@@ -134,6 +173,9 @@ def default_engine_provider() -> WebInferenceEngine:
                     device_index=WEB_SETTINGS["device_index"],
                     predict_options=WEB_SETTINGS["predict"],
                     incremental_protocols=WEB_SETTINGS["protocols"],
+                    class_names=WEB_SETTINGS["class_names"],
+                    base_class_ids=WEB_SETTINGS["base_class_ids"],
+                    routing_options=WEB_SETTINGS["routing"],
                 )
     return _engine
 
@@ -193,7 +235,7 @@ async def health(request: Request) -> JSONResponse:
                     "max_batch_mb": MAX_BATCH_BYTES // (1024 * 1024),
                     "max_image_pixels": MAX_IMAGE_PIXELS,
                 },
-                "classes": list(CLASS_NAMES.values()),
+                "classes": list(WEB_SETTINGS["class_names"].values()),
             }
         )
     except (RuntimeError, OSError, ValueError) as exc:
@@ -204,10 +246,12 @@ async def capabilities(_request: Request) -> JSONResponse:
     protocols = [
         {
             "id": item["id"],
-            "new_class": item["new_class"],
+            "class_name": item["class_name"],
+            "incremental_mode": item["incremental_mode"],
             "new_map50": item["new_map50"],
             "krr": item["krr"],
             "available": item["available"],
+            "evidence_level": item["evidence_level"],
         }
         for item in WEB_SETTINGS["protocols"].values()
     ]
@@ -216,7 +260,7 @@ async def capabilities(_request: Request) -> JSONResponse:
             "models": [
                 {"id": "scene_sensor_net_v1", "name": "场景认知"},
                 {"id": "unified_yolo11s_v1", "name": "统一目标检测"},
-                {"id": "incremental_model_bank_v1", "name": "增量模型库"},
+                {"id": "incremental_model_bank_v1", "name": "专项增强与增量模型库"},
             ],
             "incremental_enabled": WEB_SETTINGS["incremental_enabled"],
             "protocols": protocols,
@@ -273,10 +317,9 @@ async def batch_detect(request: Request) -> Response:
         for filename, _data, image, task_id in validated:
             result = await run_in_threadpool(engine.predict, image, filename, confidence, task_id, "auto")
             results.append(result)
-        archive = build_batch_zip(results)
         total_detections = sum(int(item["detection_count"]) for item in results)
         total_inference = round(sum(float(item["inference_ms"]) for item in results), 1)
-        batch_id = request.app.state.batch_store.put(archive, results)
+        batch_id = request.app.state.batch_store.put(results)
         public_results = []
         for index, item in enumerate(results):
             row = {key: value for key, value in item.items() if key not in {"annotated_png", "task_id"}}
@@ -315,9 +358,9 @@ async def batch_download(request: Request) -> Response:
     if item is None:
         return JSONResponse({"error": "批量结果包已过期或不存在。"}, status_code=404)
     return Response(
-        item["archive"],
+        build_batch_zip(item["results"]),
         media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="agile-agent-results.zip"'},
+        headers={"Content-Disposition": 'attachment; filename="lingdong-agent-results.zip"'},
     )
 
 
@@ -341,7 +384,12 @@ def create_app(engine_provider: EngineProvider | None = None) -> Starlette:
         exception_handlers={404: not_found},
     )
     application.state.engine_provider = engine_provider or default_engine_provider
-    application.state.batch_store = BatchResultStore()
+    cache = WEB_SETTINGS.get("cache", {})
+    application.state.batch_store = BatchResultStore(
+        max_items=int(cache.get("max_items", 4)),
+        ttl_seconds=int(cache.get("ttl_seconds", 1800)),
+        max_bytes=int(cache.get("max_bytes", 512 * 1024 * 1024)),
+    )
     return application
 
 

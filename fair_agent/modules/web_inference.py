@@ -112,20 +112,21 @@ def validate_batch_uploads(items: Iterable[tuple[str, bytes]]) -> List[tuple[str
     return validated
 
 
-def result_records(result: Any) -> List[Dict[str, Any]]:
+def result_records(result: Any, class_names: Mapping[int, str] | None = None) -> List[Dict[str, Any]]:
     boxes = getattr(result, "boxes", None)
     if boxes is None or len(boxes) == 0:
         return []
     xyxy = boxes.xyxy.detach().cpu().tolist()
     confidences = boxes.conf.detach().cpu().tolist()
     class_ids = boxes.cls.detach().cpu().tolist()
+    names = dict(class_names or CLASS_NAMES)
     rows = []
     for coordinates, confidence, class_id in zip(xyxy, confidences, class_ids):
         numeric_id = int(class_id)
         rows.append(
             {
                 "class_id": numeric_id,
-                "class_name": CLASS_NAMES.get(numeric_id, str(numeric_id)),
+                "class_name": names.get(numeric_id, str(numeric_id)),
                 "confidence": round(float(confidence), 6),
                 "xyxy": [round(float(value), 2) for value in coordinates],
             }
@@ -142,12 +143,40 @@ def yolo_inference_ms(result: Any) -> float:
     return max(0.0, float(speed.get("inference", 0.0)))
 
 
-def remap_specialist_records(records: Iterable[Dict[str, Any]], global_class_id: int) -> List[Dict[str, Any]]:
-    class_name = CLASS_NAMES[global_class_id]
+def remap_specialist_records(
+    records: Iterable[Dict[str, Any]],
+    global_class_id: int,
+    class_names: Mapping[int, str] | None = None,
+    protocol_id: str | None = None,
+) -> List[Dict[str, Any]]:
+    class_name = dict(class_names or CLASS_NAMES).get(global_class_id, str(global_class_id))
     return [
-        {**item, "class_id": global_class_id, "class_name": class_name, "source": "incremental_model"}
+        {
+            **item,
+            "class_id": global_class_id,
+            "class_name": class_name,
+            "source": "incremental_model",
+            "protocol_id": protocol_id,
+        }
         for item in records
     ]
+
+
+def remap_base_records(
+    records: Iterable[Dict[str, Any]],
+    local_to_global: Mapping[int, int],
+    class_names: Mapping[int, str],
+) -> List[Dict[str, Any]]:
+    mapping = {int(key): int(value) for key, value in local_to_global.items()}
+    names = {int(key): str(value) for key, value in class_names.items()}
+    remapped = []
+    for item in records:
+        local_id = int(item["class_id"])
+        if local_id not in mapping:
+            raise ValueError(f"基础模型输出未注册的本地类别：{local_id}")
+        global_id = mapping[local_id]
+        remapped.append({**item, "class_id": global_id, "class_name": names.get(global_id, str(global_id))})
+    return remapped
 
 
 def box_iou(first: Iterable[float], second: Iterable[float]) -> float:
@@ -180,11 +209,103 @@ def compose_incremental_records(
     global_class_id: int,
 ) -> List[Dict[str, Any]]:
     old_records = [
-        {**item, "source": "frozen_base_model"}
+        {**item, "source": "frozen_base_model", "protocol_id": None}
         for item in base_records
-        if int(item["class_id"]) != global_class_id
     ]
     return old_records + remap_specialist_records(specialist_records, global_class_id)
+
+
+def context_affinity(context: Mapping[str, Any], prior: Mapping[str, Any] | None) -> float:
+    """Return a soft context score. Missing priors stay neutral and never reject a route."""
+    prior = dict(prior or {})
+    components: List[float] = []
+    for dimension in ("sensor", "scene"):
+        weights = prior.get(dimension)
+        probabilities = context.get(f"{dimension}_probabilities")
+        if isinstance(weights, Mapping) and isinstance(probabilities, Mapping) and weights:
+            score = sum(float(probabilities.get(name, 0.0)) * float(weight) for name, weight in weights.items())
+            components.append(max(0.0, min(1.0, score)))
+    return sum(components) / len(components) if components else 0.5
+
+
+def plan_specialist_routes(
+    protocols: Mapping[str, Mapping[str, Any]],
+    base_records: Iterable[Dict[str, Any]],
+    context: Mapping[str, Any],
+    base_class_ids: Iterable[int],
+    max_specialists: int = 4,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    base_rows = list(base_records)
+    base_ids = {int(value) for value in base_class_ids}
+    eligible: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    for protocol_id, raw_protocol in protocols.items():
+        protocol = dict(raw_protocol)
+        mode = str(protocol.get("incremental_mode") or "target_incremental")
+        global_class_id = int(protocol["global_class_id"])
+        if not protocol.get("available"):
+            skipped.append({"id": protocol_id, "reason": "protocol_unavailable"})
+            continue
+        if mode == "class_incremental":
+            if global_class_id in base_ids:
+                skipped.append({"id": protocol_id, "reason": "new_class_id_overlaps_base"})
+                continue
+            if protocol.get("activation_threshold") is None or not protocol.get("calibration_source"):
+                skipped.append({"id": protocol_id, "reason": "activation_threshold_not_calibrated"})
+                continue
+            evidence_score = float(protocol.get("routing_prior", 0.5))
+            mode_priority = 0
+        elif mode == "target_incremental":
+            references = [row for row in base_rows if int(row["class_id"]) == global_class_id]
+            if not references:
+                skipped.append({"id": protocol_id, "reason": "base_class_not_detected"})
+                continue
+            evidence_score = max(float(row.get("confidence", 0.0)) for row in references)
+            mode_priority = 1
+        else:
+            skipped.append({"id": protocol_id, "reason": "unsupported_incremental_mode"})
+            continue
+        soft_context = context_affinity(context, protocol.get("context_prior"))
+        route = {
+            "id": protocol_id,
+            "protocol": protocol,
+            "incremental_mode": mode,
+            "evidence_score": round(evidence_score, 6),
+            "context_score": round(soft_context, 6),
+            "routing_score": round(0.7 * evidence_score + 0.3 * soft_context, 6),
+            "mode_priority": mode_priority,
+        }
+        eligible.append(route)
+    eligible.sort(key=lambda row: (int(row["mode_priority"]), -float(row["routing_score"]), str(row["id"])))
+    limit = max(0, int(max_specialists))
+    executed = eligible if limit == 0 else eligible[:limit]
+    for route in eligible[len(executed) :]:
+        skipped.append({"id": route["id"], "reason": "specialist_budget_exceeded", "routing_score": route["routing_score"]})
+    return eligible, executed, skipped
+
+
+def class_aware_nms(
+    records: Iterable[Dict[str, Any]],
+    iou_threshold: float = 0.60,
+) -> tuple[List[Dict[str, Any]], Dict[str, int]]:
+    rows = list(records)
+    kept: List[Dict[str, Any]] = []
+    suppressed = 0
+    for class_id in sorted({int(row["class_id"]) for row in rows}):
+        candidates = sorted(
+            (row for row in rows if int(row["class_id"]) == class_id),
+            key=lambda row: (-float(row.get("confidence", 0.0)), 0 if row.get("source") == "incremental_model" else 1),
+        )
+        class_kept: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            if any(box_iou(candidate["xyxy"], existing["xyxy"]) >= iou_threshold for existing in class_kept):
+                suppressed += 1
+                continue
+            status = "specialist_kept" if candidate.get("source") == "incremental_model" else "base_retained"
+            class_kept.append({**candidate, "fusion_status": status})
+        kept.extend(class_kept)
+    kept.sort(key=lambda row: (int(row["class_id"]), -float(row.get("confidence", 0.0))))
+    return kept, {"input_count": len(rows), "output_count": len(kept), "suppressed_count": suppressed}
 
 
 def annotate_records(image: Image.Image, records: Iterable[Dict[str, Any]]) -> Image.Image:
@@ -238,6 +359,10 @@ class WebInferenceEngine:
         device_index: str = "0",
         predict_options: Mapping[str, Any] | None = None,
         incremental_protocols: Mapping[str, Mapping[str, Any]] | None = None,
+        class_names: Mapping[int, str] | None = None,
+        base_class_ids: Iterable[int] | None = None,
+        base_local_to_global: Mapping[int, int] | None = None,
+        routing_options: Mapping[str, Any] | None = None,
     ) -> None:
         from ultralytics import YOLO
 
@@ -248,10 +373,23 @@ class WebInferenceEngine:
         self._yolo_class = YOLO
         self.detector = YOLO(str(detector_path))
         self.context_model, self.context_checkpoint = load_context_model(context_path, self.device)
+        self.class_names = {int(key): str(value) for key, value in (class_names or CLASS_NAMES).items()}
+        configured_base_ids = {int(value) for value in (base_class_ids or self.class_names)}
+        self.base_local_to_global = {
+            int(key): int(value)
+            for key, value in (base_local_to_global or {class_id: class_id for class_id in configured_base_ids}).items()
+        }
+        self.base_class_ids = set(self.base_local_to_global.values())
+        self.base_local_names = {
+            local_id: self.class_names[global_id] for local_id, global_id in self.base_local_to_global.items()
+        }
         options = dict(predict_options or {})
+        routing = dict(routing_options or {})
         self.imgsz = int(options.get("imgsz", 640))
         self.iou = float(options.get("iou", 0.7))
         self.max_det = int(options.get("max_det", 300))
+        self.fusion_iou = float(routing.get("fusion_iou", 0.60))
+        self.max_specialists = int(routing.get("max_specialists_per_image", 4))
         context_size = int(self.context_checkpoint["preprocessing"]["image_size"])
         warmup_image = Image.new("RGB", (self.imgsz, self.imgsz))
         predict_context(
@@ -313,26 +451,35 @@ class WebInferenceEngine:
             verbose=False,
         )[0]
         inference_ms += yolo_inference_ms(prediction)
-        base_records = result_records(prediction)
+        base_records = remap_base_records(
+            result_records(prediction, self.base_local_names),
+            self.base_local_to_global,
+            self.class_names,
+        )
         automatic = incremental_protocol == "auto"
         if automatic:
-            selected_protocols = [
-                (protocol_id, protocol)
-                for protocol_id, protocol in self.incremental_protocols.items()
-                if protocol.get("available")
-            ]
+            protocol_pool = self.incremental_protocols
         elif incremental_protocol:
             protocol = self.incremental_protocols.get(incremental_protocol)
             if protocol is None or not protocol.get("available"):
                 raise ValueError("所选增量能力当前不可用。")
-            selected_protocols = [(incremental_protocol, protocol)]
+            protocol_pool = {incremental_protocol: protocol}
         else:
-            selected_protocols = []
+            protocol_pool = {}
+
+        eligible_routes, executed_routes, skipped_protocols = plan_specialist_routes(
+            protocol_pool,
+            base_records,
+            context,
+            self.base_class_ids,
+            self.max_specialists if automatic else 1,
+        )
 
         protocol_results = []
-        activated_class_ids = set()
         specialist_records: List[Dict[str, Any]] = []
-        for protocol_id, protocol in selected_protocols:
+        for route in executed_routes:
+            protocol_id = str(route["id"])
+            protocol = dict(route["protocol"])
             if protocol_id not in self.specialist_detectors:
                 self.specialist_detectors[protocol_id] = self._yolo_class(str(protocol["weights"]))
             specialist_prediction = self.specialist_detectors[protocol_id].predict(
@@ -346,51 +493,76 @@ class WebInferenceEngine:
             )[0]
             inference_ms += yolo_inference_ms(specialist_prediction)
             global_class_id = int(protocol["global_class_id"])
-            raw_candidates = remap_specialist_records(result_records(specialist_prediction), global_class_id)
-            candidates = consensus_specialist_records(
-                base_records,
-                raw_candidates,
+            activation_threshold = max(float(confidence), float(protocol.get("activation_threshold", confidence)))
+            raw_candidates = remap_specialist_records(
+                result_records(specialist_prediction),
                 global_class_id,
-                float(protocol.get("consensus_iou", 0.30)),
+                self.class_names,
+                protocol_id,
             )
+            threshold_candidates = [
+                item for item in raw_candidates if float(item.get("confidence", 0.0)) >= activation_threshold
+            ]
+            if protocol.get("incremental_mode") == "class_incremental":
+                candidates = threshold_candidates
+                activation_reason = "通过独立新类置信度门限"
+            else:
+                candidates = consensus_specialist_records(
+                    base_records,
+                    threshold_candidates,
+                    global_class_id,
+                    float(protocol.get("consensus_iou", 0.30)),
+                )
+                activation_reason = "通过基础同类目标与空间一致性检查"
             activated = bool(candidates)
             if activated:
-                activated_class_ids.add(global_class_id)
                 specialist_records.extend(candidates)
             protocol_results.append({
                 "id": protocol_id,
-                "new_class": protocol["new_class"],
+                "class_name": protocol["class_name"],
+                "new_class": protocol["class_name"],
+                "incremental_mode": protocol["incremental_mode"],
                 "new_map50": protocol["new_map50"],
                 "krr": protocol["krr"],
                 "status": "activated" if activated else "no_candidate",
                 "activated": activated,
                 "raw_candidate_count": len(raw_candidates),
                 "candidate_count": len(candidates),
+                "activation_threshold": round(activation_threshold, 2),
+                "routing_score": route["routing_score"],
+                "activation_reason": activation_reason if activated else "未产生通过门限的候选框",
             })
 
-        if activated_class_ids:
-            records = [
-                {**item, "source": "frozen_base_model"}
-                for item in base_records
-                if int(item["class_id"]) not in activated_class_ids
-            ] + specialist_records
-        else:
-            records = [{**item, "source": "frozen_base_model"} for item in base_records]
+        base_with_source = [
+            {**item, "source": "frozen_base_model", "protocol_id": None}
+            for item in base_records
+        ]
+        records, fusion_summary = class_aware_nms(
+            base_with_source + specialist_records,
+            self.fusion_iou,
+        )
         annotated = annotate_records(rgb_image, records)
         models_used = ["scene_sensor_net_v1", "unified_yolo11s_v1"]
-        if selected_protocols:
+        if executed_routes:
             models_used.append("incremental_model_bank_v1")
-        activated_classes = [item["new_class"] for item in protocol_results if item["activated"]]
+        activated_classes = [item["class_name"] for item in protocol_results if item["activated"]]
         decision = {
-            "mode": "automatic" if automatic else ("manual" if selected_protocols else "unified_only"),
-            "evaluated_specialists": len(selected_protocols),
+            "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
+            "evaluated_specialists": len(executed_routes),
             "base_detection_count": len(base_records),
             "final_detection_count": len(records),
             "activated_classes": activated_classes,
+            "eligible_protocols": [
+                {"id": row["id"], "routing_score": row["routing_score"], "incremental_mode": row["incremental_mode"]}
+                for row in eligible_routes
+            ],
+            "executed_protocols": [str(row["id"]) for row in executed_routes],
+            "skipped_protocols": skipped_protocols,
+            "fusion_summary": fusion_summary,
             "reason": (
-                "自动融合通过置信度与跨模型空间一致性检查的增量候选"
+                "已融合通过模式感知门控的专项候选"
                 if activated_classes
-                else "未发现通过置信度与跨模型空间一致性检查的增量候选，保持统一检测结果"
+                else "未发现通过模式感知门控的专项候选，保持统一检测结果"
             ),
         }
         return {

@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "release": "x86-20260710",
   "created_at": "2026-07-10T00:00:00+08:00",
   "base_model": {
@@ -7,6 +7,12 @@
     "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
     "imgsz": 640,
     "classes": ["soldier", "small_aircraft", "warship", "tank"],
+    "class_map": {
+      "0": "soldier",
+      "1": "small_aircraft",
+      "2": "warship",
+      "3": "tank"
+    },
     "status": "gpu_smoke_verified",
     "metric": "mAP50",
     "lock_all_map50": 0.91202,
@@ -38,21 +44,29 @@
       "function": "incremental_object_detection",
       "task_type": "incremental_object_detection",
       "primary_mode": "class_incremental",
+      "current_evidence_mode": "target_incremental",
       "supported_modes": ["class_incremental", "target_incremental"],
       "learning_data_scope": "incremental_dataset_only",
       "model_count": 4,
       "status": "partially_verified",
       "passed_protocols": 3,
       "total_protocols": 4,
-      "old_raw_image_count": 0
+      "old_raw_image_count": 0,
+      "true_class_incremental_verified": false
     }
   ],
   "incremental_models": [
     {
       "protocol": "p01_new_small_aircraft",
       "task_type": "incremental_object_detection",
-      "incremental_mode": "class_incremental",
+      "incremental_mode": "target_incremental",
       "learning_data_scope": "incremental_dataset_only",
+      "class_name": "small_aircraft",
+      "global_class_id": 1,
+      "activation_threshold": 0.50,
+      "evidence_level": "unavailable",
+      "available": false,
+      "context_prior": {},
       "path": "models/incremental/p01_new_small_aircraft_best.pt",
       "new_map50": 0.55860,
       "krr": 1.0,
@@ -61,8 +75,14 @@
     {
       "protocol": "p02_new_warship",
       "task_type": "incremental_object_detection",
-      "incremental_mode": "class_incremental",
+      "incremental_mode": "target_incremental",
       "learning_data_scope": "incremental_dataset_only",
+      "class_name": "warship",
+      "global_class_id": 2,
+      "activation_threshold": 0.50,
+      "evidence_level": "rehearsal_only",
+      "available": true,
+      "context_prior": {},
       "path": "models/incremental/p02_new_warship_best.pt",
       "new_map50": 0.83539,
       "krr": 1.0,
@@ -71,8 +91,14 @@
     {
       "protocol": "p03_new_tank",
       "task_type": "incremental_object_detection",
-      "incremental_mode": "class_incremental",
+      "incremental_mode": "target_incremental",
       "learning_data_scope": "incremental_dataset_only",
+      "class_name": "tank",
+      "global_class_id": 3,
+      "activation_threshold": 0.50,
+      "evidence_level": "rehearsal_only",
+      "available": true,
+      "context_prior": {},
       "path": "models/incremental/p03_new_tank_best.pt",
       "new_map50": 0.74989,
       "krr": 1.0,
@@ -81,8 +107,14 @@
     {
       "protocol": "p04_new_soldier",
       "task_type": "incremental_object_detection",
-      "incremental_mode": "class_incremental",
+      "incremental_mode": "target_incremental",
       "learning_data_scope": "incremental_dataset_only",
+      "class_name": "soldier",
+      "global_class_id": 0,
+      "activation_threshold": 0.50,
+      "evidence_level": "rehearsal_only",
+      "available": true,
+      "context_prior": {},
       "path": "models/incremental/p04_new_soldier_best.pt",
       "new_map50": 0.76914,
       "krr": 1.0,
@@ -91,7 +123,8 @@
   ],
   "notes": [
     "所有报告指标均为 mAP50。",
-    "增量任务以类别增量为主，同时支持目标增量；两种模式的训练和验证都仅使用增量数据，旧样本 replay 被禁止。",
+    "当前 p01-p04 仅作为目标增量专项增强演练，不构成真实类别增量证明。",
+    "真正类别增量模型必须使用基础类别集合之外的全局类别 ID，并通过增量验证集完成激活阈值校准。",
     "为便于复现，仓库保留 p01 专用模型，但该模型未达到 0.60 验收阈值。",
     "仓库不包含竞赛数据集和标签。"
   ]

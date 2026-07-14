@@ -1,7 +1,9 @@
-streamlit
 pandas
 pyyaml
 pillow
+starlette>=0.40
+uvicorn>=0.30
+python-multipart>=0.0.9
 ultralytics
 opencv-python
 pexpect

@@ -17,6 +17,7 @@ venv/
 /incremental_protocols/
 /incremental_protocols_no_old/
 /incremental_protocols_no_old_specialist/
+/incremental_strict_3plus1/
 /splits/
 /runs/
 /reports/
@@ -54,6 +55,9 @@ venv/
 !/tools/42_predict_submission.py
 !/tools/52_build_sar_soldier_case_bank.py
 !/tools/60_train_scene_sensor.py
+!/tools/70_run_strict_3plus1.py
+!/tools/71_compare_incremental_methods.py
+!/tools/72_run_full_yolo_iod.py
 
 /configs/*
 !/configs/agent_pipeline.yaml
@@ -64,6 +68,14 @@ venv/
 !/configs/scene_sensor_model.yaml
 !/configs/functional_models.yaml
 !/configs/incremental_detection_policy.yaml
+!/configs/strict_class_incremental_3plus1.yaml
+!/configs/clean_class_incremental_v2.yaml
+!/configs/clean_context_p02_v2.yaml
+!/configs/incremental_method_comparison.yaml
+!/configs/full_yolo_iod_p02.yaml
+!/configs/full_yolo_iod_p02_r04.yaml
+!/patches/
+!/patches/yolo_iod_single_class_grad_mask.patch
 
 # Local competition notes are not part of the public source release.
 /*.md

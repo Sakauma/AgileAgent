@@ -15,7 +15,7 @@ from fair_agent.modules.release_verification import verify_release
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="执行 AgileAgent 静态发布验收。")
+    parser = argparse.ArgumentParser(description="执行灵动Agent静态发布验收。")
     parser.add_argument("--config", default="configs/agent_pipeline.yaml")
     args = parser.parse_args()
     result = verify_release(args.config)

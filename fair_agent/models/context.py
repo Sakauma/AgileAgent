@@ -98,8 +98,14 @@ def predict_context(model: SceneSensorNet, checkpoint: Dict[str, Any], image: Im
     return {
         "sensor": SENSOR_NAMES[sensor_id],
         "sensor_confidence": float(sensor_prob[sensor_id]),
+        "sensor_probabilities": {
+            name: float(sensor_prob[index]) for index, name in enumerate(SENSOR_NAMES)
+        },
         "scene": SCENE_NAMES[scene_id],
         "scene_confidence": float(scene_prob[scene_id]),
+        "scene_probabilities": {
+            name: float(scene_prob[index]) for index, name in enumerate(SCENE_NAMES)
+        },
         "_inference_ms": float(start_event.elapsed_time(end_event)),
     }
 

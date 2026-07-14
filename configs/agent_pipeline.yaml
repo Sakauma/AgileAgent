@@ -19,6 +19,12 @@ web:
     enabled: true
     require_acceptance_passed: true
     auto_consensus_iou: 0.30
+    fusion_iou: 0.60
+    max_specialists_per_image: 4
+  cache:
+    max_items: 4
+    ttl_seconds: 1800
+    max_bytes: 536870912
 
 model:
   weights: models/base/yolo11s_ir_sar_imgsz640.pt
@@ -124,7 +130,7 @@ policies:
   primary_model: use_unified_yolo11s_imgsz640
   submission_format: pending_official_confirmation
   sar_soldier_focus: tiny_object_localization_and_confidence
-  incremental_learning: incremental_data_only_class_specialist
+  incremental_learning: mode_aware_incremental_data_only
   end_device: paused_until_ascend_board_ready
 
 thresholds:

@@ -13,7 +13,7 @@ from fair_agent.core.blackboard import build_blackboard
 from fair_agent.core.config import load_config
 from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
-from fair_agent.modules.release_verification import verify_release
+from fair_agent.modules.release_verification import _validate_model_manifest, verify_release
 from fair_agent.policies.decision import build_decision
 from fair_agent.ui.console import ConsoleFrontend, render_page
 
@@ -229,6 +229,21 @@ def test_static_release_verification_passes() -> None:
     assert result["functional_models"]["distinct_function_count"] == 3
 
 
+def test_manifest_blocks_uncalibrated_or_overlapping_true_new_class() -> None:
+    manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
+    assert _validate_model_manifest(manifest) == []
+    candidate = manifest["incremental_models"][1]
+    candidate["incremental_mode"] = "class_incremental"
+    candidate["global_class_id"] = 8
+    candidate["class_name"] = "new_vehicle"
+    candidate["evidence_level"] = "verified"
+    candidate.pop("calibration_source", None)
+    assert "manifest_new_class_calibration_missing:p02_new_warship" in _validate_model_manifest(manifest)
+    candidate["calibration_source"] = "incremental_val/calibration.json"
+    candidate["global_class_id"] = 2
+    assert "manifest_new_class_overlaps_base:p02_new_warship" in _validate_model_manifest(manifest)
+
+
 def test_low_risk_action_output_cannot_escape_allowlist(tmp_path: Path) -> None:
     config = {"automation": {"allowed_output_roots": [str(tmp_path / "allowed")]}}
     safe = {"outputs": [str(tmp_path / "allowed" / "result.json")]}
@@ -244,7 +259,7 @@ def test_operator_snapshot_is_shared_by_text_and_json() -> None:
     snapshot = build_operator_snapshot(state, decision)
     text = render_snapshot(snapshot, "text")
     payload = json.loads(render_snapshot(snapshot, "json"))
-    assert "AgileAgent 终端工作台" in text
+    assert "灵动Agent终端工作台" in text
     assert snapshot["detector"]["name"] in text
     assert payload["detector"] == snapshot["detector"]
     assert payload["deployment"]["x86_nvidia_gpu"] == "ready"
@@ -274,7 +289,7 @@ def test_cli_frontend_navigates_all_operator_pages(monkeypatch) -> None:
     monkeypatch.setattr(frontend, "_state", lambda: (state, decision))
     assert frontend.run() == 0
     rendered = "\n".join(output)
-    assert "AgileAgent 终端工作台" in rendered
+    assert "灵动Agent终端工作台" in rendered
     assert "功能模型" in rendered
     assert "数据与诊断" in rendered
     assert "增量目标检测" in rendered

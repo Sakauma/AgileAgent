@@ -8,6 +8,7 @@ import yaml
 
 from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.hashes import hash_if_exists
+from fair_agent.modules.strict_incremental import discover_experiment_profiles
 
 
 def _load_registry(path: Path) -> Dict[str, Any]:
@@ -38,6 +39,9 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
     if len(functions) != len(set(functions)) or any(not value for value in functions):
         errors.append("functional_model_functions_not_distinct")
 
+    strict_profiles = discover_experiment_profiles()
+    if strict_profiles["errors"]:
+        errors.extend(f"strict_class_incremental_profile_invalid:{item}" for item in strict_profiles["errors"])
     summaries = []
     for item in entries:
         if not isinstance(item, dict):
@@ -140,6 +144,8 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     or manifest_entry.get("model_count") != len(protocols)
                     or manifest_entry.get("task_type") != "incremental_object_detection"
                     or set(manifest_entry.get("supported_modes", [])) != {"class_incremental", "target_incremental"}
+                    or manifest_entry.get("current_evidence_mode") != "target_incremental"
+                    or manifest_entry.get("true_class_incremental_verified") is not False
                     or manifest_entry.get("learning_data_scope") != "incremental_dataset_only"
                     or manifest_entry.get("old_raw_image_count") != 0
                     or any(
@@ -147,6 +153,10 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                         or protocol.get("task_type") != "incremental_object_detection"
                         or protocol.get("incremental_mode") not in {"class_incremental", "target_incremental"}
                         or protocol.get("learning_data_scope") != "incremental_dataset_only"
+                        or not isinstance(protocol.get("global_class_id"), int)
+                        or not protocol.get("class_name")
+                        or not isinstance(protocol.get("activation_threshold"), (int, float))
+                        or protocol.get("evidence_level") not in {"unavailable", "rehearsal_only", "verified"}
                         for protocol in protocols
                     )
                 ):
@@ -159,11 +169,28 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                 evidence_summary = {
                     "task_type": manifest_entry.get("task_type"),
                     "primary_mode": manifest_entry.get("primary_mode"),
+                    "current_evidence_mode": manifest_entry.get("current_evidence_mode"),
+                    "true_class_incremental_verified": bool(
+                        manifest_entry.get("true_class_incremental_verified")
+                        or strict_profiles["true_class_incremental_verified"]
+                    ),
                     "supported_modes": manifest_entry.get("supported_modes"),
                     "learning_data_scope": manifest_entry.get("learning_data_scope"),
                     "old_raw_image_count": manifest_entry.get("old_raw_image_count"),
                     "protocol_count": len(protocols),
                     "passed_protocol_count": passed_count,
+                    "strict_verified_count": strict_profiles["verified_count"],
+                    "strict_verified_profiles": [
+                        {
+                            "profile_id": profile["profile_id"],
+                            "new_class": profile["new_class"],
+                            "new_map50": profile["new_map50"],
+                            "krr": profile["krr"],
+                            "activation_threshold": profile["activation_threshold"],
+                            "lock_false_activation_rate": profile.get("lock_false_activation_rate"),
+                        }
+                        for profile in strict_profiles["profiles"]
+                    ],
                 }
 
         runtime = item.get("runtime", {})
@@ -208,4 +235,5 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
         "all_ascend_310b_ready": bool(summaries) and all(item["ascend_310b"] for item in summaries),
         "models": summaries,
         "collaboration": collaboration,
+        "strict_class_incremental": strict_profiles,
     }
