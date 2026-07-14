@@ -124,6 +124,29 @@ def test_r04_disables_cpr_and_reaches_effective_batch_16() -> None:
     assert plan["final"]["gradient_accumulation_steps"] == 8
 
 
+def test_r05_uses_gpu3_without_changing_training_protocol() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_p02_r05_gpu3.yaml")
+    assert config["runtime"]["devices"] == ["3"]
+    assert config["training"]["final"]["devices"] == ["3"]
+    assert config["evaluation"]["device"] == "3"
+    assert cpr_is_enabled(config) is False
+    assert {row["effective_batch_size"] for row in training_batch_plan(config).values()} == {16}
+
+
+def test_schema2_rejects_multiple_or_mismatched_devices() -> None:
+    root = Path(__file__).resolve().parents[1]
+    config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_p02_r05_gpu3.yaml")
+    config["runtime"]["devices"] = ["2", "3"]
+    with pytest.raises(ValueError, match="一张有效 GPU"):
+        validate_full_yolo_iod_config(config)
+
+    config["runtime"]["devices"] = ["3"]
+    config["training"]["final"]["devices"] = ["2"]
+    with pytest.raises(ValueError, match="最终训练设备"):
+        validate_full_yolo_iod_config(config)
+
+
 def test_gradient_accumulation_is_written_into_official_config() -> None:
     source = "optim_wrapper = dict(\n    constructor='YOLOWv5OptimizerConstructor')\n"
     result = _inject_gradient_accumulation(source, 8)

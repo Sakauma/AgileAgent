@@ -18,7 +18,7 @@
 
 ## 完整组件
 
-- **CPR**：r03 在没有旧类 GT 共现的舰船增量图像上生成了 420 个旧类伪框，导致监督与数据不匹配。r04 要求 `incremental_old_class_gt_count=0` 并将 CPR 记为 `skip_by_policy`，最终训练直接读取 `current_train.json`。
+- **CPR**：r03 在没有旧类 GT 共现的舰船增量图像上生成了 420 个旧类伪框，导致监督与数据不匹配。r04/r05 要求 `incremental_old_class_gt_count=0` 并将 CPR 记为 `skip_by_policy`，最终训练直接读取 `current_train.json`。
 - **IKS**：直接使用官方 GPS Loop，根据梯度和参数变化选择卷积核单元。
 - **CAKD**：直接使用官方旧教师/当前教师检测头完成 Cross-Stage Asymmetric Knowledge Distillation。
 
@@ -38,7 +38,7 @@
 cd /project/IDIP/MAJ/code/tiaozhanbei
 /project/IDIP/CONDA_ENV/envs/yolo-iod-full/bin/python \
   tools/72_run_full_yolo_iod.py \
-  --config configs/full_yolo_iod_p02_r04.yaml \
+  --config configs/full_yolo_iod_p02_r05_gpu3.yaml \
   --check-only
 ```
 
@@ -53,14 +53,14 @@ cd /project/IDIP/MAJ/code/tiaozhanbei
 ```bash
 /project/IDIP/CONDA_ENV/envs/yolo-iod-full/bin/python \
   tools/72_run_full_yolo_iod.py \
-  --config configs/full_yolo_iod_p02_r04.yaml
+  --config configs/full_yolo_iod_p02_r05_gpu3.yaml
 ```
 
-脚本依次完成：三类基础模型、当前舰船教师、CPR 数据门禁、完整 YOLO-IOD、基础/最终 lock-val 评测。r04 所有阶段固定使用 GPU 1。所有阶段写入独立日志和 `action_log.jsonl`，任一步失败立即停止。
+脚本依次完成：三类基础模型、当前舰船教师、CPR 数据门禁、完整 YOLO-IOD、基础/最终 lock-val 评测。r05 所有阶段固定使用 GPU 3；配置校验会拒绝多卡或阶段间设备不一致。所有阶段写入独立日志和 `action_log.jsonl`，任一步失败立即停止。
 
 显存允许的 micro-batch 分别为 base/current 的 4 和 final 的 2。YAML 使用梯度累积 `4/4/8`，使三个阶段的有效 batch 都等于 16；command manifest 会记录 micro-batch、累积步数和有效 batch。runner 会识别 `last_checkpoint` 并使用显式检查点路径续训。
 
-r04 的 final 验证配置只引用 `current_dev.json`，不读取旧类验证图像。旧类保持率只能在权重冻结后通过 lock-val 评分，不能用于调参或早停。
+r04/r05 的 final 验证配置只引用 `current_dev.json`，不读取旧类验证图像。旧类保持率只能在权重冻结后通过 lock-val 评分，不能用于调参或早停。
 
 ## 验收
 

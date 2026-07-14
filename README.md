@@ -185,11 +185,11 @@ python tools/71_compare_incremental_methods.py
 
 ### 官方完整 YOLO-IOD 复现
 
-为验证轻量适配失败是否来自实现简化，仓库另提供基于官方 YOLO-World(X) 的 strict-p02 复现。r04 根据数据审计禁用不适用的 CPR，保留 IKS 和 CAKD，并在 GPU 1 上通过梯度累积统一为有效 batch 16：
+为验证轻量适配失败是否来自实现简化，仓库另提供基于官方 YOLO-World(X) 的 strict-p02 复现。r05 延续 r04 的数据审计结论，禁用不适用的 CPR，保留 IKS 和 CAKD，并在 GPU 3 上通过梯度累积统一为有效 batch 16：
 
 ```bash
-python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r04.yaml --check-only
-python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r04.yaml
+python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r05_gpu3.yaml --check-only
+python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r05_gpu3.yaml
 ```
 
 类别、数据隔离、三阶段训练、lock-val 冻结和验收说明见 `docs/full-yolo-iod-reproduction.md`。完整模型只作为方法参考；只有全部门禁通过后才讨论压缩或蒸馏回 YOLO11s。
