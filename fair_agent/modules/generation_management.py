@@ -66,9 +66,11 @@ def ensure_recheck_candidate(config: Mapping[str, Any], candidate_id: str) -> Di
         return load_generation_registry(registry_path)
     if candidate_id != str(generation_cfg["candidate_id"]):
         raise ValueError(f"未知候选代际：{candidate_id}")
-    source_model = dict(models["strict_p02_warship_v1"])
-    source_generation = dict(generations["generation-1"])
-    model_id = "strict_p02_warship_recheck_v2"
+    source_generation_id = str(registry["channels"]["production"])
+    source_generation = dict(generations[source_generation_id])
+    source_model_id = str(source_generation["class_owners"]["2"])
+    source_model = dict(models[source_model_id])
+    model_id = f"{candidate_id}_expert"
     source_model.update({
         "id": model_id,
         "activation_threshold": threshold,
@@ -82,7 +84,7 @@ def ensure_recheck_candidate(config: Mapping[str, Any], candidate_id: str) -> Di
     })
     source_generation.update({
         "id": candidate_id,
-        "parent": "generation-0",
+        "parent": source_generation_id,
         "class_owners": {**source_generation["class_owners"], "2": model_id},
         "status": "pending_deployment_recheck",
         "metrics": {},
@@ -171,7 +173,7 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         "incremental_mode": "class_incremental",
         "weights": expert["resolved_path"],
         "new_map50": float(expert["metrics"]["new_map50"]),
-        "krr": float(registry["generations_by_id"]["generation-1"]["metrics"]["krr"]),
+        "krr": float(generation["metrics"].get("krr", 1.0)),
         "available": True,
         "activation_threshold": float(expert["activation_threshold"]),
         "calibration_source": expert["calibration_source"],

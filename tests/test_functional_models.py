@@ -20,7 +20,7 @@ def test_three_distinct_functional_models_are_registered() -> None:
     assert result["all_x86_gpu_ready"] is True
     assert result["all_ascend_310b_ready"] is False
     assert result["strict_class_incremental"]["true_class_incremental_verified"] is True
-    assert result["strict_class_incremental"]["production_profile"]["model_id"] == "strict_p02_warship_recheck_v2"
+    assert result["strict_class_incremental"]["production_profile"]["model_id"] == "incremental_detector"
     assert {item["function"] for item in result["models"]} == {
         "context_perception",
         "multimodal_target_detection",
@@ -31,6 +31,8 @@ def test_three_distinct_functional_models_are_registered() -> None:
     )
     assert incremental["evidence"]["summary"]["true_class_incremental_verified"] is True
     assert incremental["evidence"]["summary"]["production_class_incremental"]["activation_threshold"] == 0.63
+    assert incremental["artifact_count"] == 1
+    assert incremental["evidence"]["summary"]["protocol_count"] == 1
 
 
 def test_functional_registry_rejects_tampered_hash(tmp_path: Path) -> None:
@@ -68,7 +70,7 @@ def test_registry_describes_the_real_policy_integration() -> None:
 
 def test_incremental_status_is_derived_from_frozen_evidence(tmp_path: Path) -> None:
     manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
-    manifest["incremental_models"][0]["acceptance"] = "passed"
+    manifest["incremental_models"][0]["acceptance"] = "failed"
     evidence_path = tmp_path / "manifest.json"
     evidence_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

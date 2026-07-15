@@ -526,8 +526,8 @@ def run_all(config: Mapping[str, Any], *, prepare_only: bool = False) -> Dict[st
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="运行官方完整 YOLO-IOD strict-p02 复现实验。")
-    parser.add_argument("--config", default="configs/full_yolo_iod_p02_r04.yaml")
+    parser = argparse.ArgumentParser(description="运行官方完整 YOLO-IOD 舰船增量复现实验。")
+    parser.add_argument("--config", default="configs/full_yolo_iod_warship_no_cpr.yaml")
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()

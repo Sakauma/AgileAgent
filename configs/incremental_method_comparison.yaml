@@ -13,12 +13,12 @@ paths:
     train: splits/train.txt
     val: splits/dev_val.txt
     lock: splits/lock_val.txt
-  shared_base_checkpoint: runs/detect/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/base/weights/best.pt
+  shared_base_checkpoint: runs/detect/clean_class_incremental_v2/clean-ci-v2-warship-r02/warship-incremental/base/weights/best.pt
   dataset_root: incremental_method_comparison
   run_root: runs/detect/incremental_method_comparison
   report_root: reports/incremental_method_comparison
   freeze_root: models/experiments/incremental_method_comparison_staging
-  row_only_baseline_metrics: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/metrics.json
+  row_only_baseline_metrics: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/warship-incremental/metrics.json
 
 runtime:
   preferred_devices: ["1", "2"]
@@ -85,7 +85,7 @@ methods:
       current_feature: 0.02
     cpr:
       enabled: false
-      reason: strict_p02_has_no_old_class_cooccurrence
+      reason: warship_increment_has_no_old_class_cooccurrence
     current_teacher_train:
       epochs: 30
       lr0: 0.001

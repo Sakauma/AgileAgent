@@ -6,10 +6,10 @@ experiment:
   data_scope: base_stage_only
 
 data:
-  train: incremental_clean_v2/clean-ci-v2-warship-r02/strict-p02/base/splits/train.txt
-  dev: incremental_clean_v2/clean-ci-v2-warship-r02/strict-p02/base/splits/val.txt
-  incremental_train: incremental_clean_v2/clean-ci-v2-warship-r02/strict-p02/student/splits/train.txt
-  incremental_dev: incremental_clean_v2/clean-ci-v2-warship-r02/strict-p02/student/splits/val.txt
+  train: incremental_clean_v2/clean-ci-v2-warship-r02/warship-incremental/base/splits/train.txt
+  dev: incremental_clean_v2/clean-ci-v2-warship-r02/warship-incremental/base/splits/val.txt
+  incremental_train: incremental_clean_v2/clean-ci-v2-warship-r02/warship-incremental/student/splits/train.txt
+  incremental_dev: incremental_clean_v2/clean-ci-v2-warship-r02/warship-incremental/student/splits/val.txt
   lock: splits/lock_val.txt
   image_size: 160
   num_workers: 4
@@ -39,9 +39,9 @@ incremental_train:
   amp: true
 
 output:
-  weights: runs/detect/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/context/scene_sensor_net.pt
-  metrics: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/context_metrics.json
-  report: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/context_report.md
+  weights: runs/detect/clean_class_incremental_v2/clean-ci-v2-warship-r02/warship-incremental/context/scene_sensor_net.pt
+  metrics: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/warship-incremental/context_metrics.json
+  report: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/warship-incremental/context_report.md
 
 acceptance:
   min_lock_sensor_accuracy: 0.90

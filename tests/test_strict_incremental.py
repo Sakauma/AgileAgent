@@ -52,7 +52,7 @@ def protocol() -> dict:
 
 def test_repository_strict_config_has_only_disjoint_aircraft_and_warship_folds() -> None:
     config = load_yaml("configs/strict_class_incremental_3plus1.yaml")
-    assert [item["id"] for item in config["protocols"]] == ["strict-p01", "strict-p02"]
+    assert [item["id"] for item in config["protocols"]] == ["strict-p01", "warship-incremental"]
     assert [item["new_class"] for item in config["protocols"]] == ["small_aircraft", "warship"]
     assert config["acceptance"]["min_new_map50"] == 0.60
     assert config["acceptance"]["min_krr"] == 0.95
@@ -71,7 +71,7 @@ def test_repository_strict_config_has_only_disjoint_aircraft_and_warship_folds()
 
 def test_clean_v2_configs_share_run_id_and_enforce_strict_gates() -> None:
     detector = load_yaml("configs/clean_class_incremental_v2.yaml")
-    context = load_yaml("configs/clean_context_p02_v2.yaml")
+    context = load_yaml("configs/clean_context_warship_v2.yaml")
     assert detector["experiment"]["run_id"] == context["experiment"]["run_id"]
     assert detector["model"] == "yolo11s.pt"
     assert detector["adaptation"]["mode"] == "expanded_single_student"
@@ -79,7 +79,7 @@ def test_clean_v2_configs_share_run_id_and_enforce_strict_gates() -> None:
     assert detector["adaptation"]["new_class_channel_init"] == "deterministic_random_reset"
     assert detector["adaptation"]["update_budget"]["max_epochs"] == 30
     assert detector["student_train"]["epochs"] == 30
-    assert [item["id"] for item in detector["protocols"]] == ["strict-p02"]
+    assert [item["id"] for item in detector["protocols"]] == ["warship-incremental"]
     assert detector["protocols"][0]["build_unified_student"] is True
     assert detector["acceptance"]["max_false_activation_rate"] == 0.15
     assert detector["acceptance"]["min_lock_precision"] == 0.70
@@ -89,7 +89,7 @@ def test_clean_v2_configs_share_run_id_and_enforce_strict_gates() -> None:
     assert detector["experiment"]["run_id"] == "clean-ci-v2-warship-r02"
     assert context["data"]["incremental_train"].endswith("student/splits/train.txt")
     assert context["acceptance"]["max_old_scene_row_drift"] == 0.000001
-    assert context["data"]["train"].endswith("strict-p02/base/splits/train.txt")
+    assert context["data"]["train"].endswith("warship-incremental/base/splits/train.txt")
     runner = Path("tools/70_run_strict_3plus1.py").read_text(encoding="utf-8")
     guide = Path("docs/clean-class-incremental-v2.md").read_text(encoding="utf-8")
     context_runner = Path("tools/60_train_scene_sensor.py").read_text(encoding="utf-8")
@@ -419,7 +419,7 @@ def test_context_class_weights_allow_a_missing_incremental_scene() -> None:
 
 def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(strict, "ROOT", tmp_path)
-    profile_root = tmp_path / "models" / "experiments" / "strict_3plus1" / "strict-p01"
+    profile_root = tmp_path / "models" / "profiles" / "strict-p01"
     profile_root.mkdir(parents=True)
     base = tmp_path / "base.pt"
     specialist = tmp_path / "specialist.pt"
@@ -435,7 +435,7 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
         "old_raw_image_count": 0,
         "gates": {"data": True},
         "lock_deployment_metrics": {"precision": 0.9, "recall": 0.8},
-        "false_activation": {"false_activation_rate": 0.1},
+        "false_activation": {"false_activation_rate": 0.0},
     }), encoding="utf-8")
     payload = {
         "profile_id": "strict-p01",
@@ -453,7 +453,9 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
         "specialist_sha256": hashlib.sha256(b"specialist").hexdigest(),
     }
     (profile_root / "active.json").write_text(json.dumps(payload), encoding="utf-8")
-    assert load_experiment_profile("strict-p01")["acceptance"] == "passed"
+    loaded = load_experiment_profile("strict-p01")
+    assert loaded["acceptance"] == "passed"
+    assert loaded["deployment_accepted"] is True
     discovered = strict.discover_experiment_profiles(profile_root.parent)
     assert discovered["true_class_incremental_verified"] is True
     assert discovered["verified_count"] == 1

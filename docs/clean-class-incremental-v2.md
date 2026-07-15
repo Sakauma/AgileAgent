@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-本实验使用舰船数据模拟第一批在线增量注入。三类教师检测器和上下文模型只能读取不含舰船的基础阶段数据；四类学生检测器只能读取126张舰船增量 train 和22张增量 dev。现有四类 YOLO11s 和 p01-p04 权重仅作为历史参考，禁止作为初始化权重或 Web 增量证据。最终部署只有一个四类学生检测器，不使用独立舰船模型。
+本实验使用舰船数据模拟第一批在线增量注入。三类教师检测器和上下文模型只能读取不含舰船的基础阶段数据；四类学生检测器只能读取126张舰船增量 train 和22张增量 dev。四类 YOLO11s 仅作为 benchmark，禁止作为初始化权重或 Web 增量证据。最终部署只有一个四类学生检测器，不使用独立舰船模型。
 
 三类教师的120轮训练属于离线基础阶段，不计入增量更新时间。在线更新固定最多30轮、早停 patience 8，目标是在4090上15分钟内完成；报告必须单独记录该阶段耗时。
 
@@ -49,8 +49,8 @@ python tools/70_run_strict_3plus1.py --config configs/clean_class_incremental_v2
 必须等待第一步完全结束，再执行：
 
 ```bash
-python tools/60_train_scene_sensor.py --config configs/clean_context_p02_v2.yaml --check-only
-python tools/60_train_scene_sensor.py --config configs/clean_context_p02_v2.yaml
+python tools/60_train_scene_sensor.py --config configs/clean_context_warship_v2.yaml --check-only
+python tools/60_train_scene_sensor.py --config configs/clean_context_warship_v2.yaml
 ```
 
 第一条命令必须输出 `ready: true`。该模型先在基础阶段视图上训练已有场景，再仅使用舰船增量 train/dev 更新新增的 `sea` 场景输出行；旧场景行、传感器头和特征提取器保持冻结。lock 仅用于最终验收，不参与模型选择、早停或调参。
@@ -62,7 +62,7 @@ python tools/60_train_scene_sensor.py --config configs/clean_context_p02_v2.yaml
 检测报告位置：
 
 ```text
-reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/
+reports/clean_class_incremental_v2/<run_id>/warship-incremental/
 ```
 
 上下文报告为同目录下的 `context_report.md`。检测模型必须同时满足：

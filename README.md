@@ -1,6 +1,6 @@
 # 灵动Agent
 
-面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。系统登记场景/传感器认知、冻结旧类检测和增量类别专家三种不同功能模型，并提供面向检测用户的 Web 产品和面向运维人员的 CLI。当前 production 为 `generation-1-recheck-v2`：三类基础检测器负责人员、小型飞行器和坦克，舰船由已通过部署复核的类别增量专家负责。四类统一 YOLO11s 仅作上限基准，不参与默认推理、融合或回滚。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
+面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。系统登记场景/传感器认知、冻结旧类检测和增量检测三种不同功能模型，并提供面向检测用户的 Web 产品和面向运维人员的 CLI。当前 production 为“增量检测生产代际”：三类基础检测器负责人员、小型飞行器和坦克，通用增量检测器负责历次注入后登记的新类别；当前已验证类别绑定为舰船。四类统一 YOLO11s 仅作上限基准，不参与默认推理、融合或回滚。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
 
 ## 快速开始
 
@@ -155,16 +155,11 @@ python tools/42_predict_submission.py --config configs/local_infer_gpu.yaml
 | 模型 | 功能 | 核心指标 | 验收 |
 | --- | --- | --- | --- |
 | `models/context/scene_sensor_net.pt` | IR/SAR 与 air/forest/sea/urban 认知 | lock sensor 0.98947 / scene 0.76842 | 通过 |
-| `strict_p02_base_v1` | 三类冻结基础检测 | 单模型旧类 mAP50 0.82738 | `generation-1-recheck-v2`旧类所有者 |
-| `strict_p02_warship_recheck_v2` | 舰船类别增量专家 | 组合系统 New-mAP50 0.79500 / KRR 1.0 | production，precision 1.0 / 误激活率 0.0 |
+| `three_class_base_detector` | 三类冻结基础检测 | 单模型旧类 mAP50 0.82738 | 增量检测生产代际的旧类所有者 |
+| `incremental_detector` | 多轮新增类别检测 | 当前舰船绑定：New-mAP50 0.79500 / KRR 1.0 | production，precision 1.0 / 误激活率 0.0 |
 | `models/base/yolo11s_ir_sar_imgsz640.pt` | IR/SAR 四类统一检测 | lock-all 0.91202 | `benchmark_only` |
-| `p01_new_small_aircraft_best.pt` | small_aircraft 专项增强演练 | 0.55860 / 1.0 | 未通过、禁用 |
-| `p02_new_warship_best.pt` | warship 目标增量演练 | 0.83539 / 1.0 | 通过 |
-| `p03_new_tank_best.pt` | tank 目标增量演练 | 0.74989 / 1.0 | 通过 |
-| `p04_new_soldier_best.pt` | soldier 目标增量演练 | 0.76914 / 1.0 | 通过 |
-| `strict-p02` 实验档 | warship 严格 3+1 类别增量 | 0.90903 / 1.0 | 可审计候选、CLI 可用 |
 
-检测与增量指标均为 mAP50。现有 p01-p04 的目标类别已经包含在统一模型中，因此只作为目标增量/专项增强演练。严格 3+1 双折使用三类基础模型模拟未知新类；舰船折经 `generation-1-recheck-v2` 以增量 dev 固定阈值 0.63 后，在完整 lock-val 上通过全部精度和误激活门禁，飞行器折 New-mAP50 为 0.54062，未注册。三模型输入输出契约和协同链路见 `configs/functional_models.yaml` 与 `docs/functional-models.md`；代际注册表位于 `models/generations.json`，严格实验档独立位于 `models/experiments/strict_3plus1/`。
+检测与增量指标均为 mAP50。当前“增量检测生产代际”使用三类冻结基础模型与通用增量检测器；目前登记的舰船类别绑定以增量 dev 固定阈值 0.63 后，在完整 lock-val 上通过精度、保持率和误激活门禁。后续注入类别继续作为独立类别绑定登记，不改变增量检测器的功能名称。四类统一 YOLO11s 仅保留为 benchmark 和单模型提交回退。三模型输入输出契约见 `configs/functional_models.yaml` 与 `docs/functional-models.md`，活动代际见 `models/generations.json`。
 
 ## 常用命令
 
@@ -197,7 +192,7 @@ new_batch.zip
 └── labels/val/*.txt
 ```
 
-若没有显式验证集，Agent 会确定性划分 train/val；若没有 `data.yaml`，可在上传页填写逗号分隔的类别名称。系统会安全解压并检查图像可读性、YOLO五列格式、坐标范围、重复 stem、图像标签对应关系和类别分布，再依据当前 production 类别自动判断 `class_incremental` 或 `target_incremental`。上传数据保存在 `data/incremental_batches/<batch_id>/`，不进入 Git。
+若没有显式验证集，Agent 会确定性划分 train/val。带 `names` 的标准 YOLO 数据直接采用数据集类别；只有数字类别 ID 时，Agent 按当前类别数量生成“类别N”临时名称；4列无类别框标签按单一新增类别处理。批次详情会显示源 ID、训练 ID 和全局 ID，用户可在确认语义后补充真实名称。每次改名形成新的 `class_registry.yaml` 修订；训练启动时冻结类别注册表和 `dataset.yaml` 快照，因此训练后补名不会改变当次标签身份、训练证据或权重。系统会安全解压并检查图像可读性、YOLO四/五列格式、坐标范围、重复 stem、图像标签对应关系和类别分布，再依据当前 production 类别自动判断 `class_incremental` 或 `target_incremental`。上传数据保存在 `data/incremental_batches/<batch_id>/`，不进入 Git。
 
 “生成训练视图”会在批次目录内创建独立数据视图和内部 `batch.yaml`，并记录 `old_raw_image_count=0`；“开始快速训练”会启动 GPU 后台任务，页面可查看状态和实时日志。训练产物始终标记为待校准候选，不会自动替换 production。后续仍需完成阈值校准、lock 复核和 `generation promote`。
 
@@ -207,6 +202,7 @@ new_batch.zip
 agile-agent incremental-data upload --archive /path/to/new_batch.zip --name 新批次
 agile-agent incremental-data list
 agile-agent incremental-data show --batch-id BATCH_ID
+agile-agent incremental-data rename --batch-id BATCH_ID --class-names 新类别名称
 agile-agent incremental-data inject --batch-id BATCH_ID
 agile-agent incremental-data train --batch-id BATCH_ID
 agile-agent incremental-data jobs --batch-id BATCH_ID
@@ -225,7 +221,7 @@ agile-agent logs --component training --batch-id BATCH_ID
 agile-agent logs --job-id JOB_ID
 agile-agent logs --experiment-id warship_3plus1 --run-id RUN_ID
 agile-agent logs --protocol-id round_01
-agile-agent logs --generation-id generation-1-recheck-v2
+agile-agent logs --generation-id incremental_detection_generation
 ```
 
 日志目录、单文件大小和保留数量由主 YAML 的 `logging` 段统一配置。Web 的增量批次详情页只展示与当前批次相关的脱敏操作时间线；完整详情保留在 CLI 和 JSONL 中。完整事件规范见 `docs/agent-audit-logging.md`。
@@ -246,9 +242,9 @@ agile-agent config show --config configs/agent_pipeline.yaml --effective
 agile-agent config get routing.conflict_iou --config configs/agent_pipeline.yaml
 agile-agent config set routing.conflict_iou 0.50 --config configs/agent_pipeline.yaml
 agile-agent --config configs/agent_pipeline.yaml --set inference.confidence_default=0.60 serve
-agile-agent generation recheck --candidate generation-1-recheck-v2
-agile-agent generation promote --candidate generation-1-recheck-v2 --manifest reports/generation_rechecks/<run_id>/manifest.json
-agile-agent generation rollback --to generation-0
+agile-agent generation recheck --candidate incremental_detection_generation
+agile-agent generation promote --candidate incremental_detection_generation --manifest reports/generation_rechecks/<run_id>/manifest.json
+agile-agent generation rollback --to base_detection_generation
 ```
 
 ## 数据与增量训练
@@ -271,32 +267,30 @@ agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run
 
 `validate` 只读数据且保持 lock 封存；`run` 会启动训练；`reproduce` 只有在源数据指纹与父实验一致时才创建新 run。当前执行适配器 v1 支持单轮 3+1，通用 schema 和模型代际注册表已预留多轮；新增更多类别前需扩展训练适配器，不得把“可描述多轮”误写成“已验证多轮”。逐文件哈希、状态机、阈值冻结和验收规则见 `docs/warship-3plus1-reproducibility.md`。
 
-### 历史严格双折实验
+### 舰船 3+1 类别增量复现
 
-仓库提供 small_aircraft 与 warship 两个严格留一类别实验。基础模型只有三个检测通道，基础训练图像与新增类训练图像完全隔离；人员和坦克因始终共现，不用于严格留一实验。所有参数位于 `configs/strict_class_incremental_3plus1.yaml`，在 4090 服务器执行：
-
-```bash
-python tools/70_run_strict_3plus1.py --config configs/strict_class_incremental_3plus1.yaml
-```
-
-双 GPU 可用时两个协议分别使用 GPU 0/1 并行，否则在 GPU 0 按顺序运行。lock-val 只会在基础权重、specialist 权重和阈值冻结后物化。历史实验档可由 CLI 显式复核，但不会绕过代际门禁替换 Web production：
+当前 production 的基础模型只有三个检测通道，基础训练图像与舰船增量训练图像完全隔离。所有参数位于 `configs/incremental/warship_3plus1.yaml`：
 
 ```bash
-python -m fair_agent.cli detect --profile strict-p01 --source path/to/aircraft.png
-python -m fair_agent.cli detect --profile strict-p02 --source path/to/warship.png
+python -m fair_agent.cli experiment validate --config configs/incremental/warship_3plus1.yaml
+python -m fair_agent.cli experiment run --config configs/incremental/warship_3plus1.yaml
 ```
 
-历史 `strict-p02` 阈值 0.51 的原始舰船折虽然通过核心门槛，但 lock precision 约 0.5411、图像误激活率约 0.3378，因此仍作为未上线的 `generation-1` 证据保留。独立复核版本仅依据增量 dev 将阈值固定为 0.63，并加入跨类别冲突抑制；当前注册表记录的 `generation-1-recheck-v2` 完整 lock-val 指标为旧类 mAP50 0.82738、New-mAP50 0.79500、KRR 1.0、组合 mAP50 0.81929、precision 1.0 和误激活率 0.0，现已切入 production。`generation-0` 始终保留为回滚点。
+lock-val 只会在基础权重、specialist 权重和阈值冻结后物化。已注册实验档可由 CLI 显式复核，但不会绕过代际门禁替换 Web production：
 
-`strict-p02` 属于“冻结基础模型 + 独立 specialist”的历史系统级证据，不作为最终单模型增量结论。新的 clean-room v2 方案将三类教师检测头扩展为一个四类学生检测头，仅开放新增类通道训练，最终只部署 `student_4class.pt`。训练前先运行只读预检：
+```bash
+python -m fair_agent.cli detect --profile incremental-detection --source path/to/image.png
+```
+
+当前注册表记录的“增量检测生产代际”完整 lock-val 指标为旧类 mAP50 0.82738、舰船类别绑定 New-mAP50 0.79500、KRR 1.0、组合 mAP50 0.81929、precision 1.0 和误激活率 0.0。“基础检测代际”始终保留为回滚点。
+
+舰船 3+1 协议属于“冻结基础模型 + 独立 specialist”的系统级证据，不作为最终单模型增量结论。新的 clean-room v2 方案将三类教师检测头扩展为一个四类学生检测头，仅开放新增类通道训练，最终只部署 `student_4class.pt`。训练前先运行只读预检：
 
 ```bash
 python tools/70_run_strict_3plus1.py --config configs/clean_class_incremental_v2.yaml --check-only
 ```
 
 配置和执行边界见 `configs/clean_class_incremental_v2.yaml` 与 `docs/clean-class-incremental-v2.md`；该候选在重新训练并通过全部门禁前不会进入 Web。
-
-最新 `clean-ci-v2-warship-r02` 已完成合规训练，但未通过模型门禁：New-mAP50 为0.28421、KRR为0.99909、四类 mAP50为0.67547。它证明了快速更新、数据隔离和旧类保持闭环，不证明新增类别学习能力已经成立。
 
 ### 无旧样本方法比较
 
@@ -307,15 +301,15 @@ python tools/71_compare_incremental_methods.py --check-only
 python tools/71_compare_incremental_methods.py
 ```
 
-两个方法分别在 GPU 1/2 并行执行；脚本自动核对基础权重 SHA256，并生成不可覆盖的逐方法指标和统一比较报告。实现边界、指标门禁和复核规则见 `docs/incremental-method-comparison.md`。两者均未通过全部门禁前，不注册为 Agent 的活动增量能力。
+脚本自动核对基础权重 SHA256，并生成不可覆盖的逐方法指标和统一比较报告。实现边界、指标门禁和复核规则见 `docs/incremental-method-comparison.md`；实验输出只有通过全部门禁后才能注册为 Agent 活动能力。
 
 ### 官方完整 YOLO-IOD 复现
 
-为验证轻量适配失败是否来自实现简化，仓库另提供基于官方 YOLO-World(X) 的 strict-p02 复现。r05 延续 r04 的数据审计结论，禁用不适用的 CPR，保留 IKS 和 CAKD，并在 GPU 3 上通过梯度累积统一为有效 batch 16：
+仓库另提供基于官方 YOLO-World(X) 的舰船 3+1 复现。该配置禁用不适用的 CPR，保留 IKS 和 CAKD，并在 GPU 3 上通过梯度累积统一为有效 batch 16：
 
 ```bash
-python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r05_gpu3.yaml --check-only
-python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_p02_r05_gpu3.yaml
+python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_warship_gpu3.yaml --check-only
+python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_warship_gpu3.yaml
 ```
 
 类别、数据隔离、三阶段训练、lock-val 冻结和验收说明见 `docs/full-yolo-iod-reproduction.md`。完整模型只作为方法参考；只有全部门禁通过后才讨论压缩或蒸馏回 YOLO11s。

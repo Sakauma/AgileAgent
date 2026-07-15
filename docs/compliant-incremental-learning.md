@@ -66,4 +66,4 @@ New-mAP50 >= 0.60
 KRR >= 0.95
 ```
 
-历史 p01-p04 权重的目标类别已被当时的四类基础模型见过，因此只作为目标增量/专项增强演练，不作为严格类别增量证据。strict-p02 舰船折达到核心指标，但尚未通过部署 precision 与误激活门禁，production 仍为三类 `generation-0`。完整说明见 `docs/warship-3plus1-reproducibility.md`。
+当前公开发布仅保留通过全部门禁的类别绑定。“增量检测生产代际”由三类冻结基础模型负责旧类，通用增量检测器负责历次注入后登记的新类；当前已验证绑定为舰船。“基础检测代际”保留为回滚点。完整实验说明见 `docs/warship-3plus1-reproducibility.md`。

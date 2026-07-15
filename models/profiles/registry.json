@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "verified_profiles": [
+    {
+      "profile_id": "incremental-detection",
+      "run_id": "incremental_detection_generation",
+      "incremental_mode": "class_incremental",
+      "new_class": "warship",
+      "new_global_id": 2,
+      "active_profile": "models/profiles/incremental-detection/active.json",
+      "new_map50": 0.795,
+      "krr": 1.0,
+      "activation_threshold": 0.63,
+      "lock_false_activation_rate": 0.0
+    }
+  ]
+}

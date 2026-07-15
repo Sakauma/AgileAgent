@@ -6,14 +6,16 @@
 
 ## 数据包约定
 
-上传 ZIP 中应包含同 stem 的图像和 YOLO 标签。支持 PNG、JPEG、BMP 和 TIFF；每行标签必须为 `class x_center y_center width height`，坐标位于 `[0,1]`。建议按 `images/train`、`images/val`、`labels/train`、`labels/val` 组织，并提供：
+上传 ZIP 中应包含同 stem 的图像和 YOLO 标签。支持 PNG、JPEG、BMP 和 TIFF；标准标签为 `class x_center y_center width height`，也兼容缺少类别列的 `x_center y_center width height` 单类标注，坐标位于 `[0,1]`。建议按 `images/train`、`images/val`、`labels/train`、`labels/val` 组织，并提供：
 
 ```yaml
 names:
   0: new_class_name
 ```
 
-Agent 会拒绝路径穿越、符号链接、解压容量超限、重复路径、重复图像 stem、缺失标签、非法类别和越界框。没有验证集时按内容哈希确定性划分。没有类别名称时批次可保存和浏览，但不能注入训练，需重新上传并提供名称。
+Agent 会拒绝路径穿越、符号链接、解压容量超限、重复路径、重复图像 stem、缺失标签、非法类别和越界框。没有验证集时按内容哈希确定性划分。若数据集提供 `names`，类别语义直接继承；若只有数字 ID，则按已有类别数量依次命名为“类别N”；4列标签统一绑定为一个新增类别。每项绑定同时保存源 ID、连续训练 ID 和稳定全局 ID。Web 批次详情或 `incremental-data rename` 可在人工确认后补充真实名称，重命名不会改变这三个 ID。
+
+每个批次维护当前 `class_registry.yaml` 和不可覆盖的 `class_registry_history/revision-*.yaml`。训练任务启动时，将当前注册表和 `dataset.yaml` 冻结到任务快照目录；训练进程只读取该快照。训练完成后继续修改显示名称只会产生新的注册表修订，历史训练快照、标签映射和权重保持不变。
 
 ## 状态流转
 
@@ -38,8 +40,11 @@ extracted/                 安全解压内容
 prepared/                  独立训练视图
 batch.yaml                 Agent内部批次定义
 batch_manifest.json        数据、状态和训练摘要
+class_registry.yaml        当前类别名称与稳定ID绑定
+class_registry_history/    类别名称修订历史
 jobs/<job_id>.json         任务状态与命令
 jobs/<job_id>.log          完整训练输出
+jobs/snapshots/<job_id>/   该次训练的数据与类别注册表快照
 training/<job_id>/         Ultralytics训练产物
 ```
 

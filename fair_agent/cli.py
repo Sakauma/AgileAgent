@@ -661,7 +661,9 @@ def _incremental_services(config: Dict[str, Any]):
         load_generation_registry(config["web"]["generation_registry"]),
         str(config["web"]["generation_channel"]),
     )
-    active_classes = [generation["class_names"][class_id] for class_id in generation["active_class_ids"]]
+    active_classes = {
+        class_id: generation["class_names"][class_id] for class_id in generation["active_class_ids"]
+    }
     store = IncrementalBatchStore(config["incremental_workbench"], event_log, active_classes)
     return store, TrainingJobManager(store, config["incremental_workbench"], event_log), event_log
 
@@ -679,6 +681,16 @@ def cmd_incremental_data(args: argparse.Namespace) -> int:
             payload = store.get(args.batch_id)
         elif args.incremental_action == "inject":
             payload = store.inject(args.batch_id)
+        elif args.incremental_action == "rename":
+            values = [value.strip() for value in args.class_names.split(",") if value.strip()]
+            current = store.get(args.batch_id, include_files=False)
+            source_ids = [
+                int(item["source_class_id"])
+                for item in current.get("audit", {}).get("class_bindings", [])
+            ]
+            if len(values) != len(source_ids):
+                raise ValueError("类别名称数量必须与当前批次类别数量一致。")
+            payload = store.rename_classes(args.batch_id, dict(zip(source_ids, values)))
         elif args.incremental_action == "train":
             payload = manager.start(args.batch_id)
         elif args.incremental_action == "jobs":
@@ -775,7 +787,7 @@ def build_parser() -> argparse.ArgumentParser:
     detect = sub.add_parser("detect", help="执行完整自动路由检测并输出详细决策轨迹。")
     detect.add_argument("--source", required=True)
     detect.add_argument("--confidence", type=float)
-    detect.add_argument("--profile", choices=["strict-p01", "strict-p02"], help="使用已通过验收的严格 3+1 实验档。")
+    detect.add_argument("--profile", choices=["incremental-detection"], help="使用已注册并通过验收的增量检测档。")
     detect.set_defaults(func=cmd_detect)
 
     experiment = sub.add_parser("experiment", help="验证、执行或复现可审计的增量学习实验。")
@@ -817,6 +829,10 @@ def build_parser() -> argparse.ArgumentParser:
         action = incremental_sub.add_parser(action_name)
         action.add_argument("--batch-id", required=True)
         action.set_defaults(func=cmd_incremental_data)
+    rename = incremental_sub.add_parser("rename", help="按源类别ID顺序更新类别显示名称。")
+    rename.add_argument("--batch-id", required=True)
+    rename.add_argument("--class-names", required=True, help="逗号分隔，顺序与批次类别列表一致。")
+    rename.set_defaults(func=cmd_incremental_data)
     jobs = incremental_sub.add_parser("jobs")
     jobs.add_argument("--batch-id")
     jobs.set_defaults(func=cmd_incremental_data)

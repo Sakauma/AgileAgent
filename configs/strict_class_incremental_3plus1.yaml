@@ -10,7 +10,7 @@ paths:
   dataset_root: incremental_strict_3plus1
   run_root: runs/detect/strict_3plus1
   report_root: reports/strict_3plus1
-  freeze_root: models/experiments/strict_3plus1
+  freeze_root: models/profiles
 
 runtime:
   preferred_devices: ["0", "1"]
@@ -92,7 +92,7 @@ protocols:
     base_local_to_global: {0: 0, 1: 2, 2: 3}
     expected_incremental_counts: {train: 131, val: 22, lock_positive: 22}
     preferred_device: "0"
-  - id: strict-p02
+  - id: warship-incremental
     display_name: 舰船严格 3+1
     base_classes: [soldier, small_aircraft, tank]
     new_class: warship

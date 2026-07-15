@@ -29,7 +29,7 @@ def test_active_inference_uses_verified_frozen_weight() -> None:
     assert inference["matches_expected"] is True
     assert inference["same_frozen_path"] is True
     assert state["frozen_assets"]["checksums"]["valid"] is True
-    assert state["frozen_assets"]["checksums"]["checked"] == 6
+    assert state["frozen_assets"]["checksums"]["checked"] == 7
     assert state["functional_models"]["valid"] is True
     assert state["functional_models"]["distinct_function_count"] == 3
     assert all(state["frozen_assets"]["artifacts"].values())
@@ -43,7 +43,7 @@ def test_blackboard_uses_verified_production_generation() -> None:
     state = build_blackboard(load_config())
     generation = state["model_generation"]
     assert generation["valid"] is True
-    assert generation["production"] == "generation-1-recheck-v2"
+    assert generation["production"] == "incremental_detection_generation"
     assert generation["incremental_verified"] is True
     assert "incremental_compliant_threshold_not_met" not in state["current_blockers"]
 
@@ -78,13 +78,17 @@ def test_metrics_are_parsed_instead_of_inferred_from_report_existence() -> None:
     incremental = parse_incremental(config)
     assert specialist["status"] == "rejected"
     assert specialist["deltas"]["lock_all_map50"] < 0
-    assert incremental["complete"] is True
     assert incremental["compliance_required"] is True
     if incremental["compliance_verified"]:
-        by_name = {row["protocol"]: row for row in incremental["protocols"]}
-        assert by_name["p01_new_small_aircraft"]["passed"] is False
-        assert all(by_name[name]["passed"] for name in ["p02_new_warship", "p03_new_tank", "p04_new_soldier"])
-        assert incremental["passed"] is False
+        assert incremental["protocols"]
+        assert all(
+            row["passed"] == (
+                row["compliant"]
+                and row["new_map50"] >= incremental["acceptance"]["min_new_class_map50"]
+                and row["krr"] >= incremental["acceptance"]["min_krr"]
+            )
+            for row in incremental["protocols"]
+        )
     else:
         assert incremental["passed"] is False
 

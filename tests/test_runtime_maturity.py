@@ -200,7 +200,8 @@ def test_blackboard_uses_demo_evidence_without_private_reports(tmp_path: Path) -
     assert state["evidence"]["mode"] == "demo"
     assert state["dataset"]["image_count"] == 750
     assert state["sar_soldier"]["case_bank"]["case_count"] == 53
-    assert len(state["incremental_learning"]["protocols"]) == 4
+    assert len(state["incremental_learning"]["protocols"]) == 1
+    assert state["incremental_learning"]["protocols"][0]["protocol"] == "incremental_detector"
     assert state["submission"]["dryrun_valid"] is True
     assert state["submission"]["smoke_valid"] is True
 
@@ -226,10 +227,10 @@ def test_static_release_verification_passes() -> None:
     result = verify_release()
     assert result["status"] == "passed", result["errors"]
     assert isinstance(result["required_assets"], dict)
-    assert len(result["required_assets"]) == 10
+    assert len(result["required_assets"]) == 11
     assert result["functional_models"]["valid"] is True
     assert result["functional_models"]["distinct_function_count"] == 3
-    assert result["model_generations"]["production"] == "generation-1-recheck-v2"
+    assert result["model_generations"]["production"] == "incremental_detection_generation"
     assert result["model_generations"]["production_classes"] == [0, 1, 2, 3]
     assert result["model_generations"]["candidate_status"] == "active"
 
@@ -237,16 +238,12 @@ def test_static_release_verification_passes() -> None:
 def test_manifest_blocks_uncalibrated_or_overlapping_true_new_class() -> None:
     manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
     assert _validate_model_manifest(manifest) == []
-    candidate = manifest["incremental_models"][1]
-    candidate["incremental_mode"] = "class_incremental"
-    candidate["global_class_id"] = 8
-    candidate["class_name"] = "new_vehicle"
-    candidate["evidence_level"] = "verified"
+    candidate = manifest["incremental_models"][0]
     candidate.pop("calibration_source", None)
-    assert "manifest_new_class_calibration_missing:p02_new_warship" in _validate_model_manifest(manifest)
+    assert "manifest_new_class_calibration_missing:incremental_detector" in _validate_model_manifest(manifest)
     candidate["calibration_source"] = "incremental_val/calibration.json"
-    candidate["global_class_id"] = 2
-    assert "manifest_new_class_overlaps_base:p02_new_warship" in _validate_model_manifest(manifest)
+    candidate["base_class_ids"].append(2)
+    assert "manifest_new_class_overlaps_base:incremental_detector" in _validate_model_manifest(manifest)
 
 
 def test_low_risk_action_output_cannot_escape_allowlist(tmp_path: Path) -> None:

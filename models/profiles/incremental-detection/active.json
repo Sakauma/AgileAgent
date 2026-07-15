@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "profile_id": "incremental-detection",
+  "run_id": "incremental_detection_generation",
+  "acceptance": "passed",
+  "incremental_mode": "class_incremental",
+  "base_weight": "models/production/incremental_detection/three_class_base_detector.pt",
+  "base_sha256": "9616dda7577b1a33cb2210e4a63d2967083017726e6b2cc236f2f86d77c3d1b6",
+  "specialist_weight": "models/production/incremental_detection/incremental_detector.pt",
+  "specialist_sha256": "88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3",
+  "base_local_to_global": {
+    "0": 0,
+    "1": 1,
+    "2": 3
+  },
+  "base_local_names": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "tank"
+  },
+  "class_names": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "warship",
+    "3": "tank"
+  },
+  "new_class": "warship",
+  "new_global_id": 2,
+  "activation_threshold": 0.63,
+  "calibration_source": "models/production/incremental_detection/calibration.json",
+  "metrics_source": "models/production/incremental_detection/metrics.json",
+  "evidence_level": "verified",
+  "new_map50": 0.795,
+  "krr": 1.0,
+  "lock_precision": 1.0,
+  "lock_recall": 0.7901234567901234,
+  "lock_false_activation_rate": 0.0
+}

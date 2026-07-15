@@ -61,7 +61,17 @@ def _validate_model_manifest(manifest: Dict[str, Any]) -> List[str]:
         if mode == "target_incremental" and base_class_map.get(global_class_id) != class_name:
             errors.append(f"manifest_target_class_mapping_invalid:{protocol_id}")
         if mode == "class_incremental":
-            if global_class_id in base_class_map:
+            raw_base_ids = item.get("base_class_ids")
+            if not isinstance(raw_base_ids, list) or not raw_base_ids:
+                errors.append(f"manifest_new_class_base_scope_missing:{protocol_id}")
+                base_ids = set(base_class_map)
+            else:
+                try:
+                    base_ids = {int(class_id) for class_id in raw_base_ids}
+                except (TypeError, ValueError):
+                    errors.append(f"manifest_new_class_base_scope_invalid:{protocol_id}")
+                    base_ids = set(base_class_map)
+            if global_class_id in base_ids:
                 errors.append(f"manifest_new_class_overlaps_base:{protocol_id}")
             if item.get("acceptance") == "passed" and (
                 not item.get("calibration_source") or item.get("evidence_level") != "verified"
@@ -69,6 +79,8 @@ def _validate_model_manifest(manifest: Dict[str, Any]) -> List[str]:
                 errors.append(f"manifest_new_class_calibration_missing:{protocol_id}")
         if item.get("available") and item.get("acceptance") != "passed":
             errors.append(f"manifest_unaccepted_protocol_available:{protocol_id}")
+        if item.get("available") and not item.get("path"):
+            errors.append(f"manifest_available_protocol_artifact_missing:{protocol_id}")
     if any(not value for value in protocol_ids) or len(protocol_ids) != len(set(protocol_ids)):
         errors.append("manifest_incremental_protocol_ids_invalid")
     return errors

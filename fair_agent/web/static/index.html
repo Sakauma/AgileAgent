@@ -135,6 +135,11 @@
       <section class="incremental-detail is-hidden" id="incrementalDetail">
         <div class="incremental-detail-header"><div><p class="eyebrow">当前批次</p><h2 id="incrementalDetailName"></h2><p id="incrementalDetailMeta"></p></div><span class="batch-status" id="incrementalDetailStatus"></span></div>
         <div class="incremental-metrics" id="incrementalMetrics"></div>
+        <section class="incremental-class-panel">
+          <div class="section-heading"><div><p class="eyebrow">类别绑定</p><h2>新增类别</h2></div><span id="incrementalClassCount"></span></div>
+          <div class="incremental-class-list" id="incrementalClassList"></div>
+          <div class="incremental-class-actions"><button class="secondary-button" id="saveIncrementalClasses"><svg><use href="/assets/icons.svg#check"/></svg>保存类别名称</button></div>
+        </section>
         <div class="incremental-actions">
           <button class="secondary-button" id="injectIncremental"><svg><use href="/assets/icons.svg#settings"/></svg>生成训练视图</button>
           <button class="primary-button compact" id="trainIncremental"><svg><use href="/assets/icons.svg#scan"/></svg>开始快速训练</button>

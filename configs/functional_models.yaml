@@ -32,7 +32,7 @@ models:
         sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
     evidence:
       path: models/manifest.json
-      sha256: 239e8ead823c0a08767dc15dd77d46dbf05b314f4b973803fc6b5608b91253de
+      sha256: fb62f7d66b30e3264036b3c2a3062fc8ceeed5bf70c7f52a3bf0fc442d2c5ad8
     runtime:
       x86_gpu: true
       ascend_310b: false
@@ -41,21 +41,15 @@ models:
     function: incremental_object_detection
     display_name: 增量目标检测模型库
     implementation: mode_aware_incremental_router_and_specialist_bank
-    status: partially_verified
+    status: verified
     inputs: [incremental_images_labels, frozen_base_weights, class_focus]
     outputs: [incremental_boxes, incremental_mode, routing_trace, new_map50, krr, acceptance]
     artifacts:
-      - path: models/incremental/p01_new_small_aircraft_best.pt
-        sha256: dec95184c44d168bfe5b3760cf55fa71fdbd93ff8fdd4542be63c32a6233f37b
-      - path: models/incremental/p02_new_warship_best.pt
-        sha256: 03f4a68f85647bb33b4be043e32c9c4f74adfd3887bf22d63c3471e236af6a1e
-      - path: models/incremental/p03_new_tank_best.pt
-        sha256: 5ee5e4866772f1c28d5aad7608636c7b40284033de12ed7ba1185f7b431df5d7
-      - path: models/incremental/p04_new_soldier_best.pt
-        sha256: c22face61219ebf6d7a887f57dd3b90030b7a50324789283e66a12532372ccee
+      - path: models/production/incremental_detection/incremental_detector.pt
+        sha256: 88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3
     evidence:
       path: models/manifest.json
-      sha256: 239e8ead823c0a08767dc15dd77d46dbf05b314f4b973803fc6b5608b91253de
+      sha256: fb62f7d66b30e3264036b3c2a3062fc8ceeed5bf70c7f52a3bf0fc442d2c5ad8
     runtime:
       x86_gpu: true
       ascend_310b: false
@@ -77,4 +71,4 @@ collaboration:
     payload: gated_incremental_predictions
     status: implemented
     proof_command: python -m pytest -q tests/test_web_inference.py tests/test_web_ui_flow.py
-    purpose: Agent 按增量模式执行门控，以逐框 NMS 融合基础结果和专项候选；当前专项权重仅作为目标增量演练
+    purpose: Agent 执行已上线的增量检测器，以逐框 NMS 融合冻结基础结果和历次注入后登记的新类候选

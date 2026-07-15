@@ -232,6 +232,47 @@
     return node;
   }
 
+  function renderIncrementalClassEditor(batch, audit) {
+    const bindings = Array.isArray(audit.class_bindings) ? audit.class_bindings : [];
+    const list = $("#incrementalClassList");
+    list.replaceChildren();
+    $("#incrementalClassCount").textContent = `${bindings.length}类`;
+    const editable = ["AUDITED", "INJECTED", "FAILED", "TRAINED_CANDIDATE"].includes(batch.status);
+    $("#saveIncrementalClasses").disabled = !editable || !bindings.length;
+    if (!bindings.length) {
+      const empty = document.createElement("div");
+      empty.className = "incremental-class-empty";
+      empty.textContent = "没有可用的类别绑定";
+      list.appendChild(empty);
+      return;
+    }
+    bindings.forEach((binding) => {
+      const row = document.createElement("div");
+      row.className = "incremental-class-row";
+      const identity = document.createElement("div");
+      identity.className = "incremental-class-identity";
+      const title = document.createElement("strong");
+      title.textContent = binding.is_existing_class ? "已有类别" : "新增类别";
+      const ids = document.createElement("small");
+      ids.textContent = `源ID ${binding.source_class_id} · 训练ID ${binding.training_class_id} · 全局ID ${binding.global_class_id}`;
+      identity.append(title, ids);
+      const field = document.createElement("label");
+      field.textContent = "类别名称";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = 80;
+      input.value = binding.display_name || "";
+      input.dataset.sourceClassId = String(binding.source_class_id);
+      input.disabled = !editable;
+      field.appendChild(input);
+      const source = document.createElement("span");
+      source.className = `semantic-status${binding.semantic_status === "provisional" ? " is-provisional" : ""}`;
+      source.textContent = binding.semantic_status === "provisional" ? "自动命名" : "名称已确认";
+      row.append(identity, field, source);
+      list.appendChild(row);
+    });
+  }
+
   async function openIncrementalBatch(batchId) {
     try {
       const response = await fetch(`/api/incremental/batches/${encodeURIComponent(batchId)}`, { cache: "no-store" });
@@ -261,6 +302,7 @@
     const classNames = Object.values(audit.class_map || {}).join("、") || "待确认";
     [["图像", audit.image_count || 0], ["目标", audit.object_count || 0], ["类别", classNames], ["旧样本读取", audit.old_raw_image_count || 0], ["合规审计", audit.compliance === "passed" ? "通过" : "未通过"]]
       .forEach(([label, value]) => metrics.appendChild(metricNode(label, value)));
+    renderIncrementalClassEditor(batch, audit);
     $("#injectIncremental").disabled = batch.status !== "AUDITED";
     $("#trainIncremental").disabled = !["INJECTED", "FAILED"].includes(batch.status);
     const gallery = $("#incrementalGallery");
@@ -277,6 +319,38 @@
       node.append(image, count);
       gallery.appendChild(node);
     });
+  }
+
+  async function saveIncrementalClasses() {
+    if (!state.incrementalBatch) return;
+    const inputs = $$("#incrementalClassList input[data-source-class-id]");
+    const names = {};
+    for (const input of inputs) {
+      const value = input.value.trim();
+      if (!value) {
+        showToast("类别名称不能为空。", "error");
+        input.focus();
+        return;
+      }
+      names[input.dataset.sourceClassId] = value;
+    }
+    setLoading(true, "正在更新类别", "保存类别绑定和训练配置");
+    try {
+      const response = await fetch(
+        `/api/incremental/batches/${encodeURIComponent(state.incrementalBatch.batch_id)}/classes`,
+        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ names }) },
+      );
+      if (!response.ok) throw new Error(await responseError(response));
+      state.incrementalBatch = await response.json();
+      renderIncrementalDetail();
+      await loadIncrementalBatches();
+      await loadIncrementalEvents();
+      showToast("类别名称已保存。");
+    } catch (error) {
+      showToast(error.message || "类别名称保存失败。", "error");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function injectIncrementalBatch() {
@@ -1023,6 +1097,7 @@
     $("#uploadIncremental").addEventListener("click", uploadIncrementalBatch);
     $("#refreshIncremental").addEventListener("click", () => loadIncrementalBatches(state.incrementalBatch && state.incrementalBatch.batch_id));
     $("#injectIncremental").addEventListener("click", injectIncrementalBatch);
+    $("#saveIncrementalClasses").addEventListener("click", saveIncrementalClasses);
     $("#trainIncremental").addEventListener("click", trainIncrementalBatch);
     $("#cancelTraining").addEventListener("click", cancelTraining);
     $("#clearHistory").addEventListener("click", clearHistory);

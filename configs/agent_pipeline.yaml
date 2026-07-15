@@ -87,7 +87,7 @@ incremental_workbench:
   poll_interval_ms: 2000
   training:
     python: null
-    initial_weights: models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/base.pt
+    initial_weights: models/production/incremental_detection/three_class_base_detector.pt
     device: "0"
     imgsz: 640
     batch: 32
@@ -124,7 +124,7 @@ generation:
   registry: models/generations.json
   recheck_lock_split: splits/lock_val.txt
   report_root: reports/generation_rechecks
-  candidate_id: generation-1-recheck-v2
+  candidate_id: incremental_detection_generation
   calibrated_threshold: 0.63
   acceptance:
     min_base_map50: 0.80
@@ -136,8 +136,8 @@ generation:
 
 native_backend:
   library: build/native/libagile_agent_tensorrt.so
-  base_engine: models/engines/strict_p02_base_v1_fp16.engine
-  context_engine: models/engines/scene_sensor_net_v1_fp16.engine
+  base_engine: models/engines/rtx4060_trt10_8/three_class_base_detector_fp16_b1_640.engine
+  context_engine: models/engines/rtx4060_trt10_8/scene_sensor_net_fp16_dynamic_b1_20_160.engine
   precision: fp16
   require_exact_gpu: true
   validated: false
@@ -164,13 +164,13 @@ tensorrt_backend:
     imgsz: 160
     batch_size: 20
   engines:
-    models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/base.pt:
-      path: models/engines/rtx4060_trt10_8/strict_p02_base_fp16_b1_640.engine
+    models/production/incremental_detection/three_class_base_detector.pt:
+      path: models/engines/rtx4060_trt10_8/three_class_base_detector_fp16_b1_640.engine
       sha256: 95ce788ed8be933c7d06b8d77bfe1382b26d68fdd6668478c070543cee494d04
       imgsz: 640
       batch_size: 1
-    models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/specialist.pt:
-      path: models/engines/rtx4060_trt10_8/strict_p02_warship_fp16_b1_512.engine
+    models/production/incremental_detection/incremental_detector.pt:
+      path: models/engines/rtx4060_trt10_8/incremental_detector_fp16_b1_512.engine
       sha256: 5927599daa96068efa6b2dcc70946818aae7cb5a2f901fc13aaebad838ed665d
       imgsz: 512
       batch_size: 1
@@ -185,12 +185,13 @@ assets:
   checksums: models/SHA256SUMS.txt
   required:
     - models/base/yolo11s_ir_sar_imgsz640.pt
-    - models/incremental/p01_new_small_aircraft_best.pt
-    - models/incremental/p02_new_warship_best.pt
-    - models/incremental/p03_new_tank_best.pt
-    - models/incremental/p04_new_soldier_best.pt
+    - models/production/incremental_detection/three_class_base_detector.pt
+    - models/production/incremental_detection/incremental_detector.pt
     - models/context/scene_sensor_net.pt
     - models/context/scene_sensor_metrics.json
+    - models/engines/rtx4060_trt10_8/scene_sensor_net_fp16_dynamic_b1_20_160.engine
+    - models/engines/rtx4060_trt10_8/three_class_base_detector_fp16_b1_640.engine
+    - models/engines/rtx4060_trt10_8/incremental_detector_fp16_b1_512.engine
     - models/manifest.json
     - models/generations.json
     - demo_artifacts/agent_demo_state.json
@@ -241,10 +242,6 @@ inputs:
   agent_sar_soldier_casebank_config: configs/agent_sar_soldier_casebank_yolo11s.yaml
   agent_sar_soldier_casebank_summary: reports/agent_sar_soldier_casebank_summary.md
   incremental_replay_report: reports/incremental_learning/replay_incremental_report.md
-  incremental_p01_p04_summary: reports/incremental_learning_p01_p04_summary.md
-  incremental_metrics:
-    - reports/incremental_learning/replay_incremental_report.csv
-    - reports/incremental_learning_p03_p04/yolo11s_incremental_summary.csv
   incremental_compliant_metrics: reports/incremental_no_old_distill/summary.csv
   specialist_metrics: reports/agent_sar_soldier_casebank/sar_soldier_replay_metrics.csv
   submission_smoke_manifest: runs/submission/smoke_yolo11s_imgsz640_lock_sar_20260710/manifest.json
@@ -297,7 +294,7 @@ incremental:
   supported_modes: [class_incremental, target_incremental]
   learning_data_scope: incremental_dataset_only
   policy: configs/incremental_detection_policy.yaml
-  expected_protocols: [p01_new_small_aircraft, p02_new_warship, p03_new_tank, p04_new_soldier]
+  expected_protocols: [incremental_detector]
   require_compliant_no_old_data: true
 
 specialist_acceptance:

@@ -42,15 +42,15 @@ def load_full_yolo_iod_config(path: str | Path) -> Dict[str, Any]:
 
 def validate_full_yolo_iod_config(config: Mapping[str, Any]) -> None:
     experiment = config.get("experiment", {})
-    if experiment.get("protocol") != "strict-p02":
-        raise ValueError("完整 YOLO-IOD 首版只允许 strict-p02")
+    if experiment.get("protocol") != "warship-incremental":
+        raise ValueError("完整 YOLO-IOD 首版只允许舰船增量协议")
     if experiment.get("official_commit") != OFFICIAL_COMMIT:
         raise ValueError("官方 YOLO-IOD 提交哈希与已审计版本不一致")
     classes = config.get("classes", {})
     if tuple(classes.get("old", ())) != OFFICIAL_OLD_CLASSES:
         raise ValueError("官方模型旧类顺序必须为 soldier、small aircraft、tank")
     if classes.get("new") != OFFICIAL_NEW_CLASS:
-        raise ValueError("strict-p02 新增类必须为 warship")
+        raise ValueError("舰船增量协议的新增类必须为 warship")
     mapping = {int(key): int(value) for key, value in classes.get("global_to_official", {}).items()}
     if mapping != GLOBAL_TO_OFFICIAL:
         raise ValueError("赛题类别到官方 YOLO-IOD 类别映射错误")
@@ -73,7 +73,7 @@ def validate_full_yolo_iod_config(config: Mapping[str, Any]) -> None:
             raise ValueError("增量阶段验证必须只读取增量数据")
         cpr = config.get("cpr", {})
         if cpr.get("enabled") is not False:
-            raise ValueError("strict-p02 无旧类共现时必须禁用 CPR")
+            raise ValueError("舰船增量数据无旧类共现时必须禁用 CPR")
         if cpr.get("mode") != "disabled_no_old_class_cooccurrence":
             raise ValueError("CPR 禁用原因必须写入配置")
         if int(cpr.get("required_incremental_old_class_gt_count", -1)) != 0:
@@ -187,7 +187,7 @@ def _coco_document(
             )
             annotation_id += 1
     return {
-        "info": {"description": "AgileAgent strict-p02 YOLO-IOD reproduction"},
+        "info": {"description": "AgileAgent warship incremental YOLO-IOD reproduction"},
         "licenses": [],
         "images": coco_images,
         "annotations": annotations,
@@ -533,7 +533,7 @@ def prepare_full_yolo_iod(config: Mapping[str, Any]) -> Dict[str, Any]:
             classes = image_class_ids(image)
             if new_global_id in classes:
                 if classes != {new_global_id}:
-                    raise ValueError(f"strict-p02 新增类图像存在旧类共现：{image.name}")
+                    raise ValueError(f"舰船增量图像存在旧类共现：{image.name}")
                 current.append(image)
             else:
                 base.append(image)
@@ -576,7 +576,7 @@ def prepare_full_yolo_iod(config: Mapping[str, Any]) -> Dict[str, Any]:
     manifest = {
         "schema_version": 1,
         "run_id": run_id,
-        "protocol": "strict-p02",
+        "protocol": "warship-incremental",
         "method": "official_yolo_iod_full",
         "official_commit": OFFICIAL_COMMIT,
         "official_class_order": list(OFFICIAL_ALL_CLASSES),

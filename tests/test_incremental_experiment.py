@@ -148,26 +148,26 @@ def test_reproduce_rejects_changed_source_data_before_training(tmp_path: Path) -
 
 def test_generation_zero_excludes_warship_and_benchmark_cannot_own_production(tmp_path: Path) -> None:
     registry = load_generation_registry("models/generations.json")
-    generation_zero = registry["generations_by_id"]["generation-0"]
+    generation_zero = registry["generations_by_id"]["base_detection_generation"]
     assert set(generation_zero["classes"]) == {0, 1, 3}
     assert 2 not in generation_zero["class_owners"]
     production = registry["generations_by_id"][registry["channels"]["production"]]
     assert set(production["classes"]) == {0, 1, 2, 3}
-    assert production["class_owners"][2] == "strict_p02_warship_recheck_v2"
+    assert production["class_owners"][2] == "incremental_detector"
 
     payload = json.loads(Path("models/generations.json").read_text(encoding="utf-8"))
     broken = deepcopy(payload)
-    generation = next(item for item in broken["generations"] if item["id"] == "generation-0")
+    generation = next(item for item in broken["generations"] if item["id"] == "base_detection_generation")
     generation["classes"].append(2)
-    generation["class_owners"]["2"] = "unified_yolo11s_benchmark"
+    generation["class_owners"]["2"] = "four_class_unified_benchmark"
     broken_path = tmp_path / "generations.json"
     broken_path.write_text(json.dumps(broken), encoding="utf-8")
     with pytest.raises(ValueError, match="benchmark_only"):
         load_generation_registry(broken_path)
 
     premature = deepcopy(payload)
-    candidate = next(item for item in premature["generations"] if item["id"] == "generation-1")
-    candidate["status"] = "active"
+    expert = next(item for item in premature["models"] if item["id"] == "incremental_detector")
+    expert["acceptance"]["passed"] = False
     premature_path = tmp_path / "premature.json"
     premature_path.write_text(json.dumps(premature), encoding="utf-8")
     with pytest.raises(ValueError, match="未通过部署门禁"):

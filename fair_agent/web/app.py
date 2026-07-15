@@ -132,11 +132,12 @@ def build_web_settings(config: Mapping[str, Any] | None = None) -> Dict[str, Any
             available = available and item.get("activation_threshold") is not None and bool(item.get("calibration_source"))
         protocols[protocol_id] = {
             "id": protocol_id,
+            "display_name": str(item.get("display_name") or class_name),
             "class_name": class_name,
             "new_class": class_name,
             "global_class_id": global_class_id,
             "incremental_mode": mode,
-            "weights": resolve_path(item["path"]),
+            "weights": resolve_path(item["path"]) if item.get("path") else None,
             "new_map50": float(item["new_map50"]),
             "krr": float(item["krr"]),
             "available": available,
@@ -194,8 +195,10 @@ def build_web_settings(config: Mapping[str, Any] | None = None) -> Dict[str, Any
         "base_class_ids": list(base_class_names),
         "base_local_to_global": generation.get("base_local_to_global") if generation else None,
         "generation_id": generation.get("generation_id") if generation else "legacy-unified",
+        "generation_name": generation.get("generation_name") if generation else "四类统一检测",
         "generation_status": generation.get("generation_status") if generation else "active",
         "base_model_id": generation.get("base_model_id") if generation else "unified_yolo11s_v1",
+        "base_model_name": generation.get("base_model_name") if generation else "四类统一检测器",
         "class_owners": generation.get("class_owners") if generation else {
             class_id: "unified_yolo11s_v1" for class_id in class_names
         },
@@ -322,6 +325,7 @@ async def health(request: Request) -> JSONResponse:
                 "queue": queue,
                 "limits": public_config_payload()["limits"],
                 "generation_id": WEB_SETTINGS["generation_id"],
+                "generation_name": WEB_SETTINGS["generation_name"],
                 "classes": [
                     WEB_SETTINGS["class_names"][class_id]
                     for class_id in WEB_SETTINGS["active_class_ids"]
@@ -349,14 +353,14 @@ async def capabilities(_request: Request) -> JSONResponse:
         {"id": "scene_sensor_net_v1", "name": "场景认知", "role": "context_perception"},
         {
             "id": WEB_SETTINGS["base_model_id"],
-            "name": "冻结基础检测",
+            "name": WEB_SETTINGS["base_model_name"],
             "role": "frozen_base",
         },
     ]
     models.extend(
         {
             "id": item["id"],
-            "name": f"{item['class_name']}增量专家",
+            "name": item.get("display_name") or f"{item['class_name']}增量专家",
             "role": "class_incremental_expert",
             "available": item["available"],
         }
@@ -365,6 +369,7 @@ async def capabilities(_request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "generation_id": WEB_SETTINGS["generation_id"],
+            "generation_name": WEB_SETTINGS["generation_name"],
             "generation_status": WEB_SETTINGS["generation_status"],
             "active_classes": [
                 WEB_SETTINGS["class_names"][class_id]
@@ -617,6 +622,22 @@ async def incremental_batch_detail(request: Request) -> JSONResponse:
         return _incremental_error(exc)
 
 
+async def incremental_batch_classes(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+        names = body.get("names") if isinstance(body, dict) else None
+        if not isinstance(names, dict):
+            raise ValueError("请求必须提供按源类别ID索引的names映射。")
+        payload = await run_in_threadpool(
+            request.app.state.incremental_store.rename_classes,
+            request.path_params["batch_id"],
+            names,
+        )
+        return JSONResponse(payload)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
 async def incremental_batch_image(request: Request) -> Response:
     try:
         path = await run_in_threadpool(
@@ -740,6 +761,7 @@ def create_app(
             Route("/api/batch/{batch_id:str}/download", batch_download, methods=["GET"]),
             Route("/api/incremental/batches", incremental_batches, methods=["GET", "POST"]),
             Route("/api/incremental/batches/{batch_id:str}", incremental_batch_detail, methods=["GET"]),
+            Route("/api/incremental/batches/{batch_id:str}/classes", incremental_batch_classes, methods=["PATCH"]),
             Route("/api/incremental/batches/{batch_id:str}/images/{index:int}", incremental_batch_image, methods=["GET"]),
             Route("/api/incremental/batches/{batch_id:str}/inject", incremental_inject, methods=["POST"]),
             Route("/api/incremental/batches/{batch_id:str}/train", incremental_train, methods=["POST"]),
@@ -763,7 +785,10 @@ def create_app(
     store = incremental_store or IncrementalBatchStore(
         WEB_SETTINGS["incremental_workbench"],
         logger,
-        [WEB_SETTINGS["class_names"][class_id] for class_id in WEB_SETTINGS["active_class_ids"]],
+        {
+            class_id: WEB_SETTINGS["class_names"][class_id]
+            for class_id in WEB_SETTINGS["active_class_ids"]
+        },
     )
     application.state.event_log = logger
     application.state.incremental_store = store

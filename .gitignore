@@ -75,11 +75,11 @@ venv/
 !/configs/incremental_detection_policy.yaml
 !/configs/strict_class_incremental_3plus1.yaml
 !/configs/clean_class_incremental_v2.yaml
-!/configs/clean_context_p02_v2.yaml
+!/configs/clean_context_warship_v2.yaml
 !/configs/incremental_method_comparison.yaml
-!/configs/full_yolo_iod_p02.yaml
-!/configs/full_yolo_iod_p02_r04.yaml
-!/configs/full_yolo_iod_p02_r05_gpu3.yaml
+!/configs/full_yolo_iod_warship.yaml
+!/configs/full_yolo_iod_warship_no_cpr.yaml
+!/configs/full_yolo_iod_warship_gpu3.yaml
 !/patches/
 !/patches/yolo_iod_single_class_grad_mask.patch
 

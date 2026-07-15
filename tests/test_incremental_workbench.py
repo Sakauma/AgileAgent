@@ -5,11 +5,12 @@ import json
 import zipfile
 from pathlib import Path
 
+import yaml
 from PIL import Image
 from starlette.testclient import TestClient
 
 from fair_agent.core.runtime_log import StructuredEventLog, mirror_state_event
-from fair_agent.modules.incremental_workbench import IncrementalBatchStore
+from fair_agent.modules.incremental_workbench import IncrementalBatchStore, TrainingJobManager
 from fair_agent.web.app import create_app
 
 
@@ -19,14 +20,23 @@ def png_bytes(color: str = "white") -> bytes:
     return output.getvalue()
 
 
-def dataset_zip(class_name: str = "unknown_vehicle", count: int = 5) -> bytes:
+def dataset_zip(class_name: str = "unknown_vehicle", count: int = 5, class_id: int = 0) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("data.yaml", f"names:\n  0: {class_name}\n")
+        archive.writestr("data.yaml", f"names:\n  {class_id}: {class_name}\n")
         for index in range(count):
             split = "val" if index == count - 1 else "train"
             archive.writestr(f"images/{split}/sample_{index}.png", png_bytes("white" if index % 2 else "black"))
-            archive.writestr(f"labels/{split}/sample_{index}.txt", "0 0.5 0.5 0.2 0.2\n")
+            archive.writestr(f"labels/{split}/sample_{index}.txt", f"{class_id} 0.5 0.5 0.2 0.2\n")
+    return output.getvalue()
+
+
+def unnamed_dataset_zip(label_line: str = "0 0.5 0.5 0.2 0.2") -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        for index in range(2):
+            archive.writestr(f"images/sample_{index}.png", png_bytes("white" if index else "black"))
+            archive.writestr(f"labels/sample_{index}.txt", label_line + "\n")
     return output.getvalue()
 
 
@@ -46,7 +56,7 @@ def settings(tmp_path: Path) -> dict:
         "poll_interval_ms": 2000,
         "training": {
             "python": None,
-            "initial_weights": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/base.pt",
+            "initial_weights": "models/production/incremental_detection/three_class_base_detector.pt",
             "device": "0", "imgsz": 640, "batch": 32, "epochs": 1, "patience": 1,
             "workers": 0, "optimizer": "AdamW", "lr0": 0.001, "seed": 20260705,
             "deterministic": True, "amp": True,
@@ -68,6 +78,8 @@ def test_upload_audit_and_injection_are_persistent_and_incremental_only(tmp_path
     assert manifest["audit"]["object_count"] == 5
     assert manifest["audit"]["incremental_mode"] == "class_incremental"
     assert manifest["audit"]["old_raw_image_count"] == 0
+    assert manifest["class_registry"]["revision"] == 1
+    assert (store.root / manifest["batch_id"] / "class_registry.yaml").is_file()
     injected = store.inject(manifest["batch_id"])
     assert injected["status"] == "INJECTED"
     assert injected["injection"]["counts"] == {"train": 4, "val": 1}
@@ -98,22 +110,95 @@ def test_archive_path_traversal_is_rejected_without_writing_outside_root(tmp_pat
     assert not (tmp_path / "escape.txt").exists()
 
 
-def test_generated_names_must_be_confirmed_before_injection(tmp_path: Path) -> None:
+def test_generated_names_are_stable_and_do_not_block_injection(tmp_path: Path) -> None:
     store, _event_log = make_store(tmp_path)
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("images/a.png", png_bytes())
-        archive.writestr("labels/a.txt", "0 0.5 0.5 0.2 0.2\n")
-        archive.writestr("images/b.png", png_bytes("black"))
-        archive.writestr("labels/b.txt", "0 0.5 0.5 0.2 0.2\n")
-    manifest = store.create("unnamed.zip", output.getvalue())
+    manifest = store.create("unnamed.zip", unnamed_dataset_zip())
     assert manifest["audit"]["requires_class_confirmation"] is True
-    try:
-        store.inject(manifest["batch_id"])
-    except ValueError as exc:
-        assert "类别名称" in str(exc)
-    else:
-        raise AssertionError("unnamed class was injected")
+    assert manifest["audit"]["class_map"] == {"0": "类别3"}
+    assert manifest["audit"]["local_to_global"] == {"0": 2}
+    assert manifest["audit"]["class_bindings"][0]["semantic_status"] == "provisional"
+    injected = store.inject(manifest["batch_id"])
+    assert injected["status"] == "INJECTED"
+
+
+def test_multiple_unnamed_batches_reserve_sequential_names_and_global_ids(tmp_path: Path) -> None:
+    store, _event_log = make_store(tmp_path)
+    first = store.create("first.zip", unnamed_dataset_zip())
+    second = store.create("second.zip", unnamed_dataset_zip())
+    assert first["audit"]["class_map"] == {"0": "类别3"}
+    assert first["audit"]["local_to_global"] == {"0": 2}
+    assert second["audit"]["class_map"] == {"0": "类别4"}
+    assert second["audit"]["local_to_global"] == {"0": 3}
+
+
+def test_bbox_only_labels_are_normalized_to_single_generated_class(tmp_path: Path) -> None:
+    store, _event_log = make_store(tmp_path)
+    manifest = store.create("bbox-only.zip", unnamed_dataset_zip("0.5 0.5 0.2 0.2"))
+    assert manifest["audit"]["label_format"] == "bbox_only"
+    injected = store.inject(manifest["batch_id"])
+    prepared_label = next((store.root / injected["batch_id"] / "prepared" / "labels").rglob("*.txt"))
+    assert prepared_label.read_text(encoding="utf-8") == "0 0.5 0.5 0.2 0.2\n"
+
+
+def test_dataset_names_and_unused_source_id_are_preserved(tmp_path: Path) -> None:
+    event_log = StructuredEventLog(tmp_path / "logs", 1024 * 1024, 3)
+    store = IncrementalBatchStore(settings(tmp_path), event_log, {0: "soldier", 1: "small_aircraft", 2: "tank"})
+    manifest = store.create("official-new-class.zip", dataset_zip("warship", class_id=3))
+    binding = manifest["audit"]["class_bindings"][0]
+    assert binding == {
+        "source_class_id": 3,
+        "training_class_id": 0,
+        "global_class_id": 3,
+        "display_name": "warship",
+        "semantic_status": "confirmed",
+        "semantic_source": "dataset_names",
+        "is_existing_class": False,
+    }
+
+
+def test_class_rename_keeps_ids_and_updates_prepared_yaml(tmp_path: Path) -> None:
+    store, event_log = make_store(tmp_path)
+    manifest = store.create("unnamed.zip", unnamed_dataset_zip())
+    injected = store.inject(manifest["batch_id"])
+    before = injected["audit"]["class_bindings"][0]
+    renamed = store.rename_classes(manifest["batch_id"], {0: "新型车辆"})
+    after = renamed["audit"]["class_bindings"][0]
+    assert after["display_name"] == "新型车辆"
+    assert after["semantic_status"] == "confirmed"
+    assert after["source_class_id"] == before["source_class_id"]
+    assert after["training_class_id"] == before["training_class_id"]
+    assert after["global_class_id"] == before["global_class_id"]
+    assert renamed["class_registry"]["revision"] == 2
+    assert (store.root / manifest["batch_id"] / "class_registry_history" / "revision-0001.yaml").is_file()
+    assert (store.root / manifest["batch_id"] / "class_registry_history" / "revision-0002.yaml").is_file()
+    dataset = yaml.safe_load(
+        (store.root / manifest["batch_id"] / "prepared" / "dataset.yaml").read_text(encoding="utf-8")
+    )
+    assert dataset["names"] == {0: "新型车辆"}
+    assert event_log.query(batch_id=manifest["batch_id"], component="incremental")[0]["event"] == "incremental.classes.renamed"
+
+
+def test_training_snapshot_is_immutable_after_late_class_rename(tmp_path: Path) -> None:
+    store, event_log = make_store(tmp_path)
+    manifest = store.create("unnamed.zip", unnamed_dataset_zip())
+    store.inject(manifest["batch_id"])
+    manager = TrainingJobManager(store, settings(tmp_path), event_log)
+    snapshot = manager._create_training_snapshot(manifest["batch_id"], "train-snapshot-test")
+    snapshot_registry_path = Path(snapshot["class_registry"])
+    if not snapshot_registry_path.is_absolute():
+        snapshot_registry_path = Path.cwd() / snapshot_registry_path
+    frozen = yaml.safe_load(snapshot_registry_path.read_text(encoding="utf-8"))
+    assert frozen["bindings"][0]["display_name"] == "类别3"
+
+    store.rename_classes(manifest["batch_id"], {0: "新型车辆"})
+    current = yaml.safe_load(
+        (store.root / manifest["batch_id"] / "class_registry.yaml").read_text(encoding="utf-8")
+    )
+    frozen_after = yaml.safe_load(snapshot_registry_path.read_text(encoding="utf-8"))
+    assert current["bindings"][0]["display_name"] == "新型车辆"
+    assert current["revision"] == 2
+    assert frozen_after == frozen
+    assert snapshot["class_registry_revision"] == 1
 
 
 class NoopEngine:
@@ -150,6 +235,12 @@ def test_web_incremental_upload_browse_and_inject_flow(tmp_path: Path) -> None:
     image = client.get(f"/api/incremental/batches/{batch_id}/images/0")
     assert image.status_code == 200
     assert image.headers["content-type"] == "image/png"
+    renamed = client.patch(
+        f"/api/incremental/batches/{batch_id}/classes",
+        json={"names": {"0": "海上新目标"}},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["audit"]["class_bindings"][0]["display_name"] == "海上新目标"
     injected = client.post(f"/api/incremental/batches/{batch_id}/inject")
     assert injected.status_code == 200
     assert injected.json()["status"] == "INJECTED"

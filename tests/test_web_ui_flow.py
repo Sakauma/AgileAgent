@@ -42,7 +42,7 @@ class FakeEngine:
             "queue_wait_ms": 0.4,
             "agent": {
                 "mode": "automatic_orchestration",
-                "models_used": ["scene_sensor_net_v1", "strict_p02_base_v1"],
+                "models_used": ["scene_sensor_net_v1", "three_class_base_detector"],
                 "protocol": None,
                 "protocols": [],
                 "decision": {
@@ -101,7 +101,8 @@ def test_health_and_static_product_contract() -> None:
     assert "registry" not in json.dumps(public_config.json())
     capabilities = client.get("/api/capabilities")
     assert capabilities.status_code == 200
-    assert capabilities.json()["generation_id"] == "generation-1-recheck-v2"
+    assert capabilities.json()["generation_id"] == "incremental_detection_generation"
+    assert capabilities.json()["generation_name"] == "增量检测生产代际"
     assert capabilities.json()["active_classes"] == ["soldier", "small_aircraft", "warship", "tank"]
     assert len(capabilities.json()["models"]) == 3
     assert capabilities.json()["protocols"][0]["available"] is True
@@ -114,6 +115,12 @@ def test_health_and_static_product_contract() -> None:
     assert "AgileAgent 首页" not in page.text
     assert "批量检测" in page.text
     assert "会话记录" in page.text
+    assert 'id="incrementalClassList"' in page.text
+    assert 'id="saveIncrementalClasses"' in page.text
+    script = client.get("/assets/app.js")
+    assert script.status_code == 200
+    assert "/classes`" in script.text
+    assert "source_class_id" in script.text
     for private_term in ["SHA256SUMS", "lock-all", "增量协议", "部署门禁"]:
         assert private_term not in page.text
     for internal_hint in ["不会写入训练数据", "当前会话处理", "任务ID", "GPU推理队列", "边界框 XYXY"]:
@@ -124,7 +131,7 @@ def test_health_and_static_product_contract() -> None:
 
 def test_web_settings_follow_active_config_and_manifest() -> None:
     settings = build_web_settings()
-    assert settings["detector_path"].name == "base.pt"
+    assert settings["detector_path"].name == "three_class_base_detector.pt"
     assert settings["device_index"] == "0"
     assert settings["predict"] == {
             "imgsz": 640, "specialist_imgsz": 512, "iou": 0.7, "max_det": 300, "batch_size": 1,
@@ -133,12 +140,14 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
         "confidence_default": 0.5, "preload_specialists": True,
         "quantize": None, "cudnn_benchmark": True, "compile": False,
     }
-    assert settings["generation_id"] == "generation-1-recheck-v2"
-    assert settings["base_model_id"] == "strict_p02_base_v1"
+    assert settings["generation_id"] == "incremental_detection_generation"
+    assert settings["generation_name"] == "增量检测生产代际"
+    assert settings["base_model_id"] == "three_class_base_detector"
+    assert settings["base_model_name"] == "三类基础检测器"
     assert settings["active_class_ids"] == [0, 1, 2, 3]
     assert settings["base_local_to_global"] == {0: 0, 1: 1, 2: 3}
-    assert list(settings["protocols"]) == ["strict_p02_warship_recheck_v2"]
-    assert settings["protocols"]["strict_p02_warship_recheck_v2"]["activation_threshold"] == 0.63
+    assert list(settings["protocols"]) == ["incremental_detector"]
+    assert settings["protocols"]["incremental_detector"]["activation_threshold"] == 0.63
     assert settings["class_names"] == {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
 
 

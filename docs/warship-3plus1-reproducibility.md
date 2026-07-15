@@ -2,7 +2,7 @@
 
 ## 实验边界
 
-本协议把舰船作为模拟新增类别。`generation-0` 只学习人员、小型飞行器和坦克，基础 train/dev 排除所有含舰船图像；增量 train/dev 只包含舰船。准确表述是“基础模型未接触赛题舰船图像和标签”，不宣称通用预训练从未包含船舶语义。
+本协议把舰船作为模拟新增类别。“基础检测代际”只学习人员、小型飞行器和坦克，基础 train/dev 排除所有含舰船图像；增量 train/dev 只包含舰船。准确表述是“基础模型未接触赛题舰船图像和标签”，不宣称通用预训练从未包含船舶语义。
 
 当前完整增量批次包含 126 张 train 图像和 532 个舰船框，另有 22 张 dev 图像和 89 个舰船框；增量 train 图像数约为基础 train 的 29.03%。这些数量、传感器/场景分布和比例仍由审计脚本每次重新统计，`expected_counts` 只作断言。原始数据和标签保持只读。
 
@@ -36,7 +36,7 @@ agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run
 
 基础旧类 mAP50、New-mAP50、KRR 和四类组合 mAP50 分别不得低于 0.80、0.60、0.95 和 0.80。基础权重必须零漂移，增量阶段旧图、旧标签和旧缓存必须为 0。阈值只用增量 dev 在 0.01-0.99 扫描，目标 precision 为 0.99；冻结后 lock 只评一次，要求 precision 不低于 0.70、图像误激活率不高于 0.15。
 
-历史 strict-p02 阈值0.51未通过部署门禁。`generation-1-recheck-v2` 只依据增量dev将阈值冻结为0.63，随后在95张lock-val上通过精度、KRR、组合mAP50、precision与误激活门禁，现已进入production；`generation-0`仍保留为回滚点，四类统一模型始终是`benchmark_only`。Ascend 310B、OM转换和板端FPS继续标记为外部硬件阻塞。
+通用增量检测器的舰船类别绑定只依据增量 dev 将阈值冻结为0.63，随后在95张lock-val上通过精度、KRR、组合mAP50、precision与误激活门禁，现已进入“增量检测生产代际”；“基础检测代际”仍保留为回滚点，四类统一模型始终是`benchmark_only`。Ascend 310B、OM转换和板端FPS继续标记为外部硬件阻塞。
 
 ## 当前实现范围
 

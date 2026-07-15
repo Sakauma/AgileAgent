@@ -85,6 +85,7 @@ def generation_web_settings(registry: Mapping[str, Any], channel: str = "product
         class_id = owned[0]
         protocols[model_id] = {
             "id": model_id,
+            "display_name": str(model.get("display_name") or model_id),
             "class_name": registry["class_map"][class_id],
             "new_class": registry["class_map"][class_id],
             "global_class_id": class_id,
@@ -102,8 +103,10 @@ def generation_web_settings(registry: Mapping[str, Any], channel: str = "product
         }
     return {
         "generation_id": generation_id,
+        "generation_name": str(generation.get("display_name") or generation_id),
         "generation_status": generation["status"],
         "base_model_id": str(base["id"]),
+        "base_model_name": str(base.get("display_name") or base["id"]),
         "detector_path": base["resolved_path"],
         "class_names": dict(registry["class_map"]),
         "active_class_ids": sorted(int(value) for value in generation["classes"]),

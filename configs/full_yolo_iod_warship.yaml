@@ -1,9 +1,9 @@
 schema_version: 1
 
 experiment:
-  id: official-yolo-iod-full-strict-p02
+  id: yolo-iod-warship-incremental
   run_id: yolo-iod-full-warship-r03
-  protocol: strict-p02
+  protocol: warship-incremental
   implementation_level: official_full
   official_commit: 3d9d05a6e88561c88916657367412f9adb7341a7
   active_web_candidate: false
@@ -102,4 +102,4 @@ evaluation:
   min_full_map50: 0.80
   compare_with:
     lite: reports/incremental_method_comparison/ci-methods-warship-r01/yolo-iod-lite-p02/metrics.json
-    row_only: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/strict-p02/metrics.json
+    row_only: reports/clean_class_incremental_v2/clean-ci-v2-warship-r02/warship-incremental/metrics.json

@@ -170,16 +170,21 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     ),
                     {},
                 )
-                protocol_paths = {str(protocol.get("path") or "") for protocol in protocols if isinstance(protocol, dict)}
+                protocol_paths = {
+                    str(protocol["path"])
+                    for protocol in protocols
+                    if isinstance(protocol, dict) and protocol.get("path")
+                }
                 if (
                     protocol_paths != set(artifact_paths)
                     or manifest_entry.get("function") != function_name
                     or manifest_entry.get("status") != item.get("status")
-                    or manifest_entry.get("model_count") != len(protocols)
+                    or manifest_entry.get("model_count") != len(artifact_paths)
+                    or manifest_entry.get("protocol_count") != len(protocols)
                     or manifest_entry.get("task_type") != "incremental_object_detection"
                     or set(manifest_entry.get("supported_modes", [])) != {"class_incremental", "target_incremental"}
-                    or manifest_entry.get("current_evidence_mode") != "target_incremental"
-                    or manifest_entry.get("true_class_incremental_verified") is not False
+                    or manifest_entry.get("current_evidence_mode") not in {"class_incremental", "target_incremental"}
+                    or not isinstance(manifest_entry.get("true_class_incremental_verified"), bool)
                     or manifest_entry.get("learning_data_scope") != "incremental_dataset_only"
                     or manifest_entry.get("old_raw_image_count") != 0
                     or any(
@@ -191,6 +196,7 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                         or not protocol.get("class_name")
                         or not isinstance(protocol.get("activation_threshold"), (int, float))
                         or protocol.get("evidence_level") not in {"unavailable", "rehearsal_only", "verified"}
+                        or (bool(protocol.get("available")) and not protocol.get("path"))
                         for protocol in protocols
                     )
                 ):

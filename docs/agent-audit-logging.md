@@ -38,7 +38,7 @@ agile-agent logs --batch-id BATCH_ID
 agile-agent logs --job-id JOB_ID
 agile-agent logs --experiment-id warship_3plus1 --run-id RUN_ID
 agile-agent logs --protocol-id round_01
-agile-agent logs --generation-id generation-1-recheck-v2
+agile-agent logs --generation-id incremental_detection_generation
 agile-agent logs --level error
 ```
 

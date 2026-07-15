@@ -45,6 +45,13 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _atomic_yaml(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(yaml.safe_dump(dict(payload), allow_unicode=True, sort_keys=False), encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def _slug(value: str) -> str:
     cleaned = "".join(character.lower() if character.isalnum() else "-" for character in value.strip())
     cleaned = "-".join(part for part in cleaned.split("-") if part)
@@ -70,11 +77,10 @@ def _class_names_from_yaml(root: Path) -> Dict[int, str]:
     return {}
 
 
-def _parse_override_names(raw: str | None) -> Dict[int, str]:
+def _parse_override_names(raw: str | None) -> list[str]:
     if not raw:
-        return {}
-    values = [item.strip() for item in raw.split(",") if item.strip()]
-    return {index: value for index, value in enumerate(values)}
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 class IncrementalBatchStore:
@@ -84,12 +90,19 @@ class IncrementalBatchStore:
         self,
         settings: Mapping[str, Any],
         event_log: StructuredEventLog,
-        active_classes: Sequence[str],
+        active_classes: Mapping[int, str] | Sequence[str],
     ) -> None:
         self.settings = dict(settings)
         self.root = resolve_path(self.settings["root"])
         self.event_log = event_log
-        self.active_classes = {str(name).strip().lower() for name in active_classes}
+        if isinstance(active_classes, Mapping):
+            self.active_class_map = {int(class_id): str(name).strip() for class_id, name in active_classes.items()}
+        else:
+            self.active_class_map = {index: str(name).strip() for index, name in enumerate(active_classes)}
+        self.active_classes = {name.lower() for name in self.active_class_map.values()}
+        self.active_class_ids_by_name = {
+            name.lower(): class_id for class_id, name in self.active_class_map.items()
+        }
         self._lock = threading.Lock()
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -103,6 +116,38 @@ class IncrementalBatchStore:
 
     def _manifest_path(self, batch_id: str) -> Path:
         return self._batch_dir(batch_id) / "batch_manifest.json"
+
+    def _class_registry_path(self, batch_id: str) -> Path:
+        return self._batch_dir(batch_id) / "class_registry.yaml"
+
+    def _write_class_registry(
+        self,
+        batch_id: str,
+        bindings: Sequence[Mapping[str, Any]],
+        revision: int,
+        reason: str,
+    ) -> Dict[str, Any]:
+        payload = {
+            "schema_version": 1,
+            "batch_id": batch_id,
+            "revision": int(revision),
+            "updated_at": utc_now(),
+            "reason": reason,
+            "bindings": [dict(item) for item in bindings],
+        }
+        history = self._batch_dir(batch_id) / "class_registry_history" / f"revision-{revision:04d}.yaml"
+        if history.exists():
+            raise FileExistsError(f"类别注册表版本已存在：{history.name}")
+        _atomic_yaml(history, payload)
+        current = self._class_registry_path(batch_id)
+        _atomic_yaml(current, payload)
+        return {
+            "path": "class_registry.yaml",
+            "revision": int(revision),
+            "sha256": _sha256_file(current),
+            "history_path": f"class_registry_history/{history.name}",
+            "history_sha256": _sha256_file(history),
+        }
 
     def _load(self, batch_id: str) -> Dict[str, Any]:
         path = self._manifest_path(batch_id)
@@ -126,6 +171,31 @@ class IncrementalBatchStore:
             payload.pop("files", None)
             rows.append(payload)
         return rows
+
+    def _reserved_class_registry(self) -> tuple[set[int], Dict[str, int], int]:
+        reserved_ids: set[int] = set()
+        names_to_ids: Dict[str, int] = {}
+        highest_generated_name = len(self.active_class_map)
+        for path in self.root.glob("*/batch_manifest.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if payload.get("status") == "REJECTED":
+                continue
+            for item in payload.get("audit", {}).get("class_bindings", []):
+                try:
+                    global_id = int(item["global_class_id"])
+                    display_name = str(item["display_name"]).strip()
+                except (KeyError, TypeError, ValueError):
+                    continue
+                reserved_ids.add(global_id)
+                if display_name:
+                    names_to_ids.setdefault(display_name.casefold(), global_id)
+                    suffix = display_name.removeprefix("类别")
+                    if display_name.startswith("类别") and suffix.isdigit():
+                        highest_generated_name = max(highest_generated_name, int(suffix))
+        return reserved_ids, names_to_ids, highest_generated_name
 
     def _safe_extract(self, archive: Path, destination: Path) -> None:
         maximum_files = int(self.settings["max_extracted_files"])
@@ -186,6 +256,7 @@ class IncrementalBatchStore:
         records: list[Dict[str, Any]] = []
         class_counts: Counter[int] = Counter()
         object_count = 0
+        label_formats: set[str] = set()
         for image in images:
             label = self._label_for(image, labels_by_stem)
             if label is None and bool(self.settings["require_labels"]):
@@ -204,11 +275,17 @@ class IncrementalBatchStore:
                     if not line.strip():
                         continue
                     fields = line.split()
-                    if len(fields) != 5:
-                        raise ValueError(f"{label.name}:{line_number} 不是5列YOLO标签。")
+                    if len(fields) not in {4, 5}:
+                        raise ValueError(f"{label.name}:{line_number} 不是4列或5列YOLO标签。")
                     try:
-                        class_id = int(fields[0])
-                        coordinates = [float(value) for value in fields[1:]]
+                        if len(fields) == 5:
+                            class_id = int(fields[0])
+                            coordinates = [float(value) for value in fields[1:]]
+                            label_formats.add("class_id_bbox")
+                        else:
+                            class_id = 0
+                            coordinates = [float(value) for value in fields]
+                            label_formats.add("bbox_only")
                     except ValueError as exc:
                         raise ValueError(f"{label.name}:{line_number} 含非法数值。") from exc
                     x_center, y_center, box_width, box_height = coordinates
@@ -239,29 +316,101 @@ class IncrementalBatchStore:
                 "image_sha256": _sha256_file(image),
                 "label_sha256": _sha256_file(label) if label else None,
             })
-        names = _parse_override_names(override_names) or _class_names_from_yaml(extracted)
         all_ids = sorted(class_counts)
         if not all_ids:
             raise ValueError("增量数据集中没有有效目标。")
-        if all_ids != list(range(len(all_ids))):
-            raise ValueError("YOLO本地类别ID必须从0开始连续编号。")
-        for class_id in all_ids:
-            names.setdefault(class_id, f"new_class_{class_id}")
-        if set(names) != set(all_ids):
-            names = {class_id: names.get(class_id, f"new_class_{class_id}") for class_id in all_ids}
-        class_names = {class_id: names[class_id] for class_id in all_ids}
-        existing = [name for name in class_names.values() if name.strip().lower() in self.active_classes]
-        generated = [name for name in class_names.values() if name.startswith("new_class_")]
-        mode = "target_incremental" if class_names and len(existing) == len(class_names) else "class_incremental"
+        if len(label_formats) > 1:
+            raise ValueError("同一增量数据包不能混用4列无类别标签和5列带类别ID标签。")
+
+        override_values = _parse_override_names(override_names)
+        yaml_names = _class_names_from_yaml(extracted)
+        if override_values:
+            if len(override_values) != len(all_ids):
+                raise ValueError("手动类别名称数量必须与标签中实际类别数量一致。")
+            source_names = {source_id: override_values[index] for index, source_id in enumerate(all_ids)}
+            semantic_source = "user_override"
+        elif yaml_names:
+            source_names = {source_id: yaml_names[source_id] for source_id in all_ids if source_id in yaml_names}
+            semantic_source = "dataset_names"
+        else:
+            source_names = {}
+            semantic_source = "generated"
+
+        reserved_ids, reserved_names_to_ids, highest_generated_name = self._reserved_class_registry()
+        used_global_ids = set(self.active_class_map) | reserved_ids
+        known_class_ids_by_name = dict(reserved_names_to_ids)
+        known_class_ids_by_name.update(self.active_class_ids_by_name)
+        next_global_id = max(used_global_ids, default=-1) + 1
+        generated_index = max(len(used_global_ids), highest_generated_name) + 1
+        generated: list[str] = []
+        bindings: list[Dict[str, Any]] = []
+        class_names: Dict[int, str] = {}
+        source_class_map: Dict[int, str] = {}
+        source_to_training: Dict[int, int] = {}
+        local_to_global: Dict[int, int] = {}
+        bound_global_ids: set[int] = set()
+
+        for training_id, source_id in enumerate(all_ids):
+            supplied_name = str(source_names.get(source_id) or "").strip()
+            known_global_id = known_class_ids_by_name.get(supplied_name.casefold()) if supplied_name else None
+            if known_global_id is not None:
+                global_id = known_global_id
+                display_name = supplied_name
+                status = "confirmed"
+                binding_source = semantic_source
+                is_existing = supplied_name.casefold() in self.active_class_ids_by_name
+            else:
+                if supplied_name and source_id not in used_global_ids and source_id not in bound_global_ids:
+                    global_id = source_id
+                else:
+                    while next_global_id in used_global_ids or next_global_id in bound_global_ids:
+                        next_global_id += 1
+                    global_id = next_global_id
+                    next_global_id += 1
+                if supplied_name:
+                    display_name = supplied_name
+                    status = "confirmed"
+                    binding_source = semantic_source
+                else:
+                    display_name = f"类别{generated_index}"
+                    generated_index += 1
+                    generated.append(display_name)
+                    status = "provisional"
+                    binding_source = "generated"
+                is_existing = False
+            if global_id in bound_global_ids:
+                raise ValueError("增量数据中多个本地类别映射到了同一个全局类别。")
+            bound_global_ids.add(global_id)
+            source_class_map[source_id] = display_name
+            source_to_training[source_id] = training_id
+            class_names[training_id] = display_name
+            local_to_global[training_id] = global_id
+            bindings.append({
+                "source_class_id": source_id,
+                "training_class_id": training_id,
+                "global_class_id": global_id,
+                "display_name": display_name,
+                "semantic_status": status,
+                "semantic_source": binding_source,
+                "is_existing_class": is_existing,
+            })
+
+        mode = "target_incremental" if bindings and all(item["is_existing_class"] for item in bindings) else "class_incremental"
         return {
             "image_count": len(records),
             "label_count": sum(1 for row in records if row["label"]),
             "object_count": object_count,
             "class_map": {str(key): value for key, value in class_names.items()},
+            "source_class_map": {str(key): value for key, value in source_class_map.items()},
+            "source_to_training": {str(key): value for key, value in source_to_training.items()},
+            "local_to_global": {str(key): value for key, value in local_to_global.items()},
+            "class_bindings": bindings,
             "class_counts": {str(key): class_counts[key] for key in all_ids},
+            "label_format": next(iter(label_formats)),
             "incremental_mode": mode,
             "generated_class_names": generated,
             "requires_class_confirmation": bool(generated),
+            "has_provisional_class_names": bool(generated),
             "old_raw_image_count": 0,
             "compliance": "passed",
             "files": records,
@@ -328,28 +477,43 @@ class IncrementalBatchStore:
         started = time.perf_counter()
         try:
             self._safe_extract(archive, batch_dir / "extracted")
-            audit = self._audit(batch_dir, class_names)
-            status = "AUDITED"
-            error = None
         except Exception as exc:
-            audit = {}
-            status = "REJECTED"
-            error = str(exc)
-        manifest: Dict[str, Any] = {
-            "schema_version": 1,
-            "batch_id": batch_id,
-            "name": (display_name or Path(filename).stem).strip()[:80],
-            "status": status,
-            "created_at": utc_now(),
-            "updated_at": utc_now(),
-            "source": {"filename": Path(filename).name, "size_bytes": size_bytes, "sha256": archive_sha256},
-            "audit": {key: value for key, value in audit.items() if key != "files"},
-            "files": audit.get("files", []),
-            "error": error,
-            "trace_id": trace_id,
-            "training_job_id": None,
-        }
-        _atomic_json(self._manifest_path(batch_id), manifest)
+            extraction_error = str(exc)
+        else:
+            extraction_error = None
+        with self._lock:
+            try:
+                if extraction_error:
+                    raise ValueError(extraction_error)
+                audit = self._audit(batch_dir, class_names)
+                status = "AUDITED"
+                error = None
+            except Exception as exc:
+                audit = {}
+                status = "REJECTED"
+                error = str(exc)
+            manifest: Dict[str, Any] = {
+                "schema_version": 2,
+                "batch_id": batch_id,
+                "name": (display_name or Path(filename).stem).strip()[:80],
+                "status": status,
+                "created_at": utc_now(),
+                "updated_at": utc_now(),
+                "source": {"filename": Path(filename).name, "size_bytes": size_bytes, "sha256": archive_sha256},
+                "audit": {key: value for key, value in audit.items() if key != "files"},
+                "files": audit.get("files", []),
+                "error": error,
+                "trace_id": trace_id,
+                "training_job_id": None,
+            }
+            if status == "AUDITED":
+                manifest["class_registry"] = self._write_class_registry(
+                    batch_id,
+                    audit["class_bindings"],
+                    revision=1,
+                    reason="dataset_audit",
+                )
+            _atomic_json(self._manifest_path(batch_id), manifest)
         self.event_log.append(
             "incremental.audit.completed" if status == "AUDITED" else "incremental.audit.failed",
             level="info" if status == "AUDITED" else "error",
@@ -390,8 +554,6 @@ class IncrementalBatchStore:
             manifest = self._load(batch_id)
             if manifest["status"] not in {"AUDITED", "INJECTED"}:
                 raise ValueError("只有审计通过的批次可以注入。")
-            if manifest["audit"].get("requires_class_confirmation"):
-                raise ValueError("数据包缺少可确认的类别名称，请上传含names字段的data.yaml或在上传时填写类别名称。")
             if manifest["status"] == "INJECTED":
                 return manifest
             batch_dir = self._batch_dir(batch_id)
@@ -422,7 +584,22 @@ class IncrementalBatchStore:
                     image_target.parent.mkdir(parents=True, exist_ok=True)
                     label_target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(image_source, image_target)
-                    shutil.copy2(label_source, label_target)
+                    source_to_training = {
+                        int(key): int(value) for key, value in manifest["audit"]["source_to_training"].items()
+                    }
+                    normalized_lines = []
+                    for line in label_source.read_text(encoding="utf-8").splitlines():
+                        fields = line.split()
+                        if not fields:
+                            continue
+                        if len(fields) == 4:
+                            source_class_id, coordinates = 0, fields
+                        else:
+                            source_class_id, coordinates = int(fields[0]), fields[1:]
+                        normalized_lines.append(
+                            f"{source_to_training[source_class_id]} {' '.join(coordinates)}"
+                        )
+                    label_target.write_text("\n".join(normalized_lines) + "\n", encoding="utf-8")
             class_map = {int(key): value for key, value in manifest["audit"]["class_map"].items()}
             dataset_yaml = {
                 "path": str(prepared.resolve()),
@@ -439,6 +616,10 @@ class IncrementalBatchStore:
                 "old_raw_image_count": 0,
                 "dataset": "prepared/dataset.yaml",
                 "class_map": manifest["audit"]["class_map"],
+                "source_class_map": manifest["audit"]["source_class_map"],
+                "source_to_training": manifest["audit"]["source_to_training"],
+                "local_to_global": manifest["audit"]["local_to_global"],
+                "class_bindings": manifest["audit"]["class_bindings"],
                 "counts": {"train": len(split_rows["train"]), "val": len(split_rows["val"])},
                 "source_archive_sha256": manifest["source"]["sha256"],
             }
@@ -460,6 +641,93 @@ class IncrementalBatchStore:
                 "dataset_yaml": rel_path(dataset_yaml),
                 "dataset_yaml_sha256": _sha256_file(dataset_yaml),
             },
+        )
+        return manifest
+
+    def rename_classes(self, batch_id: str, names: Mapping[str | int, str]) -> Dict[str, Any]:
+        with self._lock:
+            manifest = self._load(batch_id)
+            if manifest["status"] not in {"AUDITED", "INJECTED", "FAILED", "TRAINED_CANDIDATE"}:
+                raise ValueError("当前批次状态不允许修改类别名称。")
+            bindings = list(manifest.get("audit", {}).get("class_bindings") or [])
+            if not bindings:
+                raise ValueError("当前批次没有可重命名的类别绑定。")
+            updates = {int(class_id): str(value).strip() for class_id, value in names.items()}
+            known_source_ids = {int(item["source_class_id"]) for item in bindings}
+            if not updates or not set(updates).issubset(known_source_ids):
+                raise ValueError("类别重命名包含未知的源类别ID。")
+            if any(not value or len(value) > 80 for value in updates.values()):
+                raise ValueError("类别名称不能为空且不能超过80个字符。")
+
+            candidate_names = {
+                int(item["source_class_id"]): updates.get(int(item["source_class_id"]), str(item["display_name"]))
+                for item in bindings
+            }
+            normalized = [value.casefold() for value in candidate_names.values()]
+            if len(normalized) != len(set(normalized)):
+                raise ValueError("同一批次中的类别名称不能重复。")
+            for item in bindings:
+                source_id = int(item["source_class_id"])
+                if source_id not in updates:
+                    continue
+                active_id = self.active_class_ids_by_name.get(updates[source_id].casefold())
+                if active_id is not None and active_id != int(item["global_class_id"]):
+                    raise ValueError("重命名不能把新增类别合并到已有类别；请使用带官方类别映射的数据包重新审计。")
+                item["display_name"] = updates[source_id]
+                item["semantic_status"] = "confirmed"
+                item["semantic_source"] = "user_rename"
+
+            audit = manifest["audit"]
+            audit["class_bindings"] = bindings
+            audit["source_class_map"] = {
+                str(item["source_class_id"]): item["display_name"] for item in bindings
+            }
+            audit["class_map"] = {
+                str(item["training_class_id"]): item["display_name"] for item in bindings
+            }
+            audit["generated_class_names"] = [
+                item["display_name"] for item in bindings if item["semantic_status"] == "provisional"
+            ]
+            audit["requires_class_confirmation"] = bool(audit["generated_class_names"])
+            audit["has_provisional_class_names"] = bool(audit["generated_class_names"])
+            manifest["updated_at"] = utc_now()
+            registry_revision = int(manifest.get("class_registry", {}).get("revision") or 0) + 1
+            manifest["class_registry"] = self._write_class_registry(
+                batch_id,
+                bindings,
+                revision=registry_revision,
+                reason="user_rename",
+            )
+
+            batch_dir = self._batch_dir(batch_id)
+            if manifest["status"] in {"INJECTED", "FAILED", "TRAINED_CANDIDATE"}:
+                dataset_path = batch_dir / "prepared" / "dataset.yaml"
+                batch_path = batch_dir / "batch.yaml"
+                if dataset_path.is_file():
+                    dataset = yaml.safe_load(dataset_path.read_text(encoding="utf-8")) or {}
+                    dataset["names"] = {int(key): value for key, value in audit["class_map"].items()}
+                    dataset_path.write_text(yaml.safe_dump(dataset, allow_unicode=True, sort_keys=False), encoding="utf-8")
+                if batch_path.is_file():
+                    batch_payload = yaml.safe_load(batch_path.read_text(encoding="utf-8")) or {}
+                    batch_payload["class_map"] = audit["class_map"]
+                    batch_payload["source_class_map"] = audit["source_class_map"]
+                    batch_payload["class_bindings"] = bindings
+                    batch_path.write_text(
+                        yaml.safe_dump(batch_payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
+                    )
+                if manifest.get("injection"):
+                    manifest["injection"]["class_map"] = audit["class_map"]
+                    manifest["injection"]["source_class_map"] = audit["source_class_map"]
+                    manifest["injection"]["class_bindings"] = bindings
+            _atomic_json(self._manifest_path(batch_id), manifest)
+
+        self.event_log.append(
+            "incremental.classes.renamed",
+            component="incremental",
+            trace_id=manifest["trace_id"],
+            batch_id=batch_id,
+            message="增量类别显示名称已更新",
+            details={"class_bindings": bindings},
         )
         return manifest
 
@@ -504,6 +772,35 @@ class TrainingJobManager:
                 continue
         return sorted(rows, key=lambda row: row["created_at"], reverse=True)
 
+    def _create_training_snapshot(self, batch_id: str, job_id: str) -> Dict[str, Any]:
+        batch_dir = self.store._batch_dir(batch_id)
+        manifest = self.store.get(batch_id, include_files=False)
+        dataset_source = batch_dir / "prepared" / "dataset.yaml"
+        registry_source = self.store._class_registry_path(batch_id)
+        if not dataset_source.is_file() or not registry_source.is_file():
+            raise FileNotFoundError("训练数据视图或类别注册表不存在。")
+        snapshot_dir = batch_dir / "jobs" / "snapshots" / job_id
+        snapshot_dir.mkdir(parents=True, exist_ok=False)
+        dataset_snapshot = snapshot_dir / "dataset.yaml"
+        registry_snapshot = snapshot_dir / "class_registry.yaml"
+        shutil.copy2(dataset_source, dataset_snapshot)
+        shutil.copy2(registry_source, registry_snapshot)
+        payload = {
+            "schema_version": 1,
+            "batch_id": batch_id,
+            "job_id": job_id,
+            "created_at": utc_now(),
+            "dataset": rel_path(dataset_snapshot),
+            "dataset_sha256": _sha256_file(dataset_snapshot),
+            "class_registry": rel_path(registry_snapshot),
+            "class_registry_sha256": _sha256_file(registry_snapshot),
+            "class_registry_revision": int(manifest.get("class_registry", {}).get("revision") or 0),
+        }
+        _atomic_json(snapshot_dir / "snapshot_manifest.json", payload)
+        payload["snapshot_manifest"] = rel_path(snapshot_dir / "snapshot_manifest.json")
+        payload["snapshot_manifest_sha256"] = _sha256_file(snapshot_dir / "snapshot_manifest.json")
+        return payload
+
     def start(self, batch_id: str) -> Dict[str, Any]:
         manifest = self.store.get(batch_id)
         if manifest["status"] not in {"INJECTED", "FAILED"}:
@@ -512,10 +809,13 @@ class TrainingJobManager:
         trace_id = new_trace_id("train")
         train = dict(self.settings["training"])
         python = str(train.get("python") or sys.executable)
+        snapshot = self._create_training_snapshot(batch_id, job_id)
         command = [
             python, "-m", "fair_agent.modules.incremental_workbench", "train-worker",
             "--batch-dir", str(self.store._batch_dir(batch_id)),
             "--job-id", job_id,
+            "--dataset-snapshot", str(resolve_path(snapshot["dataset"])),
+            "--class-registry-snapshot", str(resolve_path(snapshot["class_registry"])),
             "--weights", str(resolve_path(train["initial_weights"])),
             "--device", str(train["device"]),
             "--imgsz", str(train["imgsz"]),
@@ -540,6 +840,7 @@ class TrainingJobManager:
             "finished_at": None,
             "returncode": None,
             "command": command,
+            "training_snapshot": snapshot,
             "log_url": f"/api/incremental/jobs/{job_id}/logs?batch_id={batch_id}",
         }
         self._write_job(job)
@@ -624,6 +925,8 @@ def train_worker(arguments: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch-dir", required=True)
     parser.add_argument("--job-id", required=True)
+    parser.add_argument("--dataset-snapshot", required=True)
+    parser.add_argument("--class-registry-snapshot", required=True)
     parser.add_argument("--weights", required=True)
     parser.add_argument("--device", required=True)
     parser.add_argument("--imgsz", type=int, required=True)
@@ -638,9 +941,13 @@ def train_worker(arguments: Sequence[str] | None = None) -> int:
     parser.add_argument("--amp", choices=["true", "false"], required=True)
     args = parser.parse_args(arguments)
     batch_dir = Path(args.batch_dir).resolve()
-    dataset = batch_dir / "prepared" / "dataset.yaml"
+    dataset = Path(args.dataset_snapshot).resolve()
+    class_registry = Path(args.class_registry_snapshot).resolve()
     if not dataset.is_file():
         raise FileNotFoundError(dataset)
+    if not class_registry.is_file():
+        raise FileNotFoundError(class_registry)
+    registry_payload = yaml.safe_load(class_registry.read_text(encoding="utf-8")) or {}
     from ultralytics import YOLO
 
     model = YOLO(args.weights)
@@ -660,6 +967,12 @@ def train_worker(arguments: Sequence[str] | None = None) -> int:
         "completed_at": utc_now(),
         "best_weight": str(best),
         "best_weight_sha256": _sha256_file(best),
+        "dataset_snapshot": str(dataset),
+        "dataset_snapshot_sha256": _sha256_file(dataset),
+        "class_registry_snapshot": str(class_registry),
+        "class_registry_snapshot_sha256": _sha256_file(class_registry),
+        "class_registry_revision": int(registry_payload.get("revision") or 0),
+        "class_bindings": registry_payload.get("bindings", []),
         "status": "candidate_requires_calibration_and_recheck",
     }
     _atomic_json(save_dir / "candidate_manifest.json", output)

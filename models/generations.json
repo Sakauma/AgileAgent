@@ -8,10 +8,11 @@
   },
   "models": [
     {
-      "id": "strict_p02_base_v1",
+      "id": "three_class_base_detector",
+      "display_name": "三类基础检测器",
       "role": "frozen_base",
       "backend": "ultralytics",
-      "path": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/base.pt",
+      "path": "models/production/incremental_detection/three_class_base_detector.pt",
       "sha256": "9616dda7577b1a33cb2210e4a63d2967083017726e6b2cc236f2f86d77c3d1b6",
       "owns_classes": [
         0,
@@ -26,35 +27,8 @@
       "evidence": "未接触赛题舰船图像和标签"
     },
     {
-      "id": "strict_p02_warship_v1",
-      "role": "class_incremental_expert",
-      "backend": "ultralytics",
-      "path": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/specialist.pt",
-      "sha256": "88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3",
-      "owns_classes": [
-        2
-      ],
-      "local_to_global": {
-        "0": 2
-      },
-      "activation_threshold": 0.51,
-      "calibration_source": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/calibration.json",
-      "metrics": {
-        "new_map50": 0.9090260372388763
-      },
-      "deployment_metrics": {
-        "lock_precision": 0.5411,
-        "false_activation_rate": 0.3378
-      },
-      "acceptance": {
-        "min_lock_precision": 0.7,
-        "max_false_activation_rate": 0.15,
-        "passed": false
-      },
-      "status": "pending_deployment_recheck"
-    },
-    {
-      "id": "unified_yolo11s_benchmark",
+      "id": "four_class_unified_benchmark",
+      "display_name": "四类统一检测基准",
       "role": "benchmark_only",
       "backend": "ultralytics",
       "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
@@ -74,10 +48,11 @@
       "status": "benchmark_only"
     },
     {
-      "id": "strict_p02_warship_recheck_v2",
+      "id": "incremental_detector",
+      "display_name": "增量检测器",
       "role": "class_incremental_expert",
       "backend": "ultralytics",
-      "path": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/specialist.pt",
+      "path": "models/production/incremental_detection/incremental_detector.pt",
       "sha256": "88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3",
       "owns_classes": [
         2
@@ -86,7 +61,7 @@
         "0": 2
       },
       "activation_threshold": 0.63,
-      "calibration_source": "models/experiments/strict_3plus1/strict-p02/strict-20260712-102534/calibration.json",
+      "calibration_source": "models/production/incremental_detection/calibration.json",
       "metrics": {
         "new_map50": 0.9090260372388763
       },
@@ -104,7 +79,8 @@
   ],
   "generations": [
     {
-      "id": "generation-0",
+      "id": "base_detection_generation",
+      "display_name": "基础检测代际",
       "parent": null,
       "classes": [
         0,
@@ -112,9 +88,9 @@
         3
       ],
       "class_owners": {
-        "0": "strict_p02_base_v1",
-        "1": "strict_p02_base_v1",
-        "3": "strict_p02_base_v1"
+        "0": "three_class_base_detector",
+        "1": "three_class_base_detector",
+        "3": "three_class_base_detector"
       },
       "status": "active",
       "metrics": {
@@ -122,8 +98,9 @@
       }
     },
     {
-      "id": "generation-1",
-      "parent": "generation-0",
+      "id": "incremental_detection_generation",
+      "display_name": "增量检测生产代际",
+      "parent": "base_detection_generation",
       "classes": [
         0,
         1,
@@ -131,39 +108,10 @@
         3
       ],
       "class_owners": {
-        "0": "strict_p02_base_v1",
-        "1": "strict_p02_base_v1",
-        "2": "strict_p02_warship_v1",
-        "3": "strict_p02_base_v1"
-      },
-      "status": "pending_deployment_recheck",
-      "metrics": {
-        "base_map50": 0.8284863676564004,
-        "new_map50": 0.9090260372388763,
-        "krr": 1.0,
-        "full_map50": 0.8470003751445625,
-        "lock_precision": 0.5411,
-        "false_activation_rate": 0.3378
-      },
-      "acceptance": {
-        "core_metrics_passed": true,
-        "deployment_recheck_passed": false
-      }
-    },
-    {
-      "id": "generation-1-recheck-v2",
-      "parent": "generation-0",
-      "classes": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "class_owners": {
-        "0": "strict_p02_base_v1",
-        "1": "strict_p02_base_v1",
-        "2": "strict_p02_warship_recheck_v2",
-        "3": "strict_p02_base_v1"
+        "0": "three_class_base_detector",
+        "1": "three_class_base_detector",
+        "2": "incremental_detector",
+        "3": "three_class_base_detector"
       },
       "status": "active",
       "metrics": {
@@ -187,9 +135,9 @@
     }
   ],
   "channels": {
-    "production": "generation-1-recheck-v2",
-    "candidate": "generation-1-recheck-v2",
-    "benchmark": "unified_yolo11s_benchmark"
+    "production": "incremental_detection_generation",
+    "candidate": "incremental_detection_generation",
+    "benchmark": "four_class_unified_benchmark"
   },
   "external_blockers": [
     "ascend_310b_not_available"

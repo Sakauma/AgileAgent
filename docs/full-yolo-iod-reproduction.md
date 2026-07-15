@@ -1,4 +1,4 @@
-# 完整 YOLO-IOD strict-p02 复现指南
+# 完整 YOLO-IOD 舰船 3+1 复现指南
 
 ## 实验边界
 
@@ -38,7 +38,7 @@
 cd /project/IDIP/MAJ/code/tiaozhanbei
 /project/IDIP/CONDA_ENV/envs/yolo-iod-full/bin/python \
   tools/72_run_full_yolo_iod.py \
-  --config configs/full_yolo_iod_p02_r05_gpu3.yaml \
+  --config configs/full_yolo_iod_warship_gpu3.yaml \
   --check-only
 ```
 
@@ -53,7 +53,7 @@ cd /project/IDIP/MAJ/code/tiaozhanbei
 ```bash
 /project/IDIP/CONDA_ENV/envs/yolo-iod-full/bin/python \
   tools/72_run_full_yolo_iod.py \
-  --config configs/full_yolo_iod_p02_r05_gpu3.yaml
+  --config configs/full_yolo_iod_warship_gpu3.yaml
 ```
 
 脚本依次完成：三类基础模型、当前舰船教师、CPR 数据门禁、完整 YOLO-IOD、基础/最终 lock-val 评测。r05 所有阶段固定使用 GPU 3；配置校验会拒绝多卡或阶段间设备不一致。所有阶段写入独立日志和 `action_log.jsonl`，任一步失败立即停止。

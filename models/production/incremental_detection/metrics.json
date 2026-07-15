@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "run_id": "incremental_detection_generation",
+  "protocol": "warship-incremental",
+  "incremental_mode": "class_incremental",
+  "learning_data_scope": "incremental_dataset_only",
+  "old_raw_image_count": 0,
+  "activation_threshold": 0.63,
+  "old_map50_before": 0.8273816344198973,
+  "old_map50_after": 0.8273816344198973,
+  "new_map50": 0.795,
+  "full_map50": 0.8192862258149229,
+  "krr": 1.0,
+  "lock_deployment_metrics": {
+    "precision": 1.0,
+    "recall": 0.7901234567901234
+  },
+  "false_activation": {
+    "negative_image_count": 74,
+    "false_positive_image_count": 0,
+    "false_activation_rate": 0.0
+  },
+  "gates": {
+    "base_map50": true,
+    "new_map50": true,
+    "krr": true,
+    "combined_map50": true,
+    "lock_precision": true,
+    "false_activation_rate": true,
+    "old_prediction_equivalent": true,
+    "base_weight_unchanged": true,
+    "incremental_data_only": true
+  },
+  "accepted": true
+}

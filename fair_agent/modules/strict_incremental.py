@@ -613,7 +613,7 @@ def bootstrap_metrics(
 
 
 def load_experiment_profile(profile_id: str, profile_root: str | Path | None = None) -> Dict[str, Any]:
-    root = resolve_path(profile_root) if profile_root is not None else ROOT / "models" / "experiments" / "strict_3plus1"
+    root = resolve_path(profile_root) if profile_root is not None else ROOT / "models" / "profiles"
     active = root / profile_id / "active.json"
     if not active.exists():
         raise FileNotFoundError(f"严格增量实验档尚未通过验收：{profile_id}")
@@ -659,15 +659,17 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     profile["lock_precision"] = metrics.get("lock_deployment_metrics", {}).get("precision")
     profile["lock_recall"] = metrics.get("lock_deployment_metrics", {}).get("recall")
     profile["lock_false_activation_rate"] = metrics.get("false_activation", {}).get("false_activation_rate")
+    precision = profile["lock_precision"]
+    false_activation_rate = profile["lock_false_activation_rate"]
     profile["deployment_accepted"] = bool(
-        float(profile["lock_precision"] or 0.0) >= 0.70
-        and float(profile["lock_false_activation_rate"] or 1.0) <= 0.15
+        float(precision if precision is not None else 0.0) >= 0.70
+        and float(false_activation_rate if false_activation_rate is not None else 1.0) <= 0.15
     )
     return profile
 
 
 def discover_experiment_profiles(root: str | Path | None = None) -> Dict[str, Any]:
-    profile_root = resolve_path(root) if root is not None else ROOT / "models" / "experiments" / "strict_3plus1"
+    profile_root = resolve_path(root) if root is not None else ROOT / "models" / "profiles"
     profiles: List[Dict[str, Any]] = []
     errors: List[str] = []
     if profile_root.exists():

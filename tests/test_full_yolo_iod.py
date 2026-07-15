@@ -49,7 +49,7 @@ def test_coco_conversion_uses_old_first_official_order(tmp_path: Path) -> None:
 def test_config_rejects_non_official_mapping() -> None:
     config = {
         "experiment": {
-            "protocol": "strict-p02",
+            "protocol": "warship-incremental",
             "official_commit": "3d9d05a6e88561c88916657367412f9adb7341a7",
         },
         "classes": {
@@ -133,7 +133,7 @@ def test_official_patch_restores_accumulation_count_after_gps_scan() -> None:
 
 def test_r04_disables_cpr_and_reaches_effective_batch_16() -> None:
     root = Path(__file__).resolve().parents[1]
-    config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_p02_r04.yaml")
+    config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_warship_no_cpr.yaml")
     assert cpr_is_enabled(config) is False
     assert config["dataset"]["incremental_validation_only"] is True
     plan = training_batch_plan(config)
@@ -144,7 +144,7 @@ def test_r04_disables_cpr_and_reaches_effective_batch_16() -> None:
 
 def test_r05_uses_gpu3_without_changing_training_protocol() -> None:
     root = Path(__file__).resolve().parents[1]
-    config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_p02_r05_gpu3.yaml")
+    config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_warship_gpu3.yaml")
     assert config["runtime"]["devices"] == ["3"]
     assert config["training"]["final"]["devices"] == ["3"]
     assert config["evaluation"]["device"] == "3"
@@ -154,7 +154,7 @@ def test_r05_uses_gpu3_without_changing_training_protocol() -> None:
 
 def test_schema2_rejects_multiple_or_mismatched_devices() -> None:
     root = Path(__file__).resolve().parents[1]
-    config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_p02_r05_gpu3.yaml")
+    config = load_full_yolo_iod_config(root / "configs/full_yolo_iod_warship_gpu3.yaml")
     config["runtime"]["devices"] = ["2", "3"]
     with pytest.raises(ValueError, match="一张有效 GPU"):
         validate_full_yolo_iod_config(config)

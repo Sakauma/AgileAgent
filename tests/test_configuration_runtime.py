@@ -145,25 +145,25 @@ def test_api_benchmark_can_require_an_existing_server(monkeypatch) -> None:
 
 def test_generation_registry_keeps_verified_rollback_point() -> None:
     registry = load_generation_registry("models/generations.json")
-    assert registry["channels"]["production"] == "generation-1-recheck-v2"
-    assert registry["generations_by_id"]["generation-0"]["status"] == "active"
-    assert registry["models_by_id"]["strict_p02_warship_recheck_v2"]["activation_threshold"] == 0.63
+    assert registry["channels"]["production"] == "incremental_detection_generation"
+    assert registry["generations_by_id"]["base_detection_generation"]["status"] == "active"
+    assert registry["models_by_id"]["incremental_detector"]["activation_threshold"] == 0.63
 
 
 def test_promotion_rejects_failed_manifest(tmp_path: Path) -> None:
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({"candidate": "generation-1-recheck-v2", "accepted": False}), encoding="utf-8")
+    manifest.write_text(json.dumps({"candidate": "incremental_detection_generation", "accepted": False}), encoding="utf-8")
     config = copy.deepcopy(load_config())
     config["logging"]["root"] = str(tmp_path / "logs")
     with pytest.raises(ValueError, match="未通过"):
-        promote_generation(config, "generation-1-recheck-v2", manifest)
+        promote_generation(config, "incremental_detection_generation", manifest)
     from fair_agent.core.runtime_log import event_log_from_config
 
-    rows = event_log_from_config(config).query(generation_id="generation-1-recheck-v2")
+    rows = event_log_from_config(config).query(generation_id="incremental_detection_generation")
     assert [row["event"] for row in rows][:2] == [
         "generation.production_switch.failed", "generation.production_switch.started"
     ]
-    assert rows[0]["details"]["production_before"] == "generation-1-recheck-v2"
+    assert rows[0]["details"]["production_before"] == "incremental_detection_generation"
 
 
 def test_rollback_updates_only_copied_registry(tmp_path: Path) -> None:
@@ -172,14 +172,14 @@ def test_rollback_updates_only_copied_registry(tmp_path: Path) -> None:
     config = copy.deepcopy(load_config())
     config["generation"]["registry"] = str(registry_copy)
     config["logging"]["root"] = str(tmp_path / "logs")
-    result = rollback_generation(config, "generation-0")
-    assert result["production"] == "generation-0"
-    assert json.loads(registry_copy.read_text(encoding="utf-8"))["channels"]["production"] == "generation-0"
-    assert json.loads(Path("models/generations.json").read_text(encoding="utf-8"))["channels"]["production"] == "generation-1-recheck-v2"
+    result = rollback_generation(config, "base_detection_generation")
+    assert result["production"] == "base_detection_generation"
+    assert json.loads(registry_copy.read_text(encoding="utf-8"))["channels"]["production"] == "base_detection_generation"
+    assert json.loads(Path("models/generations.json").read_text(encoding="utf-8"))["channels"]["production"] == "incremental_detection_generation"
     from fair_agent.core.runtime_log import event_log_from_config
 
-    rows = event_log_from_config(config).query(generation_id="generation-0")
+    rows = event_log_from_config(config).query(generation_id="base_detection_generation")
     completed = next(row for row in rows if row["event"] == "generation.rollback.completed")
-    assert completed["details"]["production_before"] == "generation-1-recheck-v2"
-    assert completed["details"]["production_after"] == "generation-0"
+    assert completed["details"]["production_before"] == "incremental_detection_generation"
+    assert completed["details"]["production_after"] == "base_detection_generation"
     assert completed["details"]["registry_sha256_before"] != completed["details"]["registry_sha256_after"]

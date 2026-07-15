@@ -103,7 +103,7 @@ reference:
   reference_only: true
 
 protocols:
-  - id: strict-p02
+  - id: warship-incremental
     display_name: 舰船 clean-room 3+1 类别增量
     base_classes: [soldier, small_aircraft, tank]
     new_class: warship

@@ -534,7 +534,7 @@ def configure_yolo_iod_lite_student(
         "loss_weights": dict(settings.get("loss_weights", {})),
         "cpr": {
             "status": "not_applicable",
-            "reason": "strict_p02_has_no_old_class_cooccurrence",
+            "reason": "warship_increment_has_no_old_class_cooccurrence",
             "pseudo_label_count": 0,
         },
         "old_raw_image_count": 0,

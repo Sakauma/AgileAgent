@@ -35,7 +35,7 @@ partition:
 
 training:
   adapter_config: configs/strict_class_incremental_3plus1.yaml
-  protocol_id: strict-p02
+  protocol_id: warship-incremental
   pretrained_lineage: generic_pretrained_yolo11s
   claim: 未接触赛题舰船图像和标签
 

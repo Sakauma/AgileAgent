@@ -59,7 +59,7 @@ def build_decision(config: Dict[str, Any], state: Dict[str, Any], context: Dict[
     candidates = [
         _action(config, "formal_submission", "blocked" if blockers else "ready", "current", "正式推理只提供人工审计命令；当前前置条件尚未全部满足。" if blockers else "正式推理前置条件已满足，但 v1 仍要求人工执行。", 100 if not blockers else 10, sorted(blockers)),
         _action(config, "diagnose_sar_soldier", diagnose_status, str(case_freshness.get("freshness", "missing")), "SAR soldier 案例库已生成且输入未变化。" if case_current else "SAR soldier 诊断产物缺失或过期，需要重新生成。", 70 if sar_focus else 20),
-        _action(config, "review_incremental_learning", incremental_status, incremental_freshness, "p01-p04 指标已解析并满足验收阈值。" if incremental.get("passed") else "增量指标缺失、过期或未达到阈值，需要重新复核。", 45, list(incremental.get("warnings", []))),
+        _action(config, "review_incremental_learning", incremental_status, incremental_freshness, "活动增量协议指标已解析并满足验收阈值。" if incremental.get("passed") else "增量指标缺失、过期或未达到阈值，需要重新复核。", 45, list(incremental.get("warnings", []))),
         _action(config, "refresh_blackboard", "completed", "current", "本次决策已基于实时重建的黑板。", 15),
     ]
     candidates.append({
