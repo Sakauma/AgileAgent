@@ -699,7 +699,9 @@ def _incremental_services(config: Dict[str, Any]):
     active_classes = {
         class_id: generation["class_names"][class_id] for class_id in generation["active_class_ids"]
     }
-    store = IncrementalBatchStore(config["incremental_workbench"], event_log, active_classes)
+    store = IncrementalBatchStore(
+        config["incremental_workbench"], event_log, active_classes, generation["class_names"]
+    )
     return store, TrainingJobManager(
         store, config["incremental_workbench"], event_log, config
     ), event_log

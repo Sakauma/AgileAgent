@@ -96,6 +96,7 @@ class IncrementalBatchStore:
         settings: Mapping[str, Any],
         event_log: StructuredEventLog,
         active_classes: Mapping[int, str] | Sequence[str],
+        known_classes: Mapping[int, str] | None = None,
     ) -> None:
         self.settings = dict(settings)
         self.root = resolve_path(self.settings["root"])
@@ -105,8 +106,15 @@ class IncrementalBatchStore:
         else:
             self.active_class_map = {index: str(name).strip() for index, name in enumerate(active_classes)}
         self.active_classes = {name.lower() for name in self.active_class_map.values()}
+        self.known_class_map = {
+            int(class_id): str(name).strip()
+            for class_id, name in (known_classes or self.active_class_map).items()
+        }
         self.active_class_ids_by_name = {
             name.lower(): class_id for class_id, name in self.active_class_map.items()
+        }
+        self.known_class_ids_by_name = {
+            name.casefold(): class_id for class_id, name in self.known_class_map.items()
         }
         self._lock = threading.Lock()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -364,9 +372,9 @@ class IncrementalBatchStore:
             semantic_source = "generated"
 
         reserved_ids, reserved_names_to_ids, highest_generated_name = self._reserved_class_registry()
-        used_global_ids = set(self.active_class_map) | reserved_ids
+        used_global_ids = set(self.known_class_map) | reserved_ids
         known_class_ids_by_name = dict(reserved_names_to_ids)
-        known_class_ids_by_name.update(self.active_class_ids_by_name)
+        known_class_ids_by_name.update(self.known_class_ids_by_name)
         next_global_id = max(used_global_ids, default=-1) + 1
         generated_index = max(len(used_global_ids), highest_generated_name) + 1
         generated: list[str] = []
@@ -983,9 +991,65 @@ class TrainingJobManager:
                 continue
         return sorted(rows, key=lambda row: row["created_at"], reverse=True)
 
-    def _create_training_snapshot(self, batch_id: str, job_id: str) -> Dict[str, Any]:
+    def _resolve_training_initialization(
+        self, manifest: Mapping[str, Any], train: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        configured = resolve_path(train["initial_weights"])
+        if not configured.is_file():
+            raise FileNotFoundError(f"增量训练初始化权重不存在：{configured}")
+        initialization = {
+            "parent_generation_id": None,
+            "parent_model_id": None,
+            "initial_weight": rel_path(configured),
+            "initial_weight_sha256": _sha256_file(configured),
+            "source": "configured_base",
+        }
+        if self.config is None:
+            return initialization
+        from fair_agent.modules.generation_management import active_generation_registry
+        from fair_agent.modules.model_generations import load_generation_registry
+
+        registry = load_generation_registry(active_generation_registry(self.config))
+        parent_id = str(registry["channels"]["production"])
+        parent = registry["generations_by_id"][parent_id]
+        initialization["parent_generation_id"] = parent_id
+        mode = str(manifest.get("audit", {}).get("incremental_mode") or "")
+        global_ids = {
+            int(item["global_class_id"])
+            for item in manifest.get("audit", {}).get("class_bindings", [])
+        }
+        if mode == "target_incremental":
+            owner_ids = {parent["class_owners"].get(class_id) for class_id in global_ids}
+            owner_ids.discard(None)
+            if len(owner_ids) != 1:
+                raise ValueError("一个目标增量批次的类别必须由同一个当前模型拥有，才能确定初始化权重。")
+            owner_id = str(next(iter(owner_ids)))
+            owner = registry["models_by_id"][owner_id]
+            configured = owner["resolved_path"]
+            initialization.update({
+                "parent_model_id": owner_id,
+                "initial_weight": rel_path(configured),
+                "initial_weight_sha256": _sha256_file(configured),
+                "source": "current_class_owner",
+            })
+        else:
+            base_ids = [
+                model_id for model_id in (parent.get("model_members") or parent["class_owners"].values())
+                if registry["models_by_id"][str(model_id)]["role"] == "frozen_base"
+            ]
+            if len(set(base_ids)) == 1:
+                initialization["parent_model_id"] = str(base_ids[0])
+        return initialization
+
+    def _create_training_snapshot(
+        self, batch_id: str, job_id: str, initialization: Mapping[str, Any] | None = None,
+    ) -> Dict[str, Any]:
         batch_dir = self.store._batch_dir(batch_id)
         manifest = self.store.get(batch_id)
+        if initialization is None:
+            initialization = self._resolve_training_initialization(
+                manifest, dict(self.settings["training"])
+            )
         dataset_source = batch_dir / "prepared" / "dataset.yaml"
         registry_source = self.store._class_registry_path(batch_id)
         batch_source = batch_dir / "batch.yaml"
@@ -1029,6 +1093,7 @@ class TrainingJobManager:
             "lock_manifest": rel_path(lock_manifest) if lock_manifest.is_file() else None,
             "lock_manifest_sha256": _sha256_file(lock_manifest) if lock_manifest.is_file() else None,
             "training_access": injection.get("training_access"),
+            "initialization": dict(initialization),
         }
         _atomic_json(snapshot_dir / "snapshot_manifest.json", payload)
         payload["snapshot_manifest"] = rel_path(snapshot_dir / "snapshot_manifest.json")
@@ -1043,14 +1108,18 @@ class TrainingJobManager:
         trace_id = new_trace_id("train")
         train = dict(self.settings["training"])
         python = str(train.get("python") or sys.executable)
-        snapshot = self._create_training_snapshot(batch_id, job_id)
+        initialization = self._resolve_training_initialization(manifest, train)
+        snapshot = self._create_training_snapshot(batch_id, job_id, initialization)
         command = [
             python, "-m", "fair_agent.modules.incremental_workbench", "train-worker",
             "--batch-dir", str(self.store._batch_dir(batch_id)),
             "--job-id", job_id,
             "--dataset-snapshot", str(resolve_path(snapshot["dataset"])),
             "--class-registry-snapshot", str(resolve_path(snapshot["class_registry"])),
-            "--weights", str(resolve_path(train["initial_weights"])),
+            "--weights", str(resolve_path(initialization["initial_weight"])),
+            "--parent-generation-id", str(initialization.get("parent_generation_id") or ""),
+            "--parent-model-id", str(initialization.get("parent_model_id") or ""),
+            "--initial-weight-sha256", str(initialization["initial_weight_sha256"]),
             "--device", str(train["device"]),
             "--imgsz", str(train["imgsz"]),
             "--batch", str(train["batch"]),
@@ -1075,6 +1144,7 @@ class TrainingJobManager:
             "returncode": None,
             "command": command,
             "training_snapshot": snapshot,
+            "initialization": initialization,
             "log_url": f"/api/incremental/jobs/{job_id}/logs?batch_id={batch_id}",
         }
         self._write_job(job)
@@ -1216,6 +1286,9 @@ def train_worker(arguments: Sequence[str] | None = None) -> int:
     parser.add_argument("--dataset-snapshot", required=True)
     parser.add_argument("--class-registry-snapshot", required=True)
     parser.add_argument("--weights", required=True)
+    parser.add_argument("--parent-generation-id", default="")
+    parser.add_argument("--parent-model-id", default="")
+    parser.add_argument("--initial-weight-sha256", required=True)
     parser.add_argument("--device", required=True)
     parser.add_argument("--imgsz", type=int, required=True)
     parser.add_argument("--batch", type=int, required=True)
@@ -1235,6 +1308,9 @@ def train_worker(arguments: Sequence[str] | None = None) -> int:
         raise FileNotFoundError(dataset)
     if not class_registry.is_file():
         raise FileNotFoundError(class_registry)
+    initial_weight = Path(args.weights).resolve()
+    if not initial_weight.is_file() or _sha256_file(initial_weight) != args.initial_weight_sha256:
+        raise ValueError("训练初始化权重缺失或启动前哈希不一致。")
     registry_payload = yaml.safe_load(class_registry.read_text(encoding="utf-8")) or {}
     from ultralytics import YOLO
 
@@ -1250,11 +1326,20 @@ def train_worker(arguments: Sequence[str] | None = None) -> int:
     best = save_dir / "weights" / "best.pt"
     if not best.is_file():
         raise RuntimeError("训练完成但未生成best.pt")
+    initial_weight_sha256_after = _sha256_file(initial_weight)
+    if initial_weight_sha256_after != args.initial_weight_sha256:
+        raise RuntimeError("训练过程修改了冻结的初始化权重。")
     output = {
         "job_id": args.job_id,
         "completed_at": utc_now(),
         "best_weight": str(best),
         "best_weight_sha256": _sha256_file(best),
+        "parent_generation_id": args.parent_generation_id or None,
+        "parent_model_id": args.parent_model_id or None,
+        "initial_weight": str(initial_weight),
+        "initial_weight_sha256": args.initial_weight_sha256,
+        "initial_weight_sha256_after": initial_weight_sha256_after,
+        "frozen_source_unchanged": True,
         "dataset_snapshot": str(dataset),
         "dataset_snapshot_sha256": _sha256_file(dataset),
         "class_registry_snapshot": str(class_registry),

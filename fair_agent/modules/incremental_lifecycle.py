@@ -13,6 +13,7 @@ from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
 from fair_agent.core.runtime_log import StructuredEventLog, utc_now
 from fair_agent.modules.generation_management import (
+    build_candidate_confusion_graph,
     promote_generation,
     recheck_generation,
     register_generation_deployment,
@@ -42,7 +43,12 @@ def _ground_truth(images: list[Path], local_to_global: Mapping[int, int]) -> lis
     for image in images:
         with Image.open(image) as source:
             width, height = source.size
-        for line in image.with_suffix(".txt").read_text(encoding="utf-8").splitlines():
+        label = image.with_suffix(".txt")
+        if not label.is_file() and "images" in image.parts:
+            parts = list(image.parts)
+            parts[len(parts) - 1 - parts[::-1].index("images")] = "labels"
+            label = Path(*parts).with_suffix(".txt")
+        for line in label.read_text(encoding="utf-8").splitlines():
             fields = line.split()
             if len(fields) != 5:
                 continue
@@ -134,6 +140,17 @@ def calibrate_candidate(
             all_target_precisions_reached and target_precision_reached
         )
     output_path = batch_dir / "calibration" / f"{candidate_manifest['job_id']}.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    predictions_path = output_path.with_name(output_path.stem + "-predictions.jsonl")
+    ground_truth_path = output_path.with_name(output_path.stem + "-ground-truth.jsonl")
+    predictions_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in predictions),
+        encoding="utf-8",
+    )
+    ground_truth_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in ground_truth),
+        encoding="utf-8",
+    )
     payload: Dict[str, Any] = {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -147,6 +164,10 @@ def calibrate_candidate(
         "target_precision_reached": all_target_precisions_reached,
         "calibrated": len(per_class) == len(class_ids),
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+        "predictions": rel_path(predictions_path),
+        "predictions_sha256": sha256_file(predictions_path),
+        "ground_truth": rel_path(ground_truth_path),
+        "ground_truth_sha256": sha256_file(ground_truth_path),
     }
     _atomic_json(output_path, payload)
     payload["calibration_sources"] = {str(class_id): rel_path(output_path) for class_id in class_ids}
@@ -265,6 +286,9 @@ class IncrementalLifecycle:
         )
         canonical_events = {
             "CALIBRATED": "incremental.dev_calibration.completed",
+            "DIAGNOSING": "incremental.dev_diagnosis.started",
+            "DIAGNOSED": "incremental.dev_diagnosis.completed",
+            "RECOVERY_REQUIRED": "incremental.recovery.selected",
             "REGISTERED_CANDIDATE": "generation.registered",
             "QUANTIZING": "incremental.quantization.started",
             "QUANTIZED": "incremental.quantization.completed",
@@ -280,7 +304,9 @@ class IncrementalLifecycle:
         if canonical:
             self.event_log.append(
                 canonical,
-                level="error" if state == "ROLLBACK_FAILED" else ("warning" if state in {"REJECTED", "ROLLED_BACK"} else "info"),
+                level="error" if state == "ROLLBACK_FAILED" else (
+                    "warning" if state in {"REJECTED", "ROLLED_BACK", "RECOVERY_REQUIRED"} else "info"
+                ),
                 component="generation" if canonical.startswith("generation.") else "incremental",
                 batch_id=batch_id,
                 job_id=job_id,
@@ -303,11 +329,76 @@ class IncrementalLifecycle:
                         rejection_reason="dev_precision_calibration_failed")
             return {"status": "REJECTED", "calibration": calibration}
         self._state(batch_id, job_id, "CALIBRATED", calibration=calibration)
+        guardian = self.config.get("incremental_guardian")
+        if isinstance(guardian, Mapping) and bool(guardian.get("enabled")):
+            new_threshold = float(self.config["gates"]["official_hard"]["new_map50_min"])
+            if float(calibration["new_map50"]) < new_threshold:
+                recovery_actions = list(
+                    guardian.get("recovery_actions", {}).get("NEW_KNOWLEDGE_UNDERFIT", [])
+                )
+                self._state(
+                    batch_id,
+                    job_id,
+                    "RECOVERY_REQUIRED",
+                    diagnosis="NEW_KNOWLEDGE_UNDERFIT",
+                    dev_new_map50=float(calibration["new_map50"]),
+                    required_new_map50=new_threshold,
+                    recovery_actions=recovery_actions,
+                    lock_unsealed=False,
+                )
+                self._state(
+                    batch_id,
+                    job_id,
+                    "REJECTED",
+                    rejection_reason="dev_full_score_candidate_not_reached",
+                    recovery_actions=recovery_actions,
+                    lock_unsealed=False,
+                )
+                return {
+                    "status": "REJECTED",
+                    "calibration": calibration,
+                    "diagnosis": "NEW_KNOWLEDGE_UNDERFIT",
+                    "recovery_actions": recovery_actions,
+                    "lock_unsealed": False,
+                }
         batch = self.store.get(batch_id)
         registered = register_trained_candidate(self.config, batch, candidate, calibration)
         generation_id = registered["generation_id"]
         parent_generation_id = registered["parent_generation_id"]
         self._state(batch_id, job_id, "REGISTERED_CANDIDATE", generation=registered)
+        confusion_graph = None
+        if isinstance(guardian, Mapping) and bool(guardian.get("enabled")):
+            self._state(batch_id, job_id, "DIAGNOSING", generation_id=generation_id, source="incremental_dev_only")
+            try:
+                confusion_graph = build_candidate_confusion_graph(
+                    self.config, batch_dir, generation_id, calibration
+                )
+            except Exception as exc:
+                self._state(
+                    batch_id,
+                    job_id,
+                    "REJECTED",
+                    generation_id=generation_id,
+                    rejection_reason="dev_confusion_diagnosis_failed",
+                    diagnosis_error=str(exc),
+                    diagnosis_error_type=type(exc).__name__,
+                    lock_unsealed=False,
+                )
+                return {
+                    "status": "REJECTED",
+                    "generation": registered,
+                    "calibration": calibration,
+                    "rejection_reason": "dev_confusion_diagnosis_failed",
+                    "error": str(exc),
+                    "lock_unsealed": False,
+                }
+            self._state(
+                batch_id,
+                job_id,
+                "DIAGNOSED",
+                generation_id=generation_id,
+                confusion_graph=confusion_graph,
+            )
         quantization = None
         inference_config = self.config.get("inference", {})
         tensorrt_config = self.config.get("tensorrt_backend", {})
@@ -351,14 +442,14 @@ class IncrementalLifecycle:
                         rejection_reason="deployment_gates_failed")
             return {
                 "status": "REJECTED", "generation": registered,
-                "quantization": quantization, "recheck": recheck,
+                "quantization": quantization, "confusion_graph": confusion_graph, "recheck": recheck,
             }
         self._state(batch_id, job_id, "ACCEPTED", generation_id=generation_id,
                     recheck_manifest=recheck["manifest"], recheck=recheck)
         if not bool(self.config["generation"]["auto_promote"]):
             return {
                 "status": "ACCEPTED", "generation": registered,
-                "quantization": quantization, "recheck": recheck,
+                "quantization": quantization, "confusion_graph": confusion_graph, "recheck": recheck,
             }
         self._state(batch_id, job_id, "SHADOW_LOADING", generation_id=generation_id)
         failed_stage = "shadow_load"
@@ -383,6 +474,7 @@ class IncrementalLifecycle:
                 "status": "ROLLED_BACK",
                 "generation": registered,
                 "quantization": quantization,
+                "confusion_graph": confusion_graph,
                 "recheck": recheck,
                 "failed_stage": failed_stage,
                 "error": str(exc),
@@ -392,5 +484,6 @@ class IncrementalLifecycle:
                     promotion=promotion, accepted_lineage=rel_path(accepted_lineage) if accepted_lineage else None)
         return {
             "status": "PROMOTED", "generation": registered,
-            "quantization": quantization, "recheck": recheck, "promotion": promotion,
+            "quantization": quantization, "confusion_graph": confusion_graph,
+            "recheck": recheck, "promotion": promotion,
         }

@@ -118,7 +118,9 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         candidate_id = str(generation_registry["channels"]["candidate"])
         production = generation_registry["generations_by_id"][production_id]
         candidate = generation_registry["generations_by_id"][candidate_id]
-        production_models = set(production["class_owners"].values())
+        production_models = set(
+            production.get("model_members") or production["class_owners"].values()
+        )
         production_experts = [
             generation_registry["models_by_id"][model_id]
             for model_id in production_models
@@ -130,7 +132,9 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             errors.append("candidate_generation_prematurely_active")
         if any(
             not generation_registry["models_by_id"][model_id]["hash_valid"]
-            for model_id in set(candidate["class_owners"].values()) | production_models
+            for model_id in set(
+                candidate.get("model_members") or candidate["class_owners"].values()
+            ) | production_models
         ):
             errors.append("generation_model_hash_mismatch")
         generation_summary = {

@@ -145,13 +145,37 @@ generation:
   calibrated_threshold: 0.63
   auto_promote: true
   shadow_smoke_images: 1
-  acceptance:
-    min_base_map50: 0.80
-    min_new_map50: 0.60
-    min_krr: 0.95
-    min_combined_map50: 0.80
-    min_lock_precision: 0.70
-    max_false_activation_rate: 0.15
+
+gates:
+  official_hard:
+    base_map50_min: 0.80
+    new_map50_min: 0.60
+    krr_min: 0.95
+    old_data_overlap_max: 0
+  advisory:
+    cumulative_map50_min: 0.80
+    lock_precision_min: 0.70
+    false_activation_rate_max: 0.15
+    latency_proxy_ms_max: 33.3
+
+incremental_guardian:
+  enabled: true
+  dynamic_confusion:
+    enabled: true
+    match_iou: 0.50
+    min_support: 1
+    specialist_deficit_padding: 0.02
+    specialist_deficit_cap: 0.25
+  recovery_actions:
+    DATA_COMPLIANCE_FAILED: [block_training, rebuild_lineage_audit]
+    OLD_DATA_LEAKAGE: [block_training, isolate_incremental_view]
+    BASE_FULL_SCORE_NOT_REACHED: [keep_parent_generation, review_base_evidence]
+    NEW_KNOWLEDGE_UNDERFIT: [audit_sample_quality, rebalance_incremental_classes, retry_training_on_dev]
+    KNOWLEDGE_RETENTION_REGRESSION: [restore_class_owners, enable_teacher_consistency, rebuild_fusion_policy]
+    CROSS_CLASS_CONFLICT_RISK: [learn_confusion_graph, replay_dev_fusion, shadow_compare]
+    LOW_DEPLOYMENT_PRECISION: [recalibrate_per_class_thresholds]
+    FALSE_ACTIVATION_RISK: [recalibrate_per_class_thresholds, strengthen_conflict_arbitration]
+    LATENCY_OPTIMIZATION_REQUIRED: [reduce_specialist_budget, enable_batch_inference, evaluate_quantization]
 
 native_backend:
   library: build/native/libagile_agent_tensorrt.so

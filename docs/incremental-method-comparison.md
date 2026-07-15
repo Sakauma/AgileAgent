@@ -46,11 +46,11 @@ reports/incremental_method_comparison/<run_id>/<protocol>/
 runs/detect/incremental_method_comparison/<run_id>/<protocol>/
 ```
 
-统一输出为 `comparison.json`、`comparison.csv` 和 `comparison.md`。只有同时满足以下门禁的方法才可成为候选：
+统一输出为 `comparison.json`、`comparison.csv` 和 `comparison.md`。New-mAP50、KRR、数据合规和资产完整性是候选硬门禁，其余指标用于方法排序和风险说明：
 
 - New-mAP50 不低于 `0.60`；
 - KRR 不低于 `0.95`；
-- 四类 mAP50 不低于 `0.80`；
+- 四类 mAP50 以 `0.80` 为内部观察目标，不作为赛题独立硬门禁；
 - dev 校准 precision 不低于 `0.90`；
 - lock precision/recall 不低于 `0.70/0.75`；
 - 图像误激活率不高于 `0.15`；

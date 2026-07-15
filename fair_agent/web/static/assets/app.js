@@ -309,13 +309,23 @@
     const training = batch.training || {};
     const calibration = training.calibration || {};
     const recheck = training.recheck || {};
+    const guardian = recheck.guardian_assessment || {};
+    const warningLabels = {
+      cumulative_map50: "累计精度波动",
+      lock_precision: "复核精度风险",
+      false_activation_rate: "误激活风险",
+      latency_proxy_ms: "设备性能待优化",
+      old_prediction_equivalent: "旧类预测存在变化",
+    };
     const thresholdText = Object.entries(calibration.per_class_thresholds || {})
       .map(([id, value]) => `ID ${id}: ${Number(value).toFixed(2)}`).join(" · ") || "待校准";
-    const gateText = recheck.accepted == null ? "待复核" : (recheck.accepted ? "全部通过" : "存在未通过项");
+    const gateText = recheck.accepted == null ? "待复核" : (recheck.accepted ? "满分档通过" : "满分档未通过");
+    const warningText = (recheck.warnings || guardian.warnings || [])
+      .map((name) => warningLabels[name] || name).join("、") || "无";
     [["图像", audit.image_count || 0], ["目标", audit.object_count || 0], ["类别", classNames], ["标签格式", labelFormat],
       ["旧图交集", audit.old_raw_image_count || 0], ["旧标签交集", audit.old_raw_label_count || 0],
       ["旧缓存", audit.old_cache_count || 0], ["合规审计", audit.compliance === "passed" ? "通过" : "未通过"],
-      ["逐类阈值", thresholdText], ["上线门禁", gateText]]
+      ["逐类阈值", thresholdText], ["上线门禁", gateText], ["质量提醒", warningText]]
       .forEach(([label, value]) => metrics.appendChild(metricNode(label, value)));
     renderIncrementalClassEditor(batch, audit);
     $("#injectIncremental").disabled = batch.status !== "AUDITED";

@@ -292,10 +292,15 @@ def test_non_competition_diagnostics_do_not_fail_quantized_candidate() -> None:
             "krr": 1.0,
             "combined_map50": 0.803,
         },
-        config["generation"]["acceptance"],
+        config["gates"]["official_hard"],
         True,
     )
-    assert all(gates.values())
+    assert gates == {
+        "quantized_thresholds_calibrated": True,
+        "base_map50": True,
+        "new_map50": True,
+        "krr": True,
+    }
 
     competition, diagnostics = _performance_assessment(
         {

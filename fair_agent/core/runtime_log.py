@@ -23,6 +23,8 @@ STATE_EVENTS = {
     "INCREMENT_TRAINED": "incremental.training.completed",
     "INCREMENT_FROZEN": "incremental.candidate.frozen",
     "THRESHOLD_CALIBRATED": "incremental.dev_calibration.completed",
+    "DIAGNOSED": "incremental.dev_diagnosis.completed",
+    "RECOVERY_REQUIRED": "incremental.recovery.selected",
     "LOCK_UNSEALED": "incremental.lock.unsealed",
     "EVALUATED": "incremental.lock_recheck.completed",
     "ACCEPTED": "incremental.candidate.accepted",

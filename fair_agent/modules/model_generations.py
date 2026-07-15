@@ -37,6 +37,24 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
         model["calibration_sources"] = {
             int(key): str(value) for key, value in (raw_sources or {}).items()
         }
+        confusion_graph = model.get("confusion_graph")
+        if isinstance(confusion_graph, Mapping):
+            graph_path = resolve_path(confusion_graph.get("path", ""))
+            graph_sha256 = str(confusion_graph.get("sha256") or "")
+            graph_valid = (
+                graph_path.is_file()
+                and len(graph_sha256) == 64
+                and sha256_file(graph_path) == graph_sha256
+            )
+            graph_payload = (
+                json.loads(graph_path.read_text(encoding="utf-8")) if graph_valid else None
+            )
+            model["confusion_graph"] = {
+                **dict(confusion_graph),
+                "resolved_path": graph_path,
+                "hash_valid": graph_valid,
+                "payload": graph_payload,
+            }
         deployments = {}
         for deployment_id, raw_deployment in (model.get("deployments") or {}).items():
             if not isinstance(raw_deployment, Mapping):
@@ -57,24 +75,37 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
             raise ValueError(f"代际类别所有权不完整：{generation['id']}")
         if any(owner not in models for owner in owners.values()):
             raise ValueError(f"代际引用未知模型：{generation['id']}")
+        model_members = list(dict.fromkeys(
+            str(value) for value in (generation.get("model_members") or owners.values())
+        ))
+        if any(model_id not in models for model_id in model_members):
+            raise ValueError(f"代际成员引用未知模型：{generation['id']}")
+        if not set(owners.values()).issubset(model_members):
+            raise ValueError(f"代际类别所有者未进入模型成员集合：{generation['id']}")
+        if any(models[model_id]["role"] == "benchmark_only" for model_id in model_members):
+            raise ValueError(f"benchmark_only模型不得进入运行代际：{generation['id']}")
         for class_id, owner in owners.items():
             if class_id not in models[owner]["owns_classes"]:
                 raise ValueError(f"代际所有者未登记对应类别：{generation['id']}:{class_id}")
-            if models[owner]["role"] == "benchmark_only":
-                raise ValueError(f"benchmark_only模型不得进入运行代际：{generation['id']}")
-            if models[owner]["role"] in {"class_incremental_expert", "target_incremental_expert"} and generation.get("status") == "active":
-                acceptance = models[owner].get("acceptance", {})
+        if generation.get("status") == "active":
+            for model_id in model_members:
+                model = models[model_id]
+                if model["role"] not in {"class_incremental_expert", "target_incremental_expert"}:
+                    continue
+                acceptance = model.get("acceptance", {})
                 if acceptance.get("passed") is not True:
                     raise ValueError(f"未通过部署门禁的增量专家不得进入active代际：{generation['id']}")
-                thresholds = models[owner]["per_class_thresholds"]
-                missing = models[owner]["owns_classes"] - set(thresholds)
+                thresholds = model["per_class_thresholds"]
+                active_owned = model["owns_classes"] & set(owners)
+                missing = active_owned - set(thresholds)
                 invalid = [value for value in thresholds.values() if not 0.01 <= float(value) <= 1.0]
                 if missing or invalid:
-                    raise ValueError(f"active增量专家缺少有效逐类激活阈值：{owner}")
-                missing_sources = models[owner]["owns_classes"] - set(models[owner]["calibration_sources"])
+                    raise ValueError(f"active增量专家缺少有效逐类激活阈值：{model_id}")
+                missing_sources = active_owned - set(model["calibration_sources"])
                 if missing_sources:
-                    raise ValueError(f"active增量专家缺少逐类dev校准证据：{owner}")
+                    raise ValueError(f"active增量专家缺少逐类dev校准证据：{model_id}")
         generation["class_owners"] = owners
+        generation["model_members"] = model_members
         generation["old_class_ids"] = {int(value) for value in generation.get("old_class_ids", [])}
         generation["new_class_ids"] = {int(value) for value in generation.get("new_class_ids", [])}
         generation["updated_class_ids"] = {int(value) for value in generation.get("updated_class_ids", [])}
@@ -101,7 +132,7 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
 def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict[str, Any]:
     generation_id = str(generation_id)
     generation = registry["generations_by_id"][generation_id]
-    model_ids = list(dict.fromkeys(generation["class_owners"].values()))
+    model_ids = list(generation.get("model_members") or dict.fromkeys(generation["class_owners"].values()))
     models = registry["models_by_id"]
     if any(not models[model_id]["hash_valid"] for model_id in model_ids):
         raise ValueError(f"活动代际存在缺失或哈希错误的权重：{generation_id}")
@@ -122,7 +153,7 @@ def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict
             }
         if model["role"] not in {"class_incremental_expert", "target_incremental_expert"}:
             continue
-        owned = sorted(class_id for class_id, owner in generation["class_owners"].items() if owner == model_id)
+        owned = sorted(model["owns_classes"] & set(generation["classes"]))
         if not owned:
             raise ValueError(f"增量专家没有类别所有权：{model_id}")
         thresholds = {class_id: float(model["per_class_thresholds"][class_id]) for class_id in owned}
@@ -143,6 +174,9 @@ def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict
             "new_class": registry["class_map"][first_class] if len(owned) == 1 else "、".join(registry["class_map"][value] for value in owned),
             "global_class_id": first_class if len(owned) == 1 else None,
             "incremental_mode": str(model.get("incremental_mode") or ("class_incremental" if model["role"] == "class_incremental_expert" else "target_incremental")),
+            "independent_class_ids": sorted(
+                int(value) for value in model.get("independent_class_ids", []) if int(value) in owned
+            ),
             "weights": model["resolved_path"],
             "new_map50": float(model.get("metrics", {}).get("new_map50", 0.0)),
             "per_class_metrics": metrics_by_class,
@@ -154,6 +188,16 @@ def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict
             "calibration_source": calibration_sources[first_class] if len(owned) == 1 else None,
             "routing_prior": 1.0,
             "context_prior": {},
+            "confusion_graph": (
+                model.get("confusion_graph", {}).get("payload")
+                if model.get("confusion_graph", {}).get("hash_valid")
+                else {"schema_version": 1, "source_split": "none", "edges": []}
+            ),
+            "confusion_graph_source": (
+                rel_path(model["confusion_graph"]["resolved_path"])
+                if model.get("confusion_graph", {}).get("hash_valid")
+                else None
+            ),
             "evidence_level": "verified",
             "acceptance": "passed" if generation["status"] == "active" else "pending",
         }
@@ -167,6 +211,7 @@ def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict
         "class_names": dict(registry["class_map"]),
         "active_class_ids": sorted(int(value) for value in generation["classes"]),
         "class_owners": dict(generation["class_owners"]),
+        "model_members": list(model_ids),
         "base_class_ids": sorted(base["owns_classes"]),
         "base_local_to_global": dict(base["local_to_global"]),
         "protocols": protocols,

@@ -15,6 +15,11 @@ from PIL import Image
 from fair_agent.core.config import config_sha256, inference_backend_options, rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
 from fair_agent.core.runtime_log import event_log_from_config
+from fair_agent.modules.incremental_guardian import (
+    assess_incremental_candidate,
+    data_overlap_count,
+    learn_confusion_graph,
+)
 from fair_agent.modules.model_generations import generation_settings, load_generation_registry
 from fair_agent.modules.strict_incremental import evaluate_ap50, precision_recall, retention_metrics
 
@@ -84,10 +89,28 @@ def register_trained_candidate(
     registry = _raw_registry(registry_path)
     parent_id = str(registry["channels"]["production"])
     generations = {str(item["id"]): item for item in registry["generations"]}
+    models = {str(item["id"]): item for item in registry["models"]}
     parent = generations[parent_id]
     bindings = list(batch_manifest.get("audit", {}).get("class_bindings") or [])
     if not bindings:
         raise ValueError("增量批次缺少冻结的类别绑定。")
+    audit = dict(batch_manifest.get("audit") or {})
+    data_compliance = {
+        "compliance": audit.get("compliance"),
+        "lineage_evidence": audit.get("lineage_evidence"),
+        "lineage_catalog_hashes": list(audit.get("lineage_catalog_hashes") or []),
+        "old_raw_image_count": int(audit.get("old_raw_image_count", 0) or 0),
+        "old_raw_label_count": int(audit.get("old_raw_label_count", 0) or 0),
+        "old_cache_count": int(audit.get("old_cache_count", 0) or 0),
+        "unverified_cache_count": int(audit.get("unverified_cache_count", 0) or 0),
+    }
+    overlap_limit = int(config["gates"]["official_hard"]["old_data_overlap_max"])
+    if (
+        data_compliance["compliance"] != "passed"
+        or data_compliance["lineage_evidence"] not in {"current", "not_required"}
+        or data_overlap_count(data_compliance) > overlap_limit
+    ):
+        raise ValueError("候选批次未通过增量数据血缘硬门禁。")
     owned_ids = sorted({int(item["global_class_id"]) for item in bindings})
     mode = str(batch_manifest["audit"]["incremental_mode"])
     parent_ids = {int(value) for value in parent["classes"]}
@@ -97,6 +120,13 @@ def register_trained_candidate(
     sources = {int(key): str(value) for key, value in calibration["calibration_sources"].items()}
     if set(owned_ids) != set(thresholds) or set(owned_ids) != set(sources):
         raise ValueError("逐类阈值、校准证据与候选类别集合不一致。")
+    if str(candidate_manifest.get("parent_generation_id") or "") != parent_id:
+        raise ValueError("候选训练记录的父代际与当前production不一致。")
+    if candidate_manifest.get("frozen_source_unchanged") is not True or (
+        candidate_manifest.get("initial_weight_sha256")
+        != candidate_manifest.get("initial_weight_sha256_after")
+    ):
+        raise ValueError("候选训练未证明初始化权重保持冻结。")
     best = resolve_path(candidate_manifest["best_weight"])
     if not best.is_file() or sha256_file(best) != str(candidate_manifest["best_weight_sha256"]):
         raise ValueError("候选权重缺失或哈希不一致。")
@@ -134,12 +164,12 @@ def register_trained_candidate(
             "per_class": per_class_metrics,
         },
         "dataset_fingerprint": str(batch_manifest["injection"]["dataset_fingerprint"]),
+        "data_compliance": data_compliance,
+        "parent_model_id": candidate_manifest.get("parent_model_id"),
+        "initial_weight": candidate_manifest.get("initial_weight"),
+        "initial_weight_sha256": candidate_manifest.get("initial_weight_sha256"),
         "deployment_metrics": {},
-        "acceptance": {
-            "min_lock_precision": float(config["generation"]["acceptance"]["min_lock_precision"]),
-            "max_false_activation_rate": float(config["generation"]["acceptance"]["max_false_activation_rate"]),
-            "passed": False,
-        },
+        "acceptance": {"passed": False},
         "status": "registered_candidate",
     }
     if len(owned_ids) == 1:
@@ -147,8 +177,24 @@ def register_trained_candidate(
         model["activation_threshold"] = thresholds[only]
         model["calibration_source"] = rel_path(resolve_path(sources[only]))
     owners = {str(key): value for key, value in parent["class_owners"].items()}
+    superseded_model_ids = {
+        str(owners[str(class_id)]) for class_id in owned_ids if str(class_id) in owners
+    }
+    independent_class_ids = []
     for class_id in owned_ids:
+        parent_owner = models.get(str(owners.get(str(class_id))))
+        if mode == "class_incremental" or not parent_owner or parent_owner.get("role") != "frozen_base":
+            independent_class_ids.append(class_id)
         owners[str(class_id)] = model_id
+    model["independent_class_ids"] = independent_class_ids
+    model["supersedes_model_ids"] = sorted(superseded_model_ids)
+    active_owner_ids = set(owners.values())
+    members = [
+        str(value)
+        for value in (parent.get("model_members") or parent["class_owners"].values())
+        if str(value) not in superseded_model_ids or str(value) in active_owner_ids
+    ]
+    members = list(dict.fromkeys([*members, model_id]))
     classes = sorted(parent_ids | set(owned_ids))
     generation = {
         "id": generation_id,
@@ -159,9 +205,12 @@ def register_trained_candidate(
         "new_class_ids": owned_ids if mode == "class_incremental" else [],
         "updated_class_ids": owned_ids if mode == "target_incremental" else [],
         "class_owners": owners,
+        "model_members": members,
+        "superseded_model_ids": sorted(superseded_model_ids - active_owner_ids),
         "status": "registered_candidate",
         "incremental_mode": mode,
         "dataset_fingerprint": str(batch_manifest["injection"]["dataset_fingerprint"]),
+        "data_compliance": data_compliance,
         "lineage_batch_id": batch_id,
         "evaluation_lock": {
             "manifest": rel_path(resolve_path(batch_manifest["injection"]["sealed_lock_manifest"])),
@@ -196,7 +245,9 @@ def register_generation_deployment(
     if generation is None or not generation.get("parent"):
         raise ValueError("只能为已注册的增量候选登记部署资产。")
     parent = generations[str(generation["parent"])]
-    candidate_model_ids = set(generation["class_owners"].values()) - set(parent["class_owners"].values())
+    candidate_model_ids = set(generation.get("model_members") or generation["class_owners"].values()) - set(
+        parent.get("model_members") or parent["class_owners"].values()
+    )
     if len(candidate_model_ids) != 1:
         raise ValueError("一个增量批次必须对应一个可部署的多类专家。")
     model_id = next(iter(candidate_model_ids))
@@ -285,6 +336,10 @@ def _read_ground_truth(images: Sequence[Path], local_to_global: Mapping[int, int
         with Image.open(image) as source:
             width, height = source.size
         label = image.with_suffix(".txt")
+        if not label.is_file() and "images" in image.parts:
+            parts = list(image.parts)
+            parts[len(parts) - 1 - parts[::-1].index("images")] = "labels"
+            label = Path(*parts).with_suffix(".txt")
         for line in label.read_text(encoding="utf-8").splitlines():
             fields = line.split()
             if len(fields) != 5:
@@ -317,6 +372,32 @@ def _candidate_lock(generation: Mapping[str, Any]) -> tuple[list[Path], Dict[int
     return images, {int(key): int(value) for key, value in lock.get("local_to_global", {}).items()}
 
 
+def _generation_model_ids(generation: Mapping[str, Any]) -> list[str]:
+    return list(dict.fromkeys(
+        str(value) for value in (generation.get("model_members") or generation["class_owners"].values())
+    ))
+
+
+def _incremental_lock_chain(
+    registry: Mapping[str, Any], generation_id: str,
+) -> list[Dict[str, Any]]:
+    generations = registry["generations_by_id"]
+    chain = []
+    cursor: str | None = generation_id
+    while cursor:
+        generation = generations[cursor]
+        if isinstance(generation.get("evaluation_lock"), Mapping):
+            images, mapping = _candidate_lock(generation)
+            chain.append({
+                "generation_id": cursor,
+                "images": images,
+                "local_to_global": mapping,
+            })
+        cursor = str(generation.get("parent")) if generation.get("parent") else None
+    chain.reverse()
+    return chain
+
+
 def _run_engine(engine: Any, image_paths: Sequence[Path], config: Mapping[str, Any]) -> list[Dict[str, Any]]:
     batch_size = int(config["inference"]["batch_size"])
     results = []
@@ -328,6 +409,92 @@ def _run_engine(engine: Any, image_paths: Sequence[Path], config: Mapping[str, A
                 items.append((source.convert("RGB"), path.name, None))
         results.extend(engine.predict_batch(items, float(config["inference"]["confidence_min"]), "auto"))
     return results
+
+
+def build_candidate_confusion_graph(
+    config: Mapping[str, Any],
+    batch_dir: Path,
+    candidate_id: str,
+    calibration: Mapping[str, Any],
+) -> Dict[str, Any]:
+    guardian = config["incremental_guardian"]
+    settings = guardian["dynamic_confusion"]
+    registry_path = active_generation_registry(config)
+    registry = load_generation_registry(registry_path)
+    generation = registry["generations_by_id"][candidate_id]
+    parent_id = str(generation["parent"])
+    focus_ids = sorted(
+        int(value)
+        for value in (generation.get("new_class_ids") or generation.get("updated_class_ids") or [])
+    )
+    images = sorted(path for path in (batch_dir / "prepared" / "images" / "val").glob("*") if path.is_file())
+    if not images or not focus_ids:
+        raise ValueError("候选dev或增量类别为空，无法生成动态混淆图。")
+    candidate_model_ids = set(_generation_model_ids(generation)) - set(
+        _generation_model_ids(registry["generations_by_id"][parent_id])
+    )
+    if len(candidate_model_ids) != 1:
+        raise ValueError("动态混淆图要求每批次恰好一个多类专家。")
+    model_id = next(iter(candidate_model_ids))
+    local_to_global = registry["models_by_id"][model_id]["local_to_global"]
+    specialist_path = resolve_path(calibration["predictions"])
+    if not specialist_path.is_file() or sha256_file(specialist_path) != calibration["predictions_sha256"]:
+        raise ValueError("增量dev逐框预测缺失或哈希不一致。")
+    specialist_predictions = [
+        json.loads(line)
+        for line in specialist_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    parent_results = _run_engine(_engine(config, registry, parent_id), images, config)
+    base_predictions = _prediction_rows(parent_results)
+    ground_truth = _read_ground_truth(images, local_to_global)
+    if bool(settings["enabled"]):
+        graph = learn_confusion_graph(
+            base_predictions,
+            specialist_predictions,
+            ground_truth,
+            focus_ids,
+            settings,
+        )
+    else:
+        graph = {
+            "schema_version": 1,
+            "source_split": "incremental_dev_only",
+            "focus_class_ids": focus_ids,
+            "edges": [],
+            "hard_scene_gate": False,
+            "disabled": True,
+        }
+    graph.update({
+        "candidate_generation_id": candidate_id,
+        "parent_generation_id": parent_id,
+        "dev_image_count": len(images),
+        "base_prediction_count": len(base_predictions),
+        "specialist_prediction_count": len(specialist_predictions),
+        "ground_truth_count": len(ground_truth),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    graph_path = batch_dir / "calibration" / f"{candidate_id}-confusion_graph.json"
+    graph_path.write_text(json.dumps(graph, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    graph_record = {
+        "path": rel_path(graph_path),
+        "sha256": sha256_file(graph_path),
+        "source_split": "incremental_dev_only",
+        "edge_count": len(graph["edges"]),
+    }
+    raw = _raw_registry(registry_path)
+    raw_models = {str(item["id"]): item for item in raw["models"]}
+    raw_generations = {str(item["id"]): item for item in raw["generations"]}
+    raw_models[model_id]["confusion_graph"] = graph_record
+    raw_generations[candidate_id]["confusion_graph"] = graph_record
+    _atomic_registry_write(registry_path, raw, f"confusion-graph:{candidate_id}:{graph_record['sha256']}")
+    event_log_from_config(config).append(
+        "incremental.dev_confusion_graph.completed",
+        component="incremental",
+        generation_id=candidate_id,
+        details=graph_record,
+    )
+    return {**graph, **graph_record}
 
 
 def shadow_load_generation(config: Mapping[str, Any], candidate_id: str) -> tuple[Any, Dict[str, Any]]:
@@ -352,48 +519,128 @@ def shadow_load_generation(config: Mapping[str, Any], candidate_id: str) -> tupl
     return engine, summary
 
 
+def _unseal_lock_once(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
+    registry_path = active_generation_registry(config)
+    raw = _raw_registry(registry_path)
+    generations = {str(item["id"]): item for item in raw["generations"]}
+    generation = generations.get(candidate_id)
+    if generation is None:
+        raise ValueError("候选代际不存在。")
+    if isinstance(generation.get("lock_recheck"), Mapping):
+        raise ValueError("候选lock已经解封过；禁止使用同一lock重复复核或调参。")
+    ledger_root = resolve_path(config["generation"]["report_root"]) / "_lock_ledger"
+    ledger_root.mkdir(parents=True, exist_ok=True)
+    marker = ledger_root / f"{candidate_id}.json"
+    clean_config = {key: value for key, value in config.items() if not str(key).startswith("_")}
+    record = {
+        "candidate": candidate_id,
+        "status": "unsealed",
+        "unsealed_at": datetime.now().isoformat(timespec="seconds"),
+        "config_sha256": config_sha256(clean_config),
+    }
+    try:
+        with marker.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+    except FileExistsError as exc:
+        raise ValueError("候选lock解封凭据已存在；禁止重复复核。") from exc
+    record["marker"] = rel_path(marker)
+    record["marker_sha256"] = sha256_file(marker)
+    generation["lock_recheck"] = record
+    _atomic_registry_write(registry_path, raw, f"lock-unsealed:{candidate_id}:{record['marker_sha256']}")
+    return record
+
+
 def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
     registry = ensure_recheck_candidate(config, candidate_id)
     generation = registry["generations_by_id"][candidate_id]
     parent_id = str(generation["parent"])
     old_ids = sorted(int(value) for value in generation["old_class_ids"])
-    new_ids = sorted(int(value) for value in generation["new_class_ids"] or generation.get("updated_class_ids", []))
-    if not old_ids or not new_ids:
+    focus_ids = sorted(int(value) for value in generation["new_class_ids"] or generation.get("updated_class_ids", []))
+    if not old_ids or not focus_ids:
         raise ValueError("候选代际缺少动态新旧类别集合。")
 
     old_split = resolve_path(config["generation"]["recheck_lock_split"])
     old_images = [resolve_path(line.strip()) for line in old_split.read_text(encoding="utf-8").splitlines() if line.strip()]
-    new_images, new_mapping = _candidate_lock(generation)
-    image_paths = list(dict.fromkeys([*old_images, *new_images]))
-    if not image_paths or any(not path.is_file() for path in image_paths):
+    lock_chain = _incremental_lock_chain(registry, candidate_id)
+    if not lock_chain or lock_chain[-1]["generation_id"] != candidate_id:
+        raise ValueError("候选代际缺少当前轮封存lock。")
+    historical_groups = lock_chain[:-1]
+    current_group = lock_chain[-1]
+    historical_images = list(dict.fromkeys([
+        *old_images,
+        *(path for group in historical_groups for path in group["images"]),
+    ]))
+    current_images = list(current_group["images"])
+    image_paths = list(dict.fromkeys([*historical_images, *current_images]))
+    stems = [path.stem for path in image_paths]
+    if len(stems) != len(set(stems)):
+        raise ValueError("累计lock存在重复图像stem。")
+    if not historical_images or not current_images or any(not path.is_file() for path in image_paths):
         raise ValueError("复核lock为空或包含缺失图像。")
-    ground_truth = _read_ground_truth(old_images) + _read_ground_truth(new_images, new_mapping)
+    lock_record = _unseal_lock_once(config, candidate_id)
+    historical_ground_truth = _read_ground_truth(old_images)
+    for group in historical_groups:
+        historical_ground_truth.extend(_read_ground_truth(group["images"], group["local_to_global"]))
+    current_ground_truth = _read_ground_truth(current_images, current_group["local_to_global"])
+    ground_truth = historical_ground_truth + current_ground_truth
     started = time.perf_counter()
     event_log_from_config(config).append(
         "incremental.lock.unsealed", component="incremental", generation_id=candidate_id,
-        details={"old_lock_count": len(old_images), "incremental_lock_count": len(new_images)},
+        details={
+            "base_lock_count": len(old_images),
+            "historical_incremental_lock_count": sum(len(group["images"]) for group in historical_groups),
+            "current_incremental_lock_count": len(current_images),
+            "cumulative_lock_count": len(image_paths),
+            "one_time_lock_record": lock_record,
+        },
     )
-    before_results = _run_engine(_engine(config, registry, parent_id), image_paths, config)
-    after_results = _run_engine(_engine(config, registry, candidate_id), image_paths, config)
+    metric_registry = copy.deepcopy(registry)
+    metric_floor = float(config["inference"]["confidence_min"])
+    for model in metric_registry["models_by_id"].values():
+        if model["role"] in {"class_incremental_expert", "target_incremental_expert"}:
+            model["per_class_thresholds"] = {
+                class_id: metric_floor for class_id in model["per_class_thresholds"]
+            }
+    before_results = _run_engine(_engine(config, metric_registry, parent_id), historical_images, config)
+    after_results = _run_engine(_engine(config, metric_registry, candidate_id), image_paths, config)
     before = _prediction_rows(before_results)
     after = _prediction_rows(after_results)
-    retention = retention_metrics(before, after, ground_truth, old_ids)
-    base_metrics = evaluate_ap50(before, ground_truth, old_ids)
-    new_metrics = evaluate_ap50(after, ground_truth, new_ids)
-    combined_metrics = evaluate_ap50(after, ground_truth, sorted(set(old_ids) | set(new_ids)))
-
-    candidate_model_ids = set(generation["class_owners"].values()) - set(
-        registry["generations_by_id"][parent_id]["class_owners"].values()
+    historical_stems = {path.stem for path in historical_images}
+    current_stems = {path.stem for path in current_images}
+    after_historical = [row for row in after if row["image_id"] in historical_stems]
+    after_current = [row for row in after if row["image_id"] in current_stems]
+    retention = retention_metrics(before, after_historical, historical_ground_truth, old_ids)
+    base_model_ids = [
+        model_id for model_id in _generation_model_ids(generation)
+        if registry["models_by_id"][model_id]["role"] == "frozen_base"
+    ]
+    if len(base_model_ids) != 1:
+        raise ValueError("候选代际必须有且只有一个冻结基础模型。")
+    base_class_ids = sorted(registry["models_by_id"][base_model_ids[0]]["owns_classes"])
+    base_stems = {path.stem for path in old_images}
+    base_ground_truth = _read_ground_truth(old_images)
+    base_metrics = evaluate_ap50(
+        [row for row in before if row["image_id"] in base_stems],
+        base_ground_truth,
+        base_class_ids,
     )
+    historical_after_metrics = evaluate_ap50(after_historical, historical_ground_truth, old_ids)
+    new_metrics = evaluate_ap50(after_current, current_ground_truth, focus_ids)
+    combined_metrics = evaluate_ap50(after, ground_truth, sorted(int(value) for value in generation["classes"]))
+
+    parent = registry["generations_by_id"][parent_id]
+    candidate_model_ids = set(_generation_model_ids(generation)) - set(_generation_model_ids(parent))
     models = registry["models_by_id"]
     thresholds: Dict[int, float] = {}
     for model_id in candidate_model_ids:
         thresholds.update(models[model_id]["per_class_thresholds"])
+    if set(focus_ids) - set(thresholds):
+        raise ValueError("当前轮候选专家缺少逐类阈值。")
     per_class = {}
     false_activation_rates = []
     precisions = []
-    for class_id in new_ids:
-        deployment = precision_recall(after, ground_truth, class_id, thresholds[class_id])
+    for class_id in focus_ids:
+        deployment = precision_recall(after_current, current_ground_truth, class_id, thresholds[class_id])
         positives = {row["image_id"] for row in ground_truth if int(row["class_id"]) == class_id}
         negatives = {path.stem for path in image_paths if path.stem not in positives}
         false_images = {
@@ -402,7 +649,7 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
             and float(row["confidence"]) >= thresholds[class_id]
         }
         false_rate = len(false_images) / len(negatives) if negatives else 0.0
-        class_map = evaluate_ap50(after, ground_truth, [class_id])["map50"]
+        class_map = evaluate_ap50(after_current, current_ground_truth, [class_id])["map50"]
         per_class[str(class_id)] = {
             "map50": float(class_map), "precision": float(deployment["precision"]),
             "recall": float(deployment["recall"]), "false_activation_rate": float(false_rate),
@@ -410,8 +657,13 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         }
         false_activation_rates.append(false_rate)
         precisions.append(float(deployment["precision"]))
+    cumulative_per_class = {
+        str(class_id): float(evaluate_ap50(after, ground_truth, [class_id])["map50"])
+        for class_id in sorted(int(value) for value in generation["classes"])
+    }
     metrics = {
         "base_map50": float(base_metrics["map50"]),
+        "historical_old_map50_after": float(historical_after_metrics["map50"]),
         "new_map50": float(new_metrics["map50"]),
         "krr": float(retention["krr"]),
         "combined_map50": float(combined_metrics["map50"]),
@@ -419,18 +671,33 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         "false_activation_rate": max(false_activation_rates),
         "old_prediction_equivalent": bool(retention["old_prediction_equivalent"]),
         "per_class": per_class,
+        "cumulative_per_class": cumulative_per_class,
         "image_count": len(image_paths),
+        "historical_image_count": len(historical_images),
+        "current_image_count": len(current_images),
+        "specialist_count": sum(
+            1 for model_id in _generation_model_ids(generation)
+            if models[model_id]["role"] in {"class_incremental_expert", "target_incremental_expert"}
+        ),
+        "mean_inference_ms": (
+            sum(float(item.get("inference_ms", 0.0)) for item in after_results) / len(after_results)
+        ),
     }
-    gates_cfg = config["generation"]["acceptance"]
+    assessment = assess_incremental_candidate(
+        metrics,
+        generation.get("data_compliance") or {},
+        config["gates"],
+        config["incremental_guardian"],
+    )
     gates = {
-        "base_map50": metrics["base_map50"] >= float(gates_cfg["min_base_map50"]),
-        "new_map50": metrics["new_map50"] >= float(gates_cfg["min_new_map50"]),
-        "krr": metrics["krr"] >= float(gates_cfg["min_krr"]),
-        "combined_map50": metrics["combined_map50"] >= float(gates_cfg["min_combined_map50"]),
+        name: bool(result["passed"])
+        for name, result in assessment["official_hard"].items()
     }
     diagnostic_checks = {
-        "lock_precision": metrics["lock_precision"] >= float(gates_cfg["min_lock_precision"]),
-        "false_activation_rate": metrics["false_activation_rate"] <= float(gates_cfg["max_false_activation_rate"]),
+        **{
+            name: bool(result["passed"])
+            for name, result in assessment["advisory"].items()
+        },
         "old_prediction_equivalent": metrics["old_prediction_equivalent"],
     }
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -450,7 +717,7 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         "registry_sha256": sha256_file(registry_path),
         "weights": {
             model_id: registry["models_by_id"][model_id]["sha256"]
-            for model_id in set(generation["class_owners"].values())
+            for model_id in _generation_model_ids(generation)
         },
         "deployments": {
             model_id: {
@@ -462,15 +729,37 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
                 }
                 for deployment_id, deployment in registry["models_by_id"][model_id].get("deployments", {}).items()
             }
-            for model_id in set(generation["class_owners"].values())
+            for model_id in _generation_model_ids(generation)
         },
-        "old_class_ids": old_ids, "new_class_ids": new_ids,
+        "model_members": _generation_model_ids(generation),
+        "metric_confidence_floor": metric_floor,
+        "old_class_ids": old_ids, "focus_class_ids": focus_ids,
+        "base_class_ids": base_class_ids,
+        "lock_groups": {
+            "base": [rel_path(path) for path in old_images],
+            "historical_incremental": [
+                {
+                    "generation_id": group["generation_id"],
+                    "images": [rel_path(path) for path in group["images"]],
+                }
+                for group in historical_groups
+            ],
+            "current": {
+                "generation_id": current_group["generation_id"],
+                "images": [rel_path(path) for path in current_images],
+            },
+        },
+        "one_time_lock_record": lock_record,
         "thresholds": {str(key): value for key, value in thresholds.items()},
         "metrics": metrics,
         "gates": gates,
         "diagnostic_checks": diagnostic_checks,
-        "warnings": [name for name, passed in diagnostic_checks.items() if not passed],
-        "accepted": all(gates.values()),
+        "guardian_assessment": assessment,
+        "warnings": list(dict.fromkeys([
+            *assessment["warnings"],
+            *(["old_prediction_equivalent"] if not metrics["old_prediction_equivalent"] else []),
+        ])),
+        "accepted": bool(assessment["accepted"]),
         "predictions_before": rel_path(before_path), "predictions_before_sha256": sha256_file(before_path),
         "predictions_after": rel_path(after_path), "predictions_after_sha256": sha256_file(after_path),
     }
@@ -520,8 +809,14 @@ def _promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_p
             ):
                 raise ValueError(f"部署校准证据哈希不一致：{model_id}:{deployment_id}")
     parent = generations[str(generation["parent"])]
-    candidate_models = set(generation["class_owners"].values()) - set(parent["class_owners"].values())
+    candidate_models = set(_generation_model_ids(generation)) - set(_generation_model_ids(parent))
     generation["metrics"] = dict(manifest["metrics"])
+    generation["lock_recheck"] = {
+        **dict(generation.get("lock_recheck") or {}),
+        "status": "completed",
+        "manifest": rel_path(path),
+        "manifest_sha256": sha256_file(path),
+    }
     generation["acceptance"] = {"core_metrics_passed": True, "deployment_recheck_passed": True}
     generation["status"] = "active"
     for model_id in candidate_models:

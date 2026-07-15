@@ -10,6 +10,7 @@
 | 数据视图生成 | `incremental.data_view.generated` | `batch.yaml`、`dataset.yaml` 及其 SHA256、train/val 数量 |
 | 增量训练 | `incremental.training.started/completed/failed` | argv、GPU、任务号、返回码、耗时、训练日志和候选权重证据 |
 | dev 阈值校准 | `incremental.dev_calibration.completed` | dev-only 来源、阈值、precision、校准文件及 SHA256 |
+| dev 诊断与恢复 | `incremental.dev_diagnosis.completed`、`incremental.recovery.selected` | 动态混淆图、诊断码、候选恢复动作及 lock 未解封断言 |
 | INT8 PTQ | `incremental.quantization.started/completed` | train/dev代表样本manifest、校准缓存指纹、engine SHA256、lock未读取断言 |
 | lock 复核 | `incremental.lock.unsealed`、`incremental.lock_recheck.completed` | lock split 哈希、解封时间、mAP50、KRR、precision 和误激活率 |
 | generation 注册 | `generation.registered` | 父代际、类别所有者、模型与阈值、注册表修改前后哈希 |

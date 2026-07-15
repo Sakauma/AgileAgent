@@ -22,6 +22,7 @@ Agent 会拒绝路径穿越、符号链接、解压容量超限、重复路径�
 ```text
 AUDITED -> INJECTED -> TRAINING -> TRAINED_CANDIDATE
 -> CALIBRATING -> CALIBRATED -> REGISTERED_CANDIDATE
+-> DIAGNOSING -> DIAGNOSED / RECOVERY_REQUIRED
 -> QUANTIZING -> QUANTIZED
 -> LOCK_RECHECKING -> ACCEPTED / REJECTED
 -> SHADOW_LOADING -> PROMOTED / ROLLED_BACK
@@ -32,7 +33,10 @@ AUDITED -> INJECTED -> TRAINING -> TRAINED_CANDIDATE
 - `TRAINING`：后台 GPU 子进程正在执行，标准输出持续写入任务日志。
 - `TRAINED_CANDIDATE`：候选权重已生成并冻结。
 - `CALIBRATING / CALIBRATED`：只使用增量 dev 扫描每个类别的激活阈值。
-- `REGISTERED_CANDIDATE / LOCK_RECHECKING`：注册动态类别所有权并在冻结 lock 上复核。
+- `REGISTERED_CANDIDATE`：登记候选类别所有权，但尚未进入 production。
+- `DIAGNOSING / DIAGNOSED`：仅使用增量 dev 生成动态混淆图，并选择无需 lock 反馈的恢复动作。
+- `RECOVERY_REQUIRED`：dev 未达到满分档候选标准，保持 lock 封存并终止本候选。
+- `LOCK_RECHECKING`：权重、阈值和混淆图冻结后，仅执行一次累计 lock 复核。
 - `QUANTIZING / QUANTIZED`：当设备配置启用 INT8 时，只使用本轮增量 train/dev 自动完成专家 PTQ，engine 与校准指纹登记到候选代际；FP16/CUDA 配置跳过此阶段。
 - `ACCEPTED / REJECTED`：全部上线门禁通过或候选被拒绝。
 - `SHADOW_LOADING / PROMOTED`：候选完成预热并原子切换运行时；失败时保留原 production。
@@ -101,6 +105,8 @@ incremental_workbench:
 
 ## 上线规则
 
-训练任务仅调用受控 Python 模块，不执行用户提供的 shell。候选会自动完成增量 dev 逐类阈值校准、可选 INT8 PTQ、冻结权重与 engine 哈希、完整 lock 评测以及 shadow smoke。数据隔离和资产完整性有效，且赛题基础 mAP50、New-mAP50、KRR、组合 mAP50 与 FPS 达标后自动 promotion；precision、误激活率、P95 和一致性差值仅作为风险诊断。失败候选保留原 production 和完整日志。INT8 校准不读取封存 lock，也不允许使用历史旧类原始样本校准新增专家。
+训练任务仅调用受控 Python 模块，不执行用户提供的 shell。候选会自动完成增量 dev 诊断、动态混淆图、逐类阈值校准、可选 INT8 PTQ、冻结权重与 engine 哈希、完整 lock 评测以及 shadow smoke。数据隔离和资产完整性有效，且基础 mAP50、New-mAP50、KRR 达到赛题满分档后自动 promotion；累计组合 mAP50、precision、误激活率、x86 时延和一致性差值仅作为风险诊断。失败候选保留原 production 和完整日志。INT8 校准不读取封存 lock，也不允许使用历史旧类原始样本校准新增专家。
+
+守护器在增量 dev 上自动统计新类别与旧类别预测的空间混淆，生成随代际冻结的 `confusion_graph.json`。只有图中存在证据的类别对才能触发专家反向抑制基础误检；未知类别对继续采用保守的基础框优先策略。lock 结果不得用于修改混淆边、阈值或训练参数。
 
 CLI 的 `agile-agent incremental run --batch BATCH_ID` 在前台等待完整生命周期结束；`status --run-id` 可读取同一任务、批次状态和审计证据。Web 使用相同实现，但以后台任务方式运行。

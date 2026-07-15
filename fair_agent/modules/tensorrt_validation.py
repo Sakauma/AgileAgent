@@ -101,16 +101,14 @@ def _image_classes(path: Path) -> set[int]:
 
 def _competition_accuracy_gates(
     metrics: Mapping[str, float],
-    acceptance: Mapping[str, float],
+    official_hard: Mapping[str, float],
     thresholds_calibrated: bool,
 ) -> Dict[str, bool]:
     return {
         "quantized_thresholds_calibrated": bool(thresholds_calibrated),
-        "base_map50": float(metrics["base_map50"]) >= float(acceptance["min_base_map50"]),
-        "new_map50": float(metrics["new_map50"]) >= float(acceptance["min_new_map50"]),
-        "krr": float(metrics["krr"]) >= float(acceptance["min_krr"]),
-        "combined_map50": float(metrics["combined_map50"])
-        >= float(acceptance["min_combined_map50"]),
+        "base_map50": float(metrics["base_map50"]) >= float(official_hard["base_map50_min"]),
+        "new_map50": float(metrics["new_map50"]) >= float(official_hard["new_map50_min"]),
+        "krr": float(metrics["krr"]) >= float(official_hard["krr_min"]),
     }
 
 
@@ -132,7 +130,7 @@ def _calibrate_quantized_thresholds(config: Mapping[str, Any]) -> Dict[str, Any]
     registry = load_generation_registry(active_generation_registry(config))
     production_id = str(registry["channels"]["production"])
     generation = registry["generations_by_id"][production_id]
-    model_ids = set(generation["class_owners"].values())
+    model_ids = set(generation.get("model_members") or generation["class_owners"].values())
     threshold_min = float(config["incremental_workbench"]["lifecycle"]["threshold_min"])
     threshold_max = float(config["incremental_workbench"]["lifecycle"]["threshold_max"])
     threshold_step = float(config["incremental_workbench"]["lifecycle"]["threshold_step"])
@@ -257,7 +255,8 @@ def validate_tensorrt(config: Mapping[str, Any], activate: bool = False) -> Dict
         cuda_value = float(evaluate_ap50(cuda_predictions, ground_truth, [class_id])["map50"])
         trt_value = float(evaluate_ap50(trt_predictions, ground_truth, [class_id])["map50"])
         per_class[str(class_id)] = {"cuda_map50": cuda_value, "tensorrt_map50": trt_value, "delta": trt_value - cuda_value}
-    acceptance = config["generation"]["acceptance"]
+    official_hard = config["gates"]["official_hard"]
+    advisory = config["gates"]["advisory"]
     competition_metrics = {
         "base_map50": base_map50,
         "old_map50_after": old_after_map50,
@@ -266,7 +265,7 @@ def validate_tensorrt(config: Mapping[str, Any], activate: bool = False) -> Dict
         "combined_map50": trt_overall,
     }
     competition_gates = _competition_accuracy_gates(
-        competition_metrics, acceptance, bool(threshold_calibration["passed"])
+        competition_metrics, official_hard, bool(threshold_calibration["passed"])
     )
     validation = backend["validation"]
     consistency_checks = {
@@ -321,9 +320,9 @@ def validate_tensorrt(config: Mapping[str, Any], activate: bool = False) -> Dict
             threshold_calibration["target_precision_reached"]
         ),
         "lock_precision": deployment_diagnostics["lock_precision"]
-        >= float(acceptance["min_lock_precision"]),
+        >= float(advisory["lock_precision_min"]),
         "false_activation_rate": deployment_diagnostics["false_activation_rate"]
-        <= float(acceptance["max_false_activation_rate"]),
+        <= float(advisory["false_activation_rate_max"]),
     }
     warnings = [name for name, passed in diagnostic_checks.items() if not passed]
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")

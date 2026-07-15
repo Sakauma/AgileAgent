@@ -81,7 +81,7 @@ agile-agent pipeline --mode execute
 agile-agent --config configs/agent_pipeline.local.yaml tensorrt calibrate --activate
 ```
 
-基础模型从配置的基础 train 划分按类别所有权选择代表样本；增量专家由 Agent 仅从当前批次 train/dev 自动校准。lock 始终只在 engine 冻结后用于最终复核。赛题基础 mAP50、New-mAP50、KRR、组合 mAP50 或 FPS 未通过时不会启用 INT8，也不会自动回退 CPU；CUDA 差值、P95、并发、lock precision 和误激活率作为风险诊断保留。
+基础模型从配置的基础 train 划分按类别所有权选择代表样本；增量专家由 Agent 仅从当前批次 train/dev 自动校准。lock 始终只在 engine 冻结后用于最终复核。基础 mAP50、New-mAP50、KRR 未达到赛题满分档时不会启用 INT8，也不会自动回退 CPU；累计组合 mAP50、CUDA 差值、P95、并发、lock precision 和误激活率作为风险诊断保留。310B FPS 在板端部署阶段单独验收。
 
 ## Ascend 310B 边界
 

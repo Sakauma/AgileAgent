@@ -75,10 +75,10 @@ reports/clean_class_incremental_v2/<run_id>/warship-incremental/
 | lock precision | >= 0.70 |
 | lock recall | >= 0.75 |
 | lock 图像误激活率 | <= 0.15 |
-| 四类组合 mAP50 | >= 0.80 |
+| 四类组合 mAP50 | >= 0.80（内部观察目标，不单独否决） |
 | 自定义评测器误差 | <= 0.005 |
 
-上下文模型必须满足 sensor/scene/joint accuracy `>= 0.90/0.70/0.65`。任一门禁失败都不得切换 Web。
+上下文模型必须满足 sensor/scene/joint accuracy `>= 0.90/0.70/0.65`。基础 mAP50、New-mAP50、KRR、数据合规或资产完整性失败时不得切换 Web；组合 mAP50 和部署诊断未达目标时记录告警。
 
 ## 上线前检查
 

@@ -14,12 +14,14 @@ from PIL import Image
 
 from fair_agent.backends.inference import TensorRTEngineBackend
 from fair_agent.cli import cmd_incremental
-from fair_agent.core.config import rel_path
+from fair_agent.core.config import load_config, rel_path
 from fair_agent.core.hashes import sha256_file
 from fair_agent.core.runtime_log import StructuredEventLog
 from fair_agent.modules.incremental_lifecycle import IncrementalLifecycle
+from fair_agent.modules.incremental_lifecycle import _ground_truth as lifecycle_ground_truth
 from fair_agent.modules.incremental_lineage import _canonical_sha256, audit_incremental_records
 from fair_agent.modules.incremental_workbench import IncrementalBatchStore
+from fair_agent.modules.generation_management import _incremental_lock_chain, _unseal_lock_once
 from fair_agent.modules.model_generations import generation_web_settings, load_generation_registry
 from fair_agent.modules.web_inference import plan_specialist_routes
 from fair_agent.web.app import AtomicEngineProvider
@@ -125,6 +127,37 @@ def test_auto_lock_is_deterministic_stratified_and_not_training_reachable(tmp_pa
     ]
 
 
+def test_known_but_inactive_class_keeps_global_id_and_is_class_incremental(tmp_path: Path) -> None:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("data.yaml", "names:\n  0: warship\n")
+        for index in range(6):
+            archive.writestr(f"images/train/ship_{index}.png", _png((0, index, 0)))
+            archive.writestr(
+                f"labels/train/ship_{index}.txt", "0 0.5 0.5 0.2 0.2\n"
+            )
+    store = IncrementalBatchStore(
+        _store_settings(tmp_path),
+        StructuredEventLog(tmp_path / "logs", 1_000_000, 2),
+        {0: "soldier", 1: "small_aircraft", 3: "tank"},
+        {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"},
+    )
+    manifest = store.create("warship.zip", output.getvalue())
+    assert manifest["audit"]["incremental_mode"] == "class_incremental"
+    assert manifest["audit"]["local_to_global"] == {"0": 2}
+
+
+def test_incremental_ground_truth_resolves_sibling_label_directory(tmp_path: Path) -> None:
+    image = tmp_path / "prepared" / "images" / "val" / "sample.png"
+    label = tmp_path / "prepared" / "labels" / "val" / "sample.txt"
+    image.parent.mkdir(parents=True)
+    label.parent.mkdir(parents=True)
+    Image.new("RGB", (100, 80)).save(image)
+    label.write_text("0 0.5 0.5 0.2 0.25\n", encoding="utf-8")
+    rows = lifecycle_ground_truth([image], {0: 2})
+    assert rows == [{"image_id": "sample", "class_id": 2, "xyxy": [40.0, 30.0, 60.0, 50.0]}]
+
+
 def test_generation_schema_supports_one_multi_class_expert(tmp_path: Path) -> None:
     payload = json.loads(Path("models/generations.json").read_text(encoding="utf-8"))
     payload = deepcopy(payload)
@@ -152,6 +185,116 @@ def test_generation_schema_supports_one_multi_class_expert(tmp_path: Path) -> No
     assert [row["id"] for row in eligible] == ["incremental_detector"]
     assert len(executed) == 1
     assert skipped == []
+
+
+def test_generation_settings_loads_hashed_confusion_graph(tmp_path: Path) -> None:
+    payload = deepcopy(json.loads(Path("models/generations.json").read_text(encoding="utf-8")))
+    graph = tmp_path / "confusion_graph.json"
+    graph.write_text(json.dumps({
+        "schema_version": 1,
+        "source_split": "incremental_dev_only",
+        "edges": [{
+            "new_class_id": 2,
+            "confused_old_class_id": 1,
+            "support": 2,
+            "iou_threshold": 0.5,
+            "max_specialist_deficit": 0.1,
+        }],
+    }), encoding="utf-8")
+    expert = next(item for item in payload["models"] if item["id"] == "incremental_detector")
+    expert["confusion_graph"] = {
+        "path": str(graph),
+        "sha256": sha256_file(graph),
+        "source_split": "incremental_dev_only",
+        "edge_count": 1,
+    }
+    path = tmp_path / "generations.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    protocol = generation_web_settings(load_generation_registry(path))["protocols"]["incremental_detector"]
+    assert protocol["confusion_graph"]["edges"][0]["confused_old_class_id"] == 1
+    assert protocol["confusion_graph_source"] == rel_path(graph)
+
+
+def test_generation_replaces_same_class_runtime_owner_but_keeps_parent_for_rollback(tmp_path: Path) -> None:
+    payload = deepcopy(json.loads(Path("models/generations.json").read_text(encoding="utf-8")))
+    target = deepcopy(next(item for item in payload["models"] if item["id"] == "incremental_detector"))
+    target.update({
+        "id": "incremental_detector_round_02",
+        "display_name": "增量检测器（第2轮）",
+        "role": "target_incremental_expert",
+        "incremental_mode": "target_incremental",
+        "independent_class_ids": [2],
+    })
+    payload["models"].append(target)
+    parent = next(
+        item for item in payload["generations"]
+        if item["id"] == "incremental_detection_generation"
+    )
+    parent["model_members"] = ["three_class_base_detector", "incremental_detector"]
+    generation = deepcopy(parent)
+    generation.update({
+        "id": "incremental_detection_generation_round_02",
+        "parent": parent["id"],
+        "old_class_ids": [0, 1, 2, 3],
+        "new_class_ids": [],
+        "updated_class_ids": [2],
+        "class_owners": {**parent["class_owners"], "2": target["id"]},
+        "model_members": ["three_class_base_detector", target["id"]],
+        "superseded_model_ids": ["incremental_detector"],
+    })
+    payload["generations"].append(generation)
+    payload["channels"]["production"] = generation["id"]
+    payload["channels"]["candidate"] = generation["id"]
+    path = tmp_path / "generations.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    settings = generation_web_settings(load_generation_registry(path))
+    assert settings["model_members"] == generation["model_members"]
+    assert set(settings["protocols"]) == {target["id"]}
+    eligible, executed, skipped = plan_specialist_routes(
+        settings["protocols"], [], {}, settings["base_class_ids"], 4, 0.7, 0.3, 0.5, 0.5
+    )
+    assert [row["id"] for row in eligible] == [target["id"]]
+    assert len(executed) == 1
+    assert skipped == []
+
+
+def test_incremental_lock_chain_accumulates_all_ancestor_rounds(monkeypatch) -> None:
+    generations = {
+        "g0": {"id": "g0", "parent": None},
+        "g1": {"id": "g1", "parent": "g0", "evaluation_lock": {"round": 1}},
+        "g2": {"id": "g2", "parent": "g1", "evaluation_lock": {"round": 2}},
+        "g3": {"id": "g3", "parent": "g2", "evaluation_lock": {"round": 3}},
+        "g4": {"id": "g4", "parent": "g3", "evaluation_lock": {"round": 4}},
+    }
+    monkeypatch.setattr(
+        "fair_agent.modules.generation_management._candidate_lock",
+        lambda generation: ([Path(f"round-{generation['evaluation_lock']['round']}.png")], {0: 2}),
+    )
+    chain = _incremental_lock_chain({"generations_by_id": generations}, "g4")
+    assert [item["generation_id"] for item in chain] == ["g1", "g2", "g3", "g4"]
+    assert [item["images"][0].stem for item in chain] == ["round-1", "round-2", "round-3", "round-4"]
+
+
+def test_lock_recheck_can_only_be_unsealed_once(tmp_path: Path) -> None:
+    registry_path = tmp_path / "generations.json"
+    registry_path.write_text(
+        Path("models/generations.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    config = deepcopy(load_config())
+    config["generation"]["registry"] = str(registry_path)
+    config["generation"]["runtime_registry"] = str(registry_path)
+    config["generation"]["report_root"] = str(tmp_path / "rechecks")
+    config["logging"]["root"] = str(tmp_path / "logs")
+    first = _unseal_lock_once(config, "incremental_detection_generation")
+    assert first["status"] == "unsealed"
+    stored = json.loads(registry_path.read_text(encoding="utf-8"))
+    generation = next(
+        row for row in stored["generations"] if row["id"] == "incremental_detection_generation"
+    )
+    assert generation["lock_recheck"]["marker_sha256"] == first["marker_sha256"]
+    with pytest.raises(ValueError, match="已经解封过"):
+        _unseal_lock_once(config, "incremental_detection_generation")
 
 
 class _LifecycleStore:

@@ -14,6 +14,8 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, TypeV
 
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
+from fair_agent.modules.incremental_guardian import confusion_edge
+
 
 CLASS_NAMES = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
 SENSOR_LABELS = {"ir": "红外", "sar": "SAR"}
@@ -232,6 +234,10 @@ def protocol_thresholds(protocol: Mapping[str, Any]) -> Dict[int, float]:
     return {}
 
 
+def protocol_independent_class_ids(protocol: Mapping[str, Any]) -> set[int]:
+    return {int(value) for value in protocol.get("independent_class_ids", [])}
+
+
 def remap_base_records(
     records: Iterable[Dict[str, Any]],
     local_to_global: Mapping[int, int],
@@ -343,10 +349,14 @@ def plan_specialist_routes(
             mode_priority = 0
         elif mode == "target_incremental":
             references = [row for row in base_rows if int(row["class_id"]) in set(global_class_ids)]
-            if not references:
+            independent_ids = protocol_independent_class_ids(protocol) & set(global_class_ids)
+            if not references and not independent_ids:
                 skipped.append({"id": protocol_id, "reason": "base_class_not_detected"})
                 continue
-            evidence_score = max(float(row.get("confidence", 0.0)) for row in references)
+            evidence_score = (
+                max(float(row.get("confidence", 0.0)) for row in references)
+                if references else float(protocol.get("routing_prior", default_routing_prior))
+            )
             mode_priority = 1
         else:
             skipped.append({"id": protocol_id, "reason": "unsupported_incremental_mode"})
@@ -401,24 +411,68 @@ def suppress_specialist_conflicts(
     base_confidence: float,
     specialist_margin: float,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Reject specialist boxes that conflict with a confident old-class box."""
+    """Compatibility wrapper for the conservative specialist-only policy."""
+    _base, kept, decisions = arbitrate_cross_class_conflicts(
+        base_records,
+        specialist_records,
+        conflict_iou,
+        base_confidence,
+        specialist_margin,
+        None,
+    )
+    return kept, [row for row in decisions if row["action"] == "reject_specialist"]
+
+
+def arbitrate_cross_class_conflicts(
+    base_records: Iterable[Dict[str, Any]],
+    specialist_records: Iterable[Dict[str, Any]],
+    conflict_iou: float,
+    base_confidence: float,
+    specialist_margin: float,
+    confusion_graph: Mapping[str, Any] | None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Resolve cross-class conflicts using dev evidence and a conservative fallback."""
     base_rows = list(base_records)
     kept: List[Dict[str, Any]] = []
-    rejected: List[Dict[str, Any]] = []
+    decisions: List[Dict[str, Any]] = []
+    suppressed_base_indices: set[int] = set()
     for candidate in specialist_records:
-        conflict = None
-        for base in base_rows:
+        fallback_conflict = None
+        learned_overrides: list[tuple[int, Dict[str, Any]]] = []
+        for index, base in enumerate(base_rows):
             if int(base["class_id"]) == int(candidate["class_id"]):
                 continue
             overlap = box_iou(candidate["xyxy"], base["xyxy"])
             base_score = float(base.get("confidence", 0.0))
             specialist_score = float(candidate.get("confidence", 0.0))
+            edge = confusion_edge(
+                confusion_graph,
+                int(candidate["class_id"]),
+                int(base["class_id"]),
+            )
+            if edge is not None and (
+                overlap >= float(edge["iou_threshold"])
+                and specialist_score + float(edge["max_specialist_deficit"]) >= base_score
+            ):
+                learned_overrides.append((index, {
+                    "action": "suppress_base",
+                    "protocol_id": candidate.get("protocol_id"),
+                    "specialist_class_id": int(candidate["class_id"]),
+                    "base_class_id": int(base["class_id"]),
+                    "iou": round(overlap, 6),
+                    "specialist_confidence": round(specialist_score, 6),
+                    "base_confidence": round(base_score, 6),
+                    "evidence_support": int(edge["support"]),
+                    "reason": "learned_cross_class_confusion",
+                }))
+                continue
             if (
                 overlap >= conflict_iou
                 and base_score >= base_confidence
                 and specialist_score <= base_score + specialist_margin
             ):
-                conflict = {
+                fallback_conflict = {
+                    "action": "reject_specialist",
                     "protocol_id": candidate.get("protocol_id"),
                     "specialist_class_id": int(candidate["class_id"]),
                     "base_class_id": int(base["class_id"]),
@@ -427,12 +481,17 @@ def suppress_specialist_conflicts(
                     "base_confidence": round(base_score, 6),
                     "reason": "cross_class_conflict",
                 }
-                break
-        if conflict is None:
+        if learned_overrides:
+            for index, decision in learned_overrides:
+                suppressed_base_indices.add(index)
+                decisions.append(decision)
+            kept.append(candidate)
+        elif fallback_conflict is None:
             kept.append(candidate)
         else:
-            rejected.append(conflict)
-    return kept, rejected
+            decisions.append(fallback_conflict)
+    base_kept = [row for index, row in enumerate(base_rows) if index not in suppressed_base_indices]
+    return base_kept, kept, decisions
 
 
 def annotate_records(image: Image.Image, records: Iterable[Dict[str, Any]]) -> Image.Image:
@@ -736,7 +795,10 @@ class WebInferenceEngine:
 
         prefetch_ids = [
             protocol_id for protocol_id, protocol in protocol_pool.items()
-            if protocol.get("available") and protocol.get("incremental_mode") == "class_incremental"
+            if protocol.get("available") and (
+                protocol.get("incremental_mode") == "class_incremental"
+                or protocol_independent_class_ids(protocol)
+            )
         ][: self.max_specialists]
         for protocol_id in prefetch_ids:
             protocol = protocol_pool[protocol_id]
@@ -844,30 +906,42 @@ class WebInferenceEngine:
                     item for item in raw_candidates
                     if float(item.get("confidence", 0.0)) >= effective_thresholds[int(item["class_id"])]
                 ]
+                independent_ids = protocol_independent_class_ids(protocol)
                 if protocol.get("incremental_mode") == "class_incremental":
                     candidates = threshold_candidates
                     activation_reason = "通过独立新类置信度门限"
                 else:
                     candidates = []
                     for class_id in class_ids:
-                        candidates.extend(consensus_specialist_records(
-                            base_records_by_image[image_index],
-                            [item for item in threshold_candidates if int(item["class_id"]) == class_id],
-                            class_id,
-                            float(protocol.get("consensus_iou", 0.30)),
-                        ))
-                    activation_reason = "通过基础同类目标与空间一致性检查"
-                candidates, rejected = suppress_specialist_conflicts(
+                        class_candidates = [
+                            item for item in threshold_candidates if int(item["class_id"]) == class_id
+                        ]
+                        if class_id in independent_ids:
+                            candidates.extend(class_candidates)
+                        else:
+                            candidates.extend(consensus_specialist_records(
+                                base_records_by_image[image_index], class_candidates, class_id,
+                                float(protocol.get("consensus_iou", 0.30)),
+                            ))
+                    activation_reason = (
+                        "通过冻结专家链独立置信度门限"
+                        if independent_ids else "通过基础同类目标与空间一致性检查"
+                    )
+                base_records_by_image[image_index], candidates, conflict_decisions = arbitrate_cross_class_conflicts(
                     base_records_by_image[image_index],
                     candidates,
                     self.conflict_iou,
                     self.conflict_base_confidence,
                     self.specialist_margin,
+                    protocol.get("confusion_graph"),
                 )
+                rejected = [
+                    row for row in conflict_decisions if row["action"] == "reject_specialist"
+                ]
                 activated = bool(candidates)
                 activated_class_names = sorted({str(item["class_name"]) for item in candidates})
                 specialists_by_image[image_index].extend(candidates)
-                conflicts_by_image[image_index].extend(rejected)
+                conflicts_by_image[image_index].extend(conflict_decisions)
                 protocol_outputs[image_index].append({
                     "id": str(protocol_id),
                     "class_name": protocol["class_name"],
@@ -881,6 +955,9 @@ class WebInferenceEngine:
                     "raw_candidate_count": len(raw_candidates),
                     "candidate_count": len(candidates),
                     "conflict_suppressed_count": len(rejected),
+                    "base_override_count": sum(
+                        row["action"] == "suppress_base" for row in conflict_decisions
+                    ),
                     "activation_thresholds": {
                         str(key): round(value, 2) for key, value in effective_thresholds.items()
                     },
@@ -1021,7 +1098,10 @@ class WebInferenceEngine:
 
         prefetch_ids = [
             protocol_id for protocol_id, protocol in protocol_pool.items()
-            if protocol.get("available") and protocol.get("incremental_mode") == "class_incremental"
+            if protocol.get("available") and (
+                protocol.get("incremental_mode") == "class_incremental"
+                or protocol_independent_class_ids(protocol)
+            )
         ][: self.max_specialists]
         for protocol_id in prefetch_ids:
             protocol = protocol_pool[protocol_id]
@@ -1116,27 +1196,39 @@ class WebInferenceEngine:
                 item for item in raw_candidates
                 if float(item.get("confidence", 0.0)) >= effective_thresholds[int(item["class_id"])]
             ]
+            independent_ids = protocol_independent_class_ids(protocol)
             if protocol.get("incremental_mode") == "class_incremental":
                 candidates = threshold_candidates
                 activation_reason = "通过独立新类置信度门限"
             else:
                 candidates = []
                 for class_id in class_ids:
-                    candidates.extend(consensus_specialist_records(
-                        base_records,
-                        [item for item in threshold_candidates if int(item["class_id"]) == class_id],
-                        class_id,
-                        float(protocol.get("consensus_iou", 0.30)),
-                    ))
-                activation_reason = "通过基础同类目标与空间一致性检查"
-            candidates, rejected = suppress_specialist_conflicts(
+                    class_candidates = [
+                        item for item in threshold_candidates if int(item["class_id"]) == class_id
+                    ]
+                    if class_id in independent_ids:
+                        candidates.extend(class_candidates)
+                    else:
+                        candidates.extend(consensus_specialist_records(
+                            base_records, class_candidates, class_id,
+                            float(protocol.get("consensus_iou", 0.30)),
+                        ))
+                activation_reason = (
+                    "通过冻结专家链独立置信度门限"
+                    if independent_ids else "通过基础同类目标与空间一致性检查"
+                )
+            base_records, candidates, conflict_decisions = arbitrate_cross_class_conflicts(
                 base_records,
                 candidates,
                 self.conflict_iou,
                 self.conflict_base_confidence,
                 self.specialist_margin,
+                protocol.get("confusion_graph"),
             )
-            conflict_rejections.extend(rejected)
+            rejected = [
+                row for row in conflict_decisions if row["action"] == "reject_specialist"
+            ]
+            conflict_rejections.extend(conflict_decisions)
             activated = bool(candidates)
             activated_class_names = sorted({str(item["class_name"]) for item in candidates})
             if activated:
@@ -1154,6 +1246,9 @@ class WebInferenceEngine:
                 "raw_candidate_count": len(raw_candidates),
                 "candidate_count": len(candidates),
                 "conflict_suppressed_count": len(rejected),
+                "base_override_count": sum(
+                    row["action"] == "suppress_base" for row in conflict_decisions
+                ),
                 "activation_thresholds": {
                     str(key): round(value, 2) for key, value in effective_thresholds.items()
                 },

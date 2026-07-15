@@ -69,7 +69,7 @@ r04/r05 的 final 验证配置只引用 `current_dev.json`，不读取旧类验�
 ```text
 New-mAP50 >= 0.60
 KRR >= 0.95
-四类 mAP50 >= 0.80
+四类 mAP50 >= 0.80（内部观察目标）
 old_raw_image_count = 0
 ```
 

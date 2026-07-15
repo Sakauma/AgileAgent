@@ -56,7 +56,9 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                 production.get("status") == "active"
                 and production.get("acceptance", {}).get("deployment_recheck_passed") is True
             ):
-                owner_ids = set(production.get("class_owners", {}).values())
+                owner_ids = set(
+                    production.get("model_members") or production.get("class_owners", {}).values()
+                )
                 experts = [
                     generations["models_by_id"][str(model_id)]
                     for model_id in owner_ids

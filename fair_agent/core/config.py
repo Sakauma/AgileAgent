@@ -38,7 +38,7 @@ KNOWN_TOP_LEVEL = {
     "storage", "ui", "performance", "native_backend", "tensorrt_backend", "model", "assets", "automation",
     "generation", "submission", "blackboard", "detector", "functional_models", "inputs", "modules",
     "policies", "thresholds", "incremental", "specialist_acceptance", "decision",
-    "logging", "incremental_workbench",
+    "logging", "incremental_workbench", "gates", "incremental_guardian",
 }
 KNOWN_SECTION_KEYS = {
     "runtime": {"mode", "local_python", "default_device", "server_host", "server_port"},
@@ -71,8 +71,10 @@ KNOWN_SECTION_KEYS = {
     },
     "generation": {
         "registry", "runtime_registry", "recheck_lock_split", "report_root", "candidate_id",
-        "calibrated_threshold", "acceptance", "auto_promote", "shadow_smoke_images",
+        "calibrated_threshold", "auto_promote", "shadow_smoke_images",
     },
+    "gates": {"official_hard", "advisory"},
+    "incremental_guardian": {"enabled", "dynamic_confusion", "recovery_actions"},
     "model": {"weights", "expected_sha256"},
     "logging": {"root", "max_file_bytes", "retained_files", "request_bodies"},
     "incremental_workbench": {
@@ -397,12 +399,63 @@ def validate_config(
         errors.append("generation.auto_promote必须为布尔值")
     _number(generation, "shadow_smoke_images", errors, 1, 32)
     _number(generation, "calibrated_threshold", errors, 0.01, 1.0)
-    acceptance = generation.get("acceptance")
-    if not isinstance(acceptance, Mapping):
-        errors.append("generation.acceptance必须是映射")
+    gates = _require_mapping(config, "gates", errors)
+    official_hard = gates.get("official_hard")
+    advisory = gates.get("advisory")
+    if not isinstance(official_hard, Mapping):
+        errors.append("gates.official_hard必须是映射")
     else:
-        for key in ("min_base_map50", "min_new_map50", "min_krr", "min_combined_map50", "min_lock_precision", "max_false_activation_rate"):
-            _number(acceptance, key, errors, 0.0, 1.0)
+        unknown_hard = sorted(set(official_hard) - {
+            "base_map50_min", "new_map50_min", "krr_min", "old_data_overlap_max",
+        })
+        if unknown_hard:
+            errors.append("gates.official_hard包含未知字段：" + ", ".join(unknown_hard))
+        for key in ("base_map50_min", "new_map50_min", "krr_min"):
+            _number(official_hard, key, errors, 0.0, 1.0)
+        _number(official_hard, "old_data_overlap_max", errors, 0.0)
+    if not isinstance(advisory, Mapping):
+        errors.append("gates.advisory必须是映射")
+    else:
+        unknown_advisory = sorted(set(advisory) - {
+            "cumulative_map50_min", "lock_precision_min",
+            "false_activation_rate_max", "latency_proxy_ms_max",
+        })
+        if unknown_advisory:
+            errors.append("gates.advisory包含未知字段：" + ", ".join(unknown_advisory))
+        for key in ("cumulative_map50_min", "lock_precision_min", "false_activation_rate_max"):
+            _number(advisory, key, errors, 0.0, 1.0)
+        _number(advisory, "latency_proxy_ms_max", errors, 0.0)
+
+    guardian = _require_mapping(config, "incremental_guardian", errors)
+    if not isinstance(guardian.get("enabled"), bool):
+        errors.append("incremental_guardian.enabled必须为布尔值")
+    confusion = guardian.get("dynamic_confusion")
+    if not isinstance(confusion, Mapping):
+        errors.append("incremental_guardian.dynamic_confusion必须是映射")
+    else:
+        unknown_confusion = sorted(set(confusion) - {
+            "enabled", "match_iou", "min_support", "specialist_deficit_padding",
+            "specialist_deficit_cap",
+        })
+        if unknown_confusion:
+            errors.append("incremental_guardian.dynamic_confusion包含未知字段：" + ", ".join(unknown_confusion))
+        if not isinstance(confusion.get("enabled"), bool):
+            errors.append("incremental_guardian.dynamic_confusion.enabled必须为布尔值")
+        _number(confusion, "match_iou", errors, 0.01, 1.0)
+        _number(confusion, "min_support", errors, 1.0)
+        _number(confusion, "specialist_deficit_padding", errors, 0.0, 1.0)
+        _number(confusion, "specialist_deficit_cap", errors, 0.0, 1.0)
+    recovery_actions = guardian.get("recovery_actions")
+    if not isinstance(recovery_actions, Mapping) or not recovery_actions:
+        errors.append("incremental_guardian.recovery_actions必须是非空映射")
+    elif any(
+        not isinstance(code, str)
+        or not isinstance(actions, list)
+        or not actions
+        or any(not isinstance(action, str) or not action for action in actions)
+        for code, actions in recovery_actions.items()
+    ):
+        errors.append("incremental_guardian.recovery_actions必须映射到非空动作字符串列表")
 
     native = _require_mapping(config, "native_backend", errors)
     if native.get("precision") not in {"fp16", "fp32", "int8"}:

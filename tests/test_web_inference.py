@@ -25,6 +25,7 @@ from fair_agent.modules.web_inference import (
     remap_base_records,
     consensus_specialist_records,
     suppress_specialist_conflicts,
+    arbitrate_cross_class_conflicts,
     yolo_inference_ms,
     validate_batch_uploads,
     validate_image_bytes,

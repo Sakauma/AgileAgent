@@ -41,7 +41,7 @@ flowchart LR
 | x86 NVIDIA GPU 推理 | 可用 | 默认 PyTorch CUDA 加载模型权重，不提供 CPU 回退 |
 | Web / CLI | 可用 | 支持检测、决策展示、增量数据管理和结构化日志 |
 | 舰船 3+1 类别增量 | 已验证 | 单轮内部 lock-val 证据已通过门禁 |
-| 多轮增量 | 工程接口已预留 | 当前训练适配器只完成单轮实证 |
+| 多轮增量 | 已完成机制验证 | 四批次连续注入完成；2轮晋升、2轮拒绝，拒绝后可继续下一批 |
 | Ascend 310B | 待硬件验证 | 尚无 OM、AscendCL 和真实板端 FPS |
 | 官方隐藏测试提交 | 待赛题信息 | 测试目录和提交格式确认前保持阻塞 |
 
@@ -216,7 +216,7 @@ new_batch.zip
 上传 → 数据血缘审计 → 自动封存lock → GPU训练 → dev逐类校准 → 可选INT8 PTQ → lock复核 → shadow加载 → 受控上线
 ```
 
-生产配置会在缺少显式 lock 时按固定种子和类别组合自动封存20%样本；封存内容不进入训练 YAML。训练完成后，Agent 自动完成逐类阈值校准、动态代际注册、独立 lock 复核和 shadow 预热。数据隔离与资产哈希必须有效，赛题基础 mAP50、New-mAP50、KRR、组合 mAP50 和 FPS 达标后才会原子切换 production；precision、误激活和时延分位数作为风险诊断展示，不参与硬性否决。
+生产配置会在缺少显式 lock 时按固定种子和类别组合自动封存20%样本；封存内容不进入训练 YAML。训练完成后，增量学习守护器自动完成 dev 诊断、动态混淆图、逐类阈值校准、代际注册、独立 lock 复核和 shadow 预热。数据隔离与资产哈希必须有效，基础 mAP50、New-mAP50 和 KRR 必须达到赛题满分档才会原子切换 production。累计组合 mAP50、precision、误激活率和 x86 时延只生成风险告警；310B FPS 由板端部署验收单独判定。
 
 同一批次包含多个新增类别时只训练一个多类增量检测器，并为每个全局类别保存独立阈值。推荐的统一 CLI 入口：
 
@@ -281,6 +281,15 @@ agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run
 
 增量阶段禁止读取旧类原始图像、旧类标签和旧数据缓存特征。lock-val 只在权重与阈值冻结后解封。逐文件哈希、状态机和复现边界见 [舰船 3+1 可复现实验](docs/warship-3plus1-reproducibility.md)。
 
+四批次小样本连续验证使用独立注册表和运行目录，不修改当前 production：
+
+```bash
+python tools/81_validate_multibatch_incremental.py \
+  --config configs/incremental/multibatch_small_sample.yaml
+```
+
+实验依次执行一次类别增量和三次目标增量。每轮均冻结父权重、累计已接收 lock、重新计算 KRR。活动代际对同一类别只加载最新 owner，历史专家保留在父代际用于回滚，避免推理耗时随同类更新次数线性增长。原始实验后两轮曾因误设的组合 mAP50 硬门禁而未晋升；按赛题满分档重新判分后四轮均通过官方增量指标，详情见 [四批次小样本验证](docs/multibatch-small-sample-validation.md)。
+
 ## 开发与验收
 
 ```bash
@@ -293,7 +302,7 @@ python scripts/smoke_models.py
 - `verify_release.py` 校验配置、模型权重和公开证据哈希。
 - `smoke_models.py` 在 GPU 上加载三种功能模型并运行完整自动编排链路。
 
-当前代码基线为 `159 passed`。修改模型、推理后端或依赖后，必须重新执行三项验收。
+当前代码基线为 `191 passed`。修改模型、推理后端或依赖后，必须重新执行三项验收。
 
 ## 项目结构
 
@@ -331,7 +340,7 @@ docs/               # 设计、操作和复现实验文档
 ## 已知限制
 
 - 尚未完成 Ascend 310B 的 OM 转换、AscendCL 集成和真实板端 FPS 验证。
-- 当前只有一轮舰船类别增量的完整指标证据；多轮、多类别状态机和自动回滚已实现，但仍需使用后续真实批次补充连续实证。
+- 已完成四个互斥舰船批次的连续机制验证，四轮均达到基础 mAP50、New-mAP50 与 KRR 满分档；历史实验后两轮未形成连续 production 链，需用新版守护器重新运行后才能作为四轮连续晋升证据。真实未知类别与多类别连续批次仍需赛题新数据验证。
 - Web 与 CLI 均会从训练继续执行到逐类校准、lock复核和受控上线；任一门禁失败时保持原production。
 - TensorRT engine 不随仓库发布；启用该后端前必须在目标设备本地导出并重新完成精度与性能验收。
 - 仓库不包含竞赛数据集、官方测试集或正式提交格式。

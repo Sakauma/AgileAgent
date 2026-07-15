@@ -924,6 +924,7 @@ def create_app(
             class_id: settings["class_names"][class_id]
             for class_id in settings["active_class_ids"]
         },
+        settings["class_names"],
     )
     application.state.event_log = logger
     application.state.incremental_store = store

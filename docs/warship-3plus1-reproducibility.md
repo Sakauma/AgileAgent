@@ -34,9 +34,9 @@ agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run
 
 ## 验收门槛
 
-基础旧类 mAP50、New-mAP50、KRR 和四类组合 mAP50 分别不得低于 0.80、0.60、0.95 和 0.80。基础权重必须零漂移，增量阶段旧图、旧标签和旧缓存必须为 0。阈值只用增量 dev 在 0.01-0.99 扫描，目标 precision 为 0.99；冻结后 lock 只评一次，要求 precision 不低于 0.70、图像误激活率不高于 0.15。
+基础旧类 mAP50、New-mAP50 和 KRR 分别不得低于 0.80、0.60 和 0.95，以赛题满分档作为内部上线门限。基础权重必须零漂移，增量阶段旧图、旧标签和旧缓存必须为 0。四类组合 mAP50、precision 和误激活率作为内部风险观察指标，不单独否决候选。阈值只用增量 dev 在 0.01-0.99 扫描；冻结后 lock 只评一次。
 
-通用增量检测器的舰船类别绑定只依据增量 dev 将阈值冻结为0.63，随后在95张lock-val上通过精度、KRR、组合mAP50、precision与误激活门禁，现已进入“增量检测生产代际”；“基础检测代际”仍保留为回滚点，四类统一模型始终是`benchmark_only`。Ascend 310B、OM转换和板端FPS继续标记为外部硬件阻塞。
+通用增量检测器的舰船类别绑定只依据增量 dev 将阈值冻结为0.63，随后在95张lock-val上达到基础 mAP50、New-mAP50 与 KRR 满分档，现已进入“增量检测生产代际”；组合mAP50、precision与误激活率均保留为部署证据。“基础检测代际”仍是回滚点，四类统一模型始终是`benchmark_only`。Ascend 310B、OM转换和板端FPS继续标记为外部硬件阻塞。
 
 ## 当前实现范围
 

@@ -55,14 +55,14 @@ Agent 会按固定种子选择最多 `int8_calibration.max_images` 张代表图�
 
 ## 上线验收
 
-使用专用门禁命令在同一 lock 上复算基础 mAP50、New-mAP50、KRR、组合 mAP50，并继续记录 CUDA/TensorRT 差值、API 平均延迟、P95、动态批量吞吐和8请求并发：
+使用专用门禁命令在同一 lock 上复算基础 mAP50、New-mAP50、KRR 和累计组合 mAP50，并继续记录 CUDA/TensorRT 差值、API 平均延迟、P95、动态批量吞吐和8请求并发：
 
 ```bash
 "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" \
   tensorrt validate --activate
 ```
 
-`--activate` 的指标硬门禁只采用赛题口径：基础 mAP50、New-mAP50、KRR、组合 mAP50 和 FPS；数据隔离、阈值生成、资产哈希等完整性检查仍属于上线前置条件。CUDA/TensorRT 差值、lock precision、误激活率、API 平均延迟、P95 和并发结果继续写入报告，但仅作为部署风险告警，不否决候选。当前检测器推荐将模块 `0-1` 量化为 INT8，并通过 `mixed_precision.fp16_layer_patterns` 强制模块 `2-23` 保持 FP16。通过后运行：
+`--activate` 的模型准确性硬门禁采用赛题满分档：基础 mAP50、New-mAP50 和 KRR；数据隔离、阈值生成、资产哈希等完整性检查仍属于上线前置条件。组合 mAP50、CUDA/TensorRT 差值、lock precision、误激活率、API 平均延迟、P95 和并发结果继续写入报告，但仅作为部署风险告警。FPS 满分档必须在310B板端部署验收中单独确认。当前检测器推荐将模块 `0-1` 量化为 INT8，并通过 `mixed_precision.fp16_layer_patterns` 强制模块 `2-23` 保持 FP16。通过后运行：
 
 ```bash
 "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" doctor
