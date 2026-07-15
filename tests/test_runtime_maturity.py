@@ -227,7 +227,7 @@ def test_static_release_verification_passes() -> None:
     result = verify_release()
     assert result["status"] == "passed", result["errors"]
     assert isinstance(result["required_assets"], dict)
-    assert len(result["required_assets"]) == 11
+    assert len(result["required_assets"]) == 8
     assert result["functional_models"]["valid"] is True
     assert result["functional_models"]["distinct_function_count"] == 3
     assert result["model_generations"]["production"] == "incremental_detection_generation"

@@ -4,7 +4,7 @@ import argparse
 import json
 
 from fair_agent.core.config import load_config
-from fair_agent.modules.tensorrt_export import export_or_verify_engines
+from fair_agent.modules.tensorrt_export import export_or_verify_engines, write_export_hashes
 
 
 def main() -> int:
@@ -12,7 +12,13 @@ def main() -> int:
     parser.add_argument("--config", default="configs/agent_pipeline.yaml")
     parser.add_argument("--verify-only", action="store_true", help="只校验现有engine，不执行导出。")
     args = parser.parse_args()
-    result = export_or_verify_engines(load_config(args.config), verify_only=args.verify_only)
+    config = load_config(
+        args.config,
+        allow_unverified_tensorrt_hashes=not args.verify_only,
+    )
+    result = export_or_verify_engines(config, verify_only=args.verify_only)
+    if not args.verify_only:
+        result["config_update"] = write_export_hashes(args.config, result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

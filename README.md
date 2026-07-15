@@ -38,7 +38,7 @@ flowchart LR
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| x86 NVIDIA GPU 推理 | 可用 | 默认 TensorRT FP16，不提供 CPU 回退 |
+| x86 NVIDIA GPU 推理 | 可用 | 默认 PyTorch CUDA 加载模型权重，不提供 CPU 回退 |
 | Web / CLI | 可用 | 支持检测、决策展示、增量数据管理和结构化日志 |
 | 舰船 3+1 类别增量 | 已验证 | 单轮内部 lock-val 证据已通过门禁 |
 | 多轮增量 | 工程接口已预留 | 当前训练适配器只完成单轮实证 |
@@ -54,86 +54,29 @@ flowchart LR
 - Python `3.10-3.12`
 - 建议至少 `10 GB` 可用空间
 
-仓库中的 TensorRT engine 使用 TensorRT `10.8.0.43` 构建，并在 RTX 4060 Laptop、计算能力 `8.9` 上验证。其他 TensorRT 版本或 GPU 架构需要重新导出 engine 并更新资产清单。
+仓库只发布可移植的模型权重，不分发与 GPU 架构、TensorRT 版本绑定的 `.engine` 文件。默认配置直接使用 CUDA 版 PyTorch 和 Ultralytics 加载 `.pt` 权重；需要 TensorRT 加速时，在目标设备本地导出并保存在 `runs/engines/`。
 
-<details>
-<summary><strong>在其他 NVIDIA 设备上导出 TensorRT engine</strong></summary>
+版本库只同步源代码、公共配置、文档、训练权重，以及复核模型身份和指标所必需的校准、指标与 manifest。以下可重建产物始终留在本地：数据视图、运行报告、预测结果、设备专用配置、TensorRT/ONNX/OM 文件、原生构建目录和运行缓存。
 
-<br>
+### 可选 TensorRT 加速
 
-TensorRT engine 与 TensorRT 版本、GPU 架构和构建参数绑定。不要直接复用不匹配设备上的 `.engine` 文件，也不要覆盖仓库附带的 4060 发布资产。以下流程使用独立配置和本地输出目录。
+默认 CUDA 后端无需模型转换即可运行。需要 TensorRT 加速时，在部署设备完成以下操作：
 
-1. 准备已经安装 CUDA 版 PyTorch 和项目依赖的 Python 环境。若 `bootstrap_x86.sh` 只在最终 `doctor` 阶段报告 engine 或 GPU 不匹配，依赖通常已经安装完成，可继续使用传入的解释器：
+```bash
+AGENT_PYTHON=/path/to/env/bin/python
+"$AGENT_PYTHON" -m pip install -e ".[workbench,inference,tensorrt,export]"
 
-   ```bash
-   AGENT_PYTHON=/path/to/env/bin/python
-   "$AGENT_PYTHON" -m pip install -e ".[workbench,inference,export,dev]"
-   ```
+PROFILE="configs/agent_pipeline.local.yaml"
+cp configs/agent_pipeline.yaml "$PROFILE"
+```
 
-   上述 `inference` 依赖组会安装本项目验证过的 TensorRT `10.8.0.43`。若必须使用其他 TensorRT 版本，应在独立环境中手动安装与驱动、CUDA 和 PyTorch 兼容的运行时，不要让安装命令重新覆盖它；该组合需要重新完成本文全部门禁后才能作为发布配置。
+在 `$PROFILE` 中填写 GPU 编号、TensorRT 版本和计算能力，将 `inference.backend` 设为 `tensorrt_engine`，然后运行：
 
-2. 查询当前设备和 TensorRT 信息：
+```bash
+./scripts/export_tensorrt_engines.sh "$PROFILE"
+```
 
-   ```bash
-   "$AGENT_PYTHON" - <<'PY'
-   import tensorrt as trt
-   import torch
-
-   device = 0
-   print("TensorRT:", trt.__version__)
-   print("GPU:", torch.cuda.get_device_name(device))
-   print("Compute capability:", ".".join(map(str, torch.cuda.get_device_capability(device))))
-   PY
-   ```
-
-3. 复制一份设备专用配置，不直接修改已验证的默认配置：
-
-   ```bash
-   DEVICE_TAG=my_gpu_trt
-   PROFILE="configs/agent_pipeline.${DEVICE_TAG}.yaml"
-   cp configs/agent_pipeline.yaml "$PROFILE"
-   ```
-
-4. 编辑设备专用 YAML 的 `runtime` 和 `tensorrt_backend`：
-
-   - 将 `runtime.default_device` 和 `tensorrt_backend.export.device` 设为目标 GPU 编号。
-   - 将 `expected_version` 和 `expected_compute_capability` 改为上一步的实际值。
-   - 保持 `precision: fp16`、`require_exact_gpu: true` 和 `export.overwrite: false`。
-   - 将 `validated` 暂设为 `false`。
-   - 将三个 engine 的 `path` 改到新目录，例如 `runs/engines/<device_tag>/`。
-   - 导出前可将对应 `sha256` 暂写为 64 个 `0`；不要沿用 4060 engine 的哈希。
-
-5. 按 YAML 一次性导出场景模型、三类基础检测器和增量检测器：
-
-   ```bash
-   "$AGENT_PYTHON" tools/80_export_tensorrt_engines.py --config "$PROFILE"
-   ```
-
-   命令输出会列出每个新 engine 的实际 SHA256。将这些值回填到 `context_engine.sha256` 和 `engines.*.sha256`，然后执行只读校验：
-
-   ```bash
-   "$AGENT_PYTHON" tools/80_export_tensorrt_engines.py \
-     --config "$PROFILE" --verify-only
-   ```
-
-6. 哈希校验通过后，将设备专用配置的 `tensorrt_backend.validated` 设为 `true`，再完成环境、精度和性能复核：
-
-   ```bash
-   "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" doctor
-   "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" \
-     generation recheck --candidate incremental_detection_generation
-   "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" benchmark-api
-   ```
-
-7. 全部门禁通过后，使用该配置启动服务：
-
-   ```bash
-   "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" serve
-   ```
-
-`runs/engines/` 是本地目录，不会进入 Git。只有需要正式发布新的设备档案时，才将 engine 移入 `models/engines/<device_tag>/`，更新主 YAML、`models/SHA256SUMS.txt` 和相关 manifest，并重新执行完整发布验收。导出成功不等于精度和性能已经通过，禁止跳过 `generation recheck` 与 `benchmark-api`。
-
-</details>
+脚本会完成环境核对、模型导出、SHA256 登记和完整性校验。生成文件保存在 `runs/engines/`，不会进入版本控制。正式启用前的精度与性能验收见 [TensorRT 部署指南](docs/tensorrt-deployment.md)。
 
 ### 首次配置
 
@@ -144,13 +87,13 @@ chmod +x scripts/bootstrap_x86.sh scripts/start_agent.sh
 ./scripts/bootstrap_x86.sh
 ```
 
-配置脚本会选择或创建兼容的 Python 环境，检查 CUDA、PyTorch、TensorRT 和项目依赖，随后执行发布校验与 GPU 冒烟测试。兼容环境已存在时可显式复用：
+配置脚本会选择或创建兼容的 Python 环境，检查 CUDA、PyTorch 和项目依赖，随后执行发布校验与 GPU 冒烟测试。兼容环境已存在时可显式复用：
 
 ```bash
 AGILE_AGENT_PYTHON=/path/to/env/bin/python ./scripts/bootstrap_x86.sh
 ```
 
-已验证的参考组合为 Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124`、Ultralytics `8.4.92` 和 TensorRT `10.8.0.43`。项目允许使用满足约束且通过 `doctor` 的兼容版本，不要求环境名称或安装路径一致。
+已验证的参考组合为 Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124` 和 Ultralytics `8.4.92`。项目允许使用满足约束且通过 `doctor` 的兼容版本，不要求环境名称或安装路径一致。TensorRT 仅在设备本地导出时安装。
 
 ### 一键启动
 
@@ -215,7 +158,7 @@ new_batch.zip
 └── labels/val/*
 ```
 
-支持标准五列标签 `class x_center y_center width height`，也兼容单一新增类别的四列框标签。数据集未提供类别名称时，Agent 会分配稳定全局 ID 和“类别N”临时名称；用户可在 Web 或 CLI 中补充真实名称，重命名不会改变标签映射、训练快照或已有权重。
+赛题增量数据与基础训练集采用相同的五列 YOLO 标签：`class x_center y_center width height`，Agent 会直接读取类别 ID。为兼容异常或临时数据，四列无类别标签不会被直接拒绝，而会按单一待确认类别导入，并在批次后台和结构化日志中显示警告。数据集未提供类别名称时，Agent 会分配稳定全局 ID 和“类别N”临时名称；用户可在 Web 或 CLI 中补充真实名称，重命名不会改变标签映射、训练快照或已有权重。
 
 工作台依次完成：
 
@@ -248,7 +191,7 @@ agile-agent incremental-data jobs --batch-id BATCH_ID
 
 组合系统在 95 张内部 lock-val 上取得 mAP50 `0.81929`、舰船 precision `1.000`、recall `0.79012` 和误激活率 `0.000`。检测指标均指 mAP50；这些结果不是官方隐藏测试成绩。
 
-RTX 4060 上已观察到超过 30 FPS 的批量吞吐，但单图 API 延迟仍受 GPU 状态和运行环境影响。x86 结果只用于工程验证，不能替代 Ascend 310B 实测。
+x86 NVIDIA GPU 上的性能结果只用于工程验证，具体吞吐和单图延迟取决于设备、后端及运行状态，不能替代 Ascend 310B 实测。
 
 ## 配置管理
 
@@ -285,7 +228,7 @@ python scripts/smoke_models.py
 ```
 
 - `pytest` 验证配置、路径门禁、路由融合、增量数据、日志和代际操作。
-- `verify_release.py` 校验配置、权重、TensorRT engine 和公开证据哈希。
+- `verify_release.py` 校验配置、模型权重和公开证据哈希。
 - `smoke_models.py` 在 GPU 上加载三种功能模型并运行完整自动编排链路。
 
 当前代码基线为 `152 passed`。修改模型、推理后端或依赖后，必须重新执行三项验收。
@@ -302,14 +245,14 @@ fair_agent/
 ├── web/            # Starlette Web 服务与静态前端
 └── ui/             # 终端工作台
 configs/            # 运行和实验 YAML
-models/             # 冻结权重、engine、注册表和指标
+models/             # 冻结权重、注册表和指标
 scripts/            # 安装、启动和发布验收
 tools/              # 数据处理、训练和导出入口
 tests/              # 自动化测试
 docs/               # 设计、操作和复现实验文档
 ```
 
-竞赛数据、标签、运行报告、预测结果和本地凭据均被 Git 忽略。
+竞赛数据、标签、运行报告、预测结果、设备部署产物、构建缓存和本地凭据均被 Git 忽略。TensorRT 导出与校验代码保留在仓库中，生成的 engine 不进入版本控制。
 
 ## 文档
 
@@ -318,6 +261,7 @@ docs/               # 设计、操作和复现实验文档
 - [合规增量学习规则](docs/compliant-incremental-learning.md)
 - [增量学习工作台](docs/incremental-workbench.md)
 - [全流程审计日志](docs/agent-audit-logging.md)
+- [TensorRT 部署指南](docs/tensorrt-deployment.md)
 - [舰船 3+1 可复现实验](docs/warship-3plus1-reproducibility.md)
 - [增量方法比较](docs/incremental-method-comparison.md)
 - [YOLO-IOD 完整复现](docs/full-yolo-iod-reproduction.md)
@@ -327,5 +271,5 @@ docs/               # 设计、操作和复现实验文档
 - 尚未完成 Ascend 310B 的 OM 转换、AscendCL 集成和真实板端 FPS 验证。
 - 当前只有一轮舰船类别增量的完整实验证据，多轮能力尚未通过连续真实注入验证。
 - Web 训练当前产出待校准候选；校准、lock 复核和 production 切换仍由受审计的 CLI 门禁完成。
-- 发布 TensorRT engine 只在 README 声明的软硬件组合上完成验证，不兼容时必须重新导出，禁止回退到 CPU。
+- TensorRT engine 不随仓库发布；启用该后端前必须在目标设备本地导出并重新完成精度与性能验收。
 - 仓库不包含竞赛数据集、官方测试集或正式提交格式。

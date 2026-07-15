@@ -75,7 +75,7 @@ agile-agent pipeline --mode execute
 
 ## Ascend 310B 边界
 
-当前发布版本只验证 x86 NVIDIA GPU。production 使用 TensorRT `10.8.0.43` FP16 engine，并在 RTX 4060 Laptop（SM `8.9`）通过性能门禁；Python Agent 负责策略、审计和 Web 编排。`native/` 中的完整 C++ TensorRT ABI 仍为后续优化接口，尚未作为 production 后端。310B 状态固定为 `waiting_for_hardware`，后续必须依次完成：
+当前发布版本只验证 x86 NVIDIA GPU。production 默认使用 CUDA 版 PyTorch 直接加载仓库中的模型权重；TensorRT engine 不随仓库分发，只能在目标设备本地导出并单独验收。Python Agent 负责策略、审计和 Web 编排，`native/` 中的 C++ TensorRT ABI 仍为后续优化接口，尚未作为 production 后端。310B 状态固定为 `waiting_for_hardware`，后续必须依次完成：
 
 1. 使用 ATC 将冻结模型转换为 OM。
 2. 实现 AscendCL 输入预处理、推理和后处理。

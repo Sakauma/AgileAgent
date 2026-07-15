@@ -70,7 +70,7 @@ KNOWN_SECTION_KEYS = {
     "logging": {"root", "max_file_bytes", "retained_files", "request_bodies"},
     "incremental_workbench": {
         "root", "max_archive_bytes", "max_extracted_bytes", "max_extracted_files",
-        "max_image_pixels", "allowed_image_extensions", "require_labels", "validation_fraction",
+        "max_image_pixels", "allowed_image_extensions", "allowed_label_formats", "require_labels", "validation_fraction",
         "minimum_images", "preview_limit", "job_log_tail_lines", "poll_interval_ms", "training",
     },
 }
@@ -208,7 +208,11 @@ def _number(section: Mapping[str, Any], key: str, errors: List[str], minimum: fl
     return value
 
 
-def validate_config(config: Dict[str, Any]) -> None:
+def validate_config(
+    config: Dict[str, Any],
+    *,
+    allow_unverified_tensorrt_hashes: bool = False,
+) -> None:
     errors: List[str] = []
     if config.get("schema_version") != CONFIG_SCHEMA_VERSION:
         errors.append(f"schema_version 必须为 {CONFIG_SCHEMA_VERSION}")
@@ -300,6 +304,14 @@ def validate_config(config: Dict[str, Any]) -> None:
         isinstance(value, str) and value.startswith(".") for value in extensions
     ):
         errors.append("incremental_workbench.allowed_image_extensions必须是带点号的非空扩展名列表")
+    label_formats = workbench.get("allowed_label_formats")
+    supported_label_formats = {"class_id_bbox", "bbox_only"}
+    if not isinstance(label_formats, list) or not label_formats or not all(
+        isinstance(value, str) and value in supported_label_formats for value in label_formats
+    ):
+        errors.append(
+            "incremental_workbench.allowed_label_formats必须是class_id_bbox/bbox_only的非空列表"
+        )
     if not isinstance(workbench.get("require_labels"), bool):
         errors.append("incremental_workbench.require_labels必须为布尔值")
     _number(workbench, "validation_fraction", errors, 0.01, 0.50)
@@ -372,8 +384,23 @@ def validate_config(config: Dict[str, Any]) -> None:
         errors.append("tensorrt_backend.require_exact_gpu与validated必须为布尔值")
     if not isinstance(tensorrt_backend.get("dynamic"), bool):
         errors.append("tensorrt_backend.dynamic必须为布尔值")
+    inactive_tensorrt_profile = (
+        inference.get("backend") != "tensorrt_engine"
+        and tensorrt_backend.get("validated") is False
+    )
+    allow_missing_engine_hashes = (
+        allow_unverified_tensorrt_hashes or inactive_tensorrt_profile
+    ) and tensorrt_backend.get("validated") is False
     _number(tensorrt_backend, "workspace_gib", errors, 0.1)
-    if not tensorrt_backend.get("expected_version") or not tensorrt_backend.get("expected_compute_capability"):
+    require_tensorrt_identity = (
+        allow_unverified_tensorrt_hashes
+        or inference.get("backend") == "tensorrt_engine"
+        or tensorrt_backend.get("validated") is True
+    )
+    if require_tensorrt_identity and (
+        not tensorrt_backend.get("expected_version")
+        or not tensorrt_backend.get("expected_compute_capability")
+    ):
         errors.append("tensorrt_backend必须声明TensorRT版本与GPU计算能力")
     export = tensorrt_backend.get("export")
     if not isinstance(export, Mapping):
@@ -407,9 +434,12 @@ def validate_config(config: Dict[str, Any]) -> None:
             unknown_engine = sorted(set(entry) - {"path", "sha256", "imgsz", "batch_size"})
             if unknown_engine:
                 errors.append(f"TensorRT engine {source}包含未知字段：" + ", ".join(unknown_engine))
-            digest = str(entry.get("sha256") or "")
-            if not entry.get("path") or len(digest) != 64 or any(
-                ch not in "0123456789abcdefABCDEF" for ch in digest
+            raw_digest = entry.get("sha256")
+            digest = str(raw_digest or "")
+            missing_hash_allowed = allow_missing_engine_hashes and raw_digest is None
+            if not entry.get("path") or (
+                not missing_hash_allowed
+                and (len(digest) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in digest))
             ):
                 errors.append(f"TensorRT engine {source}缺少有效路径或SHA256")
             _number(entry, "imgsz", errors, 32)
@@ -421,9 +451,12 @@ def validate_config(config: Dict[str, Any]) -> None:
         unknown_context = sorted(set(context_engine) - {"path", "sha256", "imgsz", "batch_size"})
         if unknown_context:
             errors.append("TensorRT context engine包含未知字段：" + ", ".join(unknown_context))
-        digest = str(context_engine.get("sha256") or "")
-        if not context_engine.get("path") or len(digest) != 64 or any(
-            ch not in "0123456789abcdefABCDEF" for ch in digest
+        raw_digest = context_engine.get("sha256")
+        digest = str(raw_digest or "")
+        missing_hash_allowed = allow_missing_engine_hashes and raw_digest is None
+        if not context_engine.get("path") or (
+            not missing_hash_allowed
+            and (len(digest) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in digest))
         ):
             errors.append("TensorRT context engine缺少有效路径或SHA256")
         _number(context_engine, "imgsz", errors, 32)
@@ -490,7 +523,12 @@ def runtime_overrides(overrides: Iterable[str] | None = None) -> List[str]:
     return value
 
 
-def load_config(path: Union[str, Path] = DEFAULT_CONFIG, overrides: Iterable[str] | None = None) -> Dict[str, Any]:
+def load_config(
+    path: Union[str, Path] = DEFAULT_CONFIG,
+    overrides: Iterable[str] | None = None,
+    *,
+    allow_unverified_tensorrt_hashes: bool = False,
+) -> Dict[str, Any]:
     config_path = runtime_config_path(path)
     with config_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
@@ -501,7 +539,10 @@ def load_config(path: Union[str, Path] = DEFAULT_CONFIG, overrides: Iterable[str
     data = apply_overrides(resolved, active_overrides)
     data["_config_path"] = rel_path(config_path)
     data["_config_overrides"] = active_overrides
-    validate_config(data)
+    validate_config(
+        data,
+        allow_unverified_tensorrt_hashes=allow_unverified_tensorrt_hashes,
+    )
     data["_config_sha256"] = config_sha256(data)
     return data
 

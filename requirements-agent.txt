@@ -6,8 +6,5 @@ uvicorn>=0.30
 python-multipart>=0.0.9
 ultralytics
 opencv-python
-tensorrt-cu12==10.8.0.43
-onnx>=1.17
-onnxslim>=0.1.71
 pexpect
 pytest

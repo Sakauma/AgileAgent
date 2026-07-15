@@ -16,7 +16,7 @@ web:
   model_manifest: models/manifest.json
 
 inference:
-  backend: tensorrt_engine
+  backend: ultralytics_cuda
   imgsz: 640
   specialist_imgsz: 512
   iou: 0.70
@@ -79,6 +79,7 @@ incremental_workbench:
   max_extracted_files: 20000
   max_image_pixels: 25000000
   allowed_image_extensions: [.png, .jpg, .jpeg, .bmp, .tif, .tiff]
+  allowed_label_formats: [class_id_bbox, bbox_only]
   require_labels: true
   validation_fraction: 0.20
   minimum_images: 2
@@ -136,17 +137,17 @@ generation:
 
 native_backend:
   library: build/native/libagile_agent_tensorrt.so
-  base_engine: models/engines/rtx4060_trt10_8/three_class_base_detector_fp16_b1_640.engine
-  context_engine: models/engines/rtx4060_trt10_8/scene_sensor_net_fp16_dynamic_b1_20_160.engine
+  base_engine: runs/engines/local/three_class_base_detector.engine
+  context_engine: runs/engines/local/scene_sensor_net.engine
   precision: fp16
   require_exact_gpu: true
   validated: false
 
 tensorrt_backend:
-  expected_version: 10.8.0.43
-  expected_compute_capability: "8.9"
+  expected_version: null
+  expected_compute_capability: null
   require_exact_gpu: true
-  validated: true
+  validated: false
   precision: fp16
   workspace_gib: 4
   dynamic: false
@@ -159,19 +160,19 @@ tensorrt_backend:
     context_min_batch: 1
     context_opt_batch: 8
   context_engine:
-    path: models/engines/rtx4060_trt10_8/scene_sensor_net_fp16_dynamic_b1_20_160.engine
-    sha256: 1cec699d884eb31e7ba81a1b1e515b5b1f33b33cd4ea19640975f832481c7be6
+    path: runs/engines/local/scene_sensor_net.engine
+    sha256: null
     imgsz: 160
     batch_size: 20
   engines:
     models/production/incremental_detection/three_class_base_detector.pt:
-      path: models/engines/rtx4060_trt10_8/three_class_base_detector_fp16_b1_640.engine
-      sha256: 95ce788ed8be933c7d06b8d77bfe1382b26d68fdd6668478c070543cee494d04
+      path: runs/engines/local/three_class_base_detector.engine
+      sha256: null
       imgsz: 640
       batch_size: 1
     models/production/incremental_detection/incremental_detector.pt:
-      path: models/engines/rtx4060_trt10_8/incremental_detector_fp16_b1_512.engine
-      sha256: 5927599daa96068efa6b2dcc70946818aae7cb5a2f901fc13aaebad838ed665d
+      path: runs/engines/local/incremental_detector.engine
+      sha256: null
       imgsz: 512
       batch_size: 1
 
@@ -189,9 +190,6 @@ assets:
     - models/production/incremental_detection/incremental_detector.pt
     - models/context/scene_sensor_net.pt
     - models/context/scene_sensor_metrics.json
-    - models/engines/rtx4060_trt10_8/scene_sensor_net_fp16_dynamic_b1_20_160.engine
-    - models/engines/rtx4060_trt10_8/three_class_base_detector_fp16_b1_640.engine
-    - models/engines/rtx4060_trt10_8/incremental_detector_fp16_b1_512.engine
     - models/manifest.json
     - models/generations.json
     - demo_artifacts/agent_demo_state.json

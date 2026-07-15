@@ -48,6 +48,7 @@ def settings(tmp_path: Path) -> dict:
         "max_extracted_files": 100,
         "max_image_pixels": 1_000_000,
         "allowed_image_extensions": [".png", ".jpg"],
+        "allowed_label_formats": ["class_id_bbox", "bbox_only"],
         "require_labels": True,
         "validation_fraction": 0.20,
         "minimum_images": 2,
@@ -131,10 +132,15 @@ def test_multiple_unnamed_batches_reserve_sequential_names_and_global_ids(tmp_pa
     assert second["audit"]["local_to_global"] == {"0": 3}
 
 
-def test_bbox_only_labels_are_normalized_to_single_generated_class(tmp_path: Path) -> None:
-    store, _event_log = make_store(tmp_path)
+def test_competition_profile_accepts_bbox_only_labels_with_backend_warning(tmp_path: Path) -> None:
+    store, event_log = make_store(tmp_path)
     manifest = store.create("bbox-only.zip", unnamed_dataset_zip("0.5 0.5 0.2 0.2"))
+    assert manifest["status"] == "AUDITED"
     assert manifest["audit"]["label_format"] == "bbox_only"
+    assert manifest["audit"]["warnings"][0]["code"] == "bbox_only_labels_without_class_id"
+    assert manifest["audit"]["requires_class_confirmation"] is True
+    warning_events = event_log.query(batch_id=manifest["batch_id"], level="warning")
+    assert any(row["event"] == "incremental.audit.warning" for row in warning_events)
     injected = store.inject(manifest["batch_id"])
     prepared_label = next((store.root / injected["batch_id"] / "prepared" / "labels").rglob("*.txt"))
     assert prepared_label.read_text(encoding="utf-8") == "0 0.5 0.5 0.2 0.2\n"

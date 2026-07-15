@@ -9,6 +9,9 @@ __pycache__/
 .agent-python
 venv/
 *.egg-info/
+/build/
+/dist/
+/.streamlit/
 
 # Private competition data and derived artifacts
 /datasets*/
@@ -28,6 +31,8 @@ venv/
 *.onnx
 *.om
 *.engine
+*.plan
+*.trt
 *.zip
 *.pdf
 
@@ -35,7 +40,7 @@ venv/
 !/models/
 !/models/**
 /models/**/*.onnx
-/models/experiments/**/*.engine
+/models/**/*.engine
 /data/
 
 # Local credentials and environment files

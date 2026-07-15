@@ -300,7 +300,8 @@
     const metrics = $("#incrementalMetrics");
     metrics.innerHTML = "";
     const classNames = Object.values(audit.class_map || {}).join("、") || "待确认";
-    [["图像", audit.image_count || 0], ["目标", audit.object_count || 0], ["类别", classNames], ["旧样本读取", audit.old_raw_image_count || 0], ["合规审计", audit.compliance === "passed" ? "通过" : "未通过"]]
+    const labelFormat = audit.label_format === "bbox_only" ? "四列·类别待确认" : "五列YOLO";
+    [["图像", audit.image_count || 0], ["目标", audit.object_count || 0], ["类别", classNames], ["标签格式", labelFormat], ["旧样本读取", audit.old_raw_image_count || 0], ["合规审计", audit.compliance === "passed" ? "通过" : "未通过"]]
       .forEach(([label, value]) => metrics.appendChild(metricNode(label, value)));
     renderIncrementalClassEditor(batch, audit);
     $("#injectIncremental").disabled = batch.status !== "AUDITED";
