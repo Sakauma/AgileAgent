@@ -1,202 +1,229 @@
 # 灵动Agent
 
-面向 IR/SAR 目标检测竞赛的可审计快速学习智能体。系统登记场景/传感器认知、冻结旧类检测和增量检测三种不同功能模型，并提供面向检测用户的 Web 产品和面向运维人员的 CLI。当前 production 为“增量检测生产代际”：三类基础检测器负责人员、小型飞行器和坦克，通用增量检测器负责历次注入后登记的新类别；当前已验证类别绑定为舰船。四类统一 YOLO11s 仅作上限基准，不参与默认推理、融合或回滚。系统统一运行在 x86-64 架构的 WSL/Linux 环境中；训练数据、标签和竞赛提交结果不随仓库分发。
+面向 IR/SAR 时变场景目标检测的快速学习智能体。系统以场景与传感器认知为上下文，自动协调冻结基础检测器和增量检测器，并提供增量数据审计、快速训练、模型复核、代际切换与回滚能力。
+
+项目同时提供面向检测用户的 Web 工作台和面向开发、运维及未来端侧集成的 CLI。当前发布版运行于 x86-64 WSL/Linux 与 NVIDIA GPU；Ascend 310B 适配将在硬件到位后完成。
+
+## 核心能力
+
+- **自动识别与路由**：识别 IR/SAR 传感器和 air/forest/sea/urban 场景，自动解析当前生产代际并执行对应模型。
+- **增量目标检测**：支持类别增量和目标增量；训练、验证、早停和调参只读取本批增量数据。
+- **双前端操作**：Web 提供单图、批量检测和增量数据工作台；CLI 提供完整决策轨迹、配置、实验、日志及代际管理。
+- **可审计与可回滚**：数据、配置、权重、阈值和评测结果均记录哈希；候选模型通过门禁后才能切换 production。
+- **配置驱动**：GPU、推理、路由、融合、上传、缓存、训练及验收参数统一由 YAML 管理，并支持 CLI 临时覆盖或持久修改。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    A["IR/SAR 图像"] --> B["场景与传感器认知"]
+    B --> C["Agent 决策与代际解析"]
+    C --> D["三类冻结基础检测器"]
+    C --> E["已上线增量检测器"]
+    D --> F["全局类别映射与逐框融合"]
+    E --> F
+    F --> G["检测结果与决策轨迹"]
+
+    H["增量数据包"] --> I["安全解压与数据审计"]
+    I --> J["类别绑定与训练视图"]
+    J --> K["GPU 快速训练"]
+    K --> L["候选模型"]
+    L --> M["dev 校准 / lock 复核 / 人工确认"]
+    M --> C
+```
+
+当前 production 为“增量检测生产代际”：基础检测器负责 `soldier`、`small_aircraft` 和 `tank`，增量检测器当前验证绑定为 `warship`。四类统一 YOLO11s 仅作为性能上限基准，不参与默认推理和回滚。
+
+## 当前状态
+
+| 能力 | 状态 | 说明 |
+| --- | --- | --- |
+| x86 NVIDIA GPU 推理 | 可用 | 默认 TensorRT FP16，不提供 CPU 回退 |
+| Web / CLI | 可用 | 支持检测、决策展示、增量数据管理和结构化日志 |
+| 舰船 3+1 类别增量 | 已验证 | 单轮内部 lock-val 证据已通过门禁 |
+| 多轮增量 | 工程接口已预留 | 当前训练适配器只完成单轮实证 |
+| Ascend 310B | 待硬件验证 | 尚无 OM、AscendCL 和真实板端 FPS |
+| 官方隐藏测试提交 | 待赛题信息 | 测试目录和提交格式确认前保持阻塞 |
 
 ## 快速开始
 
-### 支持环境
+### 运行环境
 
-- x86-64 WSL 2 或 Linux、NVIDIA GPU、可用的 NVIDIA 驱动和 Git。
-- Python `3.10-3.12`；首次安装建议预留至少 `10 GB` 可用空间。
-- 发布包内的 TensorRT engine 使用 TensorRT `10.8.0.43` 构建，并已在 RTX 4060 Laptop（SM `8.9`）验证。其他 TensorRT 版本或 GPU 架构不属于开箱即用范围，Agent 不会自动回退到 CPU 或 PyTorch。
-- 仓库为私有仓库，克隆前需获得 GitHub 访问权限。
+- x86-64 WSL 2 或 Linux
+- NVIDIA GPU 及可用的 `nvidia-smi`
+- Python `3.10-3.12`
+- 建议至少 `10 GB` 可用空间
 
-先在 WSL/Linux 终端确认 GPU 可见：
+仓库中的 TensorRT engine 使用 TensorRT `10.8.0.43` 构建，并在 RTX 4060 Laptop、计算能力 `8.9` 上验证。其他 TensorRT 版本或 GPU 架构需要重新导出 engine 并更新资产清单。
 
-```bash
-nvidia-smi
-```
+<details>
+<summary><strong>在其他 NVIDIA 设备上导出 TensorRT engine</strong></summary>
 
-通过 HTTPS 克隆仓库：
+<br>
+
+TensorRT engine 与 TensorRT 版本、GPU 架构和构建参数绑定。不要直接复用不匹配设备上的 `.engine` 文件，也不要覆盖仓库附带的 4060 发布资产。以下流程使用独立配置和本地输出目录。
+
+1. 准备已经安装 CUDA 版 PyTorch 和项目依赖的 Python 环境。若 `bootstrap_x86.sh` 只在最终 `doctor` 阶段报告 engine 或 GPU 不匹配，依赖通常已经安装完成，可继续使用传入的解释器：
+
+   ```bash
+   AGENT_PYTHON=/path/to/env/bin/python
+   "$AGENT_PYTHON" -m pip install -e ".[workbench,inference,export,dev]"
+   ```
+
+   上述 `inference` 依赖组会安装本项目验证过的 TensorRT `10.8.0.43`。若必须使用其他 TensorRT 版本，应在独立环境中手动安装与驱动、CUDA 和 PyTorch 兼容的运行时，不要让安装命令重新覆盖它；该组合需要重新完成本文全部门禁后才能作为发布配置。
+
+2. 查询当前设备和 TensorRT 信息：
+
+   ```bash
+   "$AGENT_PYTHON" - <<'PY'
+   import tensorrt as trt
+   import torch
+
+   device = 0
+   print("TensorRT:", trt.__version__)
+   print("GPU:", torch.cuda.get_device_name(device))
+   print("Compute capability:", ".".join(map(str, torch.cuda.get_device_capability(device))))
+   PY
+   ```
+
+3. 复制一份设备专用配置，不直接修改已验证的默认配置：
+
+   ```bash
+   DEVICE_TAG=my_gpu_trt
+   PROFILE="configs/agent_pipeline.${DEVICE_TAG}.yaml"
+   cp configs/agent_pipeline.yaml "$PROFILE"
+   ```
+
+4. 编辑设备专用 YAML 的 `runtime` 和 `tensorrt_backend`：
+
+   - 将 `runtime.default_device` 和 `tensorrt_backend.export.device` 设为目标 GPU 编号。
+   - 将 `expected_version` 和 `expected_compute_capability` 改为上一步的实际值。
+   - 保持 `precision: fp16`、`require_exact_gpu: true` 和 `export.overwrite: false`。
+   - 将 `validated` 暂设为 `false`。
+   - 将三个 engine 的 `path` 改到新目录，例如 `runs/engines/<device_tag>/`。
+   - 导出前可将对应 `sha256` 暂写为 64 个 `0`；不要沿用 4060 engine 的哈希。
+
+5. 按 YAML 一次性导出场景模型、三类基础检测器和增量检测器：
+
+   ```bash
+   "$AGENT_PYTHON" tools/80_export_tensorrt_engines.py --config "$PROFILE"
+   ```
+
+   命令输出会列出每个新 engine 的实际 SHA256。将这些值回填到 `context_engine.sha256` 和 `engines.*.sha256`，然后执行只读校验：
+
+   ```bash
+   "$AGENT_PYTHON" tools/80_export_tensorrt_engines.py \
+     --config "$PROFILE" --verify-only
+   ```
+
+6. 哈希校验通过后，将设备专用配置的 `tensorrt_backend.validated` 设为 `true`，再完成环境、精度和性能复核：
+
+   ```bash
+   "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" doctor
+   "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" \
+     generation recheck --candidate incremental_detection_generation
+   "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" benchmark-api
+   ```
+
+7. 全部门禁通过后，使用该配置启动服务：
+
+   ```bash
+   "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" serve
+   ```
+
+`runs/engines/` 是本地目录，不会进入 Git。只有需要正式发布新的设备档案时，才将 engine 移入 `models/engines/<device_tag>/`，更新主 YAML、`models/SHA256SUMS.txt` 和相关 manifest，并重新执行完整发布验收。导出成功不等于精度和性能已经通过，禁止跳过 `generation recheck` 与 `benchmark-api`。
+
+</details>
+
+### 首次配置
 
 ```bash
 git clone https://github.com/Sakauma/AgileAgent.git
 cd AgileAgent
-```
-
-已配置 GitHub SSH 密钥时，也可使用：
-
-```bash
-git clone git@github.com:Sakauma/AgileAgent.git
-cd AgileAgent
-```
-
-首次克隆只需执行一次环境配置：
-
-```bash
 chmod +x scripts/bootstrap_x86.sh scripts/start_agent.sh
 ./scripts/bootstrap_x86.sh
 ```
 
-配置成功后启动 Web 工作台：
+配置脚本会选择或创建兼容的 Python 环境，检查 CUDA、PyTorch、TensorRT 和项目依赖，随后执行发布校验与 GPU 冒烟测试。兼容环境已存在时可显式复用：
+
+```bash
+AGILE_AGENT_PYTHON=/path/to/env/bin/python ./scripts/bootstrap_x86.sh
+```
+
+已验证的参考组合为 Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124`、Ultralytics `8.4.92` 和 TensorRT `10.8.0.43`。项目允许使用满足约束且通过 `doctor` 的兼容版本，不要求环境名称或安装路径一致。
+
+### 一键启动
 
 ```bash
 ./scripts/start_agent.sh
 ```
 
-浏览器访问 `http://127.0.0.1:8501`。终端按 `Ctrl+C` 停止服务；以后启动只需重新运行 `./scripts/start_agent.sh`，不会安装或修改依赖。
+浏览器访问 `http://127.0.0.1:8501`。日常启动脚本只执行环境门禁、刷新状态和启动服务，不安装或修改依赖。
 
-## 首次配置说明
-
-`bootstrap_x86.sh` 会创建或复用 Python 环境、补齐 CUDA 版 PyTorch、TensorRT 和 Agent 依赖，然后在 GPU 0 上执行环境诊断、权重校验、TensorRT engine 校验和三种功能模型冒烟测试。配置完成后脚本退出，不会启动 Web 服务。
-
-脚本按以下顺序选择环境：显式指定的 `AGILE_AGENT_PYTHON`、项目 `.venv`、当前激活的 venv/Conda，最后才创建新的 `.venv`。现有环境满足 Python 3.10-3.12、`torch>=2.0`、CUDA 可用、`torch.version.cuda` 有效且 torchvision CUDA NMS 可执行时，会跳过 PyTorch 安装；其余依赖达到 `pyproject.toml` 的最低版本且 `pip check` 无冲突时也会跳过安装。
-
-复用已有兼容环境时，传入其 Python 绝对路径：
+无浏览器环境使用 CLI 工作台：
 
 ```bash
-AGILE_AGENT_PYTHON=/path/to/compatible/env/bin/python ./scripts/bootstrap_x86.sh
+./scripts/start_agent.sh --cli
 ```
 
-没有兼容环境时，脚本按 `python3.12`、`python3.11`、`python3.10` 顺序选择解释器；安装了 `uv` 时可由 `uv` 创建环境。也可通过 `PYTHON_BIN` 指定解释器。脚本不会使用 Python 3.8。
+## 使用方式
 
-配置通过后，所选解释器会写入本地 `.agent-python`。`start_agent.sh` 会自动读取它；无需激活环境。执行本文后续的 `python` 或 `agile-agent` 手动命令前，请在每个新终端运行：
+### Web 工作台
+
+Web 面向评委和检测用户，提供：
+
+- 单图检测、自动场景理解和 Agent 决策摘要
+- 批量检测、逐图预览和结果包导出
+- 增量数据上传、样本浏览、类别补名、数据注入和后台训练
+- 当前会话历史结果跳转
+
+用户无需选择模型。Agent 会读取活动代际，执行类别所有者并完成全局 ID 映射和 class-aware NMS。未通过验收的候选模型不会进入默认检测链路。
+
+### CLI
+
+首次配置后，可激活记录在 `.agent-python` 中的环境：
 
 ```bash
 AGENT_PYTHON="$(cat .agent-python)"
 source "$(dirname "$AGENT_PYTHON")/activate"
 ```
 
-需要严格复现已验收依赖组合时，可手动安装：
+常用命令：
 
 ```bash
-python -m pip install "torch==2.5.1+cu124" "torchvision==0.20.1+cu124" --index-url https://download.pytorch.org/whl/cu124
-python -m pip install -c constraints-agent.txt -e ".[workbench,inference,export,dev]"
-python -m fair_agent.cli doctor
-```
-
-已验证组合为：Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124`、Ultralytics `8.4.92`、TensorRT `10.8.0.43`、ONNX `1.17.0`、ONNX Runtime GPU `1.23.2`，部署显卡为 RTX 4060 Laptop（SM `8.9`）。环境名称和安装路径不作要求。
-
-## 发布验收
-
-无需 GPU 的静态验收会验证配置、全部模型哈希、推理参数、脱敏证据和启动脚本：
-
-```bash
-python scripts/verify_release.py
-```
-
-GPU 冒烟验收读取推理配置和功能模型注册表，验证 Scene-SensorNet、基础检测器、增量专家和 TensorRT engine，并调用完整 Agent 自动路由与融合链路；本地存在 lock-val 时会自动抽取 IR/SAR 样本：
-
-```bash
-python scripts/smoke_models.py
-```
-
-## 日常一键启动
-
-环境配置完成后，日常启动不再安装或修改任何依赖：
-
-```bash
-./scripts/start_agent.sh
-```
-
-启动脚本仅依次执行环境门禁、刷新黑板、生成默认决策和启动 Starlette/Uvicorn Web 服务。服务强制监听本机回环地址，浏览器访问 `http://127.0.0.1:8501`，在终端按 `Ctrl+C` 停止服务。
-
-服务器、SSH 会话或无浏览器环境使用终端模式：
-
-```bash
-./scripts/start_agent.sh --cli
-```
-
-Web 前端面向评委和检测使用者，提供单图检测、批量检测、增量学习工作台、自动 IR/SAR 与场景识别、标注图预览以及 JSON/ZIP 导出。用户只需上传图像，Agent 会自动解析当前活动代际，执行其中所有类别所有者并融合结果，不要求用户选择模型。未通过部署门禁的候选专家不会进入 Web。批量任务完成后可在网页逐张选择和查看标注结果，也可下载完整结果包；会话记录可直接跳转到当前页面最近10份完整结果。单GPU请求采用公平队列，单次请求内的上下文、基础检测和类别专家可按 YAML 并行调度。默认单文件限制20MB、单批限制20张和200MB、当前会话最多保留20条轻量历史，实际值均由主 YAML 与只读公开配置接口提供。权重路径、哈希和部署门禁等运维细节不会显示在 Web 中。
-
-CLI 前端面向开发与运维人员，包含总览、模型、数据、增量和部署五个页面，并可刷新黑板、生成策略、创建 Dry-run 和执行经过确认的低风险动作。
-
-只输出一次终端摘要：
-
-```bash
-agile-agent console --once
-```
-
-面向外部脚本或未来 Ascend 310B 服务进程，可获取机器可读状态：
-
-```bash
+agile-agent doctor
 agile-agent status --format json --refresh
+agile-agent console
+agile-agent detect --source path/to/image.png --confidence 0.50
+agile-agent decide --source path/to/image.png
+agile-agent logs --limit 100
+agile-agent benchmark-api
 ```
 
-当私有实验报告存在时，工作台使用 `live` 证据；全新克隆时自动使用 `demo_artifacts/` 中不含原始图像、标注和真实文件名的脱敏证据。首页会明确显示当前证据模式。
-
-## 手动调试命令
-
-先生成本机黑板和策略结果，再启动网页工作台：
-
-```bash
-python -m fair_agent.cli refresh
-python -m fair_agent.cli decide --sensor sar --scene urban --class-focus soldier
-python -m fair_agent.cli context-predict --source data/images/example.png
-python -m fair_agent.cli decide --source data/images/example.png --class-focus soldier
-python -m fair_agent.cli pipeline --mode dryrun
-python -m fair_agent.cli serve
-```
-
-通常无需手动执行上述命令；它们用于单独调试某个阶段。`doctor` 在 GPU、模型、SHA256 或核心依赖异常时返回非零。全新克隆不包含私有数据分析报告，但 Web 检测和 CLI 脱敏状态均可正常使用；正式提交保持阻塞状态（`blocked`），直到官方测试目录和格式得到确认。
-
-## 本地 GPU 推理
-
-将有权限使用的图片放入 `data/images/`，无需在命令行堆叠参数：
-
-```bash
-python tools/42_predict_submission.py --config configs/local_infer_gpu.yaml
-```
-
-配置集中在 `configs/local_infer_gpu.yaml`，默认使用 GPU 0、`batch=32` 和 `imgsz=640`。结果写入独立的 `runs/submission/<run_id>/`，包含 YOLO 标签、带置信度标签、CSV、JSON、运行清单和压缩包，不会覆盖已有结果。多卡机器仍默认使用 GPU 0；如需切换显卡，只修改 YAML 中的 `predict.device`。
-
-## 模型清单
-
-| 模型 | 功能 | 核心指标 | 验收 |
-| --- | --- | --- | --- |
-| `models/context/scene_sensor_net.pt` | IR/SAR 与 air/forest/sea/urban 认知 | lock sensor 0.98947 / scene 0.76842 | 通过 |
-| `three_class_base_detector` | 三类冻结基础检测 | 单模型旧类 mAP50 0.82738 | 增量检测生产代际的旧类所有者 |
-| `incremental_detector` | 多轮新增类别检测 | 当前舰船绑定：New-mAP50 0.79500 / KRR 1.0 | production，precision 1.0 / 误激活率 0.0 |
-| `models/base/yolo11s_ir_sar_imgsz640.pt` | IR/SAR 四类统一检测 | lock-all 0.91202 | `benchmark_only` |
-
-检测与增量指标均为 mAP50。当前“增量检测生产代际”使用三类冻结基础模型与通用增量检测器；目前登记的舰船类别绑定以增量 dev 固定阈值 0.63 后，在完整 lock-val 上通过精度、保持率和误激活门禁。后续注入类别继续作为独立类别绑定登记，不改变增量检测器的功能名称。四类统一 YOLO11s 仅保留为 benchmark 和单模型提交回退。三模型输入输出契约见 `configs/functional_models.yaml` 与 `docs/functional-models.md`，活动代际见 `models/generations.json`。
-
-## 常用命令
-
-```bash
-python -m fair_agent.cli doctor
-python -m fair_agent.cli refresh
-python -m fair_agent.cli status --refresh
-python -m fair_agent.cli console
-python -m fair_agent.cli detect --source path/to/image.png --confidence 0.50
-python -m fair_agent.cli decide --sensor sar --class-focus soldier
-python -m fair_agent.cli pipeline --mode execute
-python -m fair_agent.cli benchmark-api
-pytest -q
-```
-
-`pipeline --mode execute` 只执行 YAML 允许列表中的低风险动作。训练、正式推理、打包和提交始终需要人工触发并保留审计记录。智能体主配置位于 `configs/agent_pipeline.yaml`。
-
-`benchmark-api` 会在 8501 未运行时按当前有效配置启动临时服务，测试结束后自动关闭；若已有健康服务则直接测试该实例。未达到性能门槛时命令返回非零，同时仍会将完整报告写入 `reports/api_performance/<run_id>/benchmark.json`。
+`detect` 输出完整上下文、候选协议、模型执行、跳过原因和融合记录，适合调试或接入其他程序。Web 仅显示经过简化的用户决策摘要。
 
 ## 增量学习工作台
 
-Web 顶部的“增量学习”入口支持上传、浏览、注入和训练增量数据。上传包必须是 ZIP，内部采用 YOLO 标签；建议同时包含带 `names` 字段的 `data.yaml`：
+上传包为 ZIP，采用 YOLO 图像和标签结构：
 
 ```text
 new_batch.zip
-├── data.yaml
-├── images/train/*.png
-├── images/val/*.png
-├── labels/train/*.txt
-└── labels/val/*.txt
+├── data.yaml                 # 可选，建议提供 names
+├── images/train/*
+├── images/val/*              # 可选，缺失时确定性划分
+├── labels/train/*
+└── labels/val/*
 ```
 
-若没有显式验证集，Agent 会确定性划分 train/val。带 `names` 的标准 YOLO 数据直接采用数据集类别；只有数字类别 ID 时，Agent 按当前类别数量生成“类别N”临时名称；4列无类别框标签按单一新增类别处理。批次详情会显示源 ID、训练 ID 和全局 ID，用户可在确认语义后补充真实名称。每次改名形成新的 `class_registry.yaml` 修订；训练启动时冻结类别注册表和 `dataset.yaml` 快照，因此训练后补名不会改变当次标签身份、训练证据或权重。系统会安全解压并检查图像可读性、YOLO四/五列格式、坐标范围、重复 stem、图像标签对应关系和类别分布，再依据当前 production 类别自动判断 `class_incremental` 或 `target_incremental`。上传数据保存在 `data/incremental_batches/<batch_id>/`，不进入 Git。
+支持标准五列标签 `class x_center y_center width height`，也兼容单一新增类别的四列框标签。数据集未提供类别名称时，Agent 会分配稳定全局 ID 和“类别N”临时名称；用户可在 Web 或 CLI 中补充真实名称，重命名不会改变标签映射、训练快照或已有权重。
 
-“生成训练视图”会在批次目录内创建独立数据视图和内部 `batch.yaml`，并记录 `old_raw_image_count=0`；“开始快速训练”会启动 GPU 后台任务，页面可查看状态和实时日志。训练产物始终标记为待校准候选，不会自动替换 production。后续仍需完成阈值校准、lock 复核和 `generation promote`。
+工作台依次完成：
 
-相同能力可由 CLI 操作：
+```text
+上传 → 安全审计 → 类别绑定 → 训练视图 → GPU训练 → 待校准候选
+```
+
+训练完成不会自动替换 production。候选模型仍需完成增量 dev 阈值校准、冻结哈希、完整 lock 复核和代际 promotion。CLI 等价入口：
 
 ```bash
 agile-agent incremental-data upload --archive /path/to/new_batch.zip --name 新批次
@@ -206,58 +233,40 @@ agile-agent incremental-data rename --batch-id BATCH_ID --class-names 新类别�
 agile-agent incremental-data inject --batch-id BATCH_ID
 agile-agent incremental-data train --batch-id BATCH_ID
 agile-agent incremental-data jobs --batch-id BATCH_ID
-agile-agent incremental-data logs --batch-id BATCH_ID --job-id JOB_ID
 ```
 
-上传容量、保存目录、初始权重、GPU、`imgsz`、batch、epoch、学习率和早停参数均位于 `configs/agent_pipeline.yaml` 的 `incremental_workbench` 段，也可使用现有 `--set` 或 `config set` 接口修改。完整说明见 `docs/incremental-workbench.md`。
+完整数据约定和状态流转见 [增量学习工作台](docs/incremental-workbench.md)。
 
-## 运行日志
+## 模型与指标
 
-Agent 将 Web 请求、推理、CLI、数据审计、数据视图生成、增量训练、dev 阈值校准、lock 解封与复核、generation 注册、production 切换、回滚和异常统一写为结构化 JSONL。每条记录包含 UTC 时间、级别、组件、事件、`trace_id`、批次/任务/实验/运行/协议/代际编号、耗时和脱敏详情；上传内容、口令和令牌不会写入日志。阶段原始 `events.jsonl` 与 manifest 继续保留，全局日志作为跨模块行为索引。日志默认位于 `reports/agent_logs/`，按大小轮转并保留14个文件。
+| 模型 | 功能 | 内部 lock-val 结果 | 状态 |
+| --- | --- | --- | --- |
+| Scene-SensorNet | IR/SAR 与四场景认知 | sensor 0.98947 / scene 0.76842 | production 上下文模型 |
+| 三类基础检测器 | 冻结旧类检测 | 旧类 mAP50 0.82738 | production 旧类所有者 |
+| 增量检测器 | 新类别检测 | New-mAP50 0.79500 / KRR 1.000 | production，当前绑定舰船 |
+| 四类统一 YOLO11s | 单模型上限参考 | mAP50 0.91202 | `benchmark_only` |
 
-```bash
-agile-agent logs --limit 200
-agile-agent logs --component training --batch-id BATCH_ID
-agile-agent logs --job-id JOB_ID
-agile-agent logs --experiment-id warship_3plus1 --run-id RUN_ID
-agile-agent logs --protocol-id round_01
-agile-agent logs --generation-id incremental_detection_generation
-```
+组合系统在 95 张内部 lock-val 上取得 mAP50 `0.81929`、舰船 precision `1.000`、recall `0.79012` 和误激活率 `0.000`。检测指标均指 mAP50；这些结果不是官方隐藏测试成绩。
 
-日志目录、单文件大小和保留数量由主 YAML 的 `logging` 段统一配置。Web 的增量批次详情页只展示与当前批次相关的脱敏操作时间线；完整详情保留在 CLI 和 JSONL 中。完整事件规范见 `docs/agent-audit-logging.md`。
+RTX 4060 上已观察到超过 30 FPS 的批量吞吐，但单图 API 延迟仍受 GPU 状态和运行环境影响。x86 结果只用于工程验证，不能替代 Ascend 310B 实测。
 
-当前 TensorRT engine 可用以下命令只读校验；缺失时去掉 `--verify-only` 才会按 YAML 导出，已有且哈希正确的资产不会覆盖：
+## 配置管理
 
-```bash
-python tools/80_export_tensorrt_engines.py --verify-only
-```
-
-## 统一参数配置
-
-`configs/agent_pipeline.yaml` 是 Agent 持久参数的唯一事实源，包含 GPU、服务、推理、路由、融合、上传、缓存、界面、性能和验收门槛。CLI 的重复 `--set key=value` 只覆盖当前进程；`config set/unset` 会原子写回、备份并记录审计，重启后生效。production、权重哈希和类别所有权只能通过代际专用命令修改。
+[`configs/agent_pipeline.yaml`](configs/agent_pipeline.yaml) 是运行参数的唯一持久事实源。CLI 的 `--set` 只覆盖当前进程；`config set` 会校验并原子写回 YAML：
 
 ```bash
 agile-agent config validate --config configs/agent_pipeline.yaml
 agile-agent config show --config configs/agent_pipeline.yaml --effective
-agile-agent config get routing.conflict_iou --config configs/agent_pipeline.yaml
-agile-agent config set routing.conflict_iou 0.50 --config configs/agent_pipeline.yaml
-agile-agent --config configs/agent_pipeline.yaml --set inference.confidence_default=0.60 serve
-agile-agent generation recheck --candidate incremental_detection_generation
-agile-agent generation promote --candidate incremental_detection_generation --manifest reports/generation_rechecks/<run_id>/manifest.json
-agile-agent generation rollback --to base_detection_generation
+agile-agent config get routing.conflict_iou
+agile-agent config set routing.conflict_iou 0.50
+agile-agent --set inference.confidence_default=0.60 serve
 ```
 
-## 数据与增量训练
+production 代际、类别所有权和权重身份属于受保护状态，只能通过 `generation recheck/promote/rollback` 修改。
 
-数据文件名遵循 `{sensor}_r1_base_{scene}_{id}`，图像和 YOLO 标签同名配对。获得授权数据后，可依次运行 `tools/00_check_dataset.py`、`01_build_metadata.py` 和 `02_split_dataset.py`。
+## 可复现实验
 
-增量任务统一按增量目标检测处理，以类别增量为主，同时支持目标增量。训练、验证、早停和调参只能读取增量数据集，禁止旧样本 replay；旧类测试数据只允许在增量权重冻结后的评分阶段使用。机器规则位于 `configs/incremental_detection_policy.yaml`，完整流程见 `docs/compliant-incremental-learning.md`。
-
-真正类别增量模型必须使用基础类别集合之外的全局类别 ID，并用增量验证集校准激活阈值。其候选框不依赖旧模型产生同类检测；目标增量模型则使用旧模型同类框进行空间一致性复核。场景识别只参与软路由排序，不会按场景硬拒绝新增能力。
-
-### 可复现的舰船 3+1 实验
-
-舰船协议的唯一通用配置为 `configs/incremental/warship_3plus1.yaml`。更换基础类别、新增类别、源划分或增加后续轮次时先修改该 YAML，再运行统一入口：
+舰船 3+1 实验通过单一 YAML 描述基础类别、增量类别、数据划分和验收门槛：
 
 ```bash
 agile-agent experiment validate --config configs/incremental/warship_3plus1.yaml
@@ -265,72 +274,58 @@ agile-agent experiment run --config configs/incremental/warship_3plus1.yaml
 agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run_id>/run_manifest.json
 ```
 
-`validate` 只读数据且保持 lock 封存；`run` 会启动训练；`reproduce` 只有在源数据指纹与父实验一致时才创建新 run。当前执行适配器 v1 支持单轮 3+1，通用 schema 和模型代际注册表已预留多轮；新增更多类别前需扩展训练适配器，不得把“可描述多轮”误写成“已验证多轮”。逐文件哈希、状态机、阈值冻结和验收规则见 `docs/warship-3plus1-reproducibility.md`。
+增量阶段禁止读取旧类原始图像、旧类标签和旧数据缓存特征。lock-val 只在权重与阈值冻结后解封。逐文件哈希、状态机和复现边界见 [舰船 3+1 可复现实验](docs/warship-3plus1-reproducibility.md)。
 
-### 舰船 3+1 类别增量复现
-
-当前 production 的基础模型只有三个检测通道，基础训练图像与舰船增量训练图像完全隔离。所有参数位于 `configs/incremental/warship_3plus1.yaml`：
+## 开发与验收
 
 ```bash
-python -m fair_agent.cli experiment validate --config configs/incremental/warship_3plus1.yaml
-python -m fair_agent.cli experiment run --config configs/incremental/warship_3plus1.yaml
+pytest -q
+python scripts/verify_release.py
+python scripts/smoke_models.py
 ```
 
-lock-val 只会在基础权重、specialist 权重和阈值冻结后物化。已注册实验档可由 CLI 显式复核，但不会绕过代际门禁替换 Web production：
+- `pytest` 验证配置、路径门禁、路由融合、增量数据、日志和代际操作。
+- `verify_release.py` 校验配置、权重、TensorRT engine 和公开证据哈希。
+- `smoke_models.py` 在 GPU 上加载三种功能模型并运行完整自动编排链路。
 
-```bash
-python -m fair_agent.cli detect --profile incremental-detection --source path/to/image.png
+当前代码基线为 `152 passed`。修改模型、推理后端或依赖后，必须重新执行三项验收。
+
+## 项目结构
+
+```text
+fair_agent/
+├── backends/       # CUDA/TensorRT 推理后端
+├── core/           # 配置、黑板、manifest 和审计日志
+├── modules/        # 数据、推理、增量实验和代际管理
+├── policies/       # 动作选择与路由策略
+├── executors/      # 受控动作执行器
+├── web/            # Starlette Web 服务与静态前端
+└── ui/             # 终端工作台
+configs/            # 运行和实验 YAML
+models/             # 冻结权重、engine、注册表和指标
+scripts/            # 安装、启动和发布验收
+tools/              # 数据处理、训练和导出入口
+tests/              # 自动化测试
+docs/               # 设计、操作和复现实验文档
 ```
 
-当前注册表记录的“增量检测生产代际”完整 lock-val 指标为旧类 mAP50 0.82738、舰船类别绑定 New-mAP50 0.79500、KRR 1.0、组合 mAP50 0.81929、precision 1.0 和误激活率 0.0。“基础检测代际”始终保留为回滚点。
+竞赛数据、标签、运行报告、预测结果和本地凭据均被 Git 忽略。
 
-舰船 3+1 协议属于“冻结基础模型 + 独立 specialist”的系统级证据，不作为最终单模型增量结论。新的 clean-room v2 方案将三类教师检测头扩展为一个四类学生检测头，仅开放新增类通道训练，最终只部署 `student_4class.pt`。训练前先运行只读预检：
+## 文档
 
-```bash
-python tools/70_run_strict_3plus1.py --config configs/clean_class_incremental_v2.yaml --check-only
-```
-
-配置和执行边界见 `configs/clean_class_incremental_v2.yaml` 与 `docs/clean-class-incremental-v2.md`；该候选在重新训练并通过全部门禁前不会进入 Web。
-
-### 无旧样本方法比较
-
-仓库提供同一基础权重和同一 p02 数据上的 `DuET-YOLO11s` 与 `YOLO-IOD-lite` 对照实验。全部参数位于 `configs/incremental_method_comparison.yaml`，唯一运行入口为：
-
-```bash
-python tools/71_compare_incremental_methods.py --check-only
-python tools/71_compare_incremental_methods.py
-```
-
-脚本自动核对基础权重 SHA256，并生成不可覆盖的逐方法指标和统一比较报告。实现边界、指标门禁和复核规则见 `docs/incremental-method-comparison.md`；实验输出只有通过全部门禁后才能注册为 Agent 活动能力。
-
-### 官方完整 YOLO-IOD 复现
-
-仓库另提供基于官方 YOLO-World(X) 的舰船 3+1 复现。该配置禁用不适用的 CPR，保留 IKS 和 CAKD，并在 GPU 3 上通过梯度累积统一为有效 batch 16：
-
-```bash
-python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_warship_gpu3.yaml --check-only
-python tools/72_run_full_yolo_iod.py --config configs/full_yolo_iod_warship_gpu3.yaml
-```
-
-类别、数据隔离、三阶段训练、lock-val 冻结和验收说明见 `docs/full-yolo-iod-reproduction.md`。完整模型只作为方法参考；只有全部门禁通过后才讨论压缩或蒸馏回 YOLO11s。
-
-Scene-SensorNet 的训练参数全部位于 `configs/scene_sensor_model.yaml`，训练入口为 `python tools/60_train_scene_sensor.py`。固定权重已经随仓库发布，日常启动不会重新训练。
-
-## 常见问题
-
-- `nvidia-smi` 不可用：先修复 WSL/Linux 的 NVIDIA 驱动可见性，再运行配置脚本。不要通过关闭 GPU 门禁继续安装。
-- `doctor` 报告 TensorRT 版本或 engine 不兼容：不要绕过检查。发布 engine 只保证在 README 声明的组合上可用；其他 GPU 或 TensorRT 版本需要由维护者重新导出 engine、更新受保护哈希并重新执行发布验收。
-- 端口 `8501` 已占用：激活记录在 `.agent-python` 中的环境后，使用 `agile-agent config set runtime.server_port 8502 --config configs/agent_pipeline.yaml` 修改端口，再重启 Agent。
-- 新终端中找不到 `agile-agent`：先按“首次配置说明”激活 `.agent-python` 对应环境；直接运行 `start_agent.sh` 不需要激活。
-- 首次启动比后续启动慢：TensorRT engine 和模型需要首次载入 GPU，等待终端出现工作台地址后再打开页面。
+- [Agent 操作手册](docs/agent-operations.md)
+- [三种功能模型与协同链路](docs/functional-models.md)
+- [合规增量学习规则](docs/compliant-incremental-learning.md)
+- [增量学习工作台](docs/incremental-workbench.md)
+- [全流程审计日志](docs/agent-audit-logging.md)
+- [舰船 3+1 可复现实验](docs/warship-3plus1-reproducibility.md)
+- [增量方法比较](docs/incremental-method-comparison.md)
+- [YOLO-IOD 完整复现](docs/full-yolo-iod-reproduction.md)
 
 ## 已知限制
 
-- x86 版本默认使用 NVIDIA GPU；GPU 推理速度不代表 Ascend 310B 端侧 FPS。
-- 仓库不包含竞赛数据、标签、PDF、SSH 凭据、预测结果或训练运行产物。
-- 官方隐藏测试目录和提交格式尚未确认，因此正式提交门禁默认关闭。
-- 尚未获得外部真实新增类别数据；当前舰船 3+1 已通过内部部署门禁，但外部数据泛化仍需官方隐藏测试验证。
-- RTX 4060 上 TensorRT FP16 三轮 API 复核的中位轮平均为 `32.88 ms`、P95 为 `39.58 ms`、20张批量为 `47.81 FPS`，8并发请求全部成功，已通过 `33.3 ms / 50 ms / 30 FPS` 门禁。原始性能报告属于本地 `reports/` 产物，不随仓库分发。这些 engine 仅在 TensorRT `10.8.0.43` 与 RTX 4060 Laptop（SM `8.9`）完成验证；完整 C++ ABI 尚未切入 production。
-- Ascend 310B 转换与推理接口仍待板卡就绪后补充。
-
-Web 与 CLI 的操作说明见 `docs/agent-operations.md`。
+- 尚未完成 Ascend 310B 的 OM 转换、AscendCL 集成和真实板端 FPS 验证。
+- 当前只有一轮舰船类别增量的完整实验证据，多轮能力尚未通过连续真实注入验证。
+- Web 训练当前产出待校准候选；校准、lock 复核和 production 切换仍由受审计的 CLI 门禁完成。
+- 发布 TensorRT engine 只在 README 声明的软硬件组合上完成验证，不兼容时必须重新导出，禁止回退到 CPU。
+- 仓库不包含竞赛数据集、官方测试集或正式提交格式。
