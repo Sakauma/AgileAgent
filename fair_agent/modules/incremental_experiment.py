@@ -16,6 +16,7 @@ import yaml
 from PIL import Image
 
 from fair_agent.core.config import ROOT, rel_path, resolve_path
+from fair_agent.core.runtime_log import StructuredEventLog, event_log_from_config, mirror_state_event
 from fair_agent.modules.strict_incremental import image_class_ids, read_split, source_label
 
 
@@ -378,12 +379,21 @@ def artifact_inventory(root: Path) -> list[Dict[str, Any]]:
 
 
 class ExperimentLedger:
-    def __init__(self, root: Path, run_id: str) -> None:
+    def __init__(
+        self,
+        root: Path,
+        run_id: str,
+        experiment_id: str = "unknown",
+        event_log: StructuredEventLog | None = None,
+    ) -> None:
         self.root = root / run_id
         if self.root.exists():
             raise FileExistsError(f"拒绝覆盖实验目录：{self.root}")
         self.root.mkdir(parents=True)
         self.events_path = self.root / "events.jsonl"
+        self.run_id = run_id
+        self.experiment_id = experiment_id
+        self.event_log = event_log
 
     def event(self, state: str, status: str = "completed", **details: Any) -> None:
         if state not in STATES:
@@ -397,6 +407,17 @@ class ExperimentLedger:
         }
         with self.events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if self.event_log is not None:
+            protocol_id = details.get("protocol") or details.get("protocol_id")
+            mirror_state_event(
+                self.event_log,
+                state,
+                status=status,
+                experiment_id=self.experiment_id,
+                run_id=self.run_id,
+                protocol_id=str(protocol_id) if protocol_id else None,
+                details=details,
+            )
 
     def write_json(self, name: str, payload: Mapping[str, Any]) -> Path:
         path = self.root / name
@@ -504,6 +525,17 @@ def compile_training_adapter(config: Mapping[str, Any], ledger: ExperimentLedger
         "root": str(ledger.root),
         "events": str(ledger.events_path),
         "generic_config_sha256": sha256_file(Path(config["_config_path"])),
+        "experiment_id": ledger.experiment_id,
+        "run_id": ledger.run_id,
+        "global_logging": (
+            {
+                "root": str(ledger.event_log.root),
+                "max_file_bytes": ledger.event_log.max_file_bytes,
+                "retained_files": ledger.event_log.retained_files,
+            }
+            if ledger.event_log is not None
+            else None
+        ),
     }
     output = ledger.root / "training_adapter.yaml"
     output.write_text(yaml.safe_dump(adapter, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -522,7 +554,12 @@ def run_experiment(
     experiment_id = str(config["experiment"]["id"])
     resolved_run_id = run_id or datetime.now().strftime("run-%Y%m%d-%H%M%S")
     root = resolve_path(config["experiment"].get("output_root", f"runs/experiments/{experiment_id}"))
-    ledger = ExperimentLedger(root, resolved_run_id)
+    ledger = ExperimentLedger(
+        root,
+        resolved_run_id,
+        experiment_id=experiment_id,
+        event_log=event_log_from_config(),
+    )
     ledger.event("CREATED", config=rel_path(Path(config["_config_path"])))
     try:
         portable_config = {key: value for key, value in config.items() if not key.startswith("_")}

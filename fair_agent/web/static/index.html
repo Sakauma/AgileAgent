@@ -16,6 +16,7 @@
     <nav class="main-nav" aria-label="主导航">
       <button class="nav-item is-active" data-view="detect"><svg><use href="/assets/icons.svg#scan"/></svg>智能检测</button>
       <button class="nav-item" data-view="batch"><svg><use href="/assets/icons.svg#layers"/></svg>批量任务</button>
+      <button class="nav-item" data-view="incremental"><svg><use href="/assets/icons.svg#upload"/></svg>增量学习</button>
       <button class="nav-item" data-view="history"><svg><use href="/assets/icons.svg#history"/></svg>会话记录</button>
     </nav>
     <div class="service-status" id="serviceStatus"><span></span><b>正在连接</b></div>
@@ -100,6 +101,55 @@
             </div>
           </div>
         </section>
+      </section>
+    </section>
+
+    <section class="view" id="view-incremental" aria-labelledby="incremental-title">
+      <div class="page-heading incremental-heading">
+        <div><p class="eyebrow">小样本快速适应</p><h1 id="incremental-title">增量学习工作台</h1><p>上传YOLO格式数据包，Agent将自动完成数据审计、类型判断和训练准备。</p></div>
+        <button class="secondary-button refresh-button" id="refreshIncremental"><svg><use href="/assets/icons.svg#history"/></svg>刷新状态</button>
+      </div>
+      <div class="incremental-layout">
+        <section class="incremental-upload-card">
+          <div class="section-heading"><div><p class="eyebrow">数据注入</p><h2>上传增量数据集</h2></div><span class="status-pill">ZIP · YOLO</span></div>
+          <input id="incrementalFile" type="file" accept="application/zip,.zip" hidden>
+          <button class="incremental-dropzone" id="incrementalDropzone" type="button">
+            <span class="drop-icon"><svg><use href="/assets/icons.svg#archive"/></svg></span>
+            <strong>选择增量数据包</strong>
+            <small id="incrementalLimitText">包含图像、标签及可选data.yaml</small>
+          </button>
+          <div class="incremental-form">
+            <label>批次名称<input id="incrementalName" type="text" maxlength="80" placeholder="例如：第二批海上目标"></label>
+            <label>类别名称（可选）<input id="incrementalClasses" type="text" placeholder="多个类别用英文逗号分隔"></label>
+          </div>
+          <div class="selected-archive is-hidden" id="selectedArchive"><svg><use href="/assets/icons.svg#archive"/></svg><div><strong id="selectedArchiveName"></strong><span id="selectedArchiveSize"></span></div><button class="text-button" id="clearIncrementalFile">移除</button></div>
+          <button class="primary-button compact incremental-upload-button" id="uploadIncremental" disabled><svg><use href="/assets/icons.svg#upload"/></svg>上传并审计</button>
+        </section>
+
+        <section class="incremental-batches-card">
+          <div class="section-heading"><div><p class="eyebrow">批次资产</p><h2>已上传数据</h2></div><span id="incrementalBatchCount">0批</span></div>
+          <div class="incremental-batch-list" id="incrementalBatchList"><div class="history-empty"><svg><use href="/assets/icons.svg#archive"/></svg><div><strong>还没有增量批次</strong><small>上传后可在这里浏览和操作</small></div></div></div>
+        </section>
+      </div>
+
+      <section class="incremental-detail is-hidden" id="incrementalDetail">
+        <div class="incremental-detail-header"><div><p class="eyebrow">当前批次</p><h2 id="incrementalDetailName"></h2><p id="incrementalDetailMeta"></p></div><span class="batch-status" id="incrementalDetailStatus"></span></div>
+        <div class="incremental-metrics" id="incrementalMetrics"></div>
+        <div class="incremental-actions">
+          <button class="secondary-button" id="injectIncremental"><svg><use href="/assets/icons.svg#settings"/></svg>生成训练视图</button>
+          <button class="primary-button compact" id="trainIncremental"><svg><use href="/assets/icons.svg#scan"/></svg>开始快速训练</button>
+        </div>
+        <div class="incremental-gallery" id="incrementalGallery"></div>
+        <section class="training-monitor is-hidden" id="trainingMonitor">
+          <div class="section-heading"><div><p class="eyebrow">任务进度</p><h2>训练任务</h2></div><span id="trainingStatus"></span></div>
+          <div class="training-progress"><span id="trainingProgressBar"></span></div>
+          <pre id="trainingLog">等待训练日志...</pre>
+          <button class="secondary-button danger is-hidden" id="cancelTraining"><svg><use href="/assets/icons.svg#x"/></svg>停止训练</button>
+        </section>
+        <details class="operation-log-panel">
+          <summary><svg><use href="/assets/icons.svg#file"/></svg>查看操作记录</summary>
+          <div id="incrementalEventLog"></div>
+        </details>
       </section>
     </section>
 

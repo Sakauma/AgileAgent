@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
@@ -11,6 +12,7 @@ from PIL import Image
 
 from fair_agent.core.config import config_sha256, inference_backend_options, rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
+from fair_agent.core.runtime_log import event_log_from_config
 from fair_agent.modules.model_generations import load_generation_registry
 from fair_agent.modules.strict_incremental import (
     evaluate_ap50,
@@ -57,6 +59,10 @@ def ensure_recheck_candidate(config: Mapping[str, Any], candidate_id: str) -> Di
         owner = str(generations[candidate_id]["class_owners"]["2"])
         if abs(float(models[owner]["activation_threshold"]) - threshold) > 1e-9:
             raise ValueError("候选代际已存在，但激活阈值与配置不一致。")
+        event_log_from_config(config).append(
+            "generation.registration.reused", component="generation", generation_id=candidate_id,
+            details={"registry": rel_path(registry_path), "registry_sha256": sha256_file(registry_path)},
+        )
         return load_generation_registry(registry_path)
     if candidate_id != str(generation_cfg["candidate_id"]):
         raise ValueError(f"未知候选代际：{candidate_id}")
@@ -85,7 +91,19 @@ def ensure_recheck_candidate(config: Mapping[str, Any], candidate_id: str) -> Di
     registry["models"].append(source_model)
     registry["generations"].append(source_generation)
     registry["channels"]["candidate"] = candidate_id
+    previous_hash = sha256_file(registry_path)
     _atomic_registry_write(registry_path, registry, f"register:{candidate_id}")
+    event_log_from_config(config).append(
+        "generation.registered", component="generation", generation_id=candidate_id,
+        details={
+            "parent_generation": source_generation["parent"],
+            "model_id": model_id,
+            "activation_threshold": threshold,
+            "calibration_source": source_model.get("calibration_source"),
+            "registry_sha256_before": previous_hash,
+            "registry_sha256_after": sha256_file(registry_path),
+        },
+    )
     return load_generation_registry(registry_path)
 
 
@@ -128,7 +146,7 @@ def _prediction_rows(results: Iterable[Mapping[str, Any]]) -> tuple[list[Dict[st
     return before, after
 
 
-def recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
+def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
     from fair_agent.modules.web_inference import WebInferenceEngine
 
     registry = ensure_recheck_candidate(config, candidate_id)
@@ -160,6 +178,17 @@ def recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str
         "routing_prior": 1.0,
         "context_prior": {},
     }
+    event_log_from_config(config).append(
+        "incremental.dev_calibration.consumed",
+        component="incremental",
+        generation_id=candidate_id,
+        protocol_id=str(expert["id"]),
+        details={
+            "threshold": float(expert["activation_threshold"]),
+            "calibration_source": rel_path(resolve_path(expert["calibration_source"])),
+            "calibration_source_sha256": sha256_file(resolve_path(expert["calibration_source"])),
+        },
+    )
     inference = config["inference"]
     engine = WebInferenceEngine(
         settings["base"]["resolved_path"],
@@ -180,6 +209,17 @@ def recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str
     batch_size = int(inference["batch_size"])
     all_results = []
     started = datetime.now()
+    event_log_from_config(config).append(
+        "incremental.lock.unsealed",
+        component="incremental",
+        generation_id=candidate_id,
+        protocol_id=str(expert["id"]),
+        details={
+            "lock_split": rel_path(split),
+            "lock_split_sha256": sha256_file(split),
+            "image_count": len(image_paths),
+        },
+    )
     for offset in range(0, len(image_paths), batch_size):
         rows = []
         for path in image_paths[offset : offset + batch_size]:
@@ -260,7 +300,7 @@ def recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str
     return {**manifest, "manifest": rel_path(manifest_path), "manifest_sha256": sha256_file(manifest_path)}
 
 
-def promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_path: str | Path) -> Dict[str, Any]:
+def _promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_path: str | Path) -> Dict[str, Any]:
     path = resolve_path(manifest_path)
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if manifest.get("candidate") != candidate_id or manifest.get("accepted") is not True:
@@ -304,7 +344,7 @@ def promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_pa
     return {"production": candidate_id, "manifest": rel_path(path), "registry_sha256": sha256_file(registry_path)}
 
 
-def rollback_generation(config: Mapping[str, Any], target_id: str) -> Dict[str, Any]:
+def _rollback_generation(config: Mapping[str, Any], target_id: str) -> Dict[str, Any]:
     registry_path = resolve_path(config["generation"]["registry"])
     registry = _raw_registry(registry_path)
     generations = {str(item["id"]): item for item in registry["generations"]}
@@ -314,3 +354,113 @@ def rollback_generation(config: Mapping[str, Any], target_id: str) -> Dict[str, 
     registry["channels"]["production"] = target_id
     _atomic_registry_write(registry_path, registry, f"rollback:{previous}->{target_id}")
     return {"previous": previous, "production": target_id, "registry_sha256": sha256_file(registry_path)}
+
+
+def _audited_generation_action(
+    config: Mapping[str, Any],
+    action: str,
+    generation_id: str,
+    callback: Any,
+) -> Dict[str, Any]:
+    logger = event_log_from_config(config)
+    registry_path = resolve_path(config["generation"]["registry"])
+    before_registry_hash = sha256_file(registry_path) if registry_path.is_file() else None
+    try:
+        before_registry = _raw_registry(registry_path)
+        production_before = str(before_registry.get("channels", {}).get("production"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        production_before = None
+    event_prefix = {
+        "recheck": "generation.lock_recheck",
+        "promote": "generation.production_switch",
+        "rollback": "generation.rollback",
+    }[action]
+    trace_id = f"generation_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    logger.append(
+        f"{event_prefix}.started", component="generation", trace_id=trace_id,
+        generation_id=generation_id,
+        details={
+            "production_before": production_before,
+            "registry_sha256_before": before_registry_hash,
+        },
+    )
+    started = time.perf_counter()
+    try:
+        result = callback()
+    except Exception as exc:
+        logger.append(
+            f"{event_prefix}.failed", level="error", component="generation", trace_id=trace_id,
+            generation_id=generation_id, duration_ms=(time.perf_counter() - started) * 1000,
+            message=str(exc),
+            details={
+                "error_type": type(exc).__name__,
+                "production_before": production_before,
+                "registry_sha256_before": before_registry_hash,
+            },
+        )
+        if action == "recheck":
+            logger.append(
+                "incremental.lock_recheck.failed", level="error", component="incremental",
+                trace_id=trace_id, generation_id=generation_id,
+                duration_ms=(time.perf_counter() - started) * 1000,
+                message=str(exc), details={"error_type": type(exc).__name__},
+            )
+        raise
+    after_registry_hash = sha256_file(registry_path) if registry_path.is_file() else None
+    try:
+        after_registry = _raw_registry(registry_path)
+        production_after = str(after_registry.get("channels", {}).get("production"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        production_after = None
+    logger.append(
+        f"{event_prefix}.completed", component="generation", trace_id=trace_id,
+        generation_id=generation_id, duration_ms=(time.perf_counter() - started) * 1000,
+        details={
+            "production_before": production_before,
+            "production_after": production_after,
+            "registry_sha256_before": before_registry_hash,
+            "registry_sha256_after": after_registry_hash,
+            "result": result,
+        },
+    )
+    if action == "recheck":
+        logger.append(
+            "incremental.lock_recheck.completed",
+            level="info" if result.get("accepted") else "warning",
+            component="incremental",
+            trace_id=trace_id,
+            generation_id=generation_id,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            details={
+                "accepted": bool(result.get("accepted")),
+                "threshold": result.get("threshold"),
+                "metrics": result.get("metrics"),
+                "gates": result.get("gates"),
+                "manifest": result.get("manifest"),
+                "manifest_sha256": result.get("manifest_sha256"),
+            },
+        )
+    return result
+
+
+def recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
+    return _audited_generation_action(
+        config, "recheck", candidate_id, lambda: _recheck_generation(config, candidate_id)
+    )
+
+
+def promote_generation(
+    config: Mapping[str, Any], candidate_id: str, manifest_path: str | Path
+) -> Dict[str, Any]:
+    return _audited_generation_action(
+        config,
+        "promote",
+        candidate_id,
+        lambda: _promote_generation(config, candidate_id, manifest_path),
+    )
+
+
+def rollback_generation(config: Mapping[str, Any], target_id: str) -> Dict[str, Any]:
+    return _audited_generation_action(
+        config, "rollback", target_id, lambda: _rollback_generation(config, target_id)
+    )

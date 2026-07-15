@@ -263,6 +263,62 @@ h2 { margin: 0; font-size: 14px; line-height: 1.2; }
 .history-empty { display: grid; place-items: center; min-height: 280px; color: var(--muted); text-align: center; }
 .history-empty svg { width: 34px; height: 34px; margin-bottom: 10px; color: #586563; }
 
+.incremental-heading { align-items: flex-end; }
+.refresh-button { width: auto; min-width: 132px; margin: 0; }
+.incremental-layout { display: grid; grid-template-columns: minmax(320px, .85fr) minmax(380px, 1.15fr); gap: 18px; }
+.incremental-upload-card, .incremental-batches-card, .incremental-detail { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow); }
+.incremental-upload-card { padding-bottom: 16px; }
+.status-pill, .batch-status { display: inline-flex; align-items: center; min-height: 26px; padding: 0 9px; border-radius: 999px; color: var(--cyan-strong); background: var(--cyan-soft); font-size: 10px; font-weight: 800; }
+.incremental-dropzone { display: flex; align-items: center; gap: 14px; width: calc(100% - 32px); min-height: 112px; margin: 16px; padding: 20px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--ink); background: #f9fbfb; text-align: left; cursor: pointer; }
+.incremental-dropzone:hover, .incremental-dropzone.is-dragging { border-color: var(--cyan); background: var(--cyan-soft); }
+.incremental-dropzone strong, .incremental-dropzone small { display: block; }
+.incremental-dropzone small { margin-top: 5px; color: var(--muted); font-size: 10px; }
+.incremental-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 16px 14px; }
+.incremental-form label { color: var(--muted); font-size: 10px; font-weight: 700; }
+.incremental-form input { width: 100%; height: 40px; margin-top: 7px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: #fff; }
+.incremental-form input:focus { border-color: var(--cyan); outline: 2px solid var(--cyan-soft); }
+.selected-archive { display: flex; align-items: center; gap: 10px; margin: 0 16px 14px; padding: 10px 12px; border-radius: 8px; background: var(--panel-soft); }
+.selected-archive > svg { color: var(--cyan-strong); }
+.selected-archive > div { min-width: 0; flex: 1; }
+.selected-archive strong, .selected-archive span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selected-archive span { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.incremental-upload-button { width: calc(100% - 32px); margin: 0 16px; }
+.incremental-batch-list { max-height: 364px; overflow: auto; }
+.incremental-batch-row { display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 12px; width: 100%; min-height: 72px; padding: 12px 16px; border: 0; border-top: 1px solid var(--line); color: var(--ink); background: #fff; text-align: left; cursor: pointer; }
+.incremental-batch-row:hover, .incremental-batch-row.is-active { background: var(--cyan-soft); }
+.incremental-batch-row > span:first-child { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 8px; color: var(--cyan-strong); background: #fff; }
+.incremental-batch-row strong, .incremental-batch-row small { display: block; }
+.incremental-batch-row small { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.incremental-batch-row .batch-status { justify-self: end; }
+.incremental-detail { margin-top: 18px; padding-bottom: 18px; }
+.incremental-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px; border-bottom: 1px solid var(--line); background: #fbfdfd; }
+.incremental-detail-header h2 { margin: 3px 0 5px; font-size: 19px; }
+.incremental-detail-header p { margin: 0; color: var(--muted); font-size: 10px; }
+.incremental-metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 16px 20px 6px; }
+.incremental-metric { min-height: 74px; padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.incremental-metric span, .incremental-metric b { display: block; }
+.incremental-metric span { color: var(--muted); font-size: 9px; }
+.incremental-metric b { margin-top: 8px; font-size: 17px; }
+.incremental-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px; }
+.incremental-actions .secondary-button, .incremental-actions .primary-button { width: auto; min-width: 150px; margin: 0; }
+.incremental-gallery { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; padding: 8px 20px 18px; }
+.incremental-thumb { position: relative; overflow: hidden; aspect-ratio: 4 / 3; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-soft); }
+.incremental-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.incremental-thumb span { position: absolute; right: 5px; bottom: 5px; padding: 3px 5px; border-radius: 5px; color: #fff; background: rgba(20, 38, 40, .76); font-size: 8px; }
+.training-monitor { margin: 4px 20px 16px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #f9fbfb; }
+.training-progress { height: 4px; background: var(--panel-soft); }
+.training-progress span { display: block; width: 18%; height: 100%; background: var(--cyan); animation: training-pulse 1.6s ease-in-out infinite alternate; }
+.training-monitor pre { max-height: 270px; margin: 0; padding: 15px; overflow: auto; color: #dce9e7; background: #182426; font: 10px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+.training-monitor > .secondary-button { width: auto; margin: 12px 16px; }
+.operation-log-panel { margin: 0 20px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.operation-log-panel summary { display: flex; align-items: center; gap: 8px; padding: 13px 15px; color: var(--muted); font-size: 10px; font-weight: 800; cursor: pointer; }
+.operation-log-panel summary svg { width: 15px; height: 15px; }
+.operation-event { display: grid; grid-template-columns: 142px 1fr auto; gap: 10px; padding: 9px 15px; border-top: 1px solid var(--line); font-size: 9px; }
+.operation-event time { color: var(--muted); }
+.operation-event b { color: var(--ink); }
+.operation-event span { color: var(--muted); }
+@keyframes training-pulse { to { width: 82%; } }
+
 .toast-region { position: fixed; right: 20px; bottom: 20px; z-index: 200; display: grid; gap: 8px; width: min(360px, calc(100vw - 40px)); }
 .toast { display: flex; align-items: start; gap: 10px; padding: 13px 14px; border: 1px solid #2d5b51; border-left: 3px solid var(--cyan); color: #d6dedc; background: #111817; box-shadow: var(--shadow); font-size: 11px; animation: toast-in .18s ease-out; }
 .toast.is-error { border-color: #663834; border-left-color: var(--red); background: var(--red-soft); }
@@ -377,6 +433,9 @@ body::before { border-top-color: var(--cyan); opacity: .45; }
   .detection-workspace { grid-template-columns: 1fr; }
   .result-panel { min-height: 500px; }
   .details-grid { grid-template-columns: 1fr; }
+  .incremental-layout { grid-template-columns: 1fr; }
+  .incremental-metrics { grid-template-columns: repeat(3, 1fr); }
+  .incremental-gallery { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 @media (max-width: 620px) {
@@ -423,6 +482,16 @@ body::before { border-top-color: var(--cyan); opacity: .45; }
   .history-stats { grid-template-columns: 1fr; }
   .history-row { grid-template-columns: 26px minmax(0, 1fr) 64px; }
   .history-row .history-cell:nth-last-child(-n+2) { display: none; }
+  .incremental-heading { align-items: stretch; }
+  .refresh-button { width: 100%; }
+  .incremental-form { grid-template-columns: 1fr; }
+  .incremental-detail-header { align-items: flex-start; flex-direction: column; }
+  .incremental-metrics { grid-template-columns: repeat(2, 1fr); padding: 12px; }
+  .incremental-actions { flex-direction: column; padding: 12px; }
+  .incremental-actions .secondary-button, .incremental-actions .primary-button { width: 100%; }
+  .incremental-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 8px 12px 14px; }
+  .training-monitor, .operation-log-panel { margin-left: 12px; margin-right: 12px; }
+  .operation-event { grid-template-columns: 1fr; gap: 3px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

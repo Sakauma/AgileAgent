@@ -107,7 +107,7 @@ python scripts/smoke_models.py
 ./scripts/start_agent.sh --cli
 ```
 
-Web 前端面向评委和检测使用者，提供单图检测、批量检测、自动 IR/SAR 与场景识别、标注图预览以及 JSON/ZIP 导出。用户只需上传图像，Agent 会自动解析当前活动代际，执行其中所有类别所有者并融合结果，不要求用户选择模型。未通过部署门禁的候选专家不会进入 Web。批量任务完成后可在网页逐张选择和查看标注结果，也可下载完整结果包；会话记录可直接跳转到当前页面最近10份完整结果。单GPU请求采用公平队列，单次请求内的上下文、基础检测和类别专家可按 YAML 并行调度。默认单文件限制20MB、单批限制20张和200MB、当前会话最多保留20条轻量历史，实际值均由主 YAML 与只读公开配置接口提供。权重路径、哈希和部署门禁等运维细节不会显示在 Web 中。
+Web 前端面向评委和检测使用者，提供单图检测、批量检测、增量学习工作台、自动 IR/SAR 与场景识别、标注图预览以及 JSON/ZIP 导出。用户只需上传图像，Agent 会自动解析当前活动代际，执行其中所有类别所有者并融合结果，不要求用户选择模型。未通过部署门禁的候选专家不会进入 Web。批量任务完成后可在网页逐张选择和查看标注结果，也可下载完整结果包；会话记录可直接跳转到当前页面最近10份完整结果。单GPU请求采用公平队列，单次请求内的上下文、基础检测和类别专家可按 YAML 并行调度。默认单文件限制20MB、单批限制20张和200MB、当前会话最多保留20条轻量历史，实际值均由主 YAML 与只读公开配置接口提供。权重路径、哈希和部署门禁等运维细节不会显示在 Web 中。
 
 CLI 前端面向开发与运维人员，包含总览、模型、数据、增量和部署五个页面，并可刷新黑板、生成策略、创建 Dry-run 和执行经过确认的低风险动作。
 
@@ -183,6 +183,52 @@ pytest -q
 `pipeline --mode execute` 只执行 YAML 允许列表中的低风险动作。训练、正式推理、打包和提交始终需要人工触发并保留审计记录。智能体主配置位于 `configs/agent_pipeline.yaml`。
 
 `benchmark-api` 会在 8501 未运行时按当前有效配置启动临时服务，测试结束后自动关闭；若已有健康服务则直接测试该实例。未达到性能门槛时命令返回非零，同时仍会将完整报告写入 `reports/api_performance/<run_id>/benchmark.json`。
+
+## 增量学习工作台
+
+Web 顶部的“增量学习”入口支持上传、浏览、注入和训练增量数据。上传包必须是 ZIP，内部采用 YOLO 标签；建议同时包含带 `names` 字段的 `data.yaml`：
+
+```text
+new_batch.zip
+├── data.yaml
+├── images/train/*.png
+├── images/val/*.png
+├── labels/train/*.txt
+└── labels/val/*.txt
+```
+
+若没有显式验证集，Agent 会确定性划分 train/val；若没有 `data.yaml`，可在上传页填写逗号分隔的类别名称。系统会安全解压并检查图像可读性、YOLO五列格式、坐标范围、重复 stem、图像标签对应关系和类别分布，再依据当前 production 类别自动判断 `class_incremental` 或 `target_incremental`。上传数据保存在 `data/incremental_batches/<batch_id>/`，不进入 Git。
+
+“生成训练视图”会在批次目录内创建独立数据视图和内部 `batch.yaml`，并记录 `old_raw_image_count=0`；“开始快速训练”会启动 GPU 后台任务，页面可查看状态和实时日志。训练产物始终标记为待校准候选，不会自动替换 production。后续仍需完成阈值校准、lock 复核和 `generation promote`。
+
+相同能力可由 CLI 操作：
+
+```bash
+agile-agent incremental-data upload --archive /path/to/new_batch.zip --name 新批次
+agile-agent incremental-data list
+agile-agent incremental-data show --batch-id BATCH_ID
+agile-agent incremental-data inject --batch-id BATCH_ID
+agile-agent incremental-data train --batch-id BATCH_ID
+agile-agent incremental-data jobs --batch-id BATCH_ID
+agile-agent incremental-data logs --batch-id BATCH_ID --job-id JOB_ID
+```
+
+上传容量、保存目录、初始权重、GPU、`imgsz`、batch、epoch、学习率和早停参数均位于 `configs/agent_pipeline.yaml` 的 `incremental_workbench` 段，也可使用现有 `--set` 或 `config set` 接口修改。完整说明见 `docs/incremental-workbench.md`。
+
+## 运行日志
+
+Agent 将 Web 请求、推理、CLI、数据审计、数据视图生成、增量训练、dev 阈值校准、lock 解封与复核、generation 注册、production 切换、回滚和异常统一写为结构化 JSONL。每条记录包含 UTC 时间、级别、组件、事件、`trace_id`、批次/任务/实验/运行/协议/代际编号、耗时和脱敏详情；上传内容、口令和令牌不会写入日志。阶段原始 `events.jsonl` 与 manifest 继续保留，全局日志作为跨模块行为索引。日志默认位于 `reports/agent_logs/`，按大小轮转并保留14个文件。
+
+```bash
+agile-agent logs --limit 200
+agile-agent logs --component training --batch-id BATCH_ID
+agile-agent logs --job-id JOB_ID
+agile-agent logs --experiment-id warship_3plus1 --run-id RUN_ID
+agile-agent logs --protocol-id round_01
+agile-agent logs --generation-id generation-1-recheck-v2
+```
+
+日志目录、单文件大小和保留数量由主 YAML 的 `logging` 段统一配置。Web 的增量批次详情页只展示与当前批次相关的脱敏操作时间线；完整详情保留在 CLI 和 JSONL 中。完整事件规范见 `docs/agent-audit-logging.md`。
 
 当前 TensorRT engine 可用以下命令只读校验；缺失时去掉 `--verify-only` 才会按 YAML 导出，已有且哈希正确的资产不会覆盖：
 

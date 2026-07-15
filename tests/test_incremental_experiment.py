@@ -10,11 +10,13 @@ import yaml
 from PIL import Image
 
 from fair_agent.modules.incremental_experiment import (
+    ExperimentLedger,
     dataset_snapshot,
     load_experiment_config,
     reproduce_experiment,
     validate_experiment,
 )
+from fair_agent.core.runtime_log import StructuredEventLog
 from fair_agent.modules.model_generations import load_generation_registry
 from fair_agent.modules.strict_incremental import retention_metrics
 
@@ -180,3 +182,20 @@ def test_krr_is_recomputed_from_actual_combined_predictions() -> None:
     assert retained["old_map50_after"] == 0.0
     assert retained["krr"] == 0.0
     assert retained["old_prediction_equivalent"] is False
+
+
+def test_experiment_ledger_mirrors_state_to_global_agent_log(tmp_path: Path) -> None:
+    event_log = StructuredEventLog(tmp_path / "global-logs", 1024 * 1024, 2)
+    ledger = ExperimentLedger(
+        tmp_path / "runs", "run-01", experiment_id="synthetic", event_log=event_log
+    )
+    ledger.event(
+        "LOCK_UNSEALED", protocol_id="round_01", split_sha256="b" * 64
+    )
+    local = [json.loads(line) for line in ledger.events_path.read_text(encoding="utf-8").splitlines()]
+    global_rows = event_log.query(
+        experiment_id="synthetic", run_id="run-01", protocol_id="round_01"
+    )
+    assert local[0]["state"] == "LOCK_UNSEALED"
+    assert global_rows[0]["event"] == "incremental.lock.unsealed"
+    assert global_rows[0]["details"]["split_sha256"] == "b" * 64

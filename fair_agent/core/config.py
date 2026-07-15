@@ -36,6 +36,7 @@ KNOWN_TOP_LEVEL = {
     "storage", "ui", "performance", "native_backend", "tensorrt_backend", "model", "assets", "automation",
     "generation", "submission", "blackboard", "detector", "functional_models", "inputs", "modules",
     "policies", "thresholds", "incremental", "specialist_acceptance", "decision",
+    "logging", "incremental_workbench",
 }
 KNOWN_SECTION_KEYS = {
     "runtime": {"mode", "local_python", "default_device", "server_host", "server_port"},
@@ -66,6 +67,12 @@ KNOWN_SECTION_KEYS = {
     },
     "generation": {"registry", "recheck_lock_split", "report_root", "candidate_id", "calibrated_threshold", "acceptance"},
     "model": {"weights", "expected_sha256"},
+    "logging": {"root", "max_file_bytes", "retained_files", "request_bodies"},
+    "incremental_workbench": {
+        "root", "max_archive_bytes", "max_extracted_bytes", "max_extracted_files",
+        "max_image_pixels", "allowed_image_extensions", "require_labels", "validation_fraction",
+        "minimum_images", "preview_limit", "job_log_tail_lines", "poll_interval_ms", "training",
+    },
 }
 
 
@@ -276,6 +283,48 @@ def validate_config(config: Dict[str, Any]) -> None:
     storage = _require_mapping(config, "storage", errors)
     for key in ("max_items", "ttl_seconds", "max_bytes"):
         _number(storage, key, errors, 1)
+    logging = _require_mapping(config, "logging", errors)
+    if not logging.get("root"):
+        errors.append("logging.root不能为空")
+    _number(logging, "max_file_bytes", errors, 1024)
+    _number(logging, "retained_files", errors, 1, 100)
+    if logging.get("request_bodies") is not False:
+        errors.append("logging.request_bodies必须为false，禁止记录上传内容")
+    workbench = _require_mapping(config, "incremental_workbench", errors)
+    if not workbench.get("root"):
+        errors.append("incremental_workbench.root不能为空")
+    for key in ("max_archive_bytes", "max_extracted_bytes", "max_extracted_files", "max_image_pixels"):
+        _number(workbench, key, errors, 1)
+    extensions = workbench.get("allowed_image_extensions")
+    if not isinstance(extensions, list) or not extensions or not all(
+        isinstance(value, str) and value.startswith(".") for value in extensions
+    ):
+        errors.append("incremental_workbench.allowed_image_extensions必须是带点号的非空扩展名列表")
+    if not isinstance(workbench.get("require_labels"), bool):
+        errors.append("incremental_workbench.require_labels必须为布尔值")
+    _number(workbench, "validation_fraction", errors, 0.01, 0.50)
+    _number(workbench, "minimum_images", errors, 2)
+    _number(workbench, "preview_limit", errors, 1, 100)
+    _number(workbench, "job_log_tail_lines", errors, 10, 2000)
+    _number(workbench, "poll_interval_ms", errors, 500, 60000)
+    workbench_training = workbench.get("training")
+    if not isinstance(workbench_training, Mapping):
+        errors.append("incremental_workbench.training必须是映射")
+    else:
+        required_training = {
+            "python", "initial_weights", "device", "imgsz", "batch", "epochs", "patience",
+            "workers", "optimizer", "lr0", "seed", "deterministic", "amp",
+        }
+        missing_training = sorted(required_training - set(workbench_training))
+        if missing_training:
+            errors.append("incremental_workbench.training缺少：" + ", ".join(missing_training))
+        if workbench_training.get("device") is None or not str(workbench_training.get("device")).isdigit():
+            errors.append("incremental_workbench.training.device必须是GPU编号")
+        for key in ("imgsz", "batch", "epochs", "patience", "workers", "seed"):
+            _number(workbench_training, key, errors, 0 if key in {"patience", "workers"} else 1)
+        _number(workbench_training, "lr0", errors, 0.0000001, 1.0)
+        if not all(isinstance(workbench_training.get(key), bool) for key in ("deterministic", "amp")):
+            errors.append("incremental_workbench.training.deterministic与amp必须为布尔值")
     ui = _require_mapping(config, "ui", errors)
     for key in ("history_limit", "result_cache_limit", "health_poll_ms", "toast_duration_ms"):
         _number(ui, key, errors, 1)
@@ -484,10 +533,23 @@ def write_config(path: Union[str, Path], data: Mapping[str, Any], operation: str
         raise ValueError("原配置不是映射")
     clean = {key: value for key, value in data.items() if not str(key).startswith("_")}
     validate_config(dict(clean))
-    _audit_config_write(config_path, before, clean, operation)
+    backup_dir = _audit_config_write(config_path, before, clean, operation)
     temporary = config_path.with_suffix(config_path.suffix + ".tmp")
     temporary.write_text(yaml.safe_dump(clean, allow_unicode=True, sort_keys=False), encoding="utf-8")
     os.replace(temporary, config_path)
+    from .runtime_log import event_log_from_config
+
+    event_log_from_config(clean).append(
+        "config.changed",
+        component="configuration",
+        details={
+            "operation": operation,
+            "config": rel_path(config_path),
+            "before_sha256": config_sha256(before),
+            "after_sha256": config_sha256(clean),
+            "backup": rel_path(backup_dir / config_path.name),
+        },
+    )
     return config_path
 
 

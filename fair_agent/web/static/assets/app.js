@@ -1,8 +1,9 @@
 (() => {
   "use strict";
 
-  const LIMITS = { fileBytes: 0, batchFiles: 0, batchBytes: 0 };
+  const LIMITS = { fileBytes: 0, batchFiles: 0, batchBytes: 0, incrementalBytes: 0 };
   const UI = { historyLimit: 0, resultCacheLimit: 0, healthPollMs: 0, toastDurationMs: 0 };
+  const INCREMENTAL = { previewLimit: 0, logTailLines: 0, pollIntervalMs: 0 };
   const HISTORY_KEY = "agile-agent-session-history-v1";
   const SENSOR_LABELS = { ir: "红外", sar: "SAR" };
   const SCENE_LABELS = { air: "空域", forest: "林地", sea: "海域", urban: "城市场景" };
@@ -27,6 +28,11 @@
     batchResult: null,
     resultCache: new Map(),
     history: [],
+    incrementalFile: null,
+    incrementalBatches: [],
+    incrementalBatch: null,
+    trainingJob: null,
+    trainingPoll: null,
   };
 
   function icon(name) {
@@ -107,8 +113,264 @@
     $("#mobileMenu").setAttribute("aria-expanded", "false");
     $("#mobileMenu").setAttribute("aria-label", "打开导航");
     if (viewName === "history") renderHistory();
+    if (viewName === "incremental") loadIncrementalBatches();
     window.location.hash = viewName;
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  const BATCH_STATUS = {
+    AUDITED: "审计通过", REJECTED: "审计未通过", INJECTED: "已准备",
+    TRAINING: "训练中", TRAINED_CANDIDATE: "候选已生成", FAILED: "训练失败",
+    CANCELLED: "已停止", QUEUED: "排队中", RUNNING: "训练中", COMPLETED: "训练完成",
+    CANCELLING: "正在停止",
+  };
+
+  function batchStatus(value) {
+    return BATCH_STATUS[value] || value || "未知";
+  }
+
+  function selectIncrementalFile(file) {
+    if (!file || !file.name.toLowerCase().endsWith(".zip")) {
+      showToast("请选择ZIP格式的增量数据包。", "error");
+      return;
+    }
+    if (!file.size || file.size > LIMITS.incrementalBytes) {
+      showToast(`数据包不能超过${formatBytes(LIMITS.incrementalBytes)}。`, "error");
+      return;
+    }
+    state.incrementalFile = file;
+    $("#selectedArchiveName").textContent = file.name;
+    $("#selectedArchiveSize").textContent = formatBytes(file.size);
+    $("#selectedArchive").classList.remove("is-hidden");
+    $("#uploadIncremental").disabled = false;
+  }
+
+  function clearIncrementalFile() {
+    state.incrementalFile = null;
+    $("#incrementalFile").value = "";
+    $("#selectedArchive").classList.add("is-hidden");
+    $("#uploadIncremental").disabled = true;
+  }
+
+  async function uploadIncrementalBatch() {
+    if (!state.incrementalFile) return;
+    const form = new FormData();
+    form.append("file", state.incrementalFile);
+    form.append("name", $("#incrementalName").value.trim());
+    form.append("class_names", $("#incrementalClasses").value.trim());
+    setLoading(true, "正在审计增量数据", "检查图像、标签、类别和数据边界");
+    try {
+      const response = await fetch("/api/incremental/batches", { method: "POST", body: form });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "数据审计未通过。");
+      clearIncrementalFile();
+      $("#incrementalName").value = "";
+      $("#incrementalClasses").value = "";
+      await loadIncrementalBatches(payload.batch_id);
+      showToast("增量数据已保存并通过审计。");
+    } catch (error) {
+      showToast(error.message || "增量数据上传失败。", "error");
+      await loadIncrementalBatches();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadIncrementalBatches(openBatchId = null) {
+    try {
+      const response = await fetch("/api/incremental/batches", { cache: "no-store" });
+      if (!response.ok) throw new Error(await responseError(response));
+      const payload = await response.json();
+      state.incrementalBatches = payload.batches || [];
+      renderIncrementalBatchList();
+      if (openBatchId) await openIncrementalBatch(openBatchId);
+    } catch (error) {
+      showToast(error.message || "无法读取增量批次。", "error");
+    }
+  }
+
+  function renderIncrementalBatchList() {
+    const list = $("#incrementalBatchList");
+    list.innerHTML = "";
+    $("#incrementalBatchCount").textContent = `${state.incrementalBatches.length}批`;
+    if (!state.incrementalBatches.length) {
+      const empty = document.createElement("div");
+      empty.className = "history-empty";
+      empty.innerHTML = `${icon("archive")}<div><strong>还没有增量批次</strong><small>上传后可在这里浏览和操作</small></div>`;
+      list.appendChild(empty);
+      return;
+    }
+    state.incrementalBatches.forEach((batch) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = `incremental-batch-row${state.incrementalBatch && state.incrementalBatch.batch_id === batch.batch_id ? " is-active" : ""}`;
+      const glyph = document.createElement("span");
+      glyph.innerHTML = icon(batch.status === "REJECTED" || batch.status === "FAILED" ? "alert" : "archive");
+      const content = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = batch.name;
+      const meta = document.createElement("small");
+      meta.textContent = `${Number((batch.audit || {}).image_count || 0)}张图像 · ${new Date(batch.created_at).toLocaleString()}`;
+      content.append(title, meta);
+      const status = document.createElement("span");
+      status.className = "batch-status";
+      status.textContent = batchStatus(batch.status);
+      row.append(glyph, content, status);
+      row.addEventListener("click", () => openIncrementalBatch(batch.batch_id));
+      list.appendChild(row);
+    });
+  }
+
+  function metricNode(label, value) {
+    const node = document.createElement("div");
+    node.className = "incremental-metric";
+    const title = document.createElement("span");
+    title.textContent = label;
+    const content = document.createElement("b");
+    content.textContent = String(value);
+    node.append(title, content);
+    return node;
+  }
+
+  async function openIncrementalBatch(batchId) {
+    try {
+      const response = await fetch(`/api/incremental/batches/${encodeURIComponent(batchId)}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(await responseError(response));
+      state.incrementalBatch = await response.json();
+      renderIncrementalDetail();
+      renderIncrementalBatchList();
+      await loadIncrementalEvents();
+      if (state.incrementalBatch.training_job_id && state.incrementalBatch.status === "TRAINING") {
+        startTrainingPoll(state.incrementalBatch.training_job_id);
+      }
+    } catch (error) {
+      showToast(error.message || "无法打开增量批次。", "error");
+    }
+  }
+
+  function renderIncrementalDetail() {
+    const batch = state.incrementalBatch;
+    if (!batch) return;
+    const audit = batch.audit || {};
+    $("#incrementalDetail").classList.remove("is-hidden");
+    $("#incrementalDetailName").textContent = batch.name;
+    $("#incrementalDetailMeta").textContent = `${batch.source.filename} · ${formatBytes(batch.source.size_bytes)} · ${audit.incremental_mode === "class_incremental" ? "类别增量" : "目标增量"}`;
+    $("#incrementalDetailStatus").textContent = batchStatus(batch.status);
+    const metrics = $("#incrementalMetrics");
+    metrics.innerHTML = "";
+    const classNames = Object.values(audit.class_map || {}).join("、") || "待确认";
+    [["图像", audit.image_count || 0], ["目标", audit.object_count || 0], ["类别", classNames], ["旧样本读取", audit.old_raw_image_count || 0], ["合规审计", audit.compliance === "passed" ? "通过" : "未通过"]]
+      .forEach(([label, value]) => metrics.appendChild(metricNode(label, value)));
+    $("#injectIncremental").disabled = batch.status !== "AUDITED";
+    $("#trainIncremental").disabled = !["INJECTED", "FAILED"].includes(batch.status);
+    const gallery = $("#incrementalGallery");
+    gallery.innerHTML = "";
+    (batch.files || []).slice(0, INCREMENTAL.previewLimit).forEach((item, index) => {
+      const node = document.createElement("div");
+      node.className = "incremental-thumb";
+      const image = document.createElement("img");
+      image.loading = "lazy";
+      image.src = `/api/incremental/batches/${encodeURIComponent(batch.batch_id)}/images/${index}`;
+      image.alt = `增量样本 ${index + 1}`;
+      const count = document.createElement("span");
+      count.textContent = `${item.object_count}个目标`;
+      node.append(image, count);
+      gallery.appendChild(node);
+    });
+  }
+
+  async function injectIncrementalBatch() {
+    if (!state.incrementalBatch) return;
+    setLoading(true, "正在准备训练数据", "生成独立训练视图和内部批次配置");
+    try {
+      const response = await fetch(`/api/incremental/batches/${encodeURIComponent(state.incrementalBatch.batch_id)}/inject`, { method: "POST" });
+      if (!response.ok) throw new Error(await responseError(response));
+      state.incrementalBatch = await response.json();
+      renderIncrementalDetail();
+      await loadIncrementalBatches();
+      await loadIncrementalEvents();
+      showToast("训练视图已准备完成。");
+    } catch (error) {
+      showToast(error.message || "数据注入失败。", "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function trainIncrementalBatch() {
+    if (!state.incrementalBatch) return;
+    try {
+      const response = await fetch(`/api/incremental/batches/${encodeURIComponent(state.incrementalBatch.batch_id)}/train`, { method: "POST" });
+      if (!response.ok) throw new Error(await responseError(response));
+      state.trainingJob = await response.json();
+      $("#trainingMonitor").classList.remove("is-hidden");
+      $("#cancelTraining").classList.remove("is-hidden");
+      startTrainingPoll(state.trainingJob.job_id);
+      showToast("训练任务已提交到GPU队列。");
+    } catch (error) {
+      showToast(error.message || "无法启动训练。", "error");
+    }
+  }
+
+  function startTrainingPoll(jobId) {
+    if (state.trainingPoll) window.clearInterval(state.trainingPoll);
+    pollTraining(jobId);
+    state.trainingPoll = window.setInterval(() => pollTraining(jobId), INCREMENTAL.pollIntervalMs);
+  }
+
+  async function pollTraining(jobId) {
+    if (!state.incrementalBatch) return;
+    const batchId = encodeURIComponent(state.incrementalBatch.batch_id);
+    try {
+      const [jobResponse, logResponse] = await Promise.all([
+        fetch(`/api/incremental/jobs/${encodeURIComponent(jobId)}?batch_id=${batchId}`, { cache: "no-store" }),
+        fetch(`/api/incremental/jobs/${encodeURIComponent(jobId)}/logs?batch_id=${batchId}&tail=${INCREMENTAL.logTailLines}`, { cache: "no-store" }),
+      ]);
+      if (!jobResponse.ok) throw new Error(await responseError(jobResponse));
+      state.trainingJob = await jobResponse.json();
+      $("#trainingMonitor").classList.remove("is-hidden");
+      $("#trainingStatus").textContent = batchStatus(state.trainingJob.status);
+      $("#trainingLog").textContent = logResponse.ok ? (await logResponse.text() || "训练进程正在初始化...") : "暂时无法读取训练日志。";
+      $("#trainingLog").scrollTop = $("#trainingLog").scrollHeight;
+      const terminal = ["COMPLETED", "FAILED", "CANCELLED"].includes(state.trainingJob.status);
+      $("#cancelTraining").classList.toggle("is-hidden", terminal);
+      $("#trainingProgressBar").style.animationPlayState = terminal ? "paused" : "running";
+      if (terminal) {
+        window.clearInterval(state.trainingPoll);
+        state.trainingPoll = null;
+        await openIncrementalBatch(state.incrementalBatch.batch_id);
+      }
+    } catch (error) {
+      showToast(error.message || "训练状态更新失败。", "error");
+    }
+  }
+
+  async function cancelTraining() {
+    if (!state.incrementalBatch || !state.trainingJob) return;
+    const response = await fetch(`/api/incremental/jobs/${encodeURIComponent(state.trainingJob.job_id)}/cancel?batch_id=${encodeURIComponent(state.incrementalBatch.batch_id)}`, { method: "POST" });
+    if (!response.ok) showToast(await responseError(response), "error");
+    else showToast("已请求停止训练。")
+  }
+
+  async function loadIncrementalEvents() {
+    if (!state.incrementalBatch) return;
+    const response = await fetch(`/api/logs?batch_id=${encodeURIComponent(state.incrementalBatch.batch_id)}&limit=100`, { cache: "no-store" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    const root = $("#incrementalEventLog");
+    root.innerHTML = "";
+    (payload.events || []).forEach((event) => {
+      const node = document.createElement("div");
+      node.className = "operation-event";
+      const time = document.createElement("time");
+      time.textContent = new Date(event.timestamp).toLocaleString();
+      const name = document.createElement("b");
+      name.textContent = event.event;
+      const duration = document.createElement("span");
+      duration.textContent = event.duration_ms == null ? event.level : `${Number(event.duration_ms).toFixed(1)} ms`;
+      node.append(time, name, duration);
+      root.appendChild(node);
+    });
   }
 
   async function refreshHealth() {
@@ -692,6 +954,10 @@
     LIMITS.fileBytes = Number(config.limits.max_file_bytes);
     LIMITS.batchFiles = Number(config.limits.max_batch_files);
     LIMITS.batchBytes = Number(config.limits.max_batch_bytes);
+    LIMITS.incrementalBytes = Number(config.incremental.max_archive_bytes);
+    INCREMENTAL.previewLimit = Number(config.incremental.preview_limit);
+    INCREMENTAL.logTailLines = Number(config.incremental.job_log_tail_lines);
+    INCREMENTAL.pollIntervalMs = Number(config.incremental.poll_interval_ms);
     UI.historyLimit = Number(config.ui.history_limit);
     UI.resultCacheLimit = Number(config.ui.result_cache_limit);
     UI.healthPollMs = Number(config.ui.health_poll_ms);
@@ -708,6 +974,7 @@
     $("#singleLimitText").textContent = `或点击选择文件 · 最大${formatBytes(LIMITS.fileBytes)}`;
     $("#batchLimitText").textContent = `单批最多${LIMITS.batchFiles}张，总计不超过${formatBytes(LIMITS.batchBytes)}`;
     $("#batchIntro").textContent = `一次处理最多${LIMITS.batchFiles}张图像，完成后可逐张查看标注图和结果清单。`;
+    $("#incrementalLimitText").textContent = `包含图像、标签及可选data.yaml · 最大${formatBytes(LIMITS.incrementalBytes)}`;
   }
 
   async function initialize() {
@@ -749,6 +1016,15 @@
     $("#downloadBatch").addEventListener("click", () => {
       if (state.batchResult && state.batchResult.download_url) window.location.assign(state.batchResult.download_url);
     });
+    $("#incrementalDropzone").addEventListener("click", () => $("#incrementalFile").click());
+    $("#incrementalFile").addEventListener("change", (event) => event.target.files[0] && selectIncrementalFile(event.target.files[0]));
+    bindDropzone($("#incrementalDropzone"), (files) => files[0] && selectIncrementalFile(files[0]));
+    $("#clearIncrementalFile").addEventListener("click", clearIncrementalFile);
+    $("#uploadIncremental").addEventListener("click", uploadIncrementalBatch);
+    $("#refreshIncremental").addEventListener("click", () => loadIncrementalBatches(state.incrementalBatch && state.incrementalBatch.batch_id));
+    $("#injectIncremental").addEventListener("click", injectIncrementalBatch);
+    $("#trainIncremental").addEventListener("click", trainIncrementalBatch);
+    $("#cancelTraining").addEventListener("click", cancelTraining);
     $("#clearHistory").addEventListener("click", clearHistory);
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
@@ -758,13 +1034,13 @@
       }
     });
 
-    const initialView = ["detect", "batch", "history"].includes(window.location.hash.slice(1))
+    const initialView = ["detect", "batch", "incremental", "history"].includes(window.location.hash.slice(1))
       ? window.location.hash.slice(1)
       : "detect";
     switchView(initialView);
     window.addEventListener("hashchange", () => {
       const nextView = window.location.hash.slice(1);
-      if (["detect", "batch", "history"].includes(nextView)) switchView(nextView);
+      if (["detect", "batch", "incremental", "history"].includes(nextView)) switchView(nextView);
     });
     renderHistory();
     refreshHealth();

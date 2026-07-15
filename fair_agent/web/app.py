@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import uuid
+import zipfile
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
@@ -17,7 +18,7 @@ from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -29,6 +30,8 @@ from fair_agent.modules.web_inference import (
     validate_image_bytes,
 )
 from fair_agent.core.config import inference_backend_options, load_config, resolve_path
+from fair_agent.core.runtime_log import StructuredEventLog, new_trace_id
+from fair_agent.modules.incremental_workbench import IncrementalBatchStore, TrainingJobManager
 
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
@@ -201,6 +204,8 @@ def build_web_settings(config: Mapping[str, Any] | None = None) -> Dict[str, Any
         "storage": dict(config["storage"]),
         "ui": dict(config["ui"]),
         "performance": dict(config["performance"]),
+        "logging": dict(config["logging"]),
+        "incremental_workbench": dict(config["incremental_workbench"]),
         "native_backend": backend_options,
         "confidence": {
             "min": float(inference["confidence_min"]),
@@ -269,7 +274,22 @@ def multipart_error(exc: HTTPException, settings: Mapping[str, Any] | None = Non
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
+        started = time.perf_counter()
+        trace_id = request.headers.get("X-Request-ID") or new_trace_id("http")
+        request.state.trace_id = trace_id
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+        except Exception as exc:
+            if request.url.path.startswith("/api/") and hasattr(request.app.state, "event_log"):
+                request.app.state.event_log.append(
+                    "http.request.failed", level="error", component="web", trace_id=trace_id,
+                    message=str(exc), duration_ms=(time.perf_counter() - started) * 1000,
+                    details={"method": request.method, "path": request.url.path},
+                )
+            raise
+        response.headers["X-Request-ID"] = trace_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -278,6 +298,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; "
             "script-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'"
         )
+        if request.url.path.startswith("/api/") and hasattr(request.app.state, "event_log"):
+            request.app.state.event_log.append(
+                "http.request.completed",
+                level="warning" if status_code >= 400 else "info",
+                component="web",
+                trace_id=trace_id,
+                duration_ms=(time.perf_counter() - started) * 1000,
+                details={"method": request.method, "path": request.url.path, "status_code": status_code},
+            )
         return response
 
 
@@ -362,6 +391,14 @@ def public_config_payload() -> Dict[str, Any]:
         },
         "confidence": dict(WEB_SETTINGS["confidence"]),
         "ui": dict(WEB_SETTINGS["ui"]),
+        "incremental": {
+            "max_archive_bytes": int(WEB_SETTINGS["incremental_workbench"]["max_archive_bytes"]),
+            "max_archive_mb": int(WEB_SETTINGS["incremental_workbench"]["max_archive_bytes"]) // (1024 * 1024),
+            "accepted_format": "ZIP",
+            "preview_limit": int(WEB_SETTINGS["incremental_workbench"]["preview_limit"]),
+            "job_log_tail_lines": int(WEB_SETTINGS["incremental_workbench"]["job_log_tail_lines"]),
+            "poll_interval_ms": int(WEB_SETTINGS["incremental_workbench"]["poll_interval_ms"]),
+        },
         "labels": {
             "classes": {str(key): value for key, value in WEB_SETTINGS["class_names"].items()},
             "sensors": {"ir": "红外", "sar": "SAR"},
@@ -406,6 +443,17 @@ async def detect(request: Request) -> JSONResponse:
             "queue_wait_ms": float(result.get("queue_wait_ms", 0.0)),
         })
         payload["system_total_ms"] = round((time.perf_counter() - request_started) * 1000, 1)
+        request.app.state.event_log.append(
+            "inference.single.completed", component="inference", trace_id=request.state.trace_id,
+            generation_id=WEB_SETTINGS["generation_id"],
+            duration_ms=payload["system_total_ms"],
+            details={
+                "filename": upload.filename or "image", "detection_count": payload.get("detection_count", 0),
+                "inference_ms": payload.get("inference_ms"), "context": payload.get("context"),
+                "models_used": payload.get("agent", {}).get("models_used", []),
+                "routing_decision": payload.get("agent", {}).get("decision", {}),
+            },
+        )
         return JSONResponse(payload)
     except HTTPException as exc:
         return JSONResponse({"error": multipart_error(exc)}, status_code=400)
@@ -455,6 +503,23 @@ async def batch_detect(request: Request) -> Response:
             row["preview_url"] = f"/api/batch/{batch_id}/preview/{index}"
             public_results.append(row)
         system_total = round((time.perf_counter() - request_started) * 1000, 1)
+        request.app.state.event_log.append(
+            "inference.batch.completed", component="inference", trace_id=request.state.trace_id,
+            duration_ms=system_total, batch_id=batch_id,
+            generation_id=WEB_SETTINGS["generation_id"],
+            details={
+                "image_count": len(results), "detection_count": total_detections,
+                "inference_ms": total_inference, "engine_ms": round(engine_ms, 3),
+                "routing_decisions": [
+                    {
+                        "filename": item.get("filename"),
+                        "models_used": item.get("agent", {}).get("models_used", []),
+                        "decision": item.get("agent", {}).get("decision", {}),
+                    }
+                    for item in results
+                ],
+            },
+        )
         return JSONResponse(
             {
                 "batch_id": batch_id,
@@ -512,11 +577,157 @@ async def batch_download(request: Request) -> Response:
     )
 
 
+def _incremental_error(exc: Exception) -> JSONResponse:
+    if isinstance(exc, KeyError):
+        return JSONResponse({"error": "增量批次或训练任务不存在。"}, status_code=404)
+    if isinstance(exc, (ValueError, IndexError, FileNotFoundError, zipfile.BadZipFile)):
+        return JSONResponse({"error": str(exc) or "增量数据操作失败。"}, status_code=400)
+    return JSONResponse({"error": f"增量工作台暂时不可用：{exc}"}, status_code=503)
+
+
+async def incremental_batches(request: Request) -> JSONResponse:
+    store: IncrementalBatchStore = request.app.state.incremental_store
+    if request.method == "GET":
+        return JSONResponse({"batches": await run_in_threadpool(store.list)})
+    settings = WEB_SETTINGS["incremental_workbench"]
+    try:
+        async with request.form(max_files=1, max_fields=3, max_part_size=int(settings["max_archive_bytes"])) as form:
+            upload = form.get("file")
+            if not isinstance(upload, UploadFile):
+                raise ValueError("请选择增量数据ZIP压缩包。")
+            result = await run_in_threadpool(
+                store.create_stream,
+                upload.filename or "incremental.zip",
+                upload.file,
+                str(form.get("name") or ""),
+                str(form.get("class_names") or "") or None,
+            )
+        return JSONResponse(result, status_code=201 if result["status"] == "AUDITED" else 422)
+    except HTTPException as exc:
+        return JSONResponse({"error": multipart_error(exc)}, status_code=400)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
+async def incremental_batch_detail(request: Request) -> JSONResponse:
+    try:
+        payload = await run_in_threadpool(request.app.state.incremental_store.get, request.path_params["batch_id"])
+        return JSONResponse(payload)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
+async def incremental_batch_image(request: Request) -> Response:
+    try:
+        path = await run_in_threadpool(
+            request.app.state.incremental_store.image_path,
+            request.path_params["batch_id"],
+            int(request.path_params["index"]),
+        )
+        return FileResponse(path)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
+async def incremental_inject(request: Request) -> JSONResponse:
+    try:
+        payload = await run_in_threadpool(request.app.state.incremental_store.inject, request.path_params["batch_id"])
+        return JSONResponse(payload)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
+async def incremental_train(request: Request) -> JSONResponse:
+    try:
+        job = await run_in_threadpool(request.app.state.training_manager.start, request.path_params["batch_id"])
+        return JSONResponse(job, status_code=202)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
+async def incremental_jobs(request: Request) -> JSONResponse:
+    batch_id = request.query_params.get("batch_id")
+    return JSONResponse({"jobs": await run_in_threadpool(request.app.state.training_manager.list, batch_id)})
+
+
+async def incremental_job_detail(request: Request) -> JSONResponse:
+    batch_id = request.query_params.get("batch_id")
+    if not batch_id:
+        return JSONResponse({"error": "缺少batch_id。"}, status_code=400)
+    try:
+        job = await run_in_threadpool(request.app.state.training_manager.get, batch_id, request.path_params["job_id"])
+        return JSONResponse(job)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
+async def incremental_job_logs(request: Request) -> Response:
+    batch_id = request.query_params.get("batch_id")
+    if not batch_id:
+        return JSONResponse({"error": "缺少batch_id。"}, status_code=400)
+    try:
+        text = await run_in_threadpool(
+            request.app.state.training_manager.read_log,
+            batch_id,
+            request.path_params["job_id"],
+            int(request.query_params.get("tail", str(WEB_SETTINGS["incremental_workbench"]["job_log_tail_lines"]))),
+        )
+        return PlainTextResponse(text)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
+async def incremental_job_cancel(request: Request) -> JSONResponse:
+    batch_id = request.query_params.get("batch_id")
+    if not batch_id:
+        return JSONResponse({"error": "缺少batch_id。"}, status_code=400)
+    try:
+        job = await run_in_threadpool(request.app.state.training_manager.cancel, batch_id, request.path_params["job_id"])
+        return JSONResponse(job)
+    except Exception as exc:
+        return _incremental_error(exc)
+
+
+async def runtime_logs(request: Request) -> JSONResponse:
+    batch_id = request.query_params.get("batch_id")
+    if not batch_id:
+        return JSONResponse({"error": "Web仅支持查询指定增量批次的操作记录；完整日志请使用CLI。"}, status_code=400)
+    try:
+        rows = await run_in_threadpool(
+            request.app.state.event_log.query,
+            limit=int(request.query_params.get("limit", "200")),
+            level=request.query_params.get("level"),
+            component=request.query_params.get("component"),
+            trace_id=request.query_params.get("trace_id"),
+            batch_id=batch_id,
+            job_id=request.query_params.get("job_id"),
+        )
+        public_rows = [
+            {
+                key: row.get(key)
+                for key in (
+                    "timestamp", "level", "component", "event", "trace_id", "batch_id",
+                    "job_id", "duration_ms", "message",
+                )
+                if row.get(key) is not None
+            }
+            for row in rows
+        ]
+        return JSONResponse({"events": public_rows})
+    except (TypeError, ValueError) as exc:
+        return JSONResponse({"error": f"日志查询参数无效：{exc}"}, status_code=400)
+
+
 async def not_found(_request: Request, _exc: HTTPException) -> JSONResponse:
     return JSONResponse({"error": "请求的资源不存在。"}, status_code=404)
 
 
-def create_app(engine_provider: EngineProvider | None = None) -> Starlette:
+def create_app(
+    engine_provider: EngineProvider | None = None,
+    incremental_store: IncrementalBatchStore | None = None,
+    training_manager: TrainingJobManager | None = None,
+    event_log: StructuredEventLog | None = None,
+) -> Starlette:
     application = Starlette(
         debug=False,
         routes=[
@@ -527,12 +738,38 @@ def create_app(engine_provider: EngineProvider | None = None) -> Starlette:
             Route("/api/batch", batch_detect, methods=["POST"]),
             Route("/api/batch/{batch_id:str}/preview/{index:int}", batch_preview, methods=["GET"]),
             Route("/api/batch/{batch_id:str}/download", batch_download, methods=["GET"]),
+            Route("/api/incremental/batches", incremental_batches, methods=["GET", "POST"]),
+            Route("/api/incremental/batches/{batch_id:str}", incremental_batch_detail, methods=["GET"]),
+            Route("/api/incremental/batches/{batch_id:str}/images/{index:int}", incremental_batch_image, methods=["GET"]),
+            Route("/api/incremental/batches/{batch_id:str}/inject", incremental_inject, methods=["POST"]),
+            Route("/api/incremental/batches/{batch_id:str}/train", incremental_train, methods=["POST"]),
+            Route("/api/incremental/jobs", incremental_jobs, methods=["GET"]),
+            Route("/api/incremental/jobs/{job_id:str}", incremental_job_detail, methods=["GET"]),
+            Route("/api/incremental/jobs/{job_id:str}/logs", incremental_job_logs, methods=["GET"]),
+            Route("/api/incremental/jobs/{job_id:str}/cancel", incremental_job_cancel, methods=["POST"]),
+            Route("/api/logs", runtime_logs, methods=["GET"]),
             Mount("/", app=StaticFiles(directory=STATIC_ROOT, html=True), name="static"),
         ],
         middleware=[Middleware(SecurityHeadersMiddleware)],
         exception_handlers={404: not_found},
     )
     application.state.engine_provider = engine_provider or default_engine_provider
+    log_settings = WEB_SETTINGS["logging"]
+    logger = event_log or StructuredEventLog(
+        root=log_settings["root"],
+        max_file_bytes=int(log_settings["max_file_bytes"]),
+        retained_files=int(log_settings["retained_files"]),
+    )
+    store = incremental_store or IncrementalBatchStore(
+        WEB_SETTINGS["incremental_workbench"],
+        logger,
+        [WEB_SETTINGS["class_names"][class_id] for class_id in WEB_SETTINGS["active_class_ids"]],
+    )
+    application.state.event_log = logger
+    application.state.incremental_store = store
+    application.state.training_manager = training_manager or TrainingJobManager(
+        store, WEB_SETTINGS["incremental_workbench"], logger
+    )
     cache = WEB_SETTINGS["storage"]
     application.state.batch_store = BatchResultStore(
         max_items=int(cache["max_items"]),

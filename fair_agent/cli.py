@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -16,6 +17,7 @@ from fair_agent.core.audit import make_run_dir, write_pipeline_artifacts
 from fair_agent.core.blackboard import build_blackboard, write_blackboard
 from fair_agent.core.config import ROOT, configured_python, get_key, load_config, rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
+from fair_agent.core.runtime_log import StructuredEventLog, event_log_from_config
 from fair_agent.executors.local import append_log, run_command
 from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.functional_models import validate_functional_models
@@ -280,8 +282,20 @@ def cmd_decide(args: argparse.Namespace) -> int:
     else:
         state = build_blackboard(config)
         write_blackboard(config, state)
-    decision = build_decision(config, state, decision_context(config, args))
+    context = decision_context(config, args)
+    decision = build_decision(config, state, context)
     paths = write_decision(config, decision)
+    event_log_from_config(config).append(
+        "agent.decision.completed",
+        component="policy",
+        details={
+            "context": context,
+            "recommended_action": decision.get("recommended_action"),
+            "candidate_count": len(decision.get("candidates", [])),
+            "decision_json": rel_path(paths["json"]),
+            "decision_json_sha256": sha256_file(paths["json"]),
+        },
+    )
     print(rel_path(paths["json"]))
     print(rel_path(paths["report"]))
     print(decision["recommended_action"]["action"])
@@ -295,6 +309,12 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     decision = build_decision(config, state, context)
     automation = config.get("automation", {})
     run_dir = make_run_dir("dryrun" if args.mode == "dryrun" else "execute", automation.get("run_root", "reports/agent_runs"))
+    pipeline_log = event_log_from_config(config)
+    pipeline_trace_id = f"pipeline_{run_dir.name}"
+    pipeline_log.append(
+        "agent.pipeline.started", component="pipeline", trace_id=pipeline_trace_id,
+        run_id=run_dir.name, details={"mode": args.mode, "context": context},
+    )
     plan = {
         "mode": args.mode,
         "audit_before_execute": bool(config.get("automation", {}).get("audit_before_execute", True)),
@@ -343,6 +363,22 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     write_pipeline_artifacts(run_dir, plan, state, decision, action_results)
     write_blackboard(config, state)
     write_decision(config, decision)
+    pipeline_log.append(
+        "agent.pipeline.completed",
+        level="error" if any(item.get("returncode") != 0 for item in action_results) else "info",
+        component="pipeline",
+        trace_id=pipeline_trace_id,
+        run_id=run_dir.name,
+        details={
+            "mode": args.mode,
+            "termination": plan.get("termination"),
+            "steps": plan.get("steps", []),
+            "action_results": action_results,
+            "recommended_action": decision.get("recommended_action"),
+            "manifest": rel_path(paths["manifest"]),
+            "manifest_sha256": sha256_file(paths["manifest"]),
+        },
+    )
     print(rel_path(run_dir))
     print(rel_path(paths["plan"]))
     print(rel_path(paths["manifest"]))
@@ -613,6 +649,65 @@ def cmd_benchmark_api(args: argparse.Namespace) -> int:
     return 0 if result["accepted"] else 2
 
 
+def _incremental_services(config: Dict[str, Any]):
+    from fair_agent.modules.incremental_workbench import IncrementalBatchStore, TrainingJobManager
+    from fair_agent.modules.model_generations import generation_web_settings, load_generation_registry
+
+    log_config = config["logging"]
+    event_log = StructuredEventLog(
+        log_config["root"], int(log_config["max_file_bytes"]), int(log_config["retained_files"])
+    )
+    generation = generation_web_settings(
+        load_generation_registry(config["web"]["generation_registry"]),
+        str(config["web"]["generation_channel"]),
+    )
+    active_classes = [generation["class_names"][class_id] for class_id in generation["active_class_ids"]]
+    store = IncrementalBatchStore(config["incremental_workbench"], event_log, active_classes)
+    return store, TrainingJobManager(store, config["incremental_workbench"], event_log), event_log
+
+
+def cmd_incremental_data(args: argparse.Namespace) -> int:
+    config = load_args_config(args)
+    store, manager, _event_log = _incremental_services(config)
+    try:
+        if args.incremental_action == "list":
+            payload = store.list()
+        elif args.incremental_action == "upload":
+            archive = resolve_path(args.archive)
+            payload = store.create(archive.name, archive.read_bytes(), args.name, args.class_names)
+        elif args.incremental_action == "show":
+            payload = store.get(args.batch_id)
+        elif args.incremental_action == "inject":
+            payload = store.inject(args.batch_id)
+        elif args.incremental_action == "train":
+            payload = manager.start(args.batch_id)
+        elif args.incremental_action == "jobs":
+            payload = manager.list(args.batch_id)
+        elif args.incremental_action == "logs":
+            print(manager.read_log(args.batch_id, args.job_id, args.tail))
+            return 0
+        else:
+            raise ValueError(f"未知增量数据动作：{args.incremental_action}")
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 1 if isinstance(payload, dict) and payload.get("status") == "REJECTED" else 0
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"增量数据操作失败：{exc}", file=sys.stderr)
+        return 2
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    config = load_args_config(args)
+    _store, _manager, event_log = _incremental_services(config)
+    rows = event_log.query(
+        limit=args.limit, level=args.level, component=args.component,
+        trace_id=args.trace_id, batch_id=args.batch_id, job_id=args.job_id,
+        experiment_id=args.experiment_id, run_id=args.run_id,
+        protocol_id=args.protocol_id, generation_id=args.generation_id,
+    )
+    print(json.dumps(rows, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="IR/SAR 快速学习智能体工作台")
     parser.add_argument("--config", default="configs/agent_pipeline.yaml")
@@ -710,6 +805,40 @@ def build_parser() -> argparse.ArgumentParser:
     generation_rollback.add_argument("--to", required=True)
     generation_rollback.set_defaults(func=cmd_generation)
 
+    incremental_data = sub.add_parser("incremental-data", help="管理上传、审计、注入和训练增量数据批次。")
+    incremental_sub = incremental_data.add_subparsers(dest="incremental_action", required=True)
+    incremental_sub.add_parser("list", help="列出本机增量批次。").set_defaults(func=cmd_incremental_data)
+    upload = incremental_sub.add_parser("upload", help="保存并审计本地ZIP数据包。")
+    upload.add_argument("--archive", required=True)
+    upload.add_argument("--name")
+    upload.add_argument("--class-names", help="逗号分隔的本地类别名称；包内有data.yaml时可省略。")
+    upload.set_defaults(func=cmd_incremental_data)
+    for action_name in ("show", "inject", "train"):
+        action = incremental_sub.add_parser(action_name)
+        action.add_argument("--batch-id", required=True)
+        action.set_defaults(func=cmd_incremental_data)
+    jobs = incremental_sub.add_parser("jobs")
+    jobs.add_argument("--batch-id")
+    jobs.set_defaults(func=cmd_incremental_data)
+    job_logs = incremental_sub.add_parser("logs")
+    job_logs.add_argument("--batch-id", required=True)
+    job_logs.add_argument("--job-id", required=True)
+    job_logs.add_argument("--tail", type=int, default=300)
+    job_logs.set_defaults(func=cmd_incremental_data)
+
+    logs = sub.add_parser("logs", help="查询Agent结构化运行日志。")
+    logs.add_argument("--limit", type=int, default=200)
+    logs.add_argument("--level")
+    logs.add_argument("--component")
+    logs.add_argument("--trace-id")
+    logs.add_argument("--batch-id")
+    logs.add_argument("--job-id")
+    logs.add_argument("--experiment-id")
+    logs.add_argument("--run-id")
+    logs.add_argument("--protocol-id")
+    logs.add_argument("--generation-id")
+    logs.set_defaults(func=cmd_logs)
+
     sub.add_parser("benchmark-api", help="按YAML配置执行检测API端到端性能验收。").set_defaults(func=cmd_benchmark_api)
 
     sub.add_parser("serve").set_defaults(func=cmd_serve)
@@ -719,7 +848,33 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    started = time.perf_counter()
+    try:
+        returncode = int(args.func(args))
+    except Exception as exc:
+        returncode = 1
+        try:
+            config = load_args_config(args)
+            log_config = config["logging"]
+            StructuredEventLog(log_config["root"], int(log_config["max_file_bytes"]), int(log_config["retained_files"])).append(
+                "cli.command.failed", level="error", component="cli", message=str(exc),
+                duration_ms=(time.perf_counter() - started) * 1000,
+                details={"command": args.command},
+            )
+        except Exception:
+            pass
+        raise
+    try:
+        config = load_args_config(args)
+        log_config = config["logging"]
+        StructuredEventLog(log_config["root"], int(log_config["max_file_bytes"]), int(log_config["retained_files"])).append(
+            "cli.command.completed", level="info" if returncode == 0 else "warning", component="cli",
+            duration_ms=(time.perf_counter() - started) * 1000,
+            details={"command": args.command, "returncode": returncode},
+        )
+    except Exception:
+        pass
+    return returncode
 
 
 if __name__ == "__main__":

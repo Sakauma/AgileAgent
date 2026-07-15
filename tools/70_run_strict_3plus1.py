@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fair_agent.core.config import rel_path, resolve_path
+from fair_agent.core.runtime_log import StructuredEventLog, event_log_from_config, mirror_state_event
 from fair_agent.modules.strict_incremental import (
     GLOBAL_CLASS_NAMES,
     bootstrap_metrics,
@@ -63,9 +64,11 @@ def _audit_event(
     **details: Any,
 ) -> None:
     configured = config.get("experiment_audit", {}).get("events")
-    if not configured:
-        return
-    path = Path(str(configured)).resolve()
+    if configured:
+        path = Path(str(configured)).resolve()
+    else:
+        run_id = str(config.get("_active_run_id") or "unknown")
+        path = resolve_path(config["paths"]["report_root"]) / run_id / f"{protocol_id}.events.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {
         "time": datetime.now().astimezone().isoformat(),
@@ -77,6 +80,33 @@ def _audit_event(
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    global_logging = config.get("experiment_audit", {}).get("global_logging")
+    if global_logging:
+        logger = StructuredEventLog(
+            global_logging["root"],
+            int(global_logging["max_file_bytes"]),
+            int(global_logging["retained_files"]),
+        )
+    else:
+        logger = event_log_from_config()
+    mirror_state_event(
+        logger,
+        state,
+        status=status,
+        experiment_id=str(
+            config.get("experiment_audit", {}).get("experiment_id")
+            or config.get("_experiment_id")
+            or config.get("experiment", {}).get("id")
+            or "strict-class-incremental"
+        ),
+        run_id=str(
+            config.get("experiment_audit", {}).get("run_id")
+            or config.get("_active_run_id")
+            or "unknown"
+        ),
+        protocol_id=protocol_id,
+        details=details,
+    )
 
 
 def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]:
@@ -979,6 +1009,10 @@ def run_protocol(
     from ultralytics import YOLO
 
     config = load_yaml(config_path)
+    config["_active_run_id"] = run_id
+    config["_experiment_id"] = str(
+        config.get("experiment", {}).get("id") or Path(config_path).stem
+    )
     protocol = protocol_by_id(config, protocol_id)
     _audit_event(config, protocol_id, "CREATED", status="running", device=device)
     for key, value in config["runtime"].get("env", {}).items():
@@ -1233,6 +1267,10 @@ def run_protocol(
         float(calibration_cfg["threshold_step"]),
         float(calibration_cfg["target_precision"]),
     )
+    calibration_path = report_dir / "calibration.json"
+    calibration_path.write_text(
+        json.dumps(calibration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     _audit_event(
         config,
         protocol_id,
@@ -1240,6 +1278,8 @@ def run_protocol(
         threshold=float(calibration["selected"]["threshold"]),
         precision=float(calibration["selected"]["precision"]),
         source="incremental_dev_only",
+        artifact=rel_path(calibration_path),
+        artifact_sha256=sha256_file(calibration_path),
     )
 
     # This is the first point where lock labels are read or transformed.
@@ -1424,9 +1464,6 @@ def run_protocol(
         new_map50=float(new_metrics["map50"]),
         krr=krr,
         full_map50=float(full_metrics["map50"]),
-    )
-    (report_dir / "calibration.json").write_text(
-        json.dumps(calibration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     if accepted:
         if unified_student:
