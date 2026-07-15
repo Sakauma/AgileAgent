@@ -47,7 +47,8 @@ KNOWN_SECTION_KEYS = {
     "routing": {
         "incremental_enabled", "require_acceptance_passed", "consensus_iou", "fusion_iou",
         "max_specialists_per_image", "conflict_iou", "conflict_base_confidence",
-        "specialist_margin", "detection_evidence_weight", "context_evidence_weight",
+        "specialist_margin", "preserve_base_class_owners",
+        "detection_evidence_weight", "context_evidence_weight",
         "neutral_context_score", "default_routing_prior",
         "parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution", "max_model_workers",
     },
@@ -280,7 +281,9 @@ def validate_config(
         errors.append("routing的检测证据权重与上下文证据权重之和必须为1")
     _number(routing, "max_specialists_per_image", errors, 1)
     _number(routing, "max_model_workers", errors, 1)
-    if not isinstance(routing.get("incremental_enabled"), bool) or not isinstance(routing.get("require_acceptance_passed"), bool):
+    if not all(isinstance(routing.get(key), bool) for key in (
+        "incremental_enabled", "require_acceptance_passed", "preserve_base_class_owners",
+    )):
         errors.append("routing中的开关必须为布尔值")
     if not all(isinstance(routing.get(key), bool) for key in ("parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution")):
         errors.append("routing中的并行执行开关必须为布尔值")

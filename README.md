@@ -290,6 +290,15 @@ python tools/81_validate_multibatch_incremental.py \
 
 实验依次执行一次类别增量和三次目标增量。每轮均冻结父权重、累计已接收 lock、重新计算 KRR。活动代际对同一类别只加载最新 owner，历史专家保留在父代际用于回滚，避免推理耗时随同类更新次数线性增长。原始实验后两轮曾因误设的组合 mAP50 硬门禁而未晋升；按赛题满分档重新判分后四轮均通过官方增量指标，详情见 [四批次小样本验证](docs/multibatch-small-sample-validation.md)。
 
+更严格的三组压力测试通过单一矩阵 YAML 顺序执行：
+
+```bash
+python tools/82_run_multibatch_stress_matrix.py \
+  --config configs/incremental/multibatch_stress_matrix.yaml
+```
+
+矩阵包含极小均衡批次、IR/SAR 偏移和逐轮递减三类场景。RTX 4060 上共 21 轮全部通过赛题满分档硬门禁并连续晋升，最小训练批次为 3 张；详见 [多批次小样本压力测试](docs/multibatch-stress-matrix.md)。
+
 ## 开发与验收
 
 ```bash
@@ -302,7 +311,7 @@ python scripts/smoke_models.py
 - `verify_release.py` 校验配置、模型权重和公开证据哈希。
 - `smoke_models.py` 在 GPU 上加载三种功能模型并运行完整自动编排链路。
 
-当前代码基线为 `191 passed`。修改模型、推理后端或依赖后，必须重新执行三项验收。
+当前代码基线为 `195 passed`。修改模型、推理后端或依赖后，必须重新执行三项验收。
 
 ## 项目结构
 
@@ -331,6 +340,7 @@ docs/               # 设计、操作和复现实验文档
 - [三种功能模型与协同链路](docs/functional-models.md)
 - [合规增量学习规则](docs/compliant-incremental-learning.md)
 - [增量学习工作台](docs/incremental-workbench.md)
+- [多批次小样本压力测试](docs/multibatch-stress-matrix.md)
 - [全流程审计日志](docs/agent-audit-logging.md)
 - [TensorRT 部署指南](docs/tensorrt-deployment.md)
 - [舰船 3+1 可复现实验](docs/warship-3plus1-reproducibility.md)
@@ -340,7 +350,7 @@ docs/               # 设计、操作和复现实验文档
 ## 已知限制
 
 - 尚未完成 Ascend 310B 的 OM 转换、AscendCL 集成和真实板端 FPS 验证。
-- 已完成四个互斥舰船批次的连续机制验证，四轮均达到基础 mAP50、New-mAP50 与 KRR 满分档；历史实验后两轮未形成连续 production 链，需用新版守护器重新运行后才能作为四轮连续晋升证据。真实未知类别与多类别连续批次仍需赛题新数据验证。
+- 已完成三个独立场景、21 轮的连续小样本压力测试，每组均形成完整晋升链。当前证据仍只涵盖舰船单类的类别/目标增量；真实未知类别、多新类别同批次和场景增量仍需赛题新数据验证。
 - Web 与 CLI 均会从训练继续执行到逐类校准、lock复核和受控上线；任一门禁失败时保持原production。
 - TensorRT engine 不随仓库发布；启用该后端前必须在目标设备本地导出并重新完成精度与性能验收。
 - 仓库不包含竞赛数据集、官方测试集或正式提交格式。

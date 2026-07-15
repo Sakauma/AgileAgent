@@ -77,6 +77,7 @@ venv/
 !/tools/72_run_full_yolo_iod.py
 !/tools/80_export_tensorrt_engines.py
 !/tools/81_validate_multibatch_incremental.py
+!/tools/82_run_multibatch_stress_matrix.py
 
 /configs/*
 !/configs/incremental/

@@ -180,7 +180,7 @@ def _select_rounds(spec: Mapping[str, Any]) -> list[Dict[str, list[Path]]]:
         assignments.append(row)
     stems = [image.stem for row in assignments for images in row.values() for image in images]
     if len(stems) != len(set(stems)):
-        raise ValueError("四轮小样本划分存在重复stem。")
+        raise ValueError("多轮小样本划分存在重复stem。")
     return assignments
 
 
@@ -217,12 +217,13 @@ def _model_hashes(registry: Mapping[str, Any], generation_id: str) -> Dict[str, 
 
 
 def _write_report(path: Path, summary: Mapping[str, Any]) -> None:
+    expected_rounds = int(summary["expected_rounds"])
     lines = [
-        "# 四批次小样本持续学习验证",
+        "# 多批次小样本持续学习验证",
         "",
         f"- 实验编号：`{summary['run_id']}`",
         f"- 最终状态：`{summary['status']}`",
-        f"- 批次数：{len(summary['rounds'])}/4",
+        f"- 批次数：{len(summary['rounds'])}/{expected_rounds}",
         "",
         "| 轮次 | 模式 | train/dev/lock | New-mAP50 | KRR | 组合mAP50 | 专家数 | 推理ms | 总耗时s | 状态 |",
         "|---:|---|---:|---:|---:|---:|---:|---:|---:|---|",
@@ -347,6 +348,7 @@ def run(spec_path: Path, run_id: str | None = None, resume: bool = False) -> Dic
         summary = {
             "schema_version": 1,
             "run_id": run_id,
+            "expected_rounds": int(spec["experiment"]["rounds"]),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "config": rel_path(spec_path),
             "effective_config": rel_path(resolve_path(run_root / "effective_agent_config.yaml")),
@@ -431,15 +433,19 @@ def run(spec_path: Path, run_id: str | None = None, resume: bool = False) -> Dic
             else "COMPLETED_WITH_REJECTIONS"
         )
     summary["finished_at"] = datetime.now(timezone.utc).isoformat()
-    summary["all_rounds_promoted"] = len(summary["rounds"]) == 4 and summary["status"] == "PASSED"
-    summary["all_rounds_processed"] = len(summary["rounds"]) == 4
+    expected_rounds = int(spec["experiment"]["rounds"])
+    summary["expected_rounds"] = expected_rounds
+    summary["all_rounds_promoted"] = (
+        len(summary["rounds"]) == expected_rounds and summary["status"] == "PASSED"
+    )
+    summary["all_rounds_processed"] = len(summary["rounds"]) == expected_rounds
     _atomic_json(report_root / "summary.json", summary)
     _write_report(report_root / "report.md", summary)
     return summary
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="执行四批次小样本持续学习隔离验证。")
+    parser = argparse.ArgumentParser(description="执行多批次小样本持续学习隔离验证。")
     parser.add_argument("--config", default="configs/incremental/multibatch_small_sample.yaml")
     parser.add_argument("--run-id")
     parser.add_argument("--resume", action="store_true")

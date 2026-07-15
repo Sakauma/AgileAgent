@@ -43,6 +43,7 @@ routing:
   conflict_iou: 0.50
   conflict_base_confidence: 0.50
   specialist_margin: 0.15
+  preserve_base_class_owners: true
   detection_evidence_weight: 0.70
   context_evidence_weight: 0.30
   neutral_context_score: 0.50

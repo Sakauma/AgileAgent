@@ -430,8 +430,9 @@ def arbitrate_cross_class_conflicts(
     base_confidence: float,
     specialist_margin: float,
     confusion_graph: Mapping[str, Any] | None,
+    preserve_base_class_owners: bool = False,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Resolve cross-class conflicts using dev evidence and a conservative fallback."""
+    """Resolve cross-class conflicts without weakening frozen owners when requested."""
     base_rows = list(base_records)
     kept: List[Dict[str, Any]] = []
     decisions: List[Dict[str, Any]] = []
@@ -483,11 +484,25 @@ def arbitrate_cross_class_conflicts(
                 }
         if learned_overrides:
             for index, decision in learned_overrides:
-                suppressed_base_indices.add(index)
-                decisions.append(decision)
+                if preserve_base_class_owners:
+                    decisions.append({
+                        **decision,
+                        "action": "coexist_preserve_base_owner",
+                        "reason": "learned_confusion_with_frozen_owner_preserved",
+                    })
+                else:
+                    suppressed_base_indices.add(index)
+                    decisions.append(decision)
             kept.append(candidate)
         elif fallback_conflict is None:
             kept.append(candidate)
+        elif preserve_base_class_owners:
+            kept.append(candidate)
+            decisions.append({
+                **fallback_conflict,
+                "action": "coexist_preserve_base_owner",
+                "reason": "cross_class_conflict_with_frozen_owner_preserved",
+            })
         else:
             decisions.append(fallback_conflict)
     base_kept = [row for index, row in enumerate(base_rows) if index not in suppressed_base_indices]
@@ -624,6 +639,7 @@ class WebInferenceEngine:
         self.conflict_iou = float(routing["conflict_iou"])
         self.conflict_base_confidence = float(routing["conflict_base_confidence"])
         self.specialist_margin = float(routing["specialist_margin"])
+        self.preserve_base_class_owners = bool(routing["preserve_base_class_owners"])
         self.detection_evidence_weight = float(routing["detection_evidence_weight"])
         self.context_evidence_weight = float(routing["context_evidence_weight"])
         self.neutral_context_score = float(routing["neutral_context_score"])
@@ -934,6 +950,7 @@ class WebInferenceEngine:
                     self.conflict_base_confidence,
                     self.specialist_margin,
                     protocol.get("confusion_graph"),
+                    self.preserve_base_class_owners,
                 )
                 rejected = [
                     row for row in conflict_decisions if row["action"] == "reject_specialist"
@@ -1224,6 +1241,7 @@ class WebInferenceEngine:
                 self.conflict_base_confidence,
                 self.specialist_margin,
                 protocol.get("confusion_graph"),
+                self.preserve_base_class_owners,
             )
             rejected = [
                 row for row in conflict_decisions if row["action"] == "reject_specialist"

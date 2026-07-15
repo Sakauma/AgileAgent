@@ -404,6 +404,7 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     engine.conflict_iou = 0.50
     engine.conflict_base_confidence = 0.50
     engine.specialist_margin = 0.15
+    engine.preserve_base_class_owners = True
     engine.detection_evidence_weight = 0.70
     engine.context_evidence_weight = 0.30
     engine.neutral_context_score = 0.50

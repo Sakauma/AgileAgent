@@ -378,6 +378,21 @@ def _generation_model_ids(generation: Mapping[str, Any]) -> list[str]:
     ))
 
 
+def _root_generation_id(registry: Mapping[str, Any], generation_id: str) -> str:
+    generations = registry["generations_by_id"]
+    cursor = generation_id
+    visited: set[str] = set()
+    while True:
+        if cursor in visited:
+            raise ValueError("代际父链存在循环。")
+        visited.add(cursor)
+        generation = generations[cursor]
+        parent = generation.get("parent")
+        if not parent:
+            return cursor
+        cursor = str(parent)
+
+
 def _incremental_lock_chain(
     registry: Mapping[str, Any], generation_id: str,
 ) -> list[Dict[str, Any]]:
@@ -617,10 +632,17 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
     if len(base_model_ids) != 1:
         raise ValueError("候选代际必须有且只有一个冻结基础模型。")
     base_class_ids = sorted(registry["models_by_id"][base_model_ids[0]]["owns_classes"])
+    root_generation_id = _root_generation_id(registry, candidate_id)
+    if parent_id == root_generation_id and historical_images == old_images:
+        base_predictions = before
+    else:
+        base_predictions = _prediction_rows(
+            _run_engine(_engine(config, metric_registry, root_generation_id), old_images, config)
+        )
     base_stems = {path.stem for path in old_images}
     base_ground_truth = _read_ground_truth(old_images)
     base_metrics = evaluate_ap50(
-        [row for row in before if row["image_id"] in base_stems],
+        [row for row in base_predictions if row["image_id"] in base_stems],
         base_ground_truth,
         base_class_ids,
     )
@@ -735,6 +757,7 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         "metric_confidence_floor": metric_floor,
         "old_class_ids": old_ids, "focus_class_ids": focus_ids,
         "base_class_ids": base_class_ids,
+        "base_metric_generation_id": root_generation_id,
         "lock_groups": {
             "base": [rel_path(path) for path in old_images],
             "historical_incremental": [
