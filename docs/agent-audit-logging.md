@@ -10,6 +10,7 @@
 | 数据视图生成 | `incremental.data_view.generated` | `batch.yaml`、`dataset.yaml` 及其 SHA256、train/val 数量 |
 | 增量训练 | `incremental.training.started/completed/failed` | argv、GPU、任务号、返回码、耗时、训练日志和候选权重证据 |
 | dev 阈值校准 | `incremental.dev_calibration.completed` | dev-only 来源、阈值、precision、校准文件及 SHA256 |
+| INT8 PTQ | `incremental.quantization.started/completed` | train/dev代表样本manifest、校准缓存指纹、engine SHA256、lock未读取断言 |
 | lock 复核 | `incremental.lock.unsealed`、`incremental.lock_recheck.completed` | lock split 哈希、解封时间、mAP50、KRR、precision 和误激活率 |
 | generation 注册 | `generation.registered` | 父代际、类别所有者、模型与阈值、注册表修改前后哈希 |
 | production 切换 | `generation.production_switch.started/completed/failed` | 切换前后代际、复核 manifest、注册表修改前后哈希 |
@@ -18,7 +19,7 @@
 | Agent 决策 | `agent.decision.completed`、`agent.pipeline.started/completed` | 黑板上下文、推荐动作、执行步骤、终止原因和运行 manifest |
 | 配置变更 | `config.changed` | 操作键、配置修改前后哈希和自动备份 |
 
-训练完成但尚未校准时额外写入 `incremental.dev_calibration.pending`。任何门禁拒绝、异常、超时和用户停止均单独记录，不会只留下成功事件。
+自动生命周期会额外写入 `incremental.lifecycle.*`，完整保留校准、注册、复核、shadow 加载、上线或拒绝状态；仅在显式关闭自动继续时写入 `incremental.dev_calibration.pending`。任何门禁拒绝、异常、超时和用户停止均单独记录，不会只留下成功事件。
 
 ## 关联标识
 

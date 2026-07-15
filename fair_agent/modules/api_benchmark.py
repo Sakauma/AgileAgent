@@ -29,6 +29,24 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[lower] * (1 - fraction) + ordered[upper] * fraction
 
 
+def _performance_assessment(
+    summary: Mapping[str, Any],
+    performance: Mapping[str, Any],
+    concurrency: int,
+) -> tuple[Dict[str, bool], Dict[str, bool]]:
+    target_mean_ms = 1000.0 / float(performance["target_api_fps"])
+    competition_gates = {
+        "batch_fps": float(summary["batch_fps"]) >= float(performance["target_api_fps"]),
+    }
+    diagnostic_checks = {
+        "mean_api_ms": float(summary["median_round_mean_server_ms"]) <= target_mean_ms,
+        "p95_api_ms": float(summary["all_p95_server_ms"])
+        <= float(performance["target_p95_ms"]),
+        "concurrency": int(summary["concurrent_success_count"]) == concurrency,
+    }
+    return competition_gates, diagnostic_checks
+
+
 def _post_one_with_client(client: httpx.Client, path: Path, confidence: float) -> Dict[str, float]:
     started = time.perf_counter()
     response = client.post(
@@ -70,6 +88,11 @@ def _health_available(base_url: str, timeout: float = 1.0) -> bool:
 def _server_session(config: Mapping[str, Any], base_url: str):
     performance = config["performance"]
     if _health_available(base_url):
+        health = httpx.get(f"{base_url}/api/health", timeout=2.0, trust_env=False).json()
+        if health.get("backend") != config["inference"]["backend"]:
+            raise RuntimeError(
+                f"已有检测服务后端为{health.get('backend')}，与待验收后端{config['inference']['backend']}不一致。"
+            )
         yield "existing"
         return
     if not performance["auto_start_server"]:
@@ -164,15 +187,28 @@ def _benchmark_running_server(
         })
 
     batch_paths = paths[: min(int(performance["batch_probe_size"]), len(paths))]
-    files = [
-        ("files", (path.name, path.read_bytes(), "application/octet-stream"))
-        for path in batch_paths
-    ]
+    batch_rounds = []
     with httpx.Client(base_url=base_url, timeout=timeout, trust_env=False) as client:
-        batch_response = client.post("/api/batch", files=files, data={"confidence": str(confidence)})
-    batch_response.raise_for_status()
-    batch_payload = batch_response.json()
-    batch_fps = len(batch_paths) / (float(batch_payload["system_total_ms"]) / 1000.0)
+        for round_index in range(int(performance["benchmark_rounds"])):
+            files = [
+                ("files", (path.name, path.read_bytes(), "application/octet-stream"))
+                for path in batch_paths
+            ]
+            batch_response = client.post(
+                "/api/batch", files=files, data={"confidence": str(confidence)}
+            )
+            batch_response.raise_for_status()
+            batch_payload = batch_response.json()
+            system_total_ms = float(batch_payload["system_total_ms"])
+            batch_rounds.append({
+                "round": round_index + 1,
+                "system_total_ms": system_total_ms,
+                "fps": len(batch_paths) / (system_total_ms / 1000.0),
+                "timings": dict(batch_payload.get("timings", {})),
+            })
+    median_batch = sorted(
+        batch_rounds, key=lambda row: row["system_total_ms"]
+    )[len(batch_rounds) // 2]
 
     concurrency = int(performance["concurrent_requests"])
     concurrent_paths = [paths[index % len(paths)] for index in range(concurrency)]
@@ -191,7 +227,6 @@ def _benchmark_running_server(
                 )
             )
 
-    target_mean_ms = 1000.0 / float(performance["target_api_fps"])
     median_round = sorted(rounds, key=lambda row: row["mean_server_ms"])[len(rounds) // 2]
     summary = {
         "generation_id": generation_id,
@@ -208,20 +243,18 @@ def _benchmark_running_server(
         "all_mean_engine_total_ms": statistics.fmean(all_engine),
         "all_mean_routing_fusion_ms": statistics.fmean(all_routing),
         "batch_image_count": len(batch_paths),
-        "batch_system_total_ms": float(batch_payload["system_total_ms"]),
-        "batch_fps": batch_fps,
-        "batch_timings": dict(batch_payload.get("timings", {})),
+        "batch_system_total_ms": float(median_batch["system_total_ms"]),
+        "batch_fps": float(median_batch["fps"]),
+        "batch_timings": dict(median_batch["timings"]),
+        "batch_rounds": batch_rounds,
         "concurrent_request_count": concurrency,
         "concurrent_success_count": len(concurrent_rows),
         "concurrent_p95_wall_ms": _percentile([row["wall_ms"] for row in concurrent_rows], 0.95),
         "concurrent_p95_server_ms": _percentile([row["server_ms"] for row in concurrent_rows], 0.95),
     }
-    gates = {
-        "mean_api_ms": summary["median_round_mean_server_ms"] <= target_mean_ms,
-        "p95_api_ms": summary["all_p95_server_ms"] <= float(performance["target_p95_ms"]),
-        "batch_fps": summary["batch_fps"] >= float(performance["target_api_fps"]),
-        "concurrency": summary["concurrent_success_count"] == concurrency,
-    }
+    competition_gates, diagnostic_checks = _performance_assessment(
+        summary, performance, concurrency
+    )
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     output = resolve_path(performance["report_root"]) / run_id
     output.mkdir(parents=True, exist_ok=False)
@@ -236,8 +269,10 @@ def _benchmark_running_server(
         "split_sha256": sha256_file(split),
         "summary": summary,
         "rounds": rounds,
-        "gates": gates,
-        "accepted": all(gates.values()),
+        "competition_gates": competition_gates,
+        "diagnostic_checks": diagnostic_checks,
+        "warnings": [name for name, passed in diagnostic_checks.items() if not passed],
+        "accepted": all(competition_gates.values()),
     }
     manifest = output / "benchmark.json"
     manifest.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

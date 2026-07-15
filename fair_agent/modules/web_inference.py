@@ -189,6 +189,49 @@ def remap_specialist_records(
     ]
 
 
+def remap_specialist_records_dynamic(
+    records: Iterable[Dict[str, Any]],
+    local_to_global: Mapping[int | str, int | str],
+    class_names: Mapping[int, str],
+    protocol_id: str,
+) -> List[Dict[str, Any]]:
+    mapping = {int(key): int(value) for key, value in local_to_global.items()}
+    names = {int(key): str(value) for key, value in class_names.items()}
+    remapped = []
+    for item in records:
+        local_id = int(item["class_id"])
+        if local_id not in mapping:
+            continue
+        global_id = mapping[local_id]
+        remapped.append({
+            **item,
+            "class_id": global_id,
+            "class_name": names.get(global_id, str(global_id)),
+            "source": "incremental_model",
+            "protocol_id": protocol_id,
+        })
+    return remapped
+
+
+def protocol_class_ids(protocol: Mapping[str, Any]) -> List[int]:
+    values = protocol.get("global_class_ids")
+    if isinstance(values, Iterable) and not isinstance(values, (str, bytes, Mapping)):
+        return sorted({int(value) for value in values})
+    if protocol.get("global_class_id") is None:
+        return []
+    return [int(protocol["global_class_id"])]
+
+
+def protocol_thresholds(protocol: Mapping[str, Any]) -> Dict[int, float]:
+    raw = protocol.get("activation_thresholds")
+    if isinstance(raw, Mapping):
+        return {int(key): float(value) for key, value in raw.items()}
+    ids = protocol_class_ids(protocol)
+    if len(ids) == 1 and protocol.get("activation_threshold") is not None:
+        return {ids[0]: float(protocol["activation_threshold"])}
+    return {}
+
+
 def remap_base_records(
     records: Iterable[Dict[str, Any]],
     local_to_global: Mapping[int, int],
@@ -277,21 +320,29 @@ def plan_specialist_routes(
     for protocol_id, raw_protocol in protocols.items():
         protocol = dict(raw_protocol)
         mode = str(protocol.get("incremental_mode") or "target_incremental")
-        global_class_id = int(protocol["global_class_id"])
+        global_class_ids = protocol_class_ids(protocol)
+        if not global_class_ids:
+            skipped.append({"id": protocol_id, "reason": "protocol_has_no_classes"})
+            continue
         if not protocol.get("available"):
             skipped.append({"id": protocol_id, "reason": "protocol_unavailable"})
             continue
         if mode == "class_incremental":
-            if global_class_id in base_ids:
+            if set(global_class_ids) & base_ids:
                 skipped.append({"id": protocol_id, "reason": "new_class_id_overlaps_base"})
                 continue
-            if protocol.get("activation_threshold") is None or not protocol.get("calibration_source"):
+            thresholds = protocol_thresholds(protocol)
+            sources = protocol.get("calibration_sources")
+            if not isinstance(sources, Mapping) and len(global_class_ids) == 1 and protocol.get("calibration_source"):
+                sources = {global_class_ids[0]: protocol["calibration_source"]}
+            source_ids = {int(key) for key in (sources or {})}
+            if set(global_class_ids) - set(thresholds) or set(global_class_ids) - source_ids:
                 skipped.append({"id": protocol_id, "reason": "activation_threshold_not_calibrated"})
                 continue
             evidence_score = float(protocol.get("routing_prior", default_routing_prior))
             mode_priority = 0
         elif mode == "target_incremental":
-            references = [row for row in base_rows if int(row["class_id"]) == global_class_id]
+            references = [row for row in base_rows if int(row["class_id"]) in set(global_class_ids)]
             if not references:
                 skipped.append({"id": protocol_id, "reason": "base_class_not_detected"})
                 continue
@@ -777,30 +828,34 @@ class WebInferenceEngine:
                 route = next(
                     row for row in route_rows[image_index][1] if str(row["id"]) == str(protocol_id)
                 )
-                global_class_id = int(protocol["global_class_id"])
-                activation_threshold = max(
-                    float(confidence), float(protocol.get("activation_threshold", confidence))
-                )
-                raw_candidates = remap_specialist_records(
-                    result_records(prediction),
-                    global_class_id,
-                    self.class_names,
-                    str(protocol_id),
+                class_ids = protocol_class_ids(protocol)
+                local_to_global = protocol.get("local_to_global")
+                if not isinstance(local_to_global, Mapping):
+                    local_to_global = {0: class_ids[0]}
+                thresholds = protocol_thresholds(protocol)
+                effective_thresholds = {
+                    class_id: max(float(confidence), float(thresholds.get(class_id, confidence)))
+                    for class_id in class_ids
+                }
+                raw_candidates = remap_specialist_records_dynamic(
+                    result_records(prediction), local_to_global, self.class_names, str(protocol_id)
                 )
                 threshold_candidates = [
                     item for item in raw_candidates
-                    if float(item.get("confidence", 0.0)) >= activation_threshold
+                    if float(item.get("confidence", 0.0)) >= effective_thresholds[int(item["class_id"])]
                 ]
                 if protocol.get("incremental_mode") == "class_incremental":
                     candidates = threshold_candidates
                     activation_reason = "通过独立新类置信度门限"
                 else:
-                    candidates = consensus_specialist_records(
-                        base_records_by_image[image_index],
-                        threshold_candidates,
-                        global_class_id,
-                        float(protocol.get("consensus_iou", 0.30)),
-                    )
+                    candidates = []
+                    for class_id in class_ids:
+                        candidates.extend(consensus_specialist_records(
+                            base_records_by_image[image_index],
+                            [item for item in threshold_candidates if int(item["class_id"]) == class_id],
+                            class_id,
+                            float(protocol.get("consensus_iou", 0.30)),
+                        ))
                     activation_reason = "通过基础同类目标与空间一致性检查"
                 candidates, rejected = suppress_specialist_conflicts(
                     base_records_by_image[image_index],
@@ -810,6 +865,7 @@ class WebInferenceEngine:
                     self.specialist_margin,
                 )
                 activated = bool(candidates)
+                activated_class_names = sorted({str(item["class_name"]) for item in candidates})
                 specialists_by_image[image_index].extend(candidates)
                 conflicts_by_image[image_index].extend(rejected)
                 protocol_outputs[image_index].append({
@@ -821,10 +877,17 @@ class WebInferenceEngine:
                     "krr": protocol["krr"],
                     "status": "activated" if activated else "no_candidate",
                     "activated": activated,
+                    "activated_classes": activated_class_names,
                     "raw_candidate_count": len(raw_candidates),
                     "candidate_count": len(candidates),
                     "conflict_suppressed_count": len(rejected),
-                    "activation_threshold": round(activation_threshold, 2),
+                    "activation_thresholds": {
+                        str(key): round(value, 2) for key, value in effective_thresholds.items()
+                    },
+                    "activation_threshold": (
+                        round(next(iter(effective_thresholds.values())), 2)
+                        if len(effective_thresholds) == 1 else None
+                    ),
                     "routing_score": route["routing_score"],
                     "activation_reason": activation_reason if activated else "未产生通过门限的候选框",
                 })
@@ -852,9 +915,11 @@ class WebInferenceEngine:
             )
             fusion_summary["conflict_suppressed_count"] = len(conflicts_by_image[index])
             eligible, executed, skipped = route_rows[index]
-            activated_classes = [
-                item["class_name"] for item in protocol_outputs[index] if item["activated"]
-            ]
+            activated_classes = sorted({
+                class_name
+                for item in protocol_outputs[index]
+                for class_name in item.get("activated_classes", [])
+            })
             models_used = ["scene_sensor_net_v1", self.base_model_id]
             models_used.extend(str(route["id"]) for route in executed)
             decision = {
@@ -1035,27 +1100,34 @@ class WebInferenceEngine:
             specialist_inference_ms += specialist_timing["inference_ms"]
             specialist_postprocess_ms += specialist_timing["postprocess_ms"]
             inference_ms += specialist_timing["inference_ms"]
-            global_class_id = int(protocol["global_class_id"])
-            activation_threshold = max(float(confidence), float(protocol.get("activation_threshold", confidence)))
-            raw_candidates = remap_specialist_records(
-                result_records(specialist_prediction),
-                global_class_id,
-                self.class_names,
-                protocol_id,
+            class_ids = protocol_class_ids(protocol)
+            local_to_global = protocol.get("local_to_global")
+            if not isinstance(local_to_global, Mapping):
+                local_to_global = {0: class_ids[0]}
+            thresholds = protocol_thresholds(protocol)
+            effective_thresholds = {
+                class_id: max(float(confidence), float(thresholds.get(class_id, confidence)))
+                for class_id in class_ids
+            }
+            raw_candidates = remap_specialist_records_dynamic(
+                result_records(specialist_prediction), local_to_global, self.class_names, protocol_id
             )
             threshold_candidates = [
-                item for item in raw_candidates if float(item.get("confidence", 0.0)) >= activation_threshold
+                item for item in raw_candidates
+                if float(item.get("confidence", 0.0)) >= effective_thresholds[int(item["class_id"])]
             ]
             if protocol.get("incremental_mode") == "class_incremental":
                 candidates = threshold_candidates
                 activation_reason = "通过独立新类置信度门限"
             else:
-                candidates = consensus_specialist_records(
-                    base_records,
-                    threshold_candidates,
-                    global_class_id,
-                    float(protocol.get("consensus_iou", 0.30)),
-                )
+                candidates = []
+                for class_id in class_ids:
+                    candidates.extend(consensus_specialist_records(
+                        base_records,
+                        [item for item in threshold_candidates if int(item["class_id"]) == class_id],
+                        class_id,
+                        float(protocol.get("consensus_iou", 0.30)),
+                    ))
                 activation_reason = "通过基础同类目标与空间一致性检查"
             candidates, rejected = suppress_specialist_conflicts(
                 base_records,
@@ -1066,6 +1138,7 @@ class WebInferenceEngine:
             )
             conflict_rejections.extend(rejected)
             activated = bool(candidates)
+            activated_class_names = sorted({str(item["class_name"]) for item in candidates})
             if activated:
                 specialist_records.extend(candidates)
             protocol_results.append({
@@ -1077,10 +1150,17 @@ class WebInferenceEngine:
                 "krr": protocol["krr"],
                 "status": "activated" if activated else "no_candidate",
                 "activated": activated,
+                "activated_classes": activated_class_names,
                 "raw_candidate_count": len(raw_candidates),
                 "candidate_count": len(candidates),
                 "conflict_suppressed_count": len(rejected),
-                "activation_threshold": round(activation_threshold, 2),
+                "activation_thresholds": {
+                    str(key): round(value, 2) for key, value in effective_thresholds.items()
+                },
+                "activation_threshold": (
+                    round(next(iter(effective_thresholds.values())), 2)
+                    if len(effective_thresholds) == 1 else None
+                ),
                 "routing_score": route["routing_score"],
                 "activation_reason": activation_reason if activated else "未产生通过门限的候选框",
             })
@@ -1099,7 +1179,11 @@ class WebInferenceEngine:
         generation_id = getattr(self, "generation_id", "legacy-unified")
         models_used = ["scene_sensor_net_v1", base_model_id]
         models_used.extend(str(route["id"]) for route in executed_routes)
-        activated_classes = [item["class_name"] for item in protocol_results if item["activated"]]
+        activated_classes = sorted({
+            class_name
+            for item in protocol_results
+            for class_name in item.get("activated_classes", [])
+        })
         decision = {
             "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
             "evaluated_specialists": len(executed_routes),

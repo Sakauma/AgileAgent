@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import ctypes
+import io
+import json
+import time
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
@@ -112,7 +115,10 @@ class TensorRTEngineBackend:
         self.device_index = str(device_index)
         self.engine_path = engine_path
         self.expected_imgsz = int(entry["imgsz"])
+        self.engine_min_batch_size = int(entry.get("min_batch_size", 1))
+        self.engine_opt_batch_size = int(entry.get("opt_batch_size", entry["batch_size"]))
         self.engine_batch_size = int(entry["batch_size"])
+        self.dynamic = bool(backend_options.get("dynamic"))
         self.model = YOLO(str(engine_path), task="detect")
         self._last_timings: Mapping[str, float] = {}
 
@@ -122,9 +128,11 @@ class TensorRTEngineBackend:
             raise RuntimeError(
                 f"TensorRT engine输入尺寸固定为{self.expected_imgsz}，收到{requested_imgsz}"
             )
-        allowed = {"imgsz", "conf", "iou", "max_det"}
+        allowed = {"conf", "iou", "max_det"}
         return {
             **{key: value for key, value in options.items() if key in allowed and value is not None},
+            "imgsz": self.expected_imgsz,
+            "rect": self.dynamic,
             "device": self.device_index,
             "verbose": False,
         }
@@ -133,57 +141,170 @@ class TensorRTEngineBackend:
         self.predict(image, imgsz=self.expected_imgsz)
 
     def predict(self, image: Image.Image, **options: Any) -> Any:
+        started = time.perf_counter()
         result = self.model.predict(source=image, **self._options(options))[0]
-        self._last_timings = dict(getattr(result, "speed", None) or {})
+        self._last_timings = {**dict(getattr(result, "speed", None) or {}), "backend_wall_ms": (time.perf_counter() - started) * 1000}
         return result
 
     def predict_batch(self, images: Sequence[Image.Image], **options: Any) -> Sequence[Any]:
         if len(images) > self.engine_batch_size:
             raise RuntimeError(
-                f"TensorRT engine batch固定为{self.engine_batch_size}，收到{len(images)}"
+                f"TensorRT engine最大batch为{self.engine_batch_size}，收到{len(images)}"
             )
+        if not images:
+            return []
+        if len(images) < self.engine_min_batch_size:
+            raise RuntimeError(f"TensorRT engine最小batch为{self.engine_min_batch_size}，收到{len(images)}")
+        started = time.perf_counter()
         results = self.model.predict(source=list(images), **self._options(options))
-        self._last_timings = dict(getattr(results[-1], "speed", None) or {}) if results else {}
+        self._last_timings = (
+            {**dict(getattr(results[-1], "speed", None) or {}), "backend_wall_ms": (time.perf_counter() - started) * 1000}
+            if results else {"backend_wall_ms": (time.perf_counter() - started) * 1000}
+        )
         return results
 
     def timings(self) -> Mapping[str, float]:
         return dict(self._last_timings)
 
 
+class _NativeScalar:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def item(self) -> float:
+        return self.value
+
+
+class _NativeVector:
+    def __init__(self, values: Sequence[float]) -> None:
+        self.values = list(values)
+
+    def __getitem__(self, _index: int) -> "_NativeVector":
+        return self
+
+    def tolist(self) -> list[float]:
+        return list(self.values)
+
+
+class _NativeBox:
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self.cls = _NativeScalar(float(row["class_id"]))
+        self.conf = _NativeScalar(float(row["confidence"]))
+        self.xyxy = _NativeVector(row["xyxy"])
+
+
+class _NativeResult:
+    def __init__(self, row: Mapping[str, Any]) -> None:
+        self.boxes = [_NativeBox(item) for item in row.get("detections", [])]
+        self.speed = dict(row.get("timings") or {})
+
+
 class TensorRTNativeBackend:
-    """Strict loader for the native TensorRT ABI. It never falls back to CPU."""
+    """ctypes binding for the versioned native TensorRT batch ABI."""
 
     name = "tensorrt_native"
 
-    def __init__(self, native_options: Mapping[str, Any]) -> None:
+    def __init__(self, native_options: Mapping[str, Any], weights: str | Path | None = None) -> None:
         if native_options.get("validated") is not True:
             raise RuntimeError("TensorRT原生后端尚未通过精度与性能验收。")
         library = resolve_path(native_options["library"])
-        engines = [resolve_path(native_options["base_engine"]), resolve_path(native_options["context_engine"])]
-        missing = [str(path) for path in [library, *engines] if not path.is_file()]
+        source_key = rel_path(resolve_path(weights)) if weights is not None else None
+        engine_entry = native_options.get("engines", {}).get(source_key, {}) if source_key else {}
+        detector_engine = resolve_path(engine_entry.get("path") or native_options.get("base_engine", ""))
+        context_entry = native_options["context_engine"]
+        context_engine = resolve_path(context_entry.get("path") if isinstance(context_entry, Mapping) else context_entry)
+        missing = [str(path) for path in [library, detector_engine, context_engine] if not path.is_file()]
         if missing:
             raise RuntimeError("TensorRT原生资产缺失：" + ", ".join(missing))
+        if engine_entry.get("sha256") and sha256_file(detector_engine) != str(engine_entry["sha256"]):
+            raise RuntimeError(f"TensorRT原生检测engine哈希不匹配：{rel_path(detector_engine)}")
         try:
             self._library = ctypes.CDLL(str(library))
         except OSError as exc:
             raise RuntimeError(f"无法加载TensorRT原生库：{library}: {exc}") from exc
-        if not hasattr(self._library, "agile_agent_backend_version"):
-            raise RuntimeError("TensorRT原生库ABI不兼容：缺少agile_agent_backend_version")
-        if not hasattr(self._library, "agile_agent_create"):
-            raise RuntimeError("TensorRT原生库ABI不完整：缺少agile_agent_create")
-        raise RuntimeError("TensorRT原生推理绑定尚未在此Python版本中启用。")
+        required = {
+            "agile_agent_backend_version", "agile_agent_create", "agile_agent_destroy",
+            "agile_agent_warmup", "agile_agent_predict_batch", "agile_agent_free_result",
+            "agile_agent_last_error",
+        }
+        missing_symbols = sorted(name for name in required if not hasattr(self._library, name))
+        if missing_symbols:
+            raise RuntimeError("TensorRT原生库ABI不完整：" + ", ".join(missing_symbols))
+        self._library.agile_agent_backend_version.restype = ctypes.c_uint32
+        if int(self._library.agile_agent_backend_version()) != 1:
+            raise RuntimeError("TensorRT原生库ABI版本不受支持。")
+        self._library.agile_agent_create.argtypes = [ctypes.c_char_p]
+        self._library.agile_agent_create.restype = ctypes.c_void_p
+        self._library.agile_agent_destroy.argtypes = [ctypes.c_void_p]
+        self._library.agile_agent_warmup.argtypes = [ctypes.c_void_p]
+        self._library.agile_agent_warmup.restype = ctypes.c_int
+        self._library.agile_agent_predict_batch.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_size_t, ctypes.c_char_p,
+        ]
+        self._library.agile_agent_predict_batch.restype = ctypes.c_void_p
+        self._library.agile_agent_free_result.argtypes = [ctypes.c_void_p]
+        self._library.agile_agent_last_error.argtypes = [ctypes.c_void_p]
+        self._library.agile_agent_last_error.restype = ctypes.c_char_p
+        create_payload = json.dumps({
+            "detector_engine": str(detector_engine), "context_engine": str(context_engine),
+            "precision": native_options["precision"],
+        }).encode("utf-8")
+        self._handle = self._library.agile_agent_create(create_payload)
+        if not self._handle:
+            raise RuntimeError(self._error("TensorRT原生后端初始化失败。"))
+        self._last_timings: Mapping[str, float] = {}
+
+    def _error(self, fallback: str) -> str:
+        raw = self._library.agile_agent_last_error(getattr(self, "_handle", None))
+        return raw.decode("utf-8", errors="replace") if raw else fallback
+
+    def close(self) -> None:
+        handle = getattr(self, "_handle", None)
+        if handle:
+            self._library.agile_agent_destroy(handle)
+            self._handle = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def warmup(self, image: Image.Image) -> None:
-        raise RuntimeError("TensorRT原生后端尚未初始化。")
+        if self._library.agile_agent_warmup(self._handle) != 0:
+            raise RuntimeError(self._error("TensorRT原生后端预热失败。"))
 
     def predict(self, image: Image.Image, **options: Any) -> Any:
-        raise RuntimeError("TensorRT原生后端尚未初始化。")
+        return self.predict_batch([image], **options)[0]
 
     def predict_batch(self, images: Sequence[Image.Image], **options: Any) -> Sequence[Any]:
-        raise RuntimeError("TensorRT原生后端尚未初始化。")
+        encoded = []
+        for image in images:
+            output = io.BytesIO()
+            image.save(output, format="PNG")
+            encoded.append(output.getvalue())
+        buffers = [ctypes.create_string_buffer(item) for item in encoded]
+        pointers = (ctypes.c_void_p * len(buffers))(*[ctypes.cast(item, ctypes.c_void_p) for item in buffers])
+        sizes = (ctypes.c_size_t * len(buffers))(*[len(item) for item in encoded])
+        started = time.perf_counter()
+        result_pointer = self._library.agile_agent_predict_batch(
+            self._handle, pointers, sizes, len(buffers), json.dumps(options).encode("utf-8")
+        )
+        if not result_pointer:
+            raise RuntimeError(self._error("TensorRT原生batch推理失败。"))
+        try:
+            payload = json.loads(ctypes.string_at(result_pointer).decode("utf-8"))
+        finally:
+            self._library.agile_agent_free_result(result_pointer)
+        self._last_timings = {
+            **dict(payload.get("timings") or {}),
+            "backend_wall_ms": (time.perf_counter() - started) * 1000,
+        }
+        return [_NativeResult(row) for row in payload.get("results", [])]
 
     def timings(self) -> Mapping[str, float]:
-        return {}
+        return dict(self._last_timings)
 
 
 def create_backend(
@@ -197,5 +318,5 @@ def create_backend(
     if backend == "tensorrt_engine":
         return TensorRTEngineBackend(weights, device_index, native_options or {})
     if backend == "tensorrt_native":
-        return TensorRTNativeBackend(native_options or {})
+        return TensorRTNativeBackend(native_options or {}, weights)
     raise ValueError(f"未知推理后端：{backend}")

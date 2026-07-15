@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-增量学习工作台把外部小样本批次转换为可追踪的本地资产，并串联上传、审计、注入、GPU训练和候选输出。增量训练只读取本次上传的数据，不读取基础训练图像、旧类标签或旧特征缓存。训练完成仅表示产生候选权重，不会自动修改当前 production。
+增量学习工作台把外部小样本批次转换为可追踪的本地资产，并串联上传、数据血缘审计、自动封存、GPU训练、逐类校准、独立复核、代际注册和受控上线。增量训练只读取本次上传的train/dev，不读取历史原始图像、标签、缓存或封存lock。
 
 ## 数据包约定
 
@@ -13,7 +13,7 @@ names:
   0: new_class_name
 ```
 
-Agent 会拒绝路径穿越、符号链接、解压容量超限、重复路径、重复图像 stem、缺失标签、非法类别和越界框。没有验证集时按内容哈希确定性划分。赛题增量数据与基础训练集采用相同的五列 YOLO 标签，生产配置仍兼容 `bbox_only`：检测到四列无类别标签时，批次不会被拒绝，而是按单一待确认类别导入，并在审计结果、Web 后台和结构化日志中写入警告。若数据集提供 `names`，类别语义直接继承；若只有数字 ID，则按已有类别数量依次命名为“类别N”。每项绑定同时保存源 ID、连续训练 ID 和稳定全局 ID。Web 批次详情或 `incremental-data rename` 可在人工确认后补充真实名称，重命名不会改变这三个 ID。
+Agent 会拒绝路径穿越、符号链接、解压容量超限、重复路径、重复图像 stem、缺失标签、非法类别和越界框。上传文件还会与冻结基础代际及历次已上线批次的 stem、图像 SHA256、标签 SHA256 和缓存 SHA256 求交；缺少基础指纹、发现历史数据交集或训练可达目录出现来源不明缓存时禁止训练。注入和训练启动前都会重新审计，避免审计后替换文件。没有显式 lock 时按种子 `20260705` 和类别组合自动封存20%，随后再生成 dev；每个类别必须同时覆盖 train、dev 和 lock。生产配置仍兼容 `bbox_only`：检测到四列无类别标签时，批次按单一待确认类别导入并记录警告。若数据集提供 `names`，类别语义直接继承；若只有数字 ID，则依次命名为“类别N”。类别重命名不会改变源 ID、训练 ID 或全局 ID。
 
 每个批次维护当前 `class_registry.yaml` 和不可覆盖的 `class_registry_history/revision-*.yaml`。训练任务启动时，将当前注册表和 `dataset.yaml` 冻结到任务快照目录；训练进程只读取该快照。训练完成后继续修改显示名称只会产生新的注册表修订，历史训练快照、标签映射和权重保持不变。
 
@@ -21,14 +21,22 @@ Agent 会拒绝路径穿越、符号链接、解压容量超限、重复路径�
 
 ```text
 AUDITED -> INJECTED -> TRAINING -> TRAINED_CANDIDATE
-    |          |           |
- REJECTED    阻塞       FAILED / CANCELLED
+-> CALIBRATING -> CALIBRATED -> REGISTERED_CANDIDATE
+-> QUANTIZING -> QUANTIZED
+-> LOCK_RECHECKING -> ACCEPTED / REJECTED
+-> SHADOW_LOADING -> PROMOTED / ROLLED_BACK
 ```
 
 - `AUDITED`：文件已持久保存，格式和数据边界通过。
-- `INJECTED`：已生成只含当前批次的训练视图、`dataset.yaml` 和内部 `batch.yaml`。
+- `INJECTED`：已生成只含当前批次 train/dev 的训练视图、封存 lock 和内部 `batch.yaml`。
 - `TRAINING`：后台 GPU 子进程正在执行，标准输出持续写入任务日志。
-- `TRAINED_CANDIDATE`：候选权重已生成，仍需校准、完整测试和代际上线审核。
+- `TRAINED_CANDIDATE`：候选权重已生成并冻结。
+- `CALIBRATING / CALIBRATED`：只使用增量 dev 扫描每个类别的激活阈值。
+- `REGISTERED_CANDIDATE / LOCK_RECHECKING`：注册动态类别所有权并在冻结 lock 上复核。
+- `QUANTIZING / QUANTIZED`：当设备配置启用 INT8 时，只使用本轮增量 train/dev 自动完成专家 PTQ，engine 与校准指纹登记到候选代际；FP16/CUDA 配置跳过此阶段。
+- `ACCEPTED / REJECTED`：全部上线门禁通过或候选被拒绝。
+- `SHADOW_LOADING / PROMOTED`：候选完成预热并原子切换运行时；失败时保留原 production。
+- `ROLLED_BACK`：候选加载、运行时切换或已上线血缘冻结失败，注册表与运行时均恢复父代际。
 
 ## 目录与证据
 
@@ -38,6 +46,7 @@ AUDITED -> INJECTED -> TRAINING -> TRAINED_CANDIDATE
 source.zip                 原始上传包
 extracted/                 安全解压内容
 prepared/                  独立训练视图
+sealed_lock/               训练不可达的封存样本与lock manifest
 batch.yaml                 Agent内部批次定义
 batch_manifest.json        数据、状态和训练摘要
 class_registry.yaml        当前类别名称与稳定ID绑定
@@ -70,6 +79,8 @@ incremental_workbench:
   allowed_image_extensions: [.png, .jpg, .jpeg, .bmp, .tif, .tiff]
   require_labels: true
   validation_fraction: 0.20
+  lock_fraction: 0.20
+  split_seed: 20260705
   minimum_images: 2
   preview_limit: 12
   job_log_tail_lines: 300
@@ -90,4 +101,6 @@ incremental_workbench:
 
 ## 上线规则
 
-训练任务仅调用受控 Python 模块，不执行用户提供的 shell。候选模型必须另外完成增量 dev 阈值校准、冻结权重哈希、完整 lock 评测、New-mAP50/KRR/组合 mAP50 和误激活率门禁，最后通过 `generation promote` 原子上线；失败时保留原 production 和完整日志。
+训练任务仅调用受控 Python 模块，不执行用户提供的 shell。候选会自动完成增量 dev 逐类阈值校准、可选 INT8 PTQ、冻结权重与 engine 哈希、完整 lock 评测以及 shadow smoke。数据隔离和资产完整性有效，且赛题基础 mAP50、New-mAP50、KRR、组合 mAP50 与 FPS 达标后自动 promotion；precision、误激活率、P95 和一致性差值仅作为风险诊断。失败候选保留原 production 和完整日志。INT8 校准不读取封存 lock，也不允许使用历史旧类原始样本校准新增专家。
+
+CLI 的 `agile-agent incremental run --batch BATCH_ID` 在前台等待完整生命周期结束；`status --run-id` 可读取同一任务、批次状态和审计证据。Web 使用相同实现，但以后台任务方式运行。

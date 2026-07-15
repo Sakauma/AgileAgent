@@ -70,13 +70,22 @@ PROFILE="configs/agent_pipeline.local.yaml"
 cp configs/agent_pipeline.yaml "$PROFILE"
 ```
 
-在 `$PROFILE` 中填写 GPU 编号、TensorRT 版本和计算能力，将 `inference.backend` 设为 `tensorrt_engine`，然后运行：
+在 `$PROFILE` 中填写 GPU 编号、TensorRT 版本和计算能力，导出阶段保持 `inference.backend: ultralytics_cuda`，然后运行：
 
 ```bash
 ./scripts/export_tensorrt_engines.sh "$PROFILE"
+"$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" tensorrt validate --activate
 ```
 
-脚本会完成环境核对、模型导出、SHA256 登记和完整性校验。生成文件保存在 `runs/engines/`，不会进入版本控制。正式启用前的精度与性能验收见 [TensorRT 部署指南](docs/tensorrt-deployment.md)。
+脚本会完成环境核对、模型导出、SHA256 登记和完整性校验；第二条命令会完成 CUDA/TensorRT 精度对齐与 API 性能门禁，全部通过后才原子启用。生成文件保存在 `runs/engines/`，不会进入版本控制。完整说明见 [TensorRT 部署指南](docs/tensorrt-deployment.md)。
+
+需要 INT8 PTQ 时，在设备配置中设置 `tensorrt_backend.precision: int8`，然后使用一条命令完成代表样本选择、校准、导出和门禁：
+
+```bash
+"$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" tensorrt calibrate --activate
+```
+
+Agent 会保证基础模型与增量专家使用各自合规的数据来源；后续新专家仅使用本轮增量 train/dev 自动校准，封存 lock 不参与量化。当前推荐的检测器混合精度策略固定为模块 `0-1` 使用 INT8、模块 `2-23` 使用 FP16，对应 YAML 中的 `mixed_precision.fp16_layer_patterns`；设备本地仍需重新导出并验收 engine。
 
 ### 首次配置
 
@@ -204,10 +213,22 @@ new_batch.zip
 工作台依次完成：
 
 ```text
-上传 → 安全审计 → 类别绑定 → 训练视图 → GPU训练 → 待校准候选
+上传 → 数据血缘审计 → 自动封存lock → GPU训练 → dev逐类校准 → 可选INT8 PTQ → lock复核 → shadow加载 → 受控上线
 ```
 
-训练完成不会自动替换 production。候选模型仍需完成增量 dev 阈值校准、冻结哈希、完整 lock 复核和代际 promotion。CLI 等价入口：
+生产配置会在缺少显式 lock 时按固定种子和类别组合自动封存20%样本；封存内容不进入训练 YAML。训练完成后，Agent 自动完成逐类阈值校准、动态代际注册、独立 lock 复核和 shadow 预热。数据隔离与资产哈希必须有效，赛题基础 mAP50、New-mAP50、KRR、组合 mAP50 和 FPS 达标后才会原子切换 production；precision、误激活和时延分位数作为风险诊断展示，不参与硬性否决。
+
+同一批次包含多个新增类别时只训练一个多类增量检测器，并为每个全局类别保存独立阈值。推荐的统一 CLI 入口：
+
+```bash
+agile-agent incremental audit --batch /path/to/new_batch.zip
+agile-agent incremental run --batch BATCH_ID
+agile-agent incremental status --run-id TRAIN_JOB_ID
+```
+
+`incremental run` 是前台完整生命周期命令，会持续运行到上线、拒绝或回滚并返回相应退出码；Web 工作台使用同一状态机，但任务在后台执行。
+
+底层分步命令仍可用于排障：
 
 ```bash
 agile-agent incremental-data upload --archive /path/to/new_batch.zip --name 新批次
@@ -310,7 +331,7 @@ docs/               # 设计、操作和复现实验文档
 ## 已知限制
 
 - 尚未完成 Ascend 310B 的 OM 转换、AscendCL 集成和真实板端 FPS 验证。
-- 当前只有一轮舰船类别增量的完整实验证据，多轮能力尚未通过连续真实注入验证。
-- Web 训练当前产出待校准候选；校准、lock 复核和 production 切换仍由受审计的 CLI 门禁完成。
+- 当前只有一轮舰船类别增量的完整指标证据；多轮、多类别状态机和自动回滚已实现，但仍需使用后续真实批次补充连续实证。
+- Web 与 CLI 均会从训练继续执行到逐类校准、lock复核和受控上线；任一门禁失败时保持原production。
 - TensorRT engine 不随仓库发布；启用该后端前必须在目标设备本地导出并重新完成精度与性能验收。
 - 仓库不包含竞赛数据集、官方测试集或正式提交格式。

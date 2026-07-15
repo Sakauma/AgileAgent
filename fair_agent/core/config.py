@@ -25,9 +25,11 @@ PROTECTED_PREFIXES = (
     "web.generation_registry",
     "web.generation_channel",
     "generation.registry",
+    "generation.runtime_registry",
     "tensorrt_backend.engines",
     "tensorrt_backend.context_engine",
     "tensorrt_backend.validated",
+    "tensorrt_backend.validation_report",
     "tensorrt_backend.expected_version",
     "tensorrt_backend.expected_compute_capability",
 )
@@ -60,18 +62,24 @@ KNOWN_SECTION_KEYS = {
         "benchmark_split", "report_root", "concurrent_requests", "batch_probe_size",
         "auto_start_server", "server_start_timeout_seconds", "request_timeout_seconds",
     },
-    "native_backend": {"library", "base_engine", "context_engine", "precision", "require_exact_gpu", "validated"},
+    "native_backend": {"library", "base_engine", "engines", "context_engine", "precision", "require_exact_gpu", "validated"},
     "tensorrt_backend": {
         "expected_version", "expected_compute_capability", "require_exact_gpu", "validated",
-        "precision", "workspace_gib", "dynamic", "engines", "context_engine", "export",
+        "precision", "workspace_gib", "dynamic", "minimum_spatial_size", "engines", "context_engine", "export",
+        "validation",
+        "validation_report", "int8_calibration", "mixed_precision",
     },
-    "generation": {"registry", "recheck_lock_split", "report_root", "candidate_id", "calibrated_threshold", "acceptance"},
+    "generation": {
+        "registry", "runtime_registry", "recheck_lock_split", "report_root", "candidate_id",
+        "calibrated_threshold", "acceptance", "auto_promote", "shadow_smoke_images",
+    },
     "model": {"weights", "expected_sha256"},
     "logging": {"root", "max_file_bytes", "retained_files", "request_bodies"},
     "incremental_workbench": {
         "root", "max_archive_bytes", "max_extracted_bytes", "max_extracted_files",
         "max_image_pixels", "allowed_image_extensions", "allowed_label_formats", "require_labels", "validation_fraction",
         "minimum_images", "preview_limit", "job_log_tail_lines", "poll_interval_ms", "training",
+        "lock_fraction", "split_seed", "lineage", "lifecycle",
     },
 }
 
@@ -315,6 +323,10 @@ def validate_config(
     if not isinstance(workbench.get("require_labels"), bool):
         errors.append("incremental_workbench.require_labels必须为布尔值")
     _number(workbench, "validation_fraction", errors, 0.01, 0.50)
+    if "lock_fraction" in workbench:
+        _number(workbench, "lock_fraction", errors, 0.01, 0.50)
+    if "split_seed" in workbench:
+        _number(workbench, "split_seed", errors, 0)
     _number(workbench, "minimum_images", errors, 2)
     _number(workbench, "preview_limit", errors, 1, 100)
     _number(workbench, "job_log_tail_lines", errors, 10, 2000)
@@ -337,6 +349,30 @@ def validate_config(
         _number(workbench_training, "lr0", errors, 0.0000001, 1.0)
         if not all(isinstance(workbench_training.get(key), bool) for key in ("deterministic", "amp")):
             errors.append("incremental_workbench.training.deterministic与amp必须为布尔值")
+    lineage = workbench.get("lineage")
+    if not isinstance(lineage, Mapping):
+        errors.append("incremental_workbench.lineage必须是映射")
+    else:
+        required_lineage = {"required", "root", "base_manifest", "base_experiment_config", "auto_initialize_base", "cache_roots"}
+        missing_lineage = sorted(required_lineage - set(lineage))
+        if missing_lineage:
+            errors.append("incremental_workbench.lineage缺少：" + ", ".join(missing_lineage))
+        if not isinstance(lineage.get("required"), bool) or not isinstance(lineage.get("auto_initialize_base"), bool):
+            errors.append("incremental_workbench.lineage required/auto_initialize_base必须为布尔值")
+        if not isinstance(lineage.get("cache_roots"), list):
+            errors.append("incremental_workbench.lineage.cache_roots必须为列表")
+    lifecycle = workbench.get("lifecycle")
+    if not isinstance(lifecycle, Mapping):
+        errors.append("incremental_workbench.lifecycle必须是映射")
+    else:
+        if not isinstance(lifecycle.get("auto_continue"), bool):
+            errors.append("incremental_workbench.lifecycle.auto_continue必须为布尔值")
+        _number(lifecycle, "calibration_target_precision", errors, 0.0, 1.0)
+        threshold_min = _number(lifecycle, "threshold_min", errors, 0.0, 1.0)
+        threshold_max = _number(lifecycle, "threshold_max", errors, 0.0, 1.0)
+        _number(lifecycle, "threshold_step", errors, 0.0001, 1.0)
+        if threshold_min >= threshold_max:
+            errors.append("增量阈值扫描下界必须小于上界")
     ui = _require_mapping(config, "ui", errors)
     for key in ("history_limit", "result_cache_limit", "health_poll_ms", "toast_duration_ms"):
         _number(ui, key, errors, 1)
@@ -355,8 +391,11 @@ def validate_config(
         errors.append("performance必须声明benchmark_split和report_root")
 
     generation = _require_mapping(config, "generation", errors)
-    if not generation.get("registry") or not generation.get("recheck_lock_split") or not generation.get("report_root"):
-        errors.append("generation必须声明registry、recheck_lock_split和report_root")
+    if not generation.get("registry") or not generation.get("runtime_registry") or not generation.get("recheck_lock_split") or not generation.get("report_root"):
+        errors.append("generation必须声明registry、runtime_registry、recheck_lock_split和report_root")
+    if not isinstance(generation.get("auto_promote"), bool):
+        errors.append("generation.auto_promote必须为布尔值")
+    _number(generation, "shadow_smoke_images", errors, 1, 32)
     _number(generation, "calibrated_threshold", errors, 0.01, 1.0)
     acceptance = generation.get("acceptance")
     if not isinstance(acceptance, Mapping):
@@ -370,6 +409,22 @@ def validate_config(
         errors.append("native_backend.precision 非法")
     if not isinstance(native.get("require_exact_gpu"), bool) or not isinstance(native.get("validated"), bool):
         errors.append("native_backend.require_exact_gpu与validated必须为布尔值")
+    native_engines = native.get("engines")
+    if not isinstance(native_engines, Mapping) or not native_engines:
+        errors.append("native_backend.engines必须是非空映射")
+    else:
+        for source, entry in native_engines.items():
+            if not isinstance(source, str) or not isinstance(entry, Mapping) or not entry.get("path"):
+                errors.append("native_backend.engines条目非法")
+                continue
+            unknown = sorted(set(entry) - {"path", "sha256"})
+            if unknown:
+                errors.append(f"native_backend.engines.{source}包含未知字段：" + ", ".join(unknown))
+            digest = entry.get("sha256")
+            if native.get("validated") is True and (
+                not isinstance(digest, str) or len(digest) != 64
+            ):
+                errors.append(f"已验收native engine缺少SHA256：{source}")
     if inference.get("backend") == "tensorrt_native":
         for key in ("library", "base_engine", "context_engine"):
             if not native.get(key):
@@ -384,6 +439,80 @@ def validate_config(
         errors.append("tensorrt_backend.require_exact_gpu与validated必须为布尔值")
     if not isinstance(tensorrt_backend.get("dynamic"), bool):
         errors.append("tensorrt_backend.dynamic必须为布尔值")
+    minimum_spatial_size = _number(tensorrt_backend, "minimum_spatial_size", errors, 32)
+    if int(minimum_spatial_size) % 32:
+        errors.append("tensorrt_backend.minimum_spatial_size必须是32的倍数")
+    mixed_precision = tensorrt_backend.get("mixed_precision")
+    if not isinstance(mixed_precision, Mapping):
+        errors.append("tensorrt_backend.mixed_precision必须是映射")
+    else:
+        unknown_mixed = sorted(set(mixed_precision) - {
+            "enabled", "constraint", "fp16_layer_patterns", "minimum_matched_layers",
+        })
+        if unknown_mixed:
+            errors.append("tensorrt_backend.mixed_precision包含未知字段：" + ", ".join(unknown_mixed))
+        if not isinstance(mixed_precision.get("enabled"), bool):
+            errors.append("tensorrt_backend.mixed_precision.enabled必须为布尔值")
+        if mixed_precision.get("constraint") not in {"obey", "prefer"}:
+            errors.append("tensorrt_backend.mixed_precision.constraint必须为obey或prefer")
+        patterns = mixed_precision.get("fp16_layer_patterns")
+        if not isinstance(patterns, list) or not patterns or not all(
+            isinstance(pattern, str) and pattern for pattern in patterns
+        ):
+            errors.append("tensorrt_backend.mixed_precision.fp16_layer_patterns必须是非空字符串列表")
+        _number(mixed_precision, "minimum_matched_layers", errors, 1)
+        if mixed_precision.get("enabled") is True and tensorrt_backend.get("precision") != "int8":
+            errors.append("混合精度层约束仅在precision=int8时允许启用")
+    validation = tensorrt_backend.get("validation")
+    if not isinstance(validation, Mapping):
+        errors.append("tensorrt_backend.validation必须是映射")
+    else:
+        unknown_validation = sorted(set(validation) - {
+            "max_overall_map50_delta_warning", "max_per_class_map50_delta_warning",
+            "evaluation_batch_size",
+        })
+        if unknown_validation:
+            errors.append("tensorrt_backend.validation包含未知字段：" + ", ".join(unknown_validation))
+        _number(validation, "max_overall_map50_delta_warning", errors, 0.0, 1.0)
+        _number(validation, "max_per_class_map50_delta_warning", errors, 0.0, 1.0)
+        evaluation_batch_size = _number(validation, "evaluation_batch_size", errors, 1)
+        engine_batches = [
+            int(entry.get("batch_size", 0))
+            for entry in (tensorrt_backend.get("engines") or {}).values()
+            if isinstance(entry, Mapping)
+        ]
+        if engine_batches and evaluation_batch_size > min(engine_batches):
+            errors.append("TensorRT精度评测batch不得超过任一检测engine的最大batch")
+    int8_calibration = tensorrt_backend.get("int8_calibration")
+    if not isinstance(int8_calibration, Mapping):
+        errors.append("tensorrt_backend.int8_calibration必须是映射")
+    else:
+        unknown_int8 = sorted(set(int8_calibration) - {
+            "enabled", "auto_quantize_incremental", "representative_split", "cache_root",
+            "threshold_split", "batch_size", "max_images", "minimum_images_per_class", "seed",
+        })
+        if unknown_int8:
+            errors.append("tensorrt_backend.int8_calibration包含未知字段：" + ", ".join(unknown_int8))
+        if not isinstance(int8_calibration.get("enabled"), bool) or not isinstance(
+            int8_calibration.get("auto_quantize_incremental"), bool
+        ):
+            errors.append("INT8 enabled/auto_quantize_incremental必须为布尔值")
+        if (
+            not int8_calibration.get("representative_split")
+            or not int8_calibration.get("threshold_split")
+            or not int8_calibration.get("cache_root")
+        ):
+            errors.append("INT8校准必须声明representative_split、threshold_split和cache_root")
+        calibration_batch = _number(int8_calibration, "batch_size", errors, 1)
+        calibration_images = _number(int8_calibration, "max_images", errors, 1)
+        _number(int8_calibration, "minimum_images_per_class", errors, 1)
+        _number(int8_calibration, "seed", errors, 0)
+        if calibration_batch > calibration_images:
+            errors.append("INT8校准batch不得大于最大校准图像数")
+        if tensorrt_backend.get("precision") == "int8" and int8_calibration.get("enabled") is not True:
+            errors.append("precision=int8时必须启用INT8校准")
+    if tensorrt_backend.get("validated") is True and not tensorrt_backend.get("validation_report"):
+        errors.append("已启用TensorRT后端必须登记精度与性能验收报告")
     inactive_tensorrt_profile = (
         inference.get("backend") != "tensorrt_engine"
         and tensorrt_backend.get("validated") is False
@@ -408,7 +537,6 @@ def validate_config(
     else:
         unknown_export = sorted(set(export) - {
             "device", "overwrite", "onnx_opset", "simplify", "context_checkpoint",
-            "context_min_batch", "context_opt_batch",
         })
         if unknown_export:
             errors.append("tensorrt_backend.export包含未知字段：" + ", ".join(unknown_export))
@@ -417,10 +545,6 @@ def validate_config(
         if not isinstance(export.get("overwrite"), bool) or not isinstance(export.get("simplify"), bool):
             errors.append("tensorrt_backend.export.overwrite与simplify必须为布尔值")
         _number(export, "onnx_opset", errors, 13, 20)
-        min_batch = _number(export, "context_min_batch", errors, 1)
-        opt_batch = _number(export, "context_opt_batch", errors, 1)
-        if min_batch > opt_batch:
-            errors.append("TensorRT context最小batch不得大于最优batch")
         if not export.get("context_checkpoint"):
             errors.append("tensorrt_backend.export.context_checkpoint必填")
     engines = tensorrt_backend.get("engines")
@@ -431,7 +555,10 @@ def validate_config(
             if not isinstance(source, str) or not isinstance(entry, Mapping):
                 errors.append("tensorrt_backend.engines条目非法")
                 continue
-            unknown_engine = sorted(set(entry) - {"path", "sha256", "imgsz", "batch_size"})
+            unknown_engine = sorted(set(entry) - {
+                "path", "sha256", "imgsz", "batch_size", "min_batch_size", "opt_batch_size",
+                "opt_height", "opt_width",
+            })
             if unknown_engine:
                 errors.append(f"TensorRT engine {source}包含未知字段：" + ", ".join(unknown_engine))
             raw_digest = entry.get("sha256")
@@ -443,12 +570,24 @@ def validate_config(
             ):
                 errors.append(f"TensorRT engine {source}缺少有效路径或SHA256")
             _number(entry, "imgsz", errors, 32)
-            _number(entry, "batch_size", errors, 1)
+            if int(entry.get("imgsz", 0) or 0) < minimum_spatial_size:
+                errors.append(f"TensorRT engine {source} 的imgsz不得小于minimum_spatial_size")
+            opt_height = _number(entry, "opt_height", errors, 32)
+            opt_width = _number(entry, "opt_width", errors, 32)
+            if int(opt_height) % 32 or int(opt_width) % 32:
+                errors.append(f"TensorRT engine {source} 的opt_height/opt_width必须是32的倍数")
+            if max(opt_height, opt_width) > int(entry.get("imgsz", 0) or 0):
+                errors.append(f"TensorRT engine {source} 的最优空间尺寸不得超过imgsz")
+            max_engine_batch = _number(entry, "batch_size", errors, 1)
+            min_engine_batch = _number(entry, "min_batch_size", errors, 1)
+            opt_engine_batch = _number(entry, "opt_batch_size", errors, 1)
+            if not min_engine_batch <= opt_engine_batch <= max_engine_batch:
+                errors.append(f"TensorRT engine {source} batch profile必须满足min<=opt<=max")
     context_engine = tensorrt_backend.get("context_engine")
     if not isinstance(context_engine, Mapping):
         errors.append("tensorrt_backend.context_engine必须是映射")
     else:
-        unknown_context = sorted(set(context_engine) - {"path", "sha256", "imgsz", "batch_size"})
+        unknown_context = sorted(set(context_engine) - {"path", "sha256", "imgsz", "batch_size", "min_batch_size", "opt_batch_size"})
         if unknown_context:
             errors.append("TensorRT context engine包含未知字段：" + ", ".join(unknown_context))
         raw_digest = context_engine.get("sha256")
@@ -461,8 +600,10 @@ def validate_config(
             errors.append("TensorRT context engine缺少有效路径或SHA256")
         _number(context_engine, "imgsz", errors, 32)
         context_max_batch = _number(context_engine, "batch_size", errors, 1)
-        if isinstance(export, Mapping) and float(export.get("context_opt_batch", 0) or 0) > context_max_batch:
-            errors.append("TensorRT context最优batch不得大于engine最大batch")
+        context_min_profile = _number(context_engine, "min_batch_size", errors, 1)
+        context_opt_profile = _number(context_engine, "opt_batch_size", errors, 1)
+        if not context_min_profile <= context_opt_profile <= context_max_batch:
+            errors.append("TensorRT context batch profile必须满足min<=opt<=max")
 
     model = _require_mapping(config, "model", errors)
     if not model.get("weights"):

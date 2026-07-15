@@ -37,9 +37,6 @@ from fair_agent.modules.incremental_workbench import IncrementalBatchStore, Trai
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 EngineProvider = Callable[[], WebInferenceEngine]
 
-_engine: WebInferenceEngine | None = None
-_engine_lock = threading.Lock()
-
 
 class BatchResultStore:
     def __init__(self, max_items: int, ttl_seconds: int, max_bytes: int) -> None:
@@ -97,7 +94,11 @@ class BatchResultStore:
             self._items.pop(batch_id, None)
 
 
-def build_web_settings(config: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+def build_web_settings(
+    config: Mapping[str, Any] | None = None,
+    generation_channel: str | None = None,
+    generation_id: str | None = None,
+) -> Dict[str, Any]:
     config = dict(config or load_config())
     web = config.get("web", {})
     inference = dict(config["inference"])
@@ -150,11 +151,21 @@ def build_web_settings(config: Mapping[str, Any] | None = None) -> Dict[str, Any
         }
     generation = None
     if web.get("generation_registry"):
-        from fair_agent.modules.model_generations import generation_web_settings, load_generation_registry
+        from fair_agent.modules.generation_management import active_generation_registry
+        from fair_agent.modules.model_generations import (
+            generation_settings,
+            generation_web_settings,
+            load_generation_registry,
+        )
 
-        generation = generation_web_settings(
-            load_generation_registry(web["generation_registry"]),
-            str(web.get("generation_channel", "production")),
+        loaded_registry = load_generation_registry(active_generation_registry(config))
+        generation = (
+            generation_settings(loaded_registry, generation_id)
+            if generation_id is not None
+            else generation_web_settings(
+                loaded_registry,
+                generation_channel or str(web.get("generation_channel", "production")),
+            )
         )
         class_names = generation["class_names"]
         base_class_names = {
@@ -162,6 +173,38 @@ def build_web_settings(config: Mapping[str, Any] | None = None) -> Dict[str, Any
             for global_id in generation["base_class_ids"]
         }
         protocols = generation["protocols"]
+        if backend_name == "tensorrt_engine" and backend_options.get("precision") == "int8":
+            backend_options["engines"] = {
+                **dict(backend_options.get("engines") or {}),
+                **dict(generation.get("engine_deployments") or {}),
+            }
+            validation_report = backend_options.get("validation_report")
+            if backend_options.get("validated") is True and validation_report:
+                validation_payload = json.loads(
+                    resolve_path(validation_report).read_text(encoding="utf-8")
+                )
+                if validation_payload.get("accepted") is not True:
+                    raise ValueError("TensorRT验收报告未通过，不能加载量化阈值。")
+                calibrated_thresholds = {
+                    int(key): float(value)
+                    for key, value in validation_payload.get("threshold_calibration", {})
+                    .get("thresholds", {})
+                    .items()
+                }
+                for protocol in protocols.values():
+                    owned = [int(value) for value in protocol.get("global_class_ids", [])]
+                    thresholds = {
+                        int(key): float(value)
+                        for key, value in dict(
+                            protocol.get("activation_thresholds") or {}
+                        ).items()
+                    }
+                    for class_id in owned:
+                        if class_id in calibrated_thresholds:
+                            thresholds[class_id] = calibrated_thresholds[class_id]
+                    protocol["activation_thresholds"] = thresholds
+                    if len(owned) == 1:
+                        protocol["activation_threshold"] = thresholds[owned[0]]
     return {
         "detector_path": (
             generation["detector_path"]
@@ -222,28 +265,95 @@ def build_web_settings(config: Mapping[str, Any] | None = None) -> Dict[str, Any
 WEB_SETTINGS = build_web_settings()
 
 
+class AtomicEngineProvider:
+    def __init__(self, config: Mapping[str, Any]) -> None:
+        self.config = dict(config)
+        self._engine: WebInferenceEngine | None = None
+        self._settings = build_web_settings(self.config)
+        self._lock = threading.RLock()
+        self._fallbacks: Dict[str, tuple[WebInferenceEngine | None, Dict[str, Any]]] = {}
+
+    @staticmethod
+    def _build_engine(settings: Mapping[str, Any]) -> WebInferenceEngine:
+        return WebInferenceEngine(
+            settings["detector_path"], settings["context_path"],
+            device_index=settings["device_index"], predict_options=settings["predict"],
+            incremental_protocols=settings["protocols"], class_names=settings["class_names"],
+            base_class_ids=settings["base_class_ids"],
+            base_local_to_global=settings.get("base_local_to_global"),
+            routing_options=settings["routing"], generation_id=settings["generation_id"],
+            base_model_id=settings["base_model_id"], class_owners=settings["class_owners"],
+            backend_name=settings["backend"], native_options=settings["native_backend"],
+        )
+
+    def get(self) -> WebInferenceEngine:
+        if self._engine is None:
+            with self._lock:
+                if self._engine is None:
+                    self._engine = self._build_engine(self._settings)
+        return self._engine
+
+    def settings(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._settings)
+
+    def promote(
+        self,
+        candidate_id: str,
+        manifest_path: str,
+        shadow_engine: WebInferenceEngine,
+        smoke: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        with self._lock:
+            from fair_agent.modules.generation_management import promote_generation, rollback_generation
+
+            previous_engine = self._engine
+            previous_settings = dict(self._settings)
+            previous_generation = str(previous_settings["generation_id"])
+            promotion = promote_generation(self.config, candidate_id, manifest_path)
+            try:
+                settings = build_web_settings(self.config)
+                if settings["generation_id"] != candidate_id:
+                    raise RuntimeError("production注册表已切换，但运行时代际解析不一致。")
+            except Exception:
+                rollback_generation(self.config, previous_generation)
+                self._engine = previous_engine
+                self._settings = previous_settings
+                raise
+            self._fallbacks[previous_generation] = (previous_engine, previous_settings)
+            self._engine = shadow_engine
+            self._settings = settings
+        return {**promotion, "shadow_smoke": dict(smoke), "runtime_swap": "atomic"}
+
+    def rollback(self, target_id: str) -> Dict[str, Any]:
+        from fair_agent.modules.generation_management import rollback_generation, shadow_load_generation
+
+        with self._lock:
+            current_generation = str(self._settings["generation_id"])
+            if current_generation == target_id:
+                return {"previous": current_generation, "production": target_id, "runtime_swap": "unchanged"}
+            cached = self._fallbacks.get(target_id)
+            if cached is None:
+                engine, smoke = shadow_load_generation(self.config, target_id)
+            else:
+                engine, settings = cached
+                smoke = {"generation_id": target_id, "source": "cached_runtime"}
+            rollback = rollback_generation(self.config, target_id)
+            if cached is None:
+                settings = build_web_settings(self.config)
+            if settings["generation_id"] != target_id:
+                raise RuntimeError("注册表已回滚，但运行时代际解析不一致。")
+            self._fallbacks[current_generation] = (self._engine, dict(self._settings))
+            self._engine = engine
+            self._settings = dict(settings)
+            return {**rollback, "shadow_smoke": smoke, "runtime_swap": "atomic_rollback"}
+
+
+_default_runtime_manager = AtomicEngineProvider(load_config())
+
+
 def default_engine_provider() -> WebInferenceEngine:
-    global _engine
-    if _engine is None:
-        with _engine_lock:
-            if _engine is None:
-                _engine = WebInferenceEngine(
-                    WEB_SETTINGS["detector_path"],
-                    WEB_SETTINGS["context_path"],
-                    device_index=WEB_SETTINGS["device_index"],
-                    predict_options=WEB_SETTINGS["predict"],
-                    incremental_protocols=WEB_SETTINGS["protocols"],
-                    class_names=WEB_SETTINGS["class_names"],
-                    base_class_ids=WEB_SETTINGS["base_class_ids"],
-                    base_local_to_global=WEB_SETTINGS.get("base_local_to_global"),
-                    routing_options=WEB_SETTINGS["routing"],
-                    generation_id=WEB_SETTINGS["generation_id"],
-                    base_model_id=WEB_SETTINGS["base_model_id"],
-                    class_owners=WEB_SETTINGS["class_owners"],
-                    backend_name=WEB_SETTINGS["backend"],
-                    native_options=WEB_SETTINGS["native_backend"],
-                )
-    return _engine
+    return _default_runtime_manager.get()
 
 
 def public_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -252,6 +362,13 @@ def public_result(result: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in result.items()
         if key not in {"annotated_png", "source_bytes", "task_id"}
     }
+
+
+def request_web_settings(request: Request) -> Dict[str, Any]:
+    manager = getattr(request.app.state, "runtime_manager", None)
+    if manager is not None:
+        return manager.settings()
+    return dict(getattr(request.app.state, "web_settings", WEB_SETTINGS))
 
 
 def parse_confidence(value: Any, settings: Mapping[str, Any] | None = None) -> float:
@@ -315,20 +432,22 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 async def health(request: Request) -> JSONResponse:
     provider: EngineProvider = request.app.state.engine_provider
+    settings = request_web_settings(request)
     try:
         engine = await run_in_threadpool(provider)
         queue = engine.queue_status()
         return JSONResponse(
             {
                 "status": "ready",
-                "device": f'cuda:{WEB_SETTINGS["device_index"]}',
+                "device": f'cuda:{settings["device_index"]}',
+                "backend": settings["backend"],
                 "queue": queue,
-                "limits": public_config_payload()["limits"],
-                "generation_id": WEB_SETTINGS["generation_id"],
-                "generation_name": WEB_SETTINGS["generation_name"],
+                "limits": public_config_payload(settings)["limits"],
+                "generation_id": settings["generation_id"],
+                "generation_name": settings["generation_name"],
                 "classes": [
-                    WEB_SETTINGS["class_names"][class_id]
-                    for class_id in WEB_SETTINGS["active_class_ids"]
+                    settings["class_names"][class_id]
+                    for class_id in settings["active_class_ids"]
                 ],
             }
         )
@@ -336,7 +455,8 @@ async def health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "error": f"模型服务初始化失败：{exc}"}, status_code=503)
 
 
-async def capabilities(_request: Request) -> JSONResponse:
+async def capabilities(request: Request) -> JSONResponse:
+    settings = request_web_settings(request)
     protocols = [
         {
             "id": item["id"],
@@ -347,13 +467,13 @@ async def capabilities(_request: Request) -> JSONResponse:
             "available": item["available"],
             "evidence_level": item["evidence_level"],
         }
-        for item in WEB_SETTINGS["protocols"].values()
+        for item in settings["protocols"].values()
     ]
     models = [
         {"id": "scene_sensor_net_v1", "name": "场景认知", "role": "context_perception"},
         {
-            "id": WEB_SETTINGS["base_model_id"],
-            "name": WEB_SETTINGS["base_model_name"],
+            "id": settings["base_model_id"],
+            "name": settings["base_model_name"],
             "role": "frozen_base",
         },
     ]
@@ -364,26 +484,27 @@ async def capabilities(_request: Request) -> JSONResponse:
             "role": "class_incremental_expert",
             "available": item["available"],
         }
-        for item in WEB_SETTINGS["protocols"].values()
+        for item in settings["protocols"].values()
     )
     return JSONResponse(
         {
-            "generation_id": WEB_SETTINGS["generation_id"],
-            "generation_name": WEB_SETTINGS["generation_name"],
-            "generation_status": WEB_SETTINGS["generation_status"],
+            "generation_id": settings["generation_id"],
+            "generation_name": settings["generation_name"],
+            "generation_status": settings["generation_status"],
             "active_classes": [
-                WEB_SETTINGS["class_names"][class_id]
-                for class_id in WEB_SETTINGS["active_class_ids"]
+                settings["class_names"][class_id]
+                for class_id in settings["active_class_ids"]
             ],
             "models": models,
-            "incremental_enabled": WEB_SETTINGS["incremental_enabled"],
+            "incremental_enabled": settings["incremental_enabled"],
             "protocols": protocols,
         }
     )
 
 
-def public_config_payload() -> Dict[str, Any]:
-    limits = WEB_SETTINGS["limits"]
+def public_config_payload(settings: Mapping[str, Any] | None = None) -> Dict[str, Any]:
+    settings = dict(settings or WEB_SETTINGS)
+    limits = settings["limits"]
     return {
         "limits": {
             "max_file_bytes": int(limits["max_file_bytes"]),
@@ -394,31 +515,32 @@ def public_config_payload() -> Dict[str, Any]:
             "max_image_pixels": int(limits["max_image_pixels"]),
             "allowed_image_formats": list(limits["allowed_image_formats"]),
         },
-        "confidence": dict(WEB_SETTINGS["confidence"]),
-        "ui": dict(WEB_SETTINGS["ui"]),
+        "confidence": dict(settings["confidence"]),
+        "ui": dict(settings["ui"]),
         "incremental": {
-            "max_archive_bytes": int(WEB_SETTINGS["incremental_workbench"]["max_archive_bytes"]),
-            "max_archive_mb": int(WEB_SETTINGS["incremental_workbench"]["max_archive_bytes"]) // (1024 * 1024),
+            "max_archive_bytes": int(settings["incremental_workbench"]["max_archive_bytes"]),
+            "max_archive_mb": int(settings["incremental_workbench"]["max_archive_bytes"]) // (1024 * 1024),
             "accepted_format": "ZIP",
-            "preview_limit": int(WEB_SETTINGS["incremental_workbench"]["preview_limit"]),
-            "job_log_tail_lines": int(WEB_SETTINGS["incremental_workbench"]["job_log_tail_lines"]),
-            "poll_interval_ms": int(WEB_SETTINGS["incremental_workbench"]["poll_interval_ms"]),
+            "preview_limit": int(settings["incremental_workbench"]["preview_limit"]),
+            "job_log_tail_lines": int(settings["incremental_workbench"]["job_log_tail_lines"]),
+            "poll_interval_ms": int(settings["incremental_workbench"]["poll_interval_ms"]),
         },
         "labels": {
-            "classes": {str(key): value for key, value in WEB_SETTINGS["class_names"].items()},
+            "classes": {str(key): value for key, value in settings["class_names"].items()},
             "sensors": {"ir": "红外", "sar": "SAR"},
             "scenes": {"air": "空域", "forest": "林地", "sea": "海域", "urban": "城市场景"},
         },
     }
 
 
-async def public_config(_request: Request) -> JSONResponse:
-    return JSONResponse(public_config_payload())
+async def public_config(request: Request) -> JSONResponse:
+    return JSONResponse(public_config_payload(request_web_settings(request)))
 
 
 async def detect(request: Request) -> JSONResponse:
     request_started = time.perf_counter()
-    limits = WEB_SETTINGS["limits"]
+    settings = request_web_settings(request)
+    limits = settings["limits"]
     upload_started = time.perf_counter()
     try:
         async with request.form(max_files=1, max_fields=4, max_part_size=int(limits["max_file_bytes"])) as form:
@@ -430,7 +552,7 @@ async def detect(request: Request) -> JSONResponse:
             decode_started = time.perf_counter()
             image, task_id = validate_image_bytes(data, upload.filename or "image", limits)
             decode_ms = (time.perf_counter() - decode_started) * 1000
-            confidence = parse_confidence(form.get("confidence", WEB_SETTINGS["confidence"]["default"]))
+            confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         result = await run_in_threadpool(
@@ -450,7 +572,7 @@ async def detect(request: Request) -> JSONResponse:
         payload["system_total_ms"] = round((time.perf_counter() - request_started) * 1000, 1)
         request.app.state.event_log.append(
             "inference.single.completed", component="inference", trace_id=request.state.trace_id,
-            generation_id=WEB_SETTINGS["generation_id"],
+            generation_id=result.get("agent", {}).get("decision", {}).get("generation_id", settings["generation_id"]),
             duration_ms=payload["system_total_ms"],
             details={
                 "filename": upload.filename or "image", "detection_count": payload.get("detection_count", 0),
@@ -470,7 +592,8 @@ async def detect(request: Request) -> JSONResponse:
 
 async def batch_detect(request: Request) -> Response:
     request_started = time.perf_counter()
-    limits = WEB_SETTINGS["limits"]
+    settings = request_web_settings(request)
+    limits = settings["limits"]
     upload_started = time.perf_counter()
     try:
         async with request.form(
@@ -484,7 +607,7 @@ async def batch_detect(request: Request) -> Response:
             decode_started = time.perf_counter()
             validated = validate_batch_uploads(rows, limits)
             decode_ms = (time.perf_counter() - decode_started) * 1000
-            confidence = parse_confidence(form.get("confidence", WEB_SETTINGS["confidence"]["default"]))
+            confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         engine_started = time.perf_counter()
@@ -511,7 +634,10 @@ async def batch_detect(request: Request) -> Response:
         request.app.state.event_log.append(
             "inference.batch.completed", component="inference", trace_id=request.state.trace_id,
             duration_ms=system_total, batch_id=batch_id,
-            generation_id=WEB_SETTINGS["generation_id"],
+            generation_id=(
+                results[0].get("agent", {}).get("decision", {}).get("generation_id", settings["generation_id"])
+                if results else settings["generation_id"]
+            ),
             details={
                 "image_count": len(results), "detection_count": total_detections,
                 "inference_ms": total_inference, "engine_ms": round(engine_ms, 3),
@@ -594,7 +720,7 @@ async def incremental_batches(request: Request) -> JSONResponse:
     store: IncrementalBatchStore = request.app.state.incremental_store
     if request.method == "GET":
         return JSONResponse({"batches": await run_in_threadpool(store.list)})
-    settings = WEB_SETTINGS["incremental_workbench"]
+    settings = request_web_settings(request)["incremental_workbench"]
     try:
         async with request.form(max_files=1, max_fields=3, max_part_size=int(settings["max_archive_bytes"])) as form:
             upload = form.get("file")
@@ -691,7 +817,7 @@ async def incremental_job_logs(request: Request) -> Response:
             request.app.state.training_manager.read_log,
             batch_id,
             request.path_params["job_id"],
-            int(request.query_params.get("tail", str(WEB_SETTINGS["incremental_workbench"]["job_log_tail_lines"]))),
+            int(request.query_params.get("tail", str(request_web_settings(request)["incremental_workbench"]["job_log_tail_lines"]))),
         )
         return PlainTextResponse(text)
     except Exception as exc:
@@ -748,7 +874,14 @@ def create_app(
     incremental_store: IncrementalBatchStore | None = None,
     training_manager: TrainingJobManager | None = None,
     event_log: StructuredEventLog | None = None,
+    config: Mapping[str, Any] | None = None,
+    runtime_manager: AtomicEngineProvider | None = None,
 ) -> Starlette:
+    effective_config = dict(config or load_config())
+    active_runtime = runtime_manager
+    if engine_provider is None and active_runtime is None:
+        active_runtime = _default_runtime_manager if config is None else AtomicEngineProvider(effective_config)
+    settings = active_runtime.settings() if active_runtime is not None else build_web_settings(effective_config)
     application = Starlette(
         debug=False,
         routes=[
@@ -775,27 +908,31 @@ def create_app(
         middleware=[Middleware(SecurityHeadersMiddleware)],
         exception_handlers={404: not_found},
     )
-    application.state.engine_provider = engine_provider or default_engine_provider
-    log_settings = WEB_SETTINGS["logging"]
+    application.state.runtime_manager = active_runtime
+    application.state.engine_provider = engine_provider or active_runtime.get
+    application.state.web_settings = settings
+    log_settings = settings["logging"]
     logger = event_log or StructuredEventLog(
         root=log_settings["root"],
         max_file_bytes=int(log_settings["max_file_bytes"]),
         retained_files=int(log_settings["retained_files"]),
     )
     store = incremental_store or IncrementalBatchStore(
-        WEB_SETTINGS["incremental_workbench"],
+        settings["incremental_workbench"],
         logger,
         {
-            class_id: WEB_SETTINGS["class_names"][class_id]
-            for class_id in WEB_SETTINGS["active_class_ids"]
+            class_id: settings["class_names"][class_id]
+            for class_id in settings["active_class_ids"]
         },
     )
     application.state.event_log = logger
     application.state.incremental_store = store
     application.state.training_manager = training_manager or TrainingJobManager(
-        store, WEB_SETTINGS["incremental_workbench"], logger
+        store, settings["incremental_workbench"], logger, effective_config,
+        active_runtime.promote if active_runtime is not None else None,
+        active_runtime.rollback if active_runtime is not None else None,
     )
-    cache = WEB_SETTINGS["storage"]
+    cache = settings["storage"]
     application.state.batch_store = BatchResultStore(
         max_items=int(cache["max_items"]),
         ttl_seconds=int(cache["ttl_seconds"]),

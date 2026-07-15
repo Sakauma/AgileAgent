@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from PIL import Image
 
 from fair_agent.backends.inference import TensorRTEngineBackend, TensorRTNativeBackend
 from fair_agent.core.config import apply_overrides, load_config, redact_config, validate_config
@@ -19,9 +20,17 @@ from fair_agent.modules.api_benchmark import _server_session
 from fair_agent.modules.generation_management import promote_generation, rollback_generation
 from fair_agent.modules.model_generations import load_generation_registry
 from fair_agent.modules.tensorrt_export import (
+    _apply_mixed_precision,
+    _optimal_detector_shape,
     export_or_verify_engines,
     export_plan,
+    prepare_calibration_manifest,
     write_export_hashes,
+)
+from fair_agent.modules.api_benchmark import _performance_assessment
+from fair_agent.modules.tensorrt_validation import (
+    _apply_protocol_thresholds,
+    _competition_accuracy_gates,
 )
 
 
@@ -143,7 +152,210 @@ def test_tensorrt_export_plan_is_fully_config_driven() -> None:
     rows = export_plan(load_config())
     assert [row["kind"] for row in rows] == ["yolo", "yolo", "context"]
     assert rows[-1]["batch_size"] == 20
+    assert [
+        (row["min_batch_size"], row["opt_batch_size"], row["batch_size"])
+        for row in rows
+    ] == [(1, 8, 20), (1, 8, 20), (1, 8, 20)]
     assert rows[-1]["imgsz"] == 160
+
+
+def test_int8_calibration_manifest_is_deterministic_and_rejects_lock(tmp_path: Path) -> None:
+    config = clean_config()
+    settings = config["tensorrt_backend"]["int8_calibration"]
+    settings.update({
+        "cache_root": str(tmp_path / "calibration"),
+        "batch_size": 2,
+        "max_images": 6,
+        "minimum_images_per_class": 2,
+        "seed": 20260705,
+    })
+    images = []
+    for index in range(8):
+        image = tmp_path / f"sample-{index}.png"
+        Image.new("RGB", (32, 24), (index, 0, 0)).save(image)
+        image.with_suffix(".txt").write_text(
+            f"{index % 2} 0.5 0.5 0.2 0.2\n", encoding="utf-8"
+        )
+        images.append(image)
+    first = prepare_calibration_manifest(
+        config, "model.pt", images, [0, 1], "unit-test", preprocessing={"imgsz": 640}
+    )
+    second = prepare_calibration_manifest(
+        config, "model.pt", list(reversed(images)), [0, 1], "unit-test", preprocessing={"imgsz": 640}
+    )
+    assert first["fingerprint"] == second["fingerprint"]
+    assert first["manifest_sha256"] == second["manifest_sha256"]
+    assert first["image_count"] == 6
+    changed = prepare_calibration_manifest(
+        config, "model.pt", images, [0, 1], "unit-test", preprocessing={"imgsz": 512}
+    )
+    assert changed["fingerprint"] != first["fingerprint"]
+    with pytest.raises(ValueError, match="封存lock重叠"):
+        prepare_calibration_manifest(
+            config, "model.pt", images, [0, 1], "unit-test", [first["images"][0].stem]
+        )
+
+
+def test_int8_optimal_shape_matches_rectangular_ultralytics_preprocessing(tmp_path: Path) -> None:
+    images = []
+    for index in range(3):
+        image = tmp_path / f"rect-{index}.png"
+        Image.new("RGB", (640, 512)).save(image)
+        images.append(image)
+    assert _optimal_detector_shape(images, 640) == (512, 640)
+    assert _optimal_detector_shape(images, 512) == (416, 512)
+
+
+def test_mixed_precision_forces_configured_layers_to_fp16() -> None:
+    class Output:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.dtype = "fp32"
+            self.is_shape_tensor = False
+
+    class Layer:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.type = "convolution"
+            self.outputs = [Output(name + ":0")]
+            self.num_outputs = 1
+            self.precision = None
+            self.output_types = {}
+
+        def get_output(self, index: int):
+            return self.outputs[index]
+
+        def set_output_type(self, index: int, dtype: str) -> None:
+            self.output_types[index] = dtype
+
+    layers = [Layer("/model.5/conv/Conv"), Layer("/model.6/cv1/conv/Conv"), Layer("/model.23/cv3/Conv")]
+    network = SimpleNamespace(num_layers=len(layers), get_layer=lambda index: layers[index])
+    flags = []
+    builder_config = SimpleNamespace(set_flag=flags.append)
+    trt = SimpleNamespace(
+        float16="fp16",
+        float32="fp32",
+        BuilderFlag=SimpleNamespace(
+            OBEY_PRECISION_CONSTRAINTS="obey",
+            PREFER_PRECISION_CONSTRAINTS="prefer",
+        ),
+        LayerType=SimpleNamespace(
+            ACTIVATION="activation",
+            CONVOLUTION="convolution",
+            DECONVOLUTION="deconvolution",
+            ELEMENTWISE="elementwise",
+            MATRIX_MULTIPLY="matrix_multiply",
+            NORMALIZATION="normalization",
+            PARAMETRIC_RELU="parametric_relu",
+            POOLING="pooling",
+            SOFTMAX="softmax",
+        ),
+    )
+    report = _apply_mixed_precision(network, builder_config, {
+        "precision": "int8",
+        "mixed_precision": {
+            "enabled": True,
+            "constraint": "obey",
+            "fp16_layer_patterns": ["/model.[6-9]/*", "/model.2[0-3]/*"],
+            "minimum_matched_layers": 2,
+        },
+    }, trt)
+    assert report["matched_layer_count"] == 2
+    assert layers[0].precision is None
+    assert layers[1].precision == layers[2].precision == "fp16"
+    assert flags == ["obey"]
+
+
+def test_mixed_precision_requires_int8_backend() -> None:
+    config = clean_config()
+    config["tensorrt_backend"]["mixed_precision"]["enabled"] = True
+    with pytest.raises(ValueError, match="仅在precision=int8"):
+        validate_config(config)
+
+
+def test_fixed_mixed_precision_profile_keeps_only_modules_zero_and_one_int8() -> None:
+    profile = load_config()["tensorrt_backend"]["mixed_precision"]
+    assert profile["fp16_layer_patterns"] == [
+        "/model.[2-9]/*",
+        "/model.1[0-9]/*",
+        "/model.2[0-3]/*",
+    ]
+    assert profile["minimum_matched_layers"] == 269
+
+
+def test_non_competition_diagnostics_do_not_fail_quantized_candidate() -> None:
+    config = load_config()
+    gates = _competition_accuracy_gates(
+        {
+            "base_map50": 0.81,
+            "new_map50": 0.78,
+            "krr": 1.0,
+            "combined_map50": 0.803,
+        },
+        config["generation"]["acceptance"],
+        True,
+    )
+    assert all(gates.values())
+
+    competition, diagnostics = _performance_assessment(
+        {
+            "batch_fps": 47.9,
+            "median_round_mean_server_ms": 46.9,
+            "all_p95_server_ms": 60.0,
+            "concurrent_success_count": 8,
+        },
+        config["performance"],
+        8,
+    )
+    assert competition == {"batch_fps": True}
+    assert diagnostics == {"mean_api_ms": False, "p95_api_ms": False, "concurrency": True}
+
+
+def test_validated_int8_profile_uses_device_calibrated_threshold(
+    tmp_path: Path,
+) -> None:
+    from fair_agent.web.app import build_web_settings
+
+    report = tmp_path / "validation.json"
+    report.write_text(
+        json.dumps({
+            "accepted": True,
+            "threshold_calibration": {"thresholds": {"2": 0.38}},
+        }),
+        encoding="utf-8",
+    )
+    config = clean_config()
+    config["inference"]["backend"] = "tensorrt_engine"
+    config["tensorrt_backend"]["precision"] = "int8"
+    config["tensorrt_backend"]["validated"] = True
+    config["tensorrt_backend"]["validation_report"] = str(report)
+
+    settings = build_web_settings(config)
+
+    protocol = settings["protocols"]["incremental_detector"]
+    assert protocol["activation_threshold"] == 0.38
+    assert protocol["activation_thresholds"] == {2: 0.38}
+
+
+def test_quantized_threshold_override_updates_single_class_protocol() -> None:
+    protocols = {
+        "expert": {
+            "global_class_ids": [2],
+            "activation_thresholds": {2: 0.63},
+            "activation_threshold": 0.63,
+        }
+    }
+    _apply_protocol_thresholds(protocols, {2: 0.47})
+    assert protocols["expert"]["activation_thresholds"] == {2: 0.47}
+    assert protocols["expert"]["activation_threshold"] == 0.47
+
+
+def test_int8_precision_requires_enabled_calibration() -> None:
+    config = clean_config()
+    config["tensorrt_backend"]["precision"] = "int8"
+    config["tensorrt_backend"]["int8_calibration"]["enabled"] = False
+    with pytest.raises(ValueError, match="必须启用INT8校准"):
+        validate_config(config)
 
 
 def _unset_engine_hashes(config: dict) -> dict:

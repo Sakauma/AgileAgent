@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "class_map": {
     "0": "soldier",
     "1": "small_aircraft",
@@ -61,7 +61,13 @@
         "0": 2
       },
       "activation_threshold": 0.63,
+      "per_class_thresholds": {
+        "2": 0.63
+      },
       "calibration_source": "models/production/incremental_detection/calibration.json",
+      "calibration_sources": {
+        "2": "models/production/incremental_detection/calibration.json"
+      },
       "metrics": {
         "new_map50": 0.9090260372388763
       },
@@ -93,6 +99,9 @@
         "3": "three_class_base_detector"
       },
       "status": "active",
+      "old_class_ids": [],
+      "new_class_ids": [0, 1, 3],
+      "dataset_fingerprint": null,
       "metrics": {
         "base_map50": 0.8284863676564004
       }
@@ -114,6 +123,9 @@
         "3": "three_class_base_detector"
       },
       "status": "active",
+      "old_class_ids": [0, 1, 3],
+      "new_class_ids": [2],
+      "dataset_fingerprint": null,
       "metrics": {
         "base_map50": 0.8273816344198973,
         "new_map50": 0.795,

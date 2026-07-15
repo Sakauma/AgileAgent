@@ -1,25 +1,43 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping
+from typing import Any, Dict, Iterable, Mapping, Sequence
 
+import yaml
 from PIL import Image
 
 from fair_agent.core.config import config_sha256, inference_backend_options, rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
 from fair_agent.core.runtime_log import event_log_from_config
-from fair_agent.modules.model_generations import load_generation_registry
-from fair_agent.modules.strict_incremental import (
-    evaluate_ap50,
-    precision_recall,
-    retention_metrics,
-    yolo_ground_truth,
-)
+from fair_agent.modules.model_generations import generation_settings, load_generation_registry
+from fair_agent.modules.strict_incremental import evaluate_ap50, precision_recall, retention_metrics
+
+
+def _configured_registry_path(config: Mapping[str, Any]) -> Path:
+    generation = config["generation"]
+    source = resolve_path(generation["registry"])
+    default_source = resolve_path("models/generations.json")
+    if source != default_source:
+        return source
+    runtime = resolve_path(generation["runtime_registry"])
+    if not runtime.exists():
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        temporary = runtime.with_suffix(runtime.suffix + ".tmp")
+        shutil.copy2(source, temporary)
+        os.replace(temporary, runtime)
+    return runtime
+
+
+def active_generation_registry(config: Mapping[str, Any]) -> Path:
+    path = _configured_registry_path(config)
+    load_generation_registry(path)
+    return path
 
 
 def _raw_registry(path: str | Path) -> Dict[str, Any]:
@@ -28,7 +46,6 @@ def _raw_registry(path: str | Path) -> Dict[str, Any]:
 
 def _atomic_registry_write(path: Path, registry: Mapping[str, Any], operation: str) -> None:
     audit_root = resolve_path("reports/generation_audit")
-    audit_root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup = audit_root / "backups" / stamp / path.name
     backup.parent.mkdir(parents=True, exist_ok=False)
@@ -44,219 +61,365 @@ def _atomic_registry_write(path: Path, registry: Mapping[str, Any], operation: s
         "registry_sha256": sha256_file(path),
         "backup": rel_path(backup),
     }
+    audit_root.mkdir(parents=True, exist_ok=True)
     with (audit_root / "events.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
 def ensure_recheck_candidate(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
-    generation_cfg = config["generation"]
-    registry_path = resolve_path(generation_cfg["registry"])
+    path = active_generation_registry(config)
+    registry = load_generation_registry(path)
+    if candidate_id not in registry["generations_by_id"]:
+        raise ValueError("候选代际尚未由增量生命周期注册。")
+    return registry
+
+
+def register_trained_candidate(
+    config: Mapping[str, Any],
+    batch_manifest: Mapping[str, Any],
+    candidate_manifest: Mapping[str, Any],
+    calibration: Mapping[str, Any],
+) -> Dict[str, Any]:
+    registry_path = active_generation_registry(config)
     registry = _raw_registry(registry_path)
+    parent_id = str(registry["channels"]["production"])
     generations = {str(item["id"]): item for item in registry["generations"]}
-    models = {str(item["id"]): item for item in registry["models"]}
-    threshold = float(generation_cfg["calibrated_threshold"])
-    if candidate_id in generations:
-        owner = str(generations[candidate_id]["class_owners"]["2"])
-        if abs(float(models[owner]["activation_threshold"]) - threshold) > 1e-9:
-            raise ValueError("候选代际已存在，但激活阈值与配置不一致。")
-        event_log_from_config(config).append(
-            "generation.registration.reused", component="generation", generation_id=candidate_id,
-            details={"registry": rel_path(registry_path), "registry_sha256": sha256_file(registry_path)},
-        )
-        return load_generation_registry(registry_path)
-    if candidate_id != str(generation_cfg["candidate_id"]):
-        raise ValueError(f"未知候选代际：{candidate_id}")
-    source_generation_id = str(registry["channels"]["production"])
-    source_generation = dict(generations[source_generation_id])
-    source_model_id = str(source_generation["class_owners"]["2"])
-    source_model = dict(models[source_model_id])
-    model_id = f"{candidate_id}_expert"
-    source_model.update({
+    parent = generations[parent_id]
+    bindings = list(batch_manifest.get("audit", {}).get("class_bindings") or [])
+    if not bindings:
+        raise ValueError("增量批次缺少冻结的类别绑定。")
+    owned_ids = sorted({int(item["global_class_id"]) for item in bindings})
+    mode = str(batch_manifest["audit"]["incremental_mode"])
+    parent_ids = {int(value) for value in parent["classes"]}
+    if mode == "class_incremental" and parent_ids & set(owned_ids):
+        raise ValueError("类别增量候选与当前production类别ID重叠。")
+    thresholds = {int(key): float(value) for key, value in calibration["per_class_thresholds"].items()}
+    sources = {int(key): str(value) for key, value in calibration["calibration_sources"].items()}
+    if set(owned_ids) != set(thresholds) or set(owned_ids) != set(sources):
+        raise ValueError("逐类阈值、校准证据与候选类别集合不一致。")
+    best = resolve_path(candidate_manifest["best_weight"])
+    if not best.is_file() or sha256_file(best) != str(candidate_manifest["best_weight_sha256"]):
+        raise ValueError("候选权重缺失或哈希不一致。")
+
+    batch_id = str(batch_manifest["batch_id"])
+    suffix = "".join(character if character.isalnum() else "_" for character in batch_id).strip("_")
+    model_id = f"incremental_expert_{suffix}"
+    generation_id = f"incremental_generation_{suffix}"
+    if any(str(item["id"]) in {model_id, generation_id} for item in registry["models"] + registry["generations"]):
+        raise ValueError("当前批次已经注册过候选代际。")
+    local_to_global = {
+        str(item["training_class_id"]): int(item["global_class_id"]) for item in bindings
+    }
+    class_names = {
+        int(item["global_class_id"]): str(item["display_name"]) for item in bindings
+    }
+    registry["class_map"].update({str(key): value for key, value in class_names.items()})
+    per_class_metrics = {
+        str(key): dict(value) for key, value in calibration.get("per_class_metrics", {}).items()
+    }
+    model = {
         "id": model_id,
-        "activation_threshold": threshold,
-        "status": "pending_deployment_recheck",
+        "display_name": f"增量检测器（{batch_manifest.get('name', batch_id)}）",
+        "role": "class_incremental_expert" if mode == "class_incremental" else "target_incremental_expert",
+        "incremental_mode": mode,
+        "backend": "ultralytics",
+        "path": rel_path(best),
+        "sha256": sha256_file(best),
+        "owns_classes": owned_ids,
+        "local_to_global": local_to_global,
+        "per_class_thresholds": {str(key): value for key, value in thresholds.items()},
+        "calibration_sources": {str(key): rel_path(resolve_path(value)) for key, value in sources.items()},
+        "metrics": {
+            "new_map50": float(calibration["new_map50"]),
+            "per_class": per_class_metrics,
+        },
+        "dataset_fingerprint": str(batch_manifest["injection"]["dataset_fingerprint"]),
         "deployment_metrics": {},
         "acceptance": {
-            "min_lock_precision": float(generation_cfg["acceptance"]["min_lock_precision"]),
-            "max_false_activation_rate": float(generation_cfg["acceptance"]["max_false_activation_rate"]),
+            "min_lock_precision": float(config["generation"]["acceptance"]["min_lock_precision"]),
+            "max_false_activation_rate": float(config["generation"]["acceptance"]["max_false_activation_rate"]),
             "passed": False,
         },
-    })
-    source_generation.update({
-        "id": candidate_id,
-        "parent": source_generation_id,
-        "class_owners": {**source_generation["class_owners"], "2": model_id},
-        "status": "pending_deployment_recheck",
-        "metrics": {},
-        "acceptance": {"core_metrics_passed": True, "deployment_recheck_passed": False},
-    })
-    registry["models"].append(source_model)
-    registry["generations"].append(source_generation)
-    registry["channels"]["candidate"] = candidate_id
-    previous_hash = sha256_file(registry_path)
-    _atomic_registry_write(registry_path, registry, f"register:{candidate_id}")
-    event_log_from_config(config).append(
-        "generation.registered", component="generation", generation_id=candidate_id,
-        details={
-            "parent_generation": source_generation["parent"],
-            "model_id": model_id,
-            "activation_threshold": threshold,
-            "calibration_source": source_model.get("calibration_source"),
-            "registry_sha256_before": previous_hash,
-            "registry_sha256_after": sha256_file(registry_path),
+        "status": "registered_candidate",
+    }
+    if len(owned_ids) == 1:
+        only = owned_ids[0]
+        model["activation_threshold"] = thresholds[only]
+        model["calibration_source"] = rel_path(resolve_path(sources[only]))
+    owners = {str(key): value for key, value in parent["class_owners"].items()}
+    for class_id in owned_ids:
+        owners[str(class_id)] = model_id
+    classes = sorted(parent_ids | set(owned_ids))
+    generation = {
+        "id": generation_id,
+        "display_name": f"增量代际（{batch_manifest.get('name', batch_id)}）",
+        "parent": parent_id,
+        "classes": classes,
+        "old_class_ids": sorted(parent_ids),
+        "new_class_ids": owned_ids if mode == "class_incremental" else [],
+        "updated_class_ids": owned_ids if mode == "target_incremental" else [],
+        "class_owners": owners,
+        "status": "registered_candidate",
+        "incremental_mode": mode,
+        "dataset_fingerprint": str(batch_manifest["injection"]["dataset_fingerprint"]),
+        "lineage_batch_id": batch_id,
+        "evaluation_lock": {
+            "manifest": rel_path(resolve_path(batch_manifest["injection"]["sealed_lock_manifest"])),
+            "local_to_global": batch_manifest["audit"]["local_to_global"],
         },
-    )
-    return load_generation_registry(registry_path)
-
-
-def _candidate_settings(registry: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
-    generation = registry["generations_by_id"][candidate_id]
-    models = registry["models_by_id"]
-    base_id = next(
-        model_id for model_id in set(generation["class_owners"].values())
-        if models[model_id]["role"] == "frozen_base"
-    )
-    expert_id = str(generation["class_owners"][2])
-    base = models[base_id]
-    expert = models[expert_id]
-    if not base["hash_valid"] or not expert["hash_valid"]:
-        raise ValueError("候选代际权重缺失或SHA256不匹配。")
+        "metrics": {"krr": 0.0},
+        "acceptance": {"core_metrics_passed": False, "deployment_recheck_passed": False},
+    }
+    registry["models"].append(model)
+    registry["generations"].append(generation)
+    registry["channels"]["candidate"] = generation_id
+    _atomic_registry_write(registry_path, registry, f"register:{generation_id}")
     return {
-        "base": base,
-        "expert": expert,
-        "class_names": dict(registry["class_map"]),
-        "class_owners": dict(generation["class_owners"]),
-        "generation": generation,
+        "generation_id": generation_id,
+        "parent_generation_id": parent_id,
+        "model_id": model_id,
+        "registry": rel_path(registry_path),
     }
 
 
-def _prediction_rows(results: Iterable[Mapping[str, Any]]) -> tuple[list[Dict[str, Any]], list[Dict[str, Any]]]:
-    before: list[Dict[str, Any]] = []
-    after: list[Dict[str, Any]] = []
+def register_generation_deployment(
+    config: Mapping[str, Any],
+    generation_id: str,
+    deployment_id: str,
+    deployment: Mapping[str, Any],
+) -> Dict[str, Any]:
+    registry_path = active_generation_registry(config)
+    registry = _raw_registry(registry_path)
+    generations = {str(item["id"]): item for item in registry["generations"]}
+    models = {str(item["id"]): item for item in registry["models"]}
+    generation = generations.get(generation_id)
+    if generation is None or not generation.get("parent"):
+        raise ValueError("只能为已注册的增量候选登记部署资产。")
+    parent = generations[str(generation["parent"])]
+    candidate_model_ids = set(generation["class_owners"].values()) - set(parent["class_owners"].values())
+    if len(candidate_model_ids) != 1:
+        raise ValueError("一个增量批次必须对应一个可部署的多类专家。")
+    model_id = next(iter(candidate_model_ids))
+    artifact = resolve_path(deployment["path"])
+    expected = str(deployment["sha256"])
+    if not artifact.is_file() or sha256_file(artifact) != expected:
+        raise ValueError("待登记部署engine缺失或哈希不一致。")
+    calibration_manifest = resolve_path(deployment["calibration_manifest"])
+    if not calibration_manifest.is_file() or sha256_file(calibration_manifest) != str(
+        deployment["calibration_manifest_sha256"]
+    ):
+        raise ValueError("INT8校准manifest缺失或哈希不一致。")
+    model = models[model_id]
+    deployments = model.setdefault("deployments", {})
+    if deployment_id in deployments:
+        raise ValueError(f"模型已登记同名部署资产：{deployment_id}")
+    deployments[deployment_id] = dict(deployment)
+    _atomic_registry_write(
+        registry_path,
+        registry,
+        f"register-deployment:{generation_id}:{model_id}:{deployment_id}",
+    )
+    return {
+        "generation_id": generation_id,
+        "model_id": model_id,
+        "deployment_id": deployment_id,
+        "engine": rel_path(artifact),
+        "engine_sha256": expected,
+        "registry": rel_path(registry_path),
+    }
+
+
+def _context_path(config: Mapping[str, Any]) -> Path:
+    functional = yaml.safe_load(resolve_path(config["web"]["functional_registry"]).read_text(encoding="utf-8"))
+    entry = next(item for item in functional["models"] if item["function"] == "context_perception")
+    return resolve_path(entry["artifacts"][0]["path"])
+
+
+def _engine(config: Mapping[str, Any], registry: Mapping[str, Any], generation_id: str):
+    from fair_agent.modules.web_inference import WebInferenceEngine
+
+    settings = generation_settings(registry, generation_id)
+    inference = config["inference"]
+    backend_options = inference_backend_options(config)
+    if str(inference["backend"]) == "tensorrt_engine" and backend_options.get("precision") == "int8":
+        backend_options["engines"] = {
+            **dict(backend_options.get("engines") or {}),
+            **dict(settings.get("engine_deployments") or {}),
+        }
+    return WebInferenceEngine(
+        settings["detector_path"], _context_path(config),
+        device_index=str(config["runtime"]["default_device"]),
+        predict_options=inference,
+        incremental_protocols=settings["protocols"],
+        class_names=settings["class_names"],
+        base_class_ids=settings["base_class_ids"],
+        base_local_to_global=settings["base_local_to_global"],
+        routing_options=config["routing"],
+        generation_id=generation_id,
+        base_model_id=settings["base_model_id"],
+        class_owners=settings["class_owners"],
+        backend_name=str(inference["backend"]),
+        native_options=backend_options,
+    )
+
+
+def _prediction_rows(results: Iterable[Mapping[str, Any]]) -> list[Dict[str, Any]]:
+    rows = []
     for result in results:
         for detection in result["detections"]:
-            row = {
+            rows.append({
                 "image_id": Path(str(result["filename"])).stem,
                 "class_id": int(detection["class_id"]),
                 "confidence": float(detection["confidence"]),
                 "xyxy": list(detection["xyxy"]),
                 "source": detection.get("source"),
-            }
-            after.append(row)
-            if detection.get("source") == "frozen_base_model":
-                before.append(row)
-    return before, after
+                "protocol_id": detection.get("protocol_id"),
+            })
+    return rows
+
+
+def _read_ground_truth(images: Sequence[Path], local_to_global: Mapping[int, int] | None = None) -> list[Dict[str, Any]]:
+    mapping = {int(key): int(value) for key, value in (local_to_global or {}).items()}
+    rows = []
+    for image in images:
+        with Image.open(image) as source:
+            width, height = source.size
+        label = image.with_suffix(".txt")
+        for line in label.read_text(encoding="utf-8").splitlines():
+            fields = line.split()
+            if len(fields) != 5:
+                continue
+            local_id = int(fields[0])
+            class_id = mapping.get(local_id, local_id)
+            x, y, w, h = [float(value) for value in fields[1:]]
+            rows.append({
+                "image_id": image.stem,
+                "class_id": class_id,
+                "xyxy": [(x - w / 2) * width, (y - h / 2) * height, (x + w / 2) * width, (y + h / 2) * height],
+            })
+    return rows
+
+
+def _candidate_lock(generation: Mapping[str, Any]) -> tuple[list[Path], Dict[int, int]]:
+    lock = generation.get("evaluation_lock")
+    if not isinstance(lock, Mapping):
+        return [], {}
+    manifest_path = resolve_path(lock["manifest"])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    root = manifest_path.parent
+    images = []
+    for row in payload.get("files", []):
+        stem = str(row["stem"])
+        match = next((path for path in (root / "images" / "lock").glob(stem + ".*") if path.is_file()), None)
+        if match is None:
+            raise FileNotFoundError(f"封存lock图像不存在：{stem}")
+        images.append(match)
+    return images, {int(key): int(value) for key, value in lock.get("local_to_global", {}).items()}
+
+
+def _run_engine(engine: Any, image_paths: Sequence[Path], config: Mapping[str, Any]) -> list[Dict[str, Any]]:
+    batch_size = int(config["inference"]["batch_size"])
+    results = []
+    for offset in range(0, len(image_paths), batch_size):
+        items = []
+        for path in image_paths[offset: offset + batch_size]:
+            with Image.open(path) as source:
+                source.load()
+                items.append((source.convert("RGB"), path.name, None))
+        results.extend(engine.predict_batch(items, float(config["inference"]["confidence_min"]), "auto"))
+    return results
+
+
+def shadow_load_generation(config: Mapping[str, Any], candidate_id: str) -> tuple[Any, Dict[str, Any]]:
+    registry = ensure_recheck_candidate(config, candidate_id)
+    started = time.perf_counter()
+    engine = _engine(config, registry, candidate_id)
+    smoke_count = int(config["generation"]["shadow_smoke_images"])
+    image = Image.new(
+        "RGB",
+        (int(config["inference"]["warmup_width"]), int(config["inference"]["warmup_height"])),
+    )
+    results = [
+        engine.predict(image, f"shadow-smoke-{index}.png", float(config["inference"]["confidence_default"]), None, "auto")
+        for index in range(smoke_count)
+    ]
+    summary = {
+        "generation_id": candidate_id,
+        "smoke_images": smoke_count,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+        "detections": sum(int(item["detection_count"]) for item in results),
+    }
+    return engine, summary
 
 
 def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
-    from fair_agent.modules.web_inference import WebInferenceEngine
-
     registry = ensure_recheck_candidate(config, candidate_id)
-    settings = _candidate_settings(registry, candidate_id)
-    split = resolve_path(config["generation"]["recheck_lock_split"])
-    image_paths = [resolve_path(line.strip()) for line in split.read_text(encoding="utf-8").splitlines() if line.strip()]
+    generation = registry["generations_by_id"][candidate_id]
+    parent_id = str(generation["parent"])
+    old_ids = sorted(int(value) for value in generation["old_class_ids"])
+    new_ids = sorted(int(value) for value in generation["new_class_ids"] or generation.get("updated_class_ids", []))
+    if not old_ids or not new_ids:
+        raise ValueError("候选代际缺少动态新旧类别集合。")
+
+    old_split = resolve_path(config["generation"]["recheck_lock_split"])
+    old_images = [resolve_path(line.strip()) for line in old_split.read_text(encoding="utf-8").splitlines() if line.strip()]
+    new_images, new_mapping = _candidate_lock(generation)
+    image_paths = list(dict.fromkeys([*old_images, *new_images]))
     if not image_paths or any(not path.is_file() for path in image_paths):
-        raise ValueError("lock-val划分为空或包含缺失图像。")
-    web_cfg = config["web"]
-    functional = json.loads("{}")
-    import yaml
-    functional = yaml.safe_load(resolve_path(web_cfg["functional_registry"]).read_text(encoding="utf-8"))
-    context_entry = next(item for item in functional["models"] if item["function"] == "context_perception")
-    context_path = resolve_path(context_entry["artifacts"][0]["path"])
-    expert = settings["expert"]
-    generation = settings["generation"]
-    protocol = {
-        "id": expert["id"],
-        "class_name": settings["class_names"][2],
-        "new_class": settings["class_names"][2],
-        "global_class_id": 2,
-        "incremental_mode": "class_incremental",
-        "weights": expert["resolved_path"],
-        "new_map50": float(expert["metrics"]["new_map50"]),
-        "krr": float(generation["metrics"].get("krr", 1.0)),
-        "available": True,
-        "activation_threshold": float(expert["activation_threshold"]),
-        "calibration_source": expert["calibration_source"],
-        "routing_prior": 1.0,
-        "context_prior": {},
-    }
+        raise ValueError("复核lock为空或包含缺失图像。")
+    ground_truth = _read_ground_truth(old_images) + _read_ground_truth(new_images, new_mapping)
+    started = time.perf_counter()
     event_log_from_config(config).append(
-        "incremental.dev_calibration.consumed",
-        component="incremental",
-        generation_id=candidate_id,
-        protocol_id=str(expert["id"]),
-        details={
-            "threshold": float(expert["activation_threshold"]),
-            "calibration_source": rel_path(resolve_path(expert["calibration_source"])),
-            "calibration_source_sha256": sha256_file(resolve_path(expert["calibration_source"])),
-        },
+        "incremental.lock.unsealed", component="incremental", generation_id=candidate_id,
+        details={"old_lock_count": len(old_images), "incremental_lock_count": len(new_images)},
     )
-    inference = config["inference"]
-    engine = WebInferenceEngine(
-        settings["base"]["resolved_path"],
-        context_path,
-        device_index=str(config["runtime"]["default_device"]),
-        predict_options=inference,
-        incremental_protocols={expert["id"]: protocol},
-        class_names=settings["class_names"],
-        base_class_ids=settings["base"]["owns_classes"],
-        base_local_to_global=settings["base"]["local_to_global"],
-        routing_options=config["routing"],
-        generation_id=candidate_id,
-        base_model_id=settings["base"]["id"],
-        class_owners=settings["class_owners"],
-        backend_name=str(inference["backend"]),
-        native_options=inference_backend_options(config),
-    )
-    batch_size = int(inference["batch_size"])
-    all_results = []
-    started = datetime.now()
-    event_log_from_config(config).append(
-        "incremental.lock.unsealed",
-        component="incremental",
-        generation_id=candidate_id,
-        protocol_id=str(expert["id"]),
-        details={
-            "lock_split": rel_path(split),
-            "lock_split_sha256": sha256_file(split),
-            "image_count": len(image_paths),
-        },
-    )
-    for offset in range(0, len(image_paths), batch_size):
-        rows = []
-        for path in image_paths[offset : offset + batch_size]:
-            with Image.open(path) as source:
-                source.load()
-                rows.append((source.convert("RGB"), path.name, None))
-        all_results.extend(engine.predict_batch(rows, float(inference["confidence_min"]), "auto"))
-    before, after = _prediction_rows(all_results)
-    ground_truth = yolo_ground_truth(image_paths)
-    old_ids = [0, 1, 3]
+    before_results = _run_engine(_engine(config, registry, parent_id), image_paths, config)
+    after_results = _run_engine(_engine(config, registry, candidate_id), image_paths, config)
+    before = _prediction_rows(before_results)
+    after = _prediction_rows(after_results)
     retention = retention_metrics(before, after, ground_truth, old_ids)
     base_metrics = evaluate_ap50(before, ground_truth, old_ids)
-    new_metrics = evaluate_ap50(after, ground_truth, [2])
-    combined_metrics = evaluate_ap50(after, ground_truth, [0, 1, 2, 3])
-    deployment = precision_recall(after, ground_truth, 2, float(expert["activation_threshold"]))
-    positives = {row["image_id"] for row in ground_truth if int(row["class_id"]) == 2}
-    negatives = {path.stem for path in image_paths if path.stem not in positives}
-    false_positive_images = {
-        row["image_id"] for row in after
-        if int(row["class_id"]) == 2 and row["image_id"] in negatives
-    }
-    false_activation_rate = len(false_positive_images) / len(negatives) if negatives else 0.0
+    new_metrics = evaluate_ap50(after, ground_truth, new_ids)
+    combined_metrics = evaluate_ap50(after, ground_truth, sorted(set(old_ids) | set(new_ids)))
+
+    candidate_model_ids = set(generation["class_owners"].values()) - set(
+        registry["generations_by_id"][parent_id]["class_owners"].values()
+    )
+    models = registry["models_by_id"]
+    thresholds: Dict[int, float] = {}
+    for model_id in candidate_model_ids:
+        thresholds.update(models[model_id]["per_class_thresholds"])
+    per_class = {}
+    false_activation_rates = []
+    precisions = []
+    for class_id in new_ids:
+        deployment = precision_recall(after, ground_truth, class_id, thresholds[class_id])
+        positives = {row["image_id"] for row in ground_truth if int(row["class_id"]) == class_id}
+        negatives = {path.stem for path in image_paths if path.stem not in positives}
+        false_images = {
+            row["image_id"] for row in after
+            if int(row["class_id"]) == class_id and row["image_id"] in negatives
+            and float(row["confidence"]) >= thresholds[class_id]
+        }
+        false_rate = len(false_images) / len(negatives) if negatives else 0.0
+        class_map = evaluate_ap50(after, ground_truth, [class_id])["map50"]
+        per_class[str(class_id)] = {
+            "map50": float(class_map), "precision": float(deployment["precision"]),
+            "recall": float(deployment["recall"]), "false_activation_rate": float(false_rate),
+            "threshold": thresholds[class_id],
+        }
+        false_activation_rates.append(false_rate)
+        precisions.append(float(deployment["precision"]))
     metrics = {
         "base_map50": float(base_metrics["map50"]),
         "new_map50": float(new_metrics["map50"]),
         "krr": float(retention["krr"]),
         "combined_map50": float(combined_metrics["map50"]),
-        "lock_precision": float(deployment["precision"]),
-        "lock_recall": float(deployment["recall"]),
-        "false_activation_rate": float(false_activation_rate),
+        "lock_precision": min(precisions),
+        "false_activation_rate": max(false_activation_rates),
         "old_prediction_equivalent": bool(retention["old_prediction_equivalent"]),
+        "per_class": per_class,
         "image_count": len(image_paths),
-        "negative_image_count": len(negatives),
-        "false_positive_image_count": len(false_positive_images),
-        "mean_inference_ms": sum(float(row["inference_ms"]) for row in all_results) / len(all_results),
     }
     gates_cfg = config["generation"]["acceptance"]
     gates = {
@@ -264,6 +427,8 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         "new_map50": metrics["new_map50"] >= float(gates_cfg["min_new_map50"]),
         "krr": metrics["krr"] >= float(gates_cfg["min_krr"]),
         "combined_map50": metrics["combined_map50"] >= float(gates_cfg["min_combined_map50"]),
+    }
+    diagnostic_checks = {
         "lock_precision": metrics["lock_precision"] >= float(gates_cfg["min_lock_precision"]),
         "false_activation_rate": metrics["false_activation_rate"] <= float(gates_cfg["max_false_activation_rate"]),
         "old_prediction_equivalent": metrics["old_prediction_equivalent"],
@@ -271,31 +436,43 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     run_dir = resolve_path(config["generation"]["report_root"]) / f"{candidate_id}-{run_id}"
     run_dir.mkdir(parents=True, exist_ok=False)
-    predictions_path = run_dir / "predictions.jsonl"
-    with predictions_path.open("w", encoding="utf-8") as handle:
-        for row in after:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-    config_clean = {key: value for key, value in config.items() if not str(key).startswith("_")}
+    before_path = run_dir / "predictions_before.jsonl"
+    after_path = run_dir / "predictions_after.jsonl"
+    for path, rows in ((before_path, before), (after_path, after)):
+        path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+    clean_config = {key: value for key, value in config.items() if not str(key).startswith("_")}
+    registry_path = active_generation_registry(config)
     manifest = {
-        "schema_version": 1,
-        "candidate": candidate_id,
+        "schema_version": 2, "candidate": candidate_id,
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "elapsed_seconds": (datetime.now() - started).total_seconds(),
-        "config_sha256": config_sha256(config_clean),
-        "registry_sha256": sha256_file(resolve_path(config["generation"]["registry"])),
+        "elapsed_seconds": time.perf_counter() - started,
+        "config_sha256": config_sha256(clean_config),
+        "registry_sha256": sha256_file(registry_path),
         "weights": {
-            settings["base"]["id"]: settings["base"]["sha256"],
-            expert["id"]: expert["sha256"],
+            model_id: registry["models_by_id"][model_id]["sha256"]
+            for model_id in set(generation["class_owners"].values())
         },
-        "threshold": float(expert["activation_threshold"]),
-        "threshold_source": rel_path(resolve_path(expert["calibration_source"])),
-        "lock_split": rel_path(split),
-        "lock_split_sha256": sha256_file(split),
+        "deployments": {
+            model_id: {
+                deployment_id: {
+                    "path": deployment["path"],
+                    "sha256": deployment["sha256"],
+                    "calibration_manifest": deployment.get("calibration_manifest"),
+                    "calibration_manifest_sha256": deployment.get("calibration_manifest_sha256"),
+                }
+                for deployment_id, deployment in registry["models_by_id"][model_id].get("deployments", {}).items()
+            }
+            for model_id in set(generation["class_owners"].values())
+        },
+        "old_class_ids": old_ids, "new_class_ids": new_ids,
+        "thresholds": {str(key): value for key, value in thresholds.items()},
         "metrics": metrics,
         "gates": gates,
+        "diagnostic_checks": diagnostic_checks,
+        "warnings": [name for name, passed in diagnostic_checks.items() if not passed],
         "accepted": all(gates.values()),
-        "predictions": rel_path(predictions_path),
-        "predictions_sha256": sha256_file(predictions_path),
+        "predictions_before": rel_path(before_path), "predictions_before_sha256": sha256_file(before_path),
+        "predictions_after": rel_path(after_path), "predictions_after_sha256": sha256_file(after_path),
     }
     manifest_path = run_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -312,42 +489,56 @@ def _promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_p
     clean_config = {key: value for key, value in config.items() if not str(key).startswith("_")}
     if manifest.get("config_sha256") != config_sha256(clean_config):
         raise ValueError("当前有效配置与复核配置不一致。")
-    registry_path = resolve_path(config["generation"]["registry"])
+    registry_path = active_generation_registry(config)
     if manifest.get("registry_sha256") != sha256_file(registry_path):
         raise ValueError("代际注册表在复核后发生变化。")
     registry = _raw_registry(registry_path)
     generations = {str(item["id"]): item for item in registry["generations"]}
     models = {str(item["id"]): item for item in registry["models"]}
-    if candidate_id not in generations:
+    generation = generations.get(candidate_id)
+    if generation is None:
         raise ValueError("候选代际未注册。")
-    generation = generations[candidate_id]
-    expert_id = str(generation["class_owners"]["2"])
     for model_id, expected in manifest["weights"].items():
         model = models[model_id]
         if model["sha256"] != expected or sha256_file(resolve_path(model["path"])) != expected:
             raise ValueError(f"模型权重哈希不一致：{model_id}")
-    metrics = dict(manifest["metrics"])
-    generation["metrics"] = metrics
+    for model_id, deployments in manifest.get("deployments", {}).items():
+        registered = models[model_id].get("deployments", {})
+        for deployment_id, expected in deployments.items():
+            deployment = registered.get(deployment_id)
+            if not isinstance(deployment, Mapping):
+                raise ValueError(f"部署资产未注册：{model_id}:{deployment_id}")
+            if deployment.get("sha256") != expected.get("sha256") or sha256_file(
+                resolve_path(deployment["path"])
+            ) != expected.get("sha256"):
+                raise ValueError(f"部署engine哈希不一致：{model_id}:{deployment_id}")
+            calibration_path = expected.get("calibration_manifest")
+            calibration_hash = expected.get("calibration_manifest_sha256")
+            if calibration_path and (
+                not resolve_path(calibration_path).is_file()
+                or sha256_file(resolve_path(calibration_path)) != calibration_hash
+            ):
+                raise ValueError(f"部署校准证据哈希不一致：{model_id}:{deployment_id}")
+    parent = generations[str(generation["parent"])]
+    candidate_models = set(generation["class_owners"].values()) - set(parent["class_owners"].values())
+    generation["metrics"] = dict(manifest["metrics"])
     generation["acceptance"] = {"core_metrics_passed": True, "deployment_recheck_passed": True}
     generation["status"] = "active"
-    models[expert_id]["deployment_metrics"] = {
-        "lock_precision": metrics["lock_precision"],
-        "false_activation_rate": metrics["false_activation_rate"],
-    }
-    models[expert_id]["acceptance"]["passed"] = True
-    models[expert_id]["status"] = "active"
+    for model_id in candidate_models:
+        models[model_id]["deployment_metrics"] = {
+            "lock_precision": manifest["metrics"]["lock_precision"],
+            "false_activation_rate": manifest["metrics"]["false_activation_rate"],
+        }
+        models[model_id]["acceptance"]["passed"] = True
+        models[model_id]["status"] = "active"
     registry["channels"]["production"] = candidate_id
     registry["channels"]["candidate"] = candidate_id
-    registry["external_blockers"] = [
-        item for item in registry.get("external_blockers", [])
-        if item != "deployment_threshold_recheck_pending"
-    ]
     _atomic_registry_write(registry_path, registry, f"promote:{candidate_id}:{sha256_file(path)}")
     return {"production": candidate_id, "manifest": rel_path(path), "registry_sha256": sha256_file(registry_path)}
 
 
 def _rollback_generation(config: Mapping[str, Any], target_id: str) -> Dict[str, Any]:
-    registry_path = resolve_path(config["generation"]["registry"])
+    registry_path = active_generation_registry(config)
     registry = _raw_registry(registry_path)
     generations = {str(item["id"]): item for item in registry["generations"]}
     if target_id not in generations or generations[target_id].get("status") != "active":
@@ -358,111 +549,42 @@ def _rollback_generation(config: Mapping[str, Any], target_id: str) -> Dict[str,
     return {"previous": previous, "production": target_id, "registry_sha256": sha256_file(registry_path)}
 
 
-def _audited_generation_action(
-    config: Mapping[str, Any],
-    action: str,
-    generation_id: str,
-    callback: Any,
-) -> Dict[str, Any]:
+def _audited_generation_action(config: Mapping[str, Any], action: str, generation_id: str, callback: Any) -> Dict[str, Any]:
     logger = event_log_from_config(config)
-    registry_path = resolve_path(config["generation"]["registry"])
-    before_registry_hash = sha256_file(registry_path) if registry_path.is_file() else None
-    try:
-        before_registry = _raw_registry(registry_path)
-        production_before = str(before_registry.get("channels", {}).get("production"))
-    except (OSError, ValueError, json.JSONDecodeError):
-        production_before = None
-    event_prefix = {
-        "recheck": "generation.lock_recheck",
-        "promote": "generation.production_switch",
-        "rollback": "generation.rollback",
-    }[action]
+    registry_path = active_generation_registry(config)
+    before_hash = sha256_file(registry_path)
+    before = _raw_registry(registry_path)
+    production_before = str(before.get("channels", {}).get("production"))
+    prefix = {"recheck": "generation.lock_recheck", "promote": "generation.production_switch", "rollback": "generation.rollback"}[action]
     trace_id = f"generation_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-    logger.append(
-        f"{event_prefix}.started", component="generation", trace_id=trace_id,
-        generation_id=generation_id,
-        details={
-            "production_before": production_before,
-            "registry_sha256_before": before_registry_hash,
-        },
-    )
+    logger.append(f"{prefix}.started", component="generation", trace_id=trace_id, generation_id=generation_id,
+                  details={"production_before": production_before, "registry_sha256_before": before_hash})
     started = time.perf_counter()
     try:
         result = callback()
     except Exception as exc:
-        logger.append(
-            f"{event_prefix}.failed", level="error", component="generation", trace_id=trace_id,
-            generation_id=generation_id, duration_ms=(time.perf_counter() - started) * 1000,
-            message=str(exc),
-            details={
-                "error_type": type(exc).__name__,
-                "production_before": production_before,
-                "registry_sha256_before": before_registry_hash,
-            },
-        )
-        if action == "recheck":
-            logger.append(
-                "incremental.lock_recheck.failed", level="error", component="incremental",
-                trace_id=trace_id, generation_id=generation_id,
-                duration_ms=(time.perf_counter() - started) * 1000,
-                message=str(exc), details={"error_type": type(exc).__name__},
-            )
+        logger.append(f"{prefix}.failed", level="error", component="generation", trace_id=trace_id,
+                      generation_id=generation_id, duration_ms=(time.perf_counter() - started) * 1000,
+                      message=str(exc), details={"error_type": type(exc).__name__, "production_before": production_before,
+                                                 "registry_sha256_before": before_hash})
         raise
-    after_registry_hash = sha256_file(registry_path) if registry_path.is_file() else None
-    try:
-        after_registry = _raw_registry(registry_path)
-        production_after = str(after_registry.get("channels", {}).get("production"))
-    except (OSError, ValueError, json.JSONDecodeError):
-        production_after = None
-    logger.append(
-        f"{event_prefix}.completed", component="generation", trace_id=trace_id,
-        generation_id=generation_id, duration_ms=(time.perf_counter() - started) * 1000,
-        details={
-            "production_before": production_before,
-            "production_after": production_after,
-            "registry_sha256_before": before_registry_hash,
-            "registry_sha256_after": after_registry_hash,
-            "result": result,
-        },
-    )
-    if action == "recheck":
-        logger.append(
-            "incremental.lock_recheck.completed",
-            level="info" if result.get("accepted") else "warning",
-            component="incremental",
-            trace_id=trace_id,
-            generation_id=generation_id,
-            duration_ms=(time.perf_counter() - started) * 1000,
-            details={
-                "accepted": bool(result.get("accepted")),
-                "threshold": result.get("threshold"),
-                "metrics": result.get("metrics"),
-                "gates": result.get("gates"),
-                "manifest": result.get("manifest"),
-                "manifest_sha256": result.get("manifest_sha256"),
-            },
-        )
+    after = _raw_registry(registry_path)
+    logger.append(f"{prefix}.completed", component="generation", trace_id=trace_id, generation_id=generation_id,
+                  duration_ms=(time.perf_counter() - started) * 1000,
+                  details={"production_before": production_before,
+                           "production_after": str(after.get("channels", {}).get("production")),
+                           "registry_sha256_before": before_hash,
+                           "registry_sha256_after": sha256_file(registry_path), **dict(result)})
     return result
 
 
 def recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
-    return _audited_generation_action(
-        config, "recheck", candidate_id, lambda: _recheck_generation(config, candidate_id)
-    )
+    return _audited_generation_action(config, "recheck", candidate_id, lambda: _recheck_generation(config, candidate_id))
 
 
-def promote_generation(
-    config: Mapping[str, Any], candidate_id: str, manifest_path: str | Path
-) -> Dict[str, Any]:
-    return _audited_generation_action(
-        config,
-        "promote",
-        candidate_id,
-        lambda: _promote_generation(config, candidate_id, manifest_path),
-    )
+def promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_path: str | Path) -> Dict[str, Any]:
+    return _audited_generation_action(config, "promote", candidate_id, lambda: _promote_generation(config, candidate_id, manifest_path))
 
 
 def rollback_generation(config: Mapping[str, Any], target_id: str) -> Dict[str, Any]:
-    return _audited_generation_action(
-        config, "rollback", target_id, lambda: _rollback_generation(config, target_id)
-    )
+    return _audited_generation_action(config, "rollback", target_id, lambda: _rollback_generation(config, target_id))

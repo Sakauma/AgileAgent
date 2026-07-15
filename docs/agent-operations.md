@@ -73,9 +73,19 @@ agile-agent pipeline --mode execute
 
 每次运行写入独立的 `reports/agent_runs/<run_id>/`，包含计划、manifest、动作日志和 Markdown 报告。训练、正式推理与提交不由 v1 自动执行。
 
+## INT8 端侧校准
+
+在设备专用 YAML 中设置 `tensorrt_backend.precision: int8` 后，可用一条命令完成代表样本选择、PTQ、engine 哈希登记、CUDA/INT8 精度对齐和 API 性能门禁：
+
+```bash
+agile-agent --config configs/agent_pipeline.local.yaml tensorrt calibrate --activate
+```
+
+基础模型从配置的基础 train 划分按类别所有权选择代表样本；增量专家由 Agent 仅从当前批次 train/dev 自动校准。lock 始终只在 engine 冻结后用于最终复核。赛题基础 mAP50、New-mAP50、KRR、组合 mAP50 或 FPS 未通过时不会启用 INT8，也不会自动回退 CPU；CUDA 差值、P95、并发、lock precision 和误激活率作为风险诊断保留。
+
 ## Ascend 310B 边界
 
-当前发布版本只验证 x86 NVIDIA GPU。production 默认使用 CUDA 版 PyTorch 直接加载仓库中的模型权重；TensorRT engine 不随仓库分发，只能在目标设备本地导出并单独验收。Python Agent 负责策略、审计和 Web 编排，`native/` 中的 C++ TensorRT ABI 仍为后续优化接口，尚未作为 production 后端。310B 状态固定为 `waiting_for_hardware`，后续必须依次完成：
+当前发布版本只验证 x86 NVIDIA GPU。production 默认使用 CUDA 版 PyTorch 直接加载仓库中的模型权重；TensorRT engine 不随仓库分发，只能在目标设备本地导出并单独验收。Python Agent 负责策略、审计和 Web 编排；`native/` 已实现 C++ TensorRT 批推理 ABI，但仍需在目标设备通过同一套精度与性能门禁后才能切换为 production 后端。310B 状态固定为 `waiting_for_hardware`，后续必须依次完成：
 
 1. 使用 ATC 将冻结模型转换为 OM。
 2. 实现 AscendCL 输入预处理、推理和后处理。

@@ -134,7 +134,7 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
     assert settings["detector_path"].name == "three_class_base_detector.pt"
     assert settings["device_index"] == "0"
     assert settings["predict"] == {
-            "imgsz": 640, "specialist_imgsz": 512, "iou": 0.7, "max_det": 300, "batch_size": 1,
+            "imgsz": 640, "specialist_imgsz": 512, "iou": 0.7, "max_det": 300, "batch_size": 20,
             "warmup_iterations": 1, "warmup_batch_size": 1,
         "warmup_width": 640, "warmup_height": 512,
         "confidence_default": 0.5, "preload_specialists": True,

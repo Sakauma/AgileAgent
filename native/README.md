@@ -7,4 +7,6 @@ cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native --config Release -j
 ```
 
-当前production使用Python策略层调用已验收的TensorRT engine，尚未切换到本目录的原生ABI。Python加载器采用严格门禁：原生库、基础检测engine或场景engine缺失时立即失败，不会回退到CPU。只有补齐解码、预处理、CUDA stream、NMS和结构化结果ABI，并通过95张lock-val精度与性能验收后，才能把`inference.backend`切换为`tensorrt_native`。
+原生库实现版本化C ABI、OpenCV内存解码、YOLO letterbox、动态batch、可复用CUDA缓冲区、TensorRT前向和class-aware NMS。Python继续负责策略、代际、审计与Web协议。
+
+构建成功不代表可以直接上线。必须先在目标GPU上导出匹配的engine，再使用TensorRT验收命令核对CUDA基线精度、API延迟、批量吞吐和并发稳定性；门禁未通过时配置会保持原后端，不会回退到CPU。

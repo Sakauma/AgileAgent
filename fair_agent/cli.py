@@ -90,10 +90,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     )
     state = build_blackboard(config)
     backend_name = str(config["inference"]["backend"])
+    native_cfg = config["native_backend"]
     native_assets = {
-        key: resolve_path(config["native_backend"][key]).is_file()
-        for key in ("library", "base_engine", "context_engine")
+        "library": resolve_path(native_cfg["library"]).is_file(),
+        "context_engine": resolve_path(native_cfg["context_engine"]).is_file(),
     }
+    for source, entry in native_cfg["engines"].items():
+        path = resolve_path(entry["path"])
+        native_assets[source] = bool(
+            path.is_file() and entry.get("sha256") and sha256_file(path) == str(entry["sha256"])
+        )
     tensorrt_cfg = config["tensorrt_backend"]
     tensorrt_assets = {}
     for source, entry in tensorrt_cfg["engines"].items():
@@ -649,7 +655,36 @@ def cmd_benchmark_api(args: argparse.Namespace) -> int:
     return 0 if result["accepted"] else 2
 
 
+def cmd_tensorrt(args: argparse.Namespace) -> int:
+    from fair_agent.modules.tensorrt_export import export_or_verify_engines, write_export_hashes
+    from fair_agent.modules.tensorrt_validation import validate_tensorrt
+
+    try:
+        config = load_args_config(args)
+        if args.tensorrt_action == "calibrate":
+            if config["tensorrt_backend"]["precision"] != "int8":
+                raise ValueError("INT8自动校准要求设备配置使用precision: int8。")
+            export_result = export_or_verify_engines(config, verify_only=False)
+            config_update = write_export_hashes(config["_config_path"], export_result)
+            config = load_config(config["_config_path"])
+            validation = validate_tensorrt(config, activate=bool(args.activate))
+            result = {
+                "calibration": export_result,
+                "config_update": config_update,
+                "validation": validation,
+                "accepted": bool(validation["accepted"]),
+            }
+        else:
+            result = validate_tensorrt(config, activate=bool(args.activate))
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"TensorRT验收失败：{exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result["accepted"] else 2
+
+
 def _incremental_services(config: Dict[str, Any]):
+    from fair_agent.modules.generation_management import active_generation_registry
     from fair_agent.modules.incremental_workbench import IncrementalBatchStore, TrainingJobManager
     from fair_agent.modules.model_generations import generation_web_settings, load_generation_registry
 
@@ -658,14 +693,48 @@ def _incremental_services(config: Dict[str, Any]):
         log_config["root"], int(log_config["max_file_bytes"]), int(log_config["retained_files"])
     )
     generation = generation_web_settings(
-        load_generation_registry(config["web"]["generation_registry"]),
+        load_generation_registry(active_generation_registry(config)),
         str(config["web"]["generation_channel"]),
     )
     active_classes = {
         class_id: generation["class_names"][class_id] for class_id in generation["active_class_ids"]
     }
     store = IncrementalBatchStore(config["incremental_workbench"], event_log, active_classes)
-    return store, TrainingJobManager(store, config["incremental_workbench"], event_log), event_log
+    return store, TrainingJobManager(
+        store, config["incremental_workbench"], event_log, config
+    ), event_log
+
+
+def cmd_incremental(args: argparse.Namespace) -> int:
+    config = load_args_config(args)
+    store, manager, _event_log = _incremental_services(config)
+    try:
+        if args.incremental_action in {"audit", "run"}:
+            source = Path(args.batch)
+            if source.is_file():
+                archive = resolve_path(source)
+                manifest = store.create(archive.name, archive.read_bytes(), getattr(args, "name", None), getattr(args, "class_names", None))
+            else:
+                manifest = store.get(args.batch)
+            if args.incremental_action == "audit":
+                payload = manifest
+            else:
+                if manifest["status"] == "AUDITED":
+                    manifest = store.inject(manifest["batch_id"])
+                if manifest["status"] not in {"INJECTED", "FAILED"}:
+                    raise ValueError(f"批次状态不允许启动完整生命周期：{manifest['status']}")
+                payload = manager.start(manifest["batch_id"], wait=True)
+        else:
+            matches = [row for row in manager.list() if str(row["job_id"]) == str(args.run_id)]
+            if not matches:
+                raise KeyError(args.run_id)
+            payload = matches[0]
+            payload["batch"] = store.get(str(payload["batch_id"]), include_files=False)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 1 if isinstance(payload, dict) and payload.get("status") in {"REJECTED", "FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"} else 0
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"增量生命周期操作失败：{exc}", file=sys.stderr)
+        return 2
 
 
 def cmd_incremental_data(args: argparse.Namespace) -> int:
@@ -817,6 +886,22 @@ def build_parser() -> argparse.ArgumentParser:
     generation_rollback.add_argument("--to", required=True)
     generation_rollback.set_defaults(func=cmd_generation)
 
+    incremental = sub.add_parser("incremental", help="运行可审计的增量学习完整生命周期。")
+    incremental_lifecycle_sub = incremental.add_subparsers(dest="incremental_action", required=True)
+    incremental_audit = incremental_lifecycle_sub.add_parser("audit", help="上传或读取批次并执行数据血缘审计。")
+    incremental_audit.add_argument("--batch", required=True, help="增量ZIP路径或已有batch_id。")
+    incremental_audit.add_argument("--name")
+    incremental_audit.add_argument("--class-names")
+    incremental_audit.set_defaults(func=cmd_incremental)
+    incremental_run = incremental_lifecycle_sub.add_parser("run", help="从审计继续执行到自动门禁与受控上线。")
+    incremental_run.add_argument("--batch", required=True, help="增量ZIP路径或已有batch_id。")
+    incremental_run.add_argument("--name")
+    incremental_run.add_argument("--class-names")
+    incremental_run.set_defaults(func=cmd_incremental)
+    incremental_status = incremental_lifecycle_sub.add_parser("status", help="按训练run_id查询完整生命周期状态。")
+    incremental_status.add_argument("--run-id", required=True)
+    incremental_status.set_defaults(func=cmd_incremental)
+
     incremental_data = sub.add_parser("incremental-data", help="管理上传、审计、注入和训练增量数据批次。")
     incremental_sub = incremental_data.add_subparsers(dest="incremental_action", required=True)
     incremental_sub.add_parser("list", help="列出本机增量批次。").set_defaults(func=cmd_incremental_data)
@@ -856,6 +941,19 @@ def build_parser() -> argparse.ArgumentParser:
     logs.set_defaults(func=cmd_logs)
 
     sub.add_parser("benchmark-api", help="按YAML配置执行检测API端到端性能验收。").set_defaults(func=cmd_benchmark_api)
+
+    tensorrt = sub.add_parser("tensorrt", help="执行TensorRT精度、性能和启用门禁。")
+    tensorrt_sub = tensorrt.add_subparsers(dest="tensorrt_action", required=True)
+    tensorrt_validate = tensorrt_sub.add_parser("validate", help="对CUDA与TensorRT执行同集精度对齐和API性能验收。")
+    tensorrt_validate.add_argument("--activate", action="store_true", help="全部门禁通过后原子写回并启用当前设备配置。")
+    tensorrt_validate.set_defaults(func=cmd_tensorrt)
+    tensorrt_calibrate = tensorrt_sub.add_parser(
+        "calibrate", help="自动选择代表性数据、执行INT8 PTQ并完成精度和性能门禁。"
+    )
+    tensorrt_calibrate.add_argument(
+        "--activate", action="store_true", help="全部门禁通过后原子启用INT8设备配置。"
+    )
+    tensorrt_calibrate.set_defaults(func=cmd_tensorrt)
 
     sub.add_parser("serve").set_defaults(func=cmd_serve)
     return parser

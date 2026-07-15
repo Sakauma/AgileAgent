@@ -21,7 +21,7 @@ inference:
   specialist_imgsz: 512
   iou: 0.70
   max_det: 300
-  batch_size: 1
+  batch_size: 20
   confidence_min: 0.01
   confidence_max: 1.00
   confidence_default: 0.50
@@ -82,10 +82,25 @@ incremental_workbench:
   allowed_label_formats: [class_id_bbox, bbox_only]
   require_labels: true
   validation_fraction: 0.20
+  lock_fraction: 0.20
+  split_seed: 20260705
   minimum_images: 2
   preview_limit: 12
   job_log_tail_lines: 300
   poll_interval_ms: 2000
+  lineage:
+    required: true
+    root: data/incremental_lineage
+    base_manifest: data/incremental_lineage/base_dataset.json
+    base_experiment_config: configs/incremental/warship_3plus1.yaml
+    auto_initialize_base: true
+    cache_roots: []
+  lifecycle:
+    auto_continue: true
+    calibration_target_precision: 0.99
+    threshold_min: 0.01
+    threshold_max: 0.99
+    threshold_step: 0.01
   training:
     python: null
     initial_weights: models/production/incremental_detection/three_class_base_detector.pt
@@ -123,10 +138,13 @@ performance:
 
 generation:
   registry: models/generations.json
+  runtime_registry: data/generation_registry/runtime.json
   recheck_lock_split: splits/lock_val.txt
   report_root: reports/generation_rechecks
   candidate_id: incremental_detection_generation
   calibrated_threshold: 0.63
+  auto_promote: true
+  shadow_smoke_images: 1
   acceptance:
     min_base_map50: 0.80
     min_new_map50: 0.60
@@ -139,6 +157,13 @@ native_backend:
   library: build/native/libagile_agent_tensorrt.so
   base_engine: runs/engines/local/three_class_base_detector.engine
   context_engine: runs/engines/local/scene_sensor_net.engine
+  engines:
+    models/production/incremental_detection/three_class_base_detector.pt:
+      path: runs/engines/local/three_class_base_detector.engine
+      sha256: null
+    models/production/incremental_detection/incremental_detector.pt:
+      path: runs/engines/local/incremental_detector.engine
+      sha256: null
   precision: fp16
   require_exact_gpu: true
   validated: false
@@ -148,33 +173,65 @@ tensorrt_backend:
   expected_compute_capability: null
   require_exact_gpu: true
   validated: false
+  validation_report: null
   precision: fp16
   workspace_gib: 4
-  dynamic: false
+  dynamic: true
+  minimum_spatial_size: 32
+  mixed_precision:
+    enabled: false
+    constraint: obey
+    fp16_layer_patterns:
+      - "/model.[2-9]/*"
+      - "/model.1[0-9]/*"
+      - "/model.2[0-3]/*"
+    minimum_matched_layers: 269
+  validation:
+    max_overall_map50_delta_warning: 0.005
+    max_per_class_map50_delta_warning: 0.01
+    evaluation_batch_size: 8
+  int8_calibration:
+    enabled: true
+    auto_quantize_incremental: true
+    representative_split: splits/train.txt
+    threshold_split: splits/dev_val.txt
+    cache_root: runs/tensorrt_calibration
+    batch_size: 8
+    max_images: 256
+    minimum_images_per_class: 8
+    seed: 20260705
   export:
     device: "0"
     overwrite: false
     onnx_opset: 17
     simplify: true
     context_checkpoint: models/context/scene_sensor_net.pt
-    context_min_batch: 1
-    context_opt_batch: 8
   context_engine:
     path: runs/engines/local/scene_sensor_net.engine
     sha256: null
     imgsz: 160
+    min_batch_size: 1
+    opt_batch_size: 8
     batch_size: 20
   engines:
     models/production/incremental_detection/three_class_base_detector.pt:
       path: runs/engines/local/three_class_base_detector.engine
       sha256: null
       imgsz: 640
-      batch_size: 1
+      opt_height: 512
+      opt_width: 640
+      min_batch_size: 1
+      opt_batch_size: 8
+      batch_size: 20
     models/production/incremental_detection/incremental_detector.pt:
       path: runs/engines/local/incremental_detector.engine
       sha256: null
       imgsz: 512
-      batch_size: 1
+      opt_height: 416
+      opt_width: 512
+      min_batch_size: 1
+      opt_batch_size: 8
+      batch_size: 20
 
 model:
   weights: models/base/yolo11s_ir_sar_imgsz640.pt

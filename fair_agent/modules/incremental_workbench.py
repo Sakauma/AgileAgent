@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import shutil
 import stat
@@ -21,9 +22,13 @@ from PIL import Image
 
 from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.runtime_log import StructuredEventLog, new_trace_id, utc_now
+from fair_agent.modules.incremental_lineage import audit_incremental_records
 
 
-TERMINAL_JOB_STATES = {"COMPLETED", "FAILED", "CANCELLED"}
+TERMINAL_JOB_STATES = {
+    "COMPLETED", "FAILED", "CANCELLED", "PROMOTED", "REJECTED", "ACCEPTED", "ROLLED_BACK",
+    "ROLLBACK_FAILED",
+}
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -313,7 +318,12 @@ class IncrementalBatchStore:
                     object_count += 1
             relative = image.relative_to(extracted).as_posix()
             lower_parts = {part.lower() for part in image.parts}
-            split_hint = "val" if lower_parts & {"val", "valid", "dev", "validation"} else "train"
+            if lower_parts & {"lock", "sealed", "holdout"}:
+                split_hint = "lock"
+            elif lower_parts & {"val", "valid", "dev", "validation"}:
+                split_hint = "val"
+            else:
+                split_hint = "train"
             records.append({
                 "index": len(records),
                 "image": relative,
@@ -413,6 +423,7 @@ class IncrementalBatchStore:
             })
 
         mode = "target_incremental" if bindings and all(item["is_existing_class"] for item in bindings) else "class_incremental"
+        compliance = audit_incremental_records(records, self.settings)
         return {
             "image_count": len(records),
             "label_count": sum(1 for row in records if row["label"]),
@@ -429,8 +440,7 @@ class IncrementalBatchStore:
             "requires_class_confirmation": bool(generated),
             "has_provisional_class_names": bool(generated),
             "warnings": warnings,
-            "old_raw_image_count": 0,
-            "compliance": "passed",
+            **compliance,
             "files": records,
         }
 
@@ -584,37 +594,65 @@ class IncrementalBatchStore:
                 raise ValueError("只有审计通过的批次可以注入。")
             if manifest["status"] == "INJECTED":
                 return manifest
+            audit = manifest.get("audit", {})
+            current_compliance = audit_incremental_records(manifest["files"], self.settings)
+            manifest["audit"].update(current_compliance)
+            _atomic_json(self._manifest_path(batch_id), manifest)
+            if current_compliance.get("compliance") != "passed":
+                raise ValueError("增量数据血缘审计未通过，禁止生成训练视图。")
             batch_dir = self._batch_dir(batch_id)
             prepared = batch_dir / "prepared"
             if prepared.exists():
                 raise ValueError("训练视图已存在但状态不一致，请检查批次日志。")
             records = list(manifest["files"])
             has_val = any(row["split_hint"] == "val" for row in records)
-            split_rows: Dict[str, list[Dict[str, Any]]] = {"train": [], "val": []}
+            has_lock = any(row["split_hint"] == "lock" for row in records)
+            split_rows: Dict[str, list[Dict[str, Any]]] = {"train": [], "val": [], "lock": []}
             validation_fraction = float(self.settings["validation_fraction"])
             for row in records:
-                split = row["split_hint"]
-                if not has_val:
-                    ratio = int(row["image_sha256"][:8], 16) / 0xFFFFFFFF
-                    split = "val" if ratio < validation_fraction else "train"
-                split_rows[split].append(row)
-            if not split_rows["val"]:
-                split_rows["val"].append(split_rows["train"].pop())
-            if not split_rows["train"]:
-                split_rows["train"].append(split_rows["val"].pop(0))
+                split_rows[row["split_hint"]].append(row)
+
+            lock_fraction = self.settings.get("lock_fraction")
+            split_seed = int(self.settings.get("split_seed", self.settings.get("training", {}).get("seed", 20260705)))
+            if lock_fraction is not None and not has_lock:
+                selected = self._stratified_holdout(
+                    split_rows["train"], float(lock_fraction), split_seed, "lock"
+                )
+                selected_ids = {id(row) for row in selected}
+                split_rows["train"] = [row for row in split_rows["train"] if id(row) not in selected_ids]
+                split_rows["lock"] = selected
+
+            if not has_val:
+                selected = self._stratified_holdout(
+                    split_rows["train"], validation_fraction, split_seed + 1, "dev"
+                )
+                selected_ids = {id(row) for row in selected}
+                split_rows["train"] = [row for row in split_rows["train"] if id(row) not in selected_ids]
+                split_rows["val"] = selected
+            elif not split_rows["train"]:
+                raise ValueError("增量数据没有可用于训练的样本。")
+
+            required_splits = ["train", "val"] + (["lock"] if lock_fraction is not None or has_lock else [])
+            all_classes = {int(value) for row in records for value in row["classes"]}
+            for split in required_splits:
+                present = {int(value) for row in split_rows[split] for value in row["classes"]}
+                missing = sorted(all_classes - present)
+                if missing:
+                    raise ValueError(f"{split}划分缺少类别{missing}，无法完成逐类训练、校准和独立复核。")
             extracted = batch_dir / "extracted"
+            source_to_training = {
+                int(key): int(value) for key, value in manifest["audit"]["source_to_training"].items()
+            }
             for split, rows in split_rows.items():
                 for row in rows:
                     image_source = extracted / row["image"]
                     label_source = extracted / row["label"]
-                    image_target = prepared / "images" / split / f"{image_source.stem}{image_source.suffix.lower()}"
-                    label_target = prepared / "labels" / split / f"{image_source.stem}.txt"
+                    target_root = batch_dir / "sealed_lock" if split == "lock" else prepared
+                    image_target = target_root / "images" / split / f"{image_source.stem}{image_source.suffix.lower()}"
+                    label_target = target_root / "labels" / split / f"{image_source.stem}.txt"
                     image_target.parent.mkdir(parents=True, exist_ok=True)
                     label_target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(image_source, image_target)
-                    source_to_training = {
-                        int(key): int(value) for key, value in manifest["audit"]["source_to_training"].items()
-                    }
                     normalized_lines = []
                     for line in label_source.read_text(encoding="utf-8").splitlines():
                         fields = line.split()
@@ -636,19 +674,66 @@ class IncrementalBatchStore:
                 "names": class_map,
             }
             (prepared / "dataset.yaml").write_text(yaml.safe_dump(dataset_yaml, allow_unicode=True, sort_keys=False), encoding="utf-8")
-            internal_batch = {
+            assignment = {
+                split: [
+                    {
+                        "stem": Path(str(row["image"])).stem,
+                        "image_sha256": row["image_sha256"],
+                        "label_sha256": row.get("label_sha256"),
+                    }
+                    for row in rows
+                ]
+                for split, rows in split_rows.items()
+            }
+            dataset_fingerprint = _sha256_bytes(json.dumps(
+                {
+                    "source_archive_sha256": manifest["source"]["sha256"],
+                    "assignment": assignment,
+                    "local_to_global": manifest["audit"]["local_to_global"],
+                    "lineage_catalog_hashes": manifest["audit"].get("lineage_catalog_hashes", []),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8"))
+            lock_manifest = {
                 "schema_version": 1,
+                "batch_id": batch_id,
+                "sealed_at": utc_now(),
+                "seed": split_seed,
+                "fraction": float(lock_fraction) if lock_fraction is not None else None,
+                "auto_sealed": not has_lock and lock_fraction is not None,
+                "dataset_fingerprint": dataset_fingerprint,
+                "local_to_global": manifest["audit"]["local_to_global"],
+                "files": assignment["lock"],
+                "content_read_by_training": False,
+            }
+            _atomic_json(batch_dir / "sealed_lock" / "lock_manifest.json", lock_manifest)
+            internal_batch = {
+                "schema_version": 2,
                 "batch_id": batch_id,
                 "incremental_mode": manifest["audit"]["incremental_mode"],
                 "learning_data_scope": "incremental_dataset_only",
-                "old_raw_image_count": 0,
+                "old_raw_image_count": int(manifest["audit"]["old_raw_image_count"]),
+                "old_raw_label_count": int(manifest["audit"].get("old_raw_label_count", 0)),
+                "old_cache_count": int(manifest["audit"].get("old_cache_count", 0)),
+                "lineage_evidence": manifest["audit"].get("lineage_evidence"),
                 "dataset": "prepared/dataset.yaml",
+                "sealed_lock_manifest": rel_path(batch_dir / "sealed_lock" / "lock_manifest.json"),
+                "dataset_fingerprint": dataset_fingerprint,
                 "class_map": manifest["audit"]["class_map"],
                 "source_class_map": manifest["audit"]["source_class_map"],
                 "source_to_training": manifest["audit"]["source_to_training"],
                 "local_to_global": manifest["audit"]["local_to_global"],
                 "class_bindings": manifest["audit"]["class_bindings"],
-                "counts": {"train": len(split_rows["train"]), "val": len(split_rows["val"])},
+                "counts": {
+                    split: len(rows) for split, rows in split_rows.items()
+                    if split != "lock" or lock_fraction is not None or has_lock
+                },
+                "training_access": {
+                    "allowed_splits": ["train", "val"],
+                    "lock_content_available": False,
+                },
                 "source_archive_sha256": manifest["source"]["sha256"],
             }
             (batch_dir / "batch.yaml").write_text(yaml.safe_dump(internal_batch, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -671,6 +756,93 @@ class IncrementalBatchStore:
             },
         )
         return manifest
+
+    @staticmethod
+    def _stratified_holdout(
+        rows: Sequence[Dict[str, Any]],
+        fraction: float,
+        seed: int,
+        purpose: str,
+    ) -> list[Dict[str, Any]]:
+        if not rows:
+            raise ValueError(f"没有可用于自动封存{purpose}的数据。")
+        classes = {int(value) for row in rows for value in row["classes"]}
+        counts = Counter(int(value) for row in rows for value in set(row["classes"]))
+        too_small = sorted(class_id for class_id in classes if counts[class_id] < 2)
+        if too_small:
+            raise ValueError(f"类别{too_small}样本不足，无法同时覆盖{purpose}与剩余训练集。")
+        ordered = sorted(
+            rows,
+            key=lambda row: hashlib.sha256(
+                f"{seed}:{row['image_sha256']}".encode("utf-8")
+            ).hexdigest(),
+        )
+        target = max(1, int(math.ceil(len(rows) * fraction)), len(classes))
+        selected: list[Dict[str, Any]] = []
+        selected_ids: set[int] = set()
+        remaining = Counter(counts)
+        grouped: Dict[tuple[int, ...], list[Dict[str, Any]]] = {}
+        order_index = {id(row): index for index, row in enumerate(ordered)}
+        for row in ordered:
+            grouped.setdefault(tuple(sorted({int(value) for value in row["classes"]})), []).append(row)
+        selected_by_group: Counter[tuple[int, ...]] = Counter()
+        desired_by_group = {
+            key: len(group_rows) * fraction for key, group_rows in grouped.items()
+        }
+
+        def can_select(row: Mapping[str, Any]) -> bool:
+            return all(remaining[int(class_id)] > 1 for class_id in set(row["classes"]))
+
+        def select(row: Dict[str, Any]) -> None:
+            key = tuple(sorted({int(value) for value in row["classes"]}))
+            selected.append(row)
+            selected_ids.add(id(row))
+            selected_by_group[key] += 1
+            for value in set(row["classes"]):
+                remaining[int(value)] -= 1
+
+        for key in sorted(grouped):
+            quota = int(math.floor(desired_by_group[key]))
+            for row in grouped[key]:
+                if selected_by_group[key] >= quota:
+                    break
+                if can_select(row):
+                    select(row)
+
+        covered = {int(value) for row in selected for value in row["classes"]}
+        for class_id in sorted(classes - covered):
+            candidates = [
+                row for row in ordered
+                if id(row) not in selected_ids and class_id in row["classes"] and can_select(row)
+            ]
+            candidate = max(
+                candidates,
+                key=lambda row: (
+                    desired_by_group[tuple(sorted({int(value) for value in row["classes"]}))]
+                    - selected_by_group[tuple(sorted({int(value) for value in row["classes"]}))],
+                    -order_index[id(row)],
+                ),
+                default=None,
+            )
+            if candidate is None:
+                raise ValueError(f"类别{class_id}无法在{purpose}和训练集中同时保留。")
+            select(candidate)
+        while len(selected) < target:
+            candidates = [
+                row for row in ordered if id(row) not in selected_ids and can_select(row)
+            ]
+            if not candidates:
+                break
+            candidate = max(
+                candidates,
+                key=lambda row: (
+                    desired_by_group[tuple(sorted({int(value) for value in row["classes"]}))]
+                    - selected_by_group[tuple(sorted({int(value) for value in row["classes"]}))],
+                    -order_index[id(row)],
+                ),
+            )
+            select(candidate)
+        return selected
 
     def rename_classes(self, batch_id: str, names: Mapping[str | int, str]) -> Dict[str, Any]:
         with self._lock:
@@ -771,10 +943,21 @@ class IncrementalBatchStore:
 
 
 class TrainingJobManager:
-    def __init__(self, store: IncrementalBatchStore, settings: Mapping[str, Any], event_log: StructuredEventLog) -> None:
+    def __init__(
+        self,
+        store: IncrementalBatchStore,
+        settings: Mapping[str, Any],
+        event_log: StructuredEventLog,
+        config: Mapping[str, Any] | None = None,
+        promotion_callback: Any | None = None,
+        rollback_callback: Any | None = None,
+    ) -> None:
         self.store = store
         self.settings = dict(settings)
         self.event_log = event_log
+        self.config = dict(config) if config is not None else None
+        self.promotion_callback = promotion_callback
+        self.rollback_callback = rollback_callback
         self._processes: Dict[str, subprocess.Popen[str]] = {}
         self._lock = threading.Lock()
 
@@ -802,19 +985,31 @@ class TrainingJobManager:
 
     def _create_training_snapshot(self, batch_id: str, job_id: str) -> Dict[str, Any]:
         batch_dir = self.store._batch_dir(batch_id)
-        manifest = self.store.get(batch_id, include_files=False)
+        manifest = self.store.get(batch_id)
         dataset_source = batch_dir / "prepared" / "dataset.yaml"
         registry_source = self.store._class_registry_path(batch_id)
-        if not dataset_source.is_file() or not registry_source.is_file():
+        batch_source = batch_dir / "batch.yaml"
+        lock_manifest = batch_dir / "sealed_lock" / "lock_manifest.json"
+        if not dataset_source.is_file() or not registry_source.is_file() or not batch_source.is_file():
             raise FileNotFoundError("训练数据视图或类别注册表不存在。")
         snapshot_dir = batch_dir / "jobs" / "snapshots" / job_id
         snapshot_dir.mkdir(parents=True, exist_ok=False)
         dataset_snapshot = snapshot_dir / "dataset.yaml"
         registry_snapshot = snapshot_dir / "class_registry.yaml"
+        batch_snapshot = snapshot_dir / "batch.yaml"
         shutil.copy2(dataset_source, dataset_snapshot)
         shutil.copy2(registry_source, registry_snapshot)
+        shutil.copy2(batch_source, batch_snapshot)
+        injection = manifest.get("injection", {})
+        current_compliance = audit_incremental_records(manifest.get("files", []), self.settings)
+        if current_compliance.get("compliance") != "passed":
+            raise ValueError("训练启动前的数据血缘复核未通过。")
+        if any(int(current_compliance.get(key, -1)) != 0 for key in ("old_raw_image_count", "old_raw_label_count", "old_cache_count", "unverified_cache_count")):
+            raise ValueError("训练快照检测到旧数据或旧缓存交集。")
+        if current_compliance.get("lineage_evidence") not in {"current", "not_required"}:
+            raise ValueError("训练快照缺少有效基础数据血缘证据。")
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "batch_id": batch_id,
             "job_id": job_id,
             "created_at": utc_now(),
@@ -823,13 +1018,24 @@ class TrainingJobManager:
             "class_registry": rel_path(registry_snapshot),
             "class_registry_sha256": _sha256_file(registry_snapshot),
             "class_registry_revision": int(manifest.get("class_registry", {}).get("revision") or 0),
+            "batch": rel_path(batch_snapshot),
+            "batch_sha256": _sha256_file(batch_snapshot),
+            "dataset_fingerprint": injection.get("dataset_fingerprint"),
+            "lineage_catalog_hashes": current_compliance.get("lineage_catalog_hashes", []),
+            "old_raw_image_count": int(current_compliance["old_raw_image_count"]),
+            "old_raw_label_count": int(current_compliance["old_raw_label_count"]),
+            "old_cache_count": int(current_compliance["old_cache_count"]),
+            "unverified_cache_count": int(current_compliance["unverified_cache_count"]),
+            "lock_manifest": rel_path(lock_manifest) if lock_manifest.is_file() else None,
+            "lock_manifest_sha256": _sha256_file(lock_manifest) if lock_manifest.is_file() else None,
+            "training_access": injection.get("training_access"),
         }
         _atomic_json(snapshot_dir / "snapshot_manifest.json", payload)
         payload["snapshot_manifest"] = rel_path(snapshot_dir / "snapshot_manifest.json")
         payload["snapshot_manifest_sha256"] = _sha256_file(snapshot_dir / "snapshot_manifest.json")
         return payload
 
-    def start(self, batch_id: str) -> Dict[str, Any]:
+    def start(self, batch_id: str, wait: bool = False) -> Dict[str, Any]:
         manifest = self.store.get(batch_id)
         if manifest["status"] not in {"INJECTED", "FAILED"}:
             raise ValueError("批次必须先完成注入，且同一批次不能重复并发训练。")
@@ -873,6 +1079,9 @@ class TrainingJobManager:
         }
         self._write_job(job)
         self.store.update_training(batch_id, job_id, "TRAINING", started_at=job["created_at"])
+        if wait:
+            self._run(job, command)
+            return self.get(batch_id, job_id)
         thread = threading.Thread(target=self._run, args=(job, command), daemon=True, name=job_id)
         thread.start()
         return job
@@ -919,11 +1128,62 @@ class TrainingJobManager:
             details={"status": status, "returncode": returncode, "log": rel_path(log_path)},
         )
         if status == "COMPLETED":
-            self.event_log.append(
-                "incremental.dev_calibration.pending", level="warning", component="incremental",
-                trace_id=trace_id, batch_id=batch_id, job_id=job_id,
-                message="候选权重已生成，等待dev阈值校准。",
-            )
+            candidate_path = batch_dir / "training" / job_id / "candidate_manifest.json"
+            if candidate_path.is_file():
+                candidate_evidence = json.loads(candidate_path.read_text(encoding="utf-8"))
+                self.event_log.append(
+                    "incremental.training.artifact_frozen", component="training",
+                    trace_id=trace_id, batch_id=batch_id, job_id=job_id,
+                    details={
+                        "candidate_manifest": rel_path(candidate_path),
+                        "candidate_manifest_sha256": _sha256_file(candidate_path),
+                        "best_weight": candidate_evidence.get("best_weight"),
+                        "best_weight_sha256": candidate_evidence.get("best_weight_sha256"),
+                        "dataset_snapshot_sha256": candidate_evidence.get("dataset_snapshot_sha256"),
+                        "class_registry_snapshot_sha256": candidate_evidence.get("class_registry_snapshot_sha256"),
+                    },
+                )
+            lifecycle_cfg = self.settings.get("lifecycle")
+            if self.config is not None and isinstance(lifecycle_cfg, Mapping) and bool(lifecycle_cfg.get("auto_continue")):
+                from fair_agent.modules.incremental_lifecycle import IncrementalLifecycle
+
+                job["lifecycle_status"] = "RUNNING"
+                job["status"] = "LIFECYCLE_RUNNING"
+                self._write_job(job)
+                try:
+                    lifecycle_result = IncrementalLifecycle(
+                        self.store,
+                        self.config,
+                        self.event_log,
+                        self.promotion_callback,
+                        self.rollback_callback,
+                    ).run(batch_id, job_id)
+                    job["lifecycle_status"] = str(lifecycle_result["status"])
+                    job["status"] = str(lifecycle_result["status"])
+                    job["lifecycle_result"] = lifecycle_result
+                    self._write_job(job)
+                except Exception as exc:
+                    current_status = str(self.store.get(batch_id, include_files=False).get("status"))
+                    failure_status = "ROLLBACK_FAILED" if current_status == "ROLLBACK_FAILED" else "FAILED"
+                    job["lifecycle_status"] = failure_status
+                    job["status"] = failure_status
+                    job["lifecycle_error"] = str(exc)
+                    self._write_job(job)
+                    self.store.update_training(
+                        batch_id, job_id, failure_status, lifecycle_error=str(exc),
+                        lifecycle_error_type=type(exc).__name__,
+                    )
+                    self.event_log.append(
+                        "incremental.lifecycle.failed", level="error", component="incremental",
+                        trace_id=trace_id, batch_id=batch_id, job_id=job_id,
+                        message=str(exc), details={"error_type": type(exc).__name__},
+                    )
+            else:
+                self.event_log.append(
+                    "incremental.dev_calibration.pending", level="warning", component="incremental",
+                    trace_id=trace_id, batch_id=batch_id, job_id=job_id,
+                    message="候选权重已生成，等待dev阈值校准。",
+                )
 
     def cancel(self, batch_id: str, job_id: str) -> Dict[str, Any]:
         job = self.get(batch_id, job_id)

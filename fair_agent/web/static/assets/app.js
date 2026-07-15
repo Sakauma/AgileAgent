@@ -122,7 +122,12 @@
     AUDITED: "审计通过", REJECTED: "审计未通过", INJECTED: "已准备",
     TRAINING: "训练中", TRAINED_CANDIDATE: "候选已生成", FAILED: "训练失败",
     CANCELLED: "已停止", QUEUED: "排队中", RUNNING: "训练中", COMPLETED: "训练完成",
-    CANCELLING: "正在停止",
+    CANCELLING: "正在停止", LIFECYCLE_RUNNING: "自动验收中",
+    CALIBRATING: "阈值校准中", CALIBRATED: "阈值已校准",
+    REGISTERED_CANDIDATE: "候选已注册", LOCK_RECHECKING: "独立复核中",
+    QUANTIZING: "INT8校准中", QUANTIZED: "INT8校准完成",
+    ACCEPTED: "门禁已通过", SHADOW_LOADING: "上线预热中", PROMOTED: "已上线",
+    REJECTED: "候选未通过", ROLLED_BACK: "已回滚", ROLLBACK_FAILED: "回滚失败",
   };
 
   function batchStatus(value) {
@@ -281,7 +286,7 @@
       renderIncrementalDetail();
       renderIncrementalBatchList();
       await loadIncrementalEvents();
-      if (state.incrementalBatch.training_job_id && state.incrementalBatch.status === "TRAINING") {
+      if (state.incrementalBatch.training_job_id && !["PROMOTED", "REJECTED", "FAILED", "CANCELLED", "ROLLED_BACK", "ROLLBACK_FAILED"].includes(state.incrementalBatch.status)) {
         startTrainingPoll(state.incrementalBatch.training_job_id);
       }
     } catch (error) {
@@ -301,7 +306,16 @@
     metrics.innerHTML = "";
     const classNames = Object.values(audit.class_map || {}).join("、") || "待确认";
     const labelFormat = audit.label_format === "bbox_only" ? "四列·类别待确认" : "五列YOLO";
-    [["图像", audit.image_count || 0], ["目标", audit.object_count || 0], ["类别", classNames], ["标签格式", labelFormat], ["旧样本读取", audit.old_raw_image_count || 0], ["合规审计", audit.compliance === "passed" ? "通过" : "未通过"]]
+    const training = batch.training || {};
+    const calibration = training.calibration || {};
+    const recheck = training.recheck || {};
+    const thresholdText = Object.entries(calibration.per_class_thresholds || {})
+      .map(([id, value]) => `ID ${id}: ${Number(value).toFixed(2)}`).join(" · ") || "待校准";
+    const gateText = recheck.accepted == null ? "待复核" : (recheck.accepted ? "全部通过" : "存在未通过项");
+    [["图像", audit.image_count || 0], ["目标", audit.object_count || 0], ["类别", classNames], ["标签格式", labelFormat],
+      ["旧图交集", audit.old_raw_image_count || 0], ["旧标签交集", audit.old_raw_label_count || 0],
+      ["旧缓存", audit.old_cache_count || 0], ["合规审计", audit.compliance === "passed" ? "通过" : "未通过"],
+      ["逐类阈值", thresholdText], ["上线门禁", gateText]]
       .forEach(([label, value]) => metrics.appendChild(metricNode(label, value)));
     renderIncrementalClassEditor(batch, audit);
     $("#injectIncremental").disabled = batch.status !== "AUDITED";
@@ -407,7 +421,7 @@
       $("#trainingStatus").textContent = batchStatus(state.trainingJob.status);
       $("#trainingLog").textContent = logResponse.ok ? (await logResponse.text() || "训练进程正在初始化...") : "暂时无法读取训练日志。";
       $("#trainingLog").scrollTop = $("#trainingLog").scrollHeight;
-      const terminal = ["COMPLETED", "FAILED", "CANCELLED"].includes(state.trainingJob.status);
+      const terminal = ["COMPLETED", "FAILED", "CANCELLED", "PROMOTED", "REJECTED", "ACCEPTED", "ROLLED_BACK", "ROLLBACK_FAILED"].includes(state.trainingJob.status);
       $("#cancelTraining").classList.toggle("is-hidden", terminal);
       $("#trainingProgressBar").style.animationPlayState = terminal ? "paused" : "running";
       if (terminal) {
