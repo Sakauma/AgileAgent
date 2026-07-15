@@ -123,6 +123,41 @@ PY
   "${AGENT_PYTHON}" -m pip check >/dev/null 2>&1
 }
 
+project_entrypoint_compatible() {
+  "${AGENT_PYTHON}" - "${ROOT_DIR}" <<'PY' >/dev/null 2>&1
+import json
+import sys
+from importlib import metadata
+from pathlib import Path
+from sysconfig import get_paths
+from urllib.parse import unquote, urlparse
+
+root = Path(sys.argv[1]).resolve()
+site_paths = sorted({get_paths()["purelib"], get_paths()["platlib"]})
+distribution = next(
+    (
+        item
+        for item in metadata.distributions(path=site_paths)
+        if str(item.metadata.get("Name", "")).lower().replace("_", "-") == "agile-agent"
+    ),
+    None,
+)
+if distribution is None:
+    raise SystemExit(1)
+
+raw_direct_url = distribution.read_text("direct_url.json")
+if not raw_direct_url:
+    raise SystemExit(1)
+direct_url = json.loads(raw_direct_url)
+if direct_url.get("dir_info", {}).get("editable") is not True:
+    raise SystemExit(1)
+project_path = Path(unquote(urlparse(str(direct_url.get("url", ""))).path)).resolve()
+entrypoint = Path(sys.executable).resolve().parent / "agile-agent"
+if project_path != root or not entrypoint.is_file():
+    raise SystemExit(1)
+PY
+}
+
 printf '使用 Python 环境：%s\n' "${AGENT_PYTHON}"
 if torch_stack_compatible; then
   printf '现有 PyTorch/CUDA/torchvision 兼容，跳过安装。\n'
@@ -143,6 +178,16 @@ else
   if ! dependencies_compatible; then
     printf '依赖安装后仍存在缺失、版本过低或包冲突。\n' >&2
     "${AGENT_PYTHON}" -m pip check >&2 || true
+    exit 1
+  fi
+fi
+if project_entrypoint_compatible; then
+  printf '当前仓库的 agile-agent 命令入口已注册，跳过项目注册。\n'
+else
+  printf '注册当前仓库的 agile-agent 命令入口，不重装第三方依赖。\n'
+  "${AGENT_PYTHON}" -m pip install -e . --no-deps
+  if ! project_entrypoint_compatible; then
+    printf '当前仓库的 agile-agent 命令入口注册失败。\n' >&2
     exit 1
   fi
 fi

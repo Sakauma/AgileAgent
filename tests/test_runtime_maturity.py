@@ -117,6 +117,8 @@ def test_bootstrap_reuses_compatible_cuda_environment() -> None:
     assert 'tuple(map(int, match.groups())) < (2, 0)' in content
     assert "torchvision.ops.nms" in content
     assert "dependencies_compatible" in content
+    assert "project_entrypoint_compatible" in content
+    assert 'pip install -e . --no-deps' in content
     assert "> .agent-python" in content
     assert "python -m pip install --upgrade pip" not in content
     assert "--force-reinstall" not in content

@@ -93,6 +93,8 @@ chmod +x scripts/bootstrap_x86.sh scripts/start_agent.sh
 AGILE_AGENT_PYTHON=/path/to/env/bin/python ./scripts/bootstrap_x86.sh
 ```
 
+兼容的第三方依赖会直接复用，不会重复安装。配置脚本还会单独确认 `agile-agent` 命令入口属于当前检出的仓库；仅当入口缺失或指向其他目录时，才以 `--no-deps` 方式重新注册当前项目。
+
 已验证的参考组合为 Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124` 和 Ultralytics `8.4.92`。项目允许使用满足约束且通过 `doctor` 的兼容版本，不要求环境名称或安装路径一致。TensorRT 仅在设备本地导出时安装。
 
 ### 一键启动
@@ -108,6 +110,46 @@ AGILE_AGENT_PYTHON=/path/to/env/bin/python ./scripts/bootstrap_x86.sh
 ```bash
 ./scripts/start_agent.sh --cli
 ```
+
+## 竞赛数据与固定划分
+
+默认 Web/CLI 检测使用仓库内发布权重，不要求下载竞赛训练集。API 性能验收、舰船 3+1 复现实验和指标复核需要原始竞赛训练数据。由于数据授权限制，仓库只发布固定划分清单，不发布图像和标签。
+
+将数据放置为以下结构：
+
+```text
+datasets_r1_base_train/
+├── classes.txt
+├── ir_r1_base_air_000001.png
+├── ir_r1_base_air_000001.txt
+└── ...
+```
+
+`classes.txt` 按行写入：
+
+```text
+soldier
+small_aircraft
+warship
+tank
+```
+
+仓库中的 [`splits/`](splits/README.md) 已包含固定的 `560/95/95` train、dev 和 lock 清单，以及对应的 IR/SAR 子集。数据就位后执行：
+
+```bash
+python tools/00_check_dataset.py
+python tools/01_build_metadata.py
+agile-agent experiment validate --config configs/incremental/warship_3plus1.yaml
+```
+
+三项均通过后，才运行依赖真实数据的命令：
+
+```bash
+agile-agent benchmark-api
+agile-agent experiment run --config configs/incremental/warship_3plus1.yaml
+```
+
+`benchmark-api` 使用 `splits/lock_val.txt` 中的 95 张图像；缺少原始数据时不能用合成图替代正式性能验收。
 
 ## 使用方式
 
@@ -140,7 +182,6 @@ agile-agent console
 agile-agent detect --source path/to/image.png --confidence 0.50
 agile-agent decide --source path/to/image.png
 agile-agent logs --limit 100
-agile-agent benchmark-api
 ```
 
 `detect` 输出完整上下文、候选协议、模型执行、跳过原因和融合记录，适合调试或接入其他程序。Web 仅显示经过简化的用户决策摘要。
@@ -231,7 +272,7 @@ python scripts/smoke_models.py
 - `verify_release.py` 校验配置、模型权重和公开证据哈希。
 - `smoke_models.py` 在 GPU 上加载三种功能模型并运行完整自动编排链路。
 
-当前代码基线为 `152 passed`。修改模型、推理后端或依赖后，必须重新执行三项验收。
+当前代码基线为 `159 passed`。修改模型、推理后端或依赖后，必须重新执行三项验收。
 
 ## 项目结构
 
@@ -252,7 +293,7 @@ tests/              # 自动化测试
 docs/               # 设计、操作和复现实验文档
 ```
 
-竞赛数据、标签、运行报告、预测结果、设备部署产物、构建缓存和本地凭据均被 Git 忽略。TensorRT 导出与校验代码保留在仓库中，生成的 engine 不进入版本控制。
+竞赛图像、标签、运行报告、预测结果、设备部署产物、构建缓存和本地凭据均被 Git 忽略。固定数据划分清单由 Git 跟踪，用于在各设备上复现同一 train/dev/lock 边界。TensorRT 导出与校验代码保留在仓库中，生成的 engine 不进入版本控制。
 
 ## 文档
 
