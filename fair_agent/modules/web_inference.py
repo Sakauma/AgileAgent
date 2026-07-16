@@ -496,14 +496,9 @@ def arbitrate_cross_class_conflicts(
             kept.append(candidate)
         elif fallback_conflict is None:
             kept.append(candidate)
-        elif preserve_base_class_owners:
-            kept.append(candidate)
-            decisions.append({
-                **fallback_conflict,
-                "action": "coexist_preserve_base_owner",
-                "reason": "cross_class_conflict_with_frozen_owner_preserved",
-            })
         else:
+            # Owner preservation keeps the frozen prediction; it must not turn an
+            # otherwise rejected, unverified specialist conflict into coexistence.
             decisions.append(fallback_conflict)
     base_kept = [row for index, row in enumerate(base_rows) if index not in suppressed_base_indices]
     return base_kept, kept, decisions

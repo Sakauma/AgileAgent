@@ -659,6 +659,11 @@
     const eligible = Array.isArray(decision.eligible_protocols) ? decision.eligible_protocols : [];
     const skipped = Array.isArray(decision.skipped_protocols) ? decision.skipped_protocols : [];
     const fusion = decision.fusion_summary || {};
+    const sourceScope = decision.source_scope || "unknown";
+    const sourceLabel = sourceScope === "incremental" ? "增量数据" : sourceScope === "base" ? "原始数据" : "通用输入";
+    const sourceDetail = decision.inference_scope === "incremental"
+      ? "调用基础模型与当前代际增量能力"
+      : "按原始数据域处理，仅调用冻结基础模型";
     $("#collaborationMode").textContent = "Agent 自动决策";
     const flow = $("#collaborationFlow");
     flow.replaceChildren();
@@ -666,7 +671,7 @@
       ? protocols.map((item) => `${classLabel(item.class_name || item.new_class)} ${item.activated ? "已激活" : "未激活"}`).join(" · ")
       : skipped.length ? "当前输入无需调用专项模型" : "保持统一检测流程";
     const steps = [
-      ["01 场景认知", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "自动理解输入模态与任务场景"],
+      ["01 来源与场景", `${sourceLabel} · ${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, sourceDetail],
       ["02 统一检测", `${Number(decision.base_detection_count || 0)} 个基础候选`, "建立当前图像的统一检测结果"],
       ["03 智能评估", `${eligible.length} 项候选 · ${Number(decision.evaluated_specialists || 0)} 项执行`, evaluations],
       activated.length

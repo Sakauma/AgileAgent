@@ -155,6 +155,20 @@ def test_unknown_confusion_pair_keeps_conservative_fallback() -> None:
     assert decisions[0]["action"] == "reject_specialist"
 
 
+def test_owner_preservation_rejects_unlearned_specialist_conflict() -> None:
+    base = [{"class_id": 4, "confidence": 0.86, "xyxy": [1, 1, 19, 19]}]
+    specialist = [{"class_id": 7, "confidence": 0.80, "xyxy": [0, 0, 20, 20]}]
+
+    base_kept, specialist_kept, decisions = arbitrate_cross_class_conflicts(
+        base, specialist, 0.50, 0.50, 0.15, {"edges": []}, True
+    )
+
+    assert base_kept == base
+    assert specialist_kept == []
+    assert decisions[0]["action"] == "reject_specialist"
+    assert decisions[0]["reason"] == "cross_class_conflict"
+
+
 def test_owner_preservation_keeps_both_sides_of_learned_conflict() -> None:
     base = [{"class_id": 3, "confidence": 0.86, "xyxy": [1, 1, 19, 19]}]
     specialist = [{

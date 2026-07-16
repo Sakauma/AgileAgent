@@ -565,6 +565,38 @@ def _unseal_lock_once(config: Mapping[str, Any], candidate_id: str) -> Dict[str,
     return record
 
 
+def _run_source_scoped_recheck(
+    config: Mapping[str, Any],
+    registry: Mapping[str, Any],
+    parent_id: str,
+    candidate_id: str,
+    root_generation_id: str,
+    base_images: Sequence[Path],
+    historical_incremental_images: Sequence[Path],
+    current_incremental_images: Sequence[Path],
+) -> Dict[str, list[Dict[str, Any]]]:
+    base_before = _run_engine(_engine(config, registry, root_generation_id), base_images, config)
+    base_after = _run_engine(_engine(config, registry, root_generation_id), base_images, config)
+    historical_before = (
+        _run_engine(_engine(config, registry, parent_id), historical_incremental_images, config)
+        if historical_incremental_images else []
+    )
+    historical_after = (
+        _run_engine(_engine(config, registry, candidate_id), historical_incremental_images, config)
+        if historical_incremental_images else []
+    )
+    current_after = _run_engine(
+        _engine(config, registry, candidate_id), current_incremental_images, config
+    )
+    return {
+        "base_before": base_before,
+        "base_after": base_after,
+        "historical_before": historical_before,
+        "historical_after": historical_after,
+        "current_after": current_after,
+    }
+
+
 def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[str, Any]:
     registry = ensure_recheck_candidate(config, candidate_id)
     generation = registry["generations_by_id"][candidate_id]
@@ -581,10 +613,10 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         raise ValueError("候选代际缺少当前轮封存lock。")
     historical_groups = lock_chain[:-1]
     current_group = lock_chain[-1]
-    historical_images = list(dict.fromkeys([
-        *old_images,
-        *(path for group in historical_groups for path in group["images"]),
-    ]))
+    historical_incremental_images = list(dict.fromkeys(
+        path for group in historical_groups for path in group["images"]
+    ))
+    historical_images = list(dict.fromkeys([*old_images, *historical_incremental_images]))
     current_images = list(current_group["images"])
     image_paths = list(dict.fromkeys([*historical_images, *current_images]))
     stems = [path.stem for path in image_paths]
@@ -616,8 +648,25 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
             model["per_class_thresholds"] = {
                 class_id: metric_floor for class_id in model["per_class_thresholds"]
             }
-    before_results = _run_engine(_engine(config, metric_registry, parent_id), historical_images, config)
-    after_results = _run_engine(_engine(config, metric_registry, candidate_id), image_paths, config)
+    root_generation_id = _root_generation_id(registry, candidate_id)
+    scoped_results = _run_source_scoped_recheck(
+        config,
+        metric_registry,
+        parent_id,
+        candidate_id,
+        root_generation_id,
+        old_images,
+        historical_incremental_images,
+        current_images,
+    )
+    before_base_results = scoped_results["base_before"]
+    after_base_results = scoped_results["base_after"]
+    before_results = [*before_base_results, *scoped_results["historical_before"]]
+    after_results = [
+        *after_base_results,
+        *scoped_results["historical_after"],
+        *scoped_results["current_after"],
+    ]
     before = _prediction_rows(before_results)
     after = _prediction_rows(after_results)
     historical_stems = {path.stem for path in historical_images}
@@ -632,13 +681,7 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
     if len(base_model_ids) != 1:
         raise ValueError("候选代际必须有且只有一个冻结基础模型。")
     base_class_ids = sorted(registry["models_by_id"][base_model_ids[0]]["owns_classes"])
-    root_generation_id = _root_generation_id(registry, candidate_id)
-    if parent_id == root_generation_id and historical_images == old_images:
-        base_predictions = before
-    else:
-        base_predictions = _prediction_rows(
-            _run_engine(_engine(config, metric_registry, root_generation_id), old_images, config)
-        )
+    base_predictions = _prediction_rows(after_base_results)
     base_stems = {path.stem for path in old_images}
     base_ground_truth = _read_ground_truth(old_images)
     base_metrics = evaluate_ap50(
@@ -663,10 +706,12 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
     precisions = []
     for class_id in focus_ids:
         deployment = precision_recall(after_current, current_ground_truth, class_id, thresholds[class_id])
-        positives = {row["image_id"] for row in ground_truth if int(row["class_id"]) == class_id}
-        negatives = {path.stem for path in image_paths if path.stem not in positives}
+        positives = {
+            row["image_id"] for row in current_ground_truth if int(row["class_id"]) == class_id
+        }
+        negatives = {path.stem for path in current_images if path.stem not in positives}
         false_images = {
-            row["image_id"] for row in after
+            row["image_id"] for row in after_current
             if int(row["class_id"]) == class_id and row["image_id"] in negatives
             and float(row["confidence"]) >= thresholds[class_id]
         }
@@ -771,6 +816,11 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
                 "generation_id": current_group["generation_id"],
                 "images": [rel_path(path) for path in current_images],
             },
+        },
+        "inference_scopes": {
+            "base": root_generation_id,
+            "historical_incremental": parent_id,
+            "current_incremental": candidate_id,
         },
         "one_time_lock_record": lock_record,
         "thresholds": {str(key): value for key, value in thresholds.items()},

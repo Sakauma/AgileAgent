@@ -31,6 +31,7 @@ from fair_agent.modules.web_inference import (
 )
 from fair_agent.core.config import inference_backend_options, load_config, resolve_path
 from fair_agent.core.runtime_log import StructuredEventLog, new_trace_id
+from fair_agent.modules.inference_provenance import InferenceSourceRouter, attach_source_decision
 from fair_agent.modules.incremental_workbench import IncrementalBatchStore, TrainingJobManager
 
 
@@ -371,6 +372,13 @@ def request_web_settings(request: Request) -> Dict[str, Any]:
     return dict(getattr(request.app.state, "web_settings", WEB_SETTINGS))
 
 
+def resolve_inference_source(request: Request, task_id: str) -> Dict[str, Any]:
+    source = request.app.state.inference_source_router.resolve(task_id)
+    if source.get("rejected"):
+        raise ValueError("图像未登记到原始数据或已接收的增量数据血缘中。")
+    return source
+
+
 def parse_confidence(value: Any, settings: Mapping[str, Any] | None = None) -> float:
     bounds = dict((settings or WEB_SETTINGS)["confidence"])
     try:
@@ -553,6 +561,7 @@ async def detect(request: Request) -> JSONResponse:
             image, task_id = validate_image_bytes(data, upload.filename or "image", limits)
             decode_ms = (time.perf_counter() - decode_started) * 1000
             confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
+            source = resolve_inference_source(request, task_id)
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         result = await run_in_threadpool(
@@ -561,8 +570,9 @@ async def detect(request: Request) -> JSONResponse:
             upload.filename or "image",
             confidence,
             task_id,
-            "auto",
+            source["incremental_protocol"],
         )
+        attach_source_decision(result, source)
         payload = public_result(result)
         payload.setdefault("timings", {}).update({
             "upload_parse_ms": round(upload_ms, 3),
@@ -608,25 +618,42 @@ async def batch_detect(request: Request) -> Response:
             validated = validate_batch_uploads(rows, limits)
             decode_ms = (time.perf_counter() - decode_started) * 1000
             confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
+            sources = [resolve_inference_source(request, task_id) for _name, _data, _image, task_id in validated]
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         engine_started = time.perf_counter()
-        results = await run_in_threadpool(
-            engine.predict_batch,
-            [(image, filename, task_id) for filename, _data, image, task_id in validated],
-            confidence,
-            "auto",
-        )
+        results: list[Dict[str, Any] | None] = [None] * len(validated)
+        groups: Dict[str | None, list[int]] = {}
+        for index, source in enumerate(sources):
+            groups.setdefault(source["incremental_protocol"], []).append(index)
+        for protocol, indices in groups.items():
+            group_results = await run_in_threadpool(
+                engine.predict_batch,
+                [
+                    (validated[index][2], validated[index][0], validated[index][3])
+                    for index in indices
+                ],
+                confidence,
+                protocol,
+            )
+            if len(group_results) != len(indices):
+                raise RuntimeError("批量推理结果数量与输入不一致。")
+            for index, result in zip(indices, group_results):
+                attach_source_decision(result, sources[index])
+                results[index] = result
+        if any(result is None for result in results):
+            raise RuntimeError("批量推理结果不完整。")
+        completed_results = [result for result in results if result is not None]
         engine_ms = (time.perf_counter() - engine_started) * 1000
-        for result, (_filename, source_bytes, _image, _task_id) in zip(results, validated):
+        for result, (_filename, source_bytes, _image, _task_id) in zip(completed_results, validated):
             result["source_bytes"] = source_bytes
-        total_detections = sum(int(item["detection_count"]) for item in results)
-        total_inference = round(sum(float(item["inference_ms"]) for item in results), 1)
+        total_detections = sum(int(item["detection_count"]) for item in completed_results)
+        total_inference = round(sum(float(item["inference_ms"]) for item in completed_results), 1)
         cache_started = time.perf_counter()
-        batch_id = request.app.state.batch_store.put(results)
+        batch_id = request.app.state.batch_store.put(completed_results)
         cache_ms = (time.perf_counter() - cache_started) * 1000
         public_results = []
-        for index, item in enumerate(results):
+        for index, item in enumerate(completed_results):
             row = {key: value for key, value in item.items() if key not in {"source_bytes", "annotated_png", "task_id"}}
             row["preview_url"] = f"/api/batch/{batch_id}/preview/{index}"
             public_results.append(row)
@@ -635,11 +662,11 @@ async def batch_detect(request: Request) -> Response:
             "inference.batch.completed", component="inference", trace_id=request.state.trace_id,
             duration_ms=system_total, batch_id=batch_id,
             generation_id=(
-                results[0].get("agent", {}).get("decision", {}).get("generation_id", settings["generation_id"])
-                if results else settings["generation_id"]
+                completed_results[0].get("agent", {}).get("decision", {}).get("generation_id", settings["generation_id"])
+                if completed_results else settings["generation_id"]
             ),
             details={
-                "image_count": len(results), "detection_count": total_detections,
+                "image_count": len(completed_results), "detection_count": total_detections,
                 "inference_ms": total_inference, "engine_ms": round(engine_ms, 3),
                 "routing_decisions": [
                     {
@@ -647,14 +674,14 @@ async def batch_detect(request: Request) -> Response:
                         "models_used": item.get("agent", {}).get("models_used", []),
                         "decision": item.get("agent", {}).get("decision", {}),
                     }
-                    for item in results
+                    for item in completed_results
                 ],
             },
         )
         return JSONResponse(
             {
                 "batch_id": batch_id,
-                "image_count": len(results),
+                "image_count": len(completed_results),
                 "detection_count": total_detections,
                 "inference_ms": total_inference,
                 "system_total_ms": system_total,
@@ -876,6 +903,7 @@ def create_app(
     event_log: StructuredEventLog | None = None,
     config: Mapping[str, Any] | None = None,
     runtime_manager: AtomicEngineProvider | None = None,
+    inference_source_router: InferenceSourceRouter | None = None,
 ) -> Starlette:
     effective_config = dict(config or load_config())
     active_runtime = runtime_manager
@@ -928,6 +956,12 @@ def create_app(
     )
     application.state.event_log = logger
     application.state.incremental_store = store
+    routing = settings["routing"]
+    application.state.inference_source_router = inference_source_router or InferenceSourceRouter(
+        settings["incremental_workbench"],
+        enabled=bool(routing["source_aware"]),
+        unknown_policy=str(routing["unknown_source_policy"]),
+    )
     application.state.training_manager = training_manager or TrainingJobManager(
         store, settings["incremental_workbench"], logger, effective_config,
         active_runtime.promote if active_runtime is not None else None,

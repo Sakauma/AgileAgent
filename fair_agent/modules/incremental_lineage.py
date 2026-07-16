@@ -93,9 +93,19 @@ def build_base_lineage(settings: Mapping[str, Any]) -> Dict[str, Any]:
     from fair_agent.modules.incremental_experiment import dataset_snapshot, load_experiment_config
 
     snapshot = dataset_snapshot(load_experiment_config(source), include_lock_content=False)
-    files = [dict(item) for item in snapshot.get("base", {}).get("files", [])]
+    files = [
+        {**dict(item), "source_scope": "base"}
+        for item in snapshot.get("base", {}).get("files", [])
+    ]
     for round_snapshot in snapshot.get("rounds", []):
-        files.extend(dict(item) for item in round_snapshot.get("files", []))
+        files.extend(
+            {
+                **dict(item),
+                "source_scope": "incremental",
+                "round_id": str(round_snapshot["id"]),
+            }
+            for item in round_snapshot.get("files", [])
+        )
     unique_files = {
         (str(item.get("image_sha256")), str(item.get("label_sha256"))): item for item in files
     }
@@ -213,6 +223,9 @@ def freeze_accepted_batch(
             "stem": Path(str(row["image"])).stem,
             "image_sha256": row["image_sha256"],
             "label_sha256": row.get("label_sha256"),
+            "source_scope": "incremental",
+            "generation_id": generation_id,
+            "batch_id": batch_id,
         }
         for row in records
     ]
@@ -221,6 +234,7 @@ def freeze_accepted_batch(
         "catalog_id": generation_id,
         "kind": "accepted_incremental_batch",
         "batch_id": batch_id,
+        "generation_id": generation_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dataset_fingerprint": dataset_fingerprint,
         "files": files,

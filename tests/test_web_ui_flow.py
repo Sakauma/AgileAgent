@@ -63,9 +63,30 @@ class FakeEngine:
         ]
 
 
-def client_with_engine() -> tuple[TestClient, FakeEngine]:
+class IncrementalSourceRouter:
+    def __init__(self, incremental_ids=()) -> None:
+        self.incremental_ids = set(incremental_ids)
+
+    def resolve(self, task_id):
+        incremental = task_id in self.incremental_ids
+        return {
+            "source_scope": "incremental" if incremental else "base",
+            "inference_scope": "incremental" if incremental else "base",
+            "incremental_protocol": "auto" if incremental else None,
+            "known": True,
+            "rejected": False,
+            "reason": "test_incremental" if incremental else "test_base",
+            "generation_id": "generation-1" if incremental else None,
+            "batch_id": "batch-1" if incremental else None,
+        }
+
+
+def client_with_engine(source_router=None) -> tuple[TestClient, FakeEngine]:
     engine = FakeEngine()
-    return TestClient(create_app(engine_provider=lambda: engine)), engine
+    return TestClient(create_app(
+        engine_provider=lambda: engine,
+        inference_source_router=source_router,
+    )), engine
 
 
 def png(color: str = "white") -> bytes:
@@ -182,7 +203,9 @@ def test_single_detection_api_returns_public_json() -> None:
     assert payload["inference_ms"] == 18.2
     assert payload["confidence_threshold"] == 0.21
     assert payload["system_total_ms"] >= 0
-    assert engine.calls == [("sample.png", 0.21, content_task_id(image), "auto")]
+    assert engine.calls == [("sample.png", 0.21, content_task_id(image), None)]
+    assert payload["agent"]["decision"]["source_scope"] == "unknown"
+    assert payload["agent"]["decision"]["inference_scope"] == "base"
 
 
 def test_single_detection_ignores_manual_protocol_and_uses_agent_auto_mode() -> None:
@@ -194,7 +217,7 @@ def test_single_detection_ignores_manual_protocol_and_uses_agent_auto_mode() -> 
         data={"confidence": "0.20", "incremental_protocol": "p02_new_warship"},
     )
     assert response.status_code == 200
-    assert engine.calls == [("sample.png", 0.20, content_task_id(image), "auto")]
+    assert engine.calls == [("sample.png", 0.20, content_task_id(image), None)]
 
 
 def test_single_detection_defaults_to_half_confidence() -> None:
@@ -205,7 +228,24 @@ def test_single_detection_defaults_to_half_confidence() -> None:
     )
     assert response.status_code == 200
     assert engine.calls[0][1] == 0.50
+    assert engine.calls[0][3] is None
+
+
+def test_registered_incremental_input_activates_agent_route() -> None:
+    image = png("navy")
+    task_id = content_task_id(image)
+    client, engine = client_with_engine(IncrementalSourceRouter({task_id}))
+
+    response = client.post(
+        "/api/detect",
+        files={"file": ("incremental.png", image, "image/png")},
+    )
+
+    assert response.status_code == 200
     assert engine.calls[0][3] == "auto"
+    decision = response.json()["agent"]["decision"]
+    assert decision["source_scope"] == "incremental"
+    assert decision["source_generation_id"] == "generation-1"
 
 
 def test_single_detection_rejects_invalid_upload_and_confidence() -> None:
@@ -283,6 +323,26 @@ def test_batch_api_returns_archive_and_summary_headers() -> None:
         assert len([name for name in archive.namelist() if name.startswith("annotated/")]) == 2
         summary = json.loads(archive.read("results.json"))
     assert summary["image_count"] == 2
+
+
+def test_batch_api_groups_base_and_incremental_sources() -> None:
+    base_image = png("white")
+    incremental_image = png("navy")
+    router = IncrementalSourceRouter({content_task_id(incremental_image)})
+    client, engine = client_with_engine(router)
+
+    response = client.post(
+        "/api/batch",
+        files=[
+            ("files", ("base.png", base_image, "image/png")),
+            ("files", ("incremental.png", incremental_image, "image/png")),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert sorted(call[3] or "base" for call in engine.calls) == ["auto", "base"]
+    scopes = [row["agent"]["decision"]["source_scope"] for row in response.json()["results"]]
+    assert scopes == ["base", "incremental"]
 
 
 def test_batch_api_rejects_duplicate_content() -> None:

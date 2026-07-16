@@ -37,6 +37,8 @@ inference:
 routing:
   incremental_enabled: true
   require_acceptance_passed: true
+  source_aware: true
+  unknown_source_policy: base_only
   consensus_iou: 0.30
   fusion_iou: 0.60
   max_specialists_per_image: 4

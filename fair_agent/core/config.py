@@ -51,6 +51,7 @@ KNOWN_SECTION_KEYS = {
         "detection_evidence_weight", "context_evidence_weight",
         "neutral_context_score", "default_routing_prior",
         "parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution", "max_model_workers",
+        "source_aware", "unknown_source_policy",
     },
     "limits": {
         "max_file_bytes", "max_batch_files", "max_batch_bytes", "max_image_pixels",
@@ -282,11 +283,13 @@ def validate_config(
     _number(routing, "max_specialists_per_image", errors, 1)
     _number(routing, "max_model_workers", errors, 1)
     if not all(isinstance(routing.get(key), bool) for key in (
-        "incremental_enabled", "require_acceptance_passed", "preserve_base_class_owners",
+        "incremental_enabled", "require_acceptance_passed", "preserve_base_class_owners", "source_aware",
     )):
         errors.append("routing中的开关必须为布尔值")
     if not all(isinstance(routing.get(key), bool) for key in ("parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution")):
         errors.append("routing中的并行执行开关必须为布尔值")
+    if routing.get("unknown_source_policy") not in {"base_only", "incremental_active", "reject"}:
+        errors.append("routing.unknown_source_policy必须为base_only、incremental_active或reject")
 
     limits = _require_mapping(config, "limits", errors)
     for key in ("max_file_bytes", "max_batch_files", "max_batch_bytes", "max_image_pixels"):
