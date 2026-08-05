@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -13,19 +10,6 @@ from fair_agent.modules.incremental_methods import (
     is_task_shared_key,
     merge_task_vectors,
 )
-
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def _load_comparison_tool():
-    path = ROOT / "tools" / "71_compare_incremental_methods.py"
-    spec = importlib.util.spec_from_file_location("incremental_method_comparison_tool", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
 
 def test_task_vector_merge_uses_reference_and_two_disjoint_deltas() -> None:
     reference = {"model.0.weight": torch.tensor([1.0, 2.0])}
@@ -99,46 +83,3 @@ def test_yolo_class_output_and_shared_key_detection() -> None:
     assert not is_class_output_key("model.23.cv3.2.1.weight")
     assert is_task_shared_key("model.10.cv1.conv.weight", ("model.23",))
     assert not is_task_shared_key("model.23.cv2.0.0.weight", ("model.23",))
-
-
-def test_comparison_contract_rejects_different_incremental_protocols() -> None:
-    tool = _load_comparison_tool()
-    config = {
-        "paths": {"shared_base_checkpoint": "base.pt"},
-        "methods": {"duet_yolo11s": {}, "yolo_iod_lite": {}},
-        "protocols": [
-            {
-                "adaptation_mode": "duet_yolo11s",
-                "base_classes": ["a", "b", "c"],
-                "new_class": "d",
-                "new_global_id": 3,
-                "base_local_to_global": {0: 0, 1: 1, 2: 2},
-                "expected_incremental_counts": {"train": 10},
-                "preferred_device": "1",
-            },
-            {
-                "adaptation_mode": "yolo_iod_lite",
-                "base_classes": ["a", "b", "c"],
-                "new_class": "different",
-                "new_global_id": 4,
-                "base_local_to_global": {0: 0, 1: 1, 2: 2},
-                "expected_incremental_counts": {"train": 10},
-                "preferred_device": "2",
-            },
-        ],
-    }
-
-    result = tool.validate_comparison_config(config)
-
-    assert result["valid"] is False
-    assert any("数据协议" in error for error in result["errors"])
-
-
-def test_repository_comparison_config_uses_same_protocol_and_distinct_gpus() -> None:
-    tool = _load_comparison_tool()
-    config = tool.load_config(ROOT / "configs" / "incremental_method_comparison.yaml")
-
-    result = tool.validate_comparison_config(config)
-
-    assert result["valid"] is True
-    assert result["errors"] == []

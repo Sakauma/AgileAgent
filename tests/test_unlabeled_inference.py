@@ -50,3 +50,29 @@ def test_production_recheck_runs_candidate_on_every_after_image(monkeypatch) -> 
         row["generation_id"] == "generation-candidate"
         for row in results["base_after"]
     )
+
+
+def test_false_activation_uses_the_complete_lock_after_inference() -> None:
+    predictions = [
+        {"image_id": "increment-positive", "class_id": 2, "confidence": 0.9, "xyxy": [0, 0, 10, 10]},
+        {"image_id": "base-negative", "class_id": 2, "confidence": 0.8, "xyxy": [0, 0, 10, 10]},
+    ]
+    ground_truth = [
+        {"image_id": "increment-positive", "class_id": 2, "xyxy": [0, 0, 10, 10]},
+    ]
+
+    metrics = generation_management._class_deployment_metrics(
+        predictions,
+        ground_truth,
+        [Path("base-negative.png"), Path("increment-positive.png")],
+        2,
+        0.5,
+    )
+
+    assert metrics == {
+        "precision": 0.5,
+        "recall": 1.0,
+        "negative_image_count": 1,
+        "false_positive_image_count": 1,
+        "false_activation_rate": 1.0,
+    }

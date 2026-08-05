@@ -37,7 +37,7 @@ KNOWN_TOP_LEVEL = {
     "schema_version", "seed", "runtime", "web", "inference", "routing", "decoding",
     "storage", "ui", "performance", "native_backend", "tensorrt_backend", "model", "assets", "automation",
     "generation", "submission", "blackboard", "detector", "functional_models", "inputs", "modules",
-    "policies", "thresholds", "incremental", "specialist_acceptance", "decision",
+    "policies", "thresholds", "incremental", "decision",
     "logging", "incremental_workbench", "gates", "incremental_guardian",
 }
 KNOWN_SECTION_KEYS = {

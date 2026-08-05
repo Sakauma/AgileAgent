@@ -50,15 +50,14 @@ def render_page(page: str, state: Dict[str, Any], decision: Dict[str, Any]) -> s
         )
     if page == "data":
         dataset = snapshot.get("dataset", {})
-        case_count = state.get("sar_soldier", {}).get("case_bank", {}).get("case_count")
+        audit = state.get("data_audit", {})
         return "\n".join(
             [
-                "数据与诊断",
-                f"图像={dataset.get('image_count')}  目标={dataset.get('object_count')}  SAR soldier 案例={case_count}",
+                "数据概况",
+                f"图像={dataset.get('image_count')}  目标={dataset.get('object_count')}  标签={audit.get('total_labels')}",
                 f"传感器={dataset.get('sensor', {})}",
                 f"场景={dataset.get('scene', {})}",
                 f"类别出现图像={dataset.get('class_presence_images', {})}",
-                f"诊断结论={state.get('sar_soldier', {}).get('reason')}",
             ]
         )
     if page == "incremental":
@@ -82,7 +81,6 @@ def render_page(page: str, state: Dict[str, Any], decision: Dict[str, Any]) -> s
             f"x86 NVIDIA GPU={deployment.get('x86_nvidia_gpu')}",
             f"Ascend 310B={deployment.get('ascend_310b')}",
             "310B 门禁=" + " -> ".join(deployment.get("ascend_gates", [])),
-            f"提交 dry-run={submission.get('dryrun_valid')}  smoke={submission.get('smoke_valid')}",
             f"官方测试集={submission.get('official_test_ready')}  提交格式={submission.get('official_format_confirmed')}",
         ]
     )

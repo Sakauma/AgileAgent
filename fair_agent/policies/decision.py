@@ -36,44 +36,12 @@ def _action(config: Dict[str, Any], name: str, status: str, freshness: str, reas
 
 def build_decision(config: Dict[str, Any], state: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     blockers = set(state.get("current_blockers", []))
-    sar_case_count = int(state.get("sar_soldier", {}).get("case_bank", {}).get("case_count") or 0)
-    sar_specialist_status = state.get("sar_soldier", {}).get("specialist_status")
-    class_focus = context.get("class_focus", "soldier")
-    sensor = context.get("sensor", "sar")
-    scene = context.get("scene", "all")
-
-    case_freshness = state.get("sar_soldier", {}).get("case_bank_freshness", {})
-    case_current = case_freshness.get("freshness") == "current" and sar_case_count > 0
-    sar_focus = sensor == "sar" and class_focus == "soldier"
-    diagnose_status = "completed" if case_current else ("ready" if sar_focus and case_freshness.get("reason") != "missing_inputs" else "blocked")
     incremental = state.get("incremental_learning", {})
-    incremental_freshness_state = incremental.get("freshness", {})
-    incremental_freshness = incremental_freshness_state.get("freshness", "missing")
-    if incremental.get("complete") and incremental_freshness == "current":
-        incremental_status = "completed" if incremental.get("passed") else "blocked"
-    elif incremental_freshness_state.get("reason") == "missing_inputs":
-        incremental_status = "blocked"
-    else:
-        incremental_status = "ready"
 
     candidates = [
         _action(config, "formal_submission", "blocked" if blockers else "ready", "current", "正式推理只提供人工审计命令；当前前置条件尚未全部满足。" if blockers else "正式推理前置条件已满足，但 v1 仍要求人工执行。", 100 if not blockers else 10, sorted(blockers)),
-        _action(config, "diagnose_sar_soldier", diagnose_status, str(case_freshness.get("freshness", "missing")), "SAR soldier 案例库已生成且输入未变化。" if case_current else "SAR soldier 诊断产物缺失或过期，需要重新生成。", 70 if sar_focus else 20),
-        _action(config, "review_incremental_learning", incremental_status, incremental_freshness, "活动增量协议指标已解析并满足验收阈值。" if incremental.get("passed") else "增量指标缺失、过期或未达到阈值，需要重新复核。", 45, list(incremental.get("warnings", []))),
         _action(config, "refresh_blackboard", "completed", "current", "本次决策已基于实时重建的黑板。", 15),
     ]
-    candidates.append({
-        "action": "reject_casebank_specialist", "status": "rejected" if sar_specialist_status == "rejected" else "blocked",
-        "freshness": "current" if sar_specialist_status != "not_run" else "missing",
-        "reason": "专用模型未满足全局、IR soldier 和 SAR soldier 的联合采纳阈值。",
-        "argv": [], "command": "", "handler": None,
-        "required_artifacts": [state.get("sar_soldier", {}).get("specialist", {}).get("metrics_path")],
-        "risk_level": "low", "can_execute": False, "warnings": [], "timeout_seconds": None,
-        "score": 65 if sar_specialist_status == "rejected" else 0,
-    })
-    if scene in {"forest", "urban"} and sensor == "sar" and class_focus == "soldier":
-        candidates[1]["score"] += 10
-        candidates[1]["reason"] += f" 当前场景=`{scene}`，更适合展示定位和置信度错误案例。"
     ranked = sorted(candidates, key=lambda item: item["score"], reverse=True)
     recommended = next((item for item in ranked if item["status"] == "ready" and item.get("can_execute")), None)
     if recommended is None:
@@ -89,7 +57,7 @@ def build_decision(config: Dict[str, Any], state: Dict[str, Any], context: Dict[
         "recommended_action": recommended,
         "candidates": ranked,
         "current_blockers": sorted(blockers),
-        "sar_soldier_evidence": state.get("sar_soldier", {}).get("case_bank", {}),
+        "incremental_evidence": incremental,
     }
 
 
@@ -137,18 +105,16 @@ def render_decision_report(decision: Dict[str, Any]) -> str:
         lines.append(
             f"- `{item['action']}` 状态=`{item['status']}` 新鲜度=`{item.get('freshness')}` 风险=`{item['risk_level']}` 允许执行=`{item.get('can_execute')}` 得分=`{item['score']}`"
         )
-    evidence = decision.get("sar_soldier_evidence", {})
+    evidence = decision.get("incremental_evidence", {})
     lines.extend(
         [
             "",
-            "## SAR Soldier 证据",
+            "## 增量生产证据",
             "",
-            f"- 案例数：`{evidence.get('case_count')}`",
-            f"- 推荐动作分布：`{evidence.get('recommended_action')}`",
-            "",
-            "## 关键结论",
-            "",
-            "案例库专用模型已被记录为 `rejected`：它对 SAR soldier 的提升不足以抵消全局 mAP50 和 IR soldier 的下降，因此主线继续采用统一 YOLO11s。",
+            f"- 协议数：`{len(evidence.get('protocols', []))}`",
+            f"- 合规验证：`{evidence.get('compliance_verified')}`",
+            f"- 当前通过：`{evidence.get('passed')}`",
+            f"- 来源：`{evidence.get('source')}`",
         ]
     )
     return "\n".join(lines) + "\n"

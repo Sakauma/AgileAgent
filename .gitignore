@@ -32,6 +32,8 @@ venv/
 !/splits/dev_val_sar.txt
 !/splits/lock_val_ir.txt
 !/splits/lock_val_sar.txt
+!/splits/lock_val_base_3plus1.txt
+!/splits/lock_val_increment_3plus1.txt
 /runs/
 /reports/
 /final_submission_assets/
@@ -65,16 +67,9 @@ venv/
 !/tools/00_check_dataset.py
 !/tools/01_build_metadata.py
 !/tools/02_split_dataset.py
-!/tools/23_build_no_old_distill_dataset.py
-!/tools/24_run_no_old_distill.py
-!/tools/25_aggregate_no_old_distill.py
-!/tools/27_build_new_class_specialist_dataset.py
 !/tools/42_predict_submission.py
-!/tools/52_build_sar_soldier_case_bank.py
 !/tools/60_train_scene_sensor.py
 !/tools/70_run_strict_3plus1.py
-!/tools/71_compare_incremental_methods.py
-!/tools/72_run_full_yolo_iod.py
 !/tools/80_export_tensorrt_engines.py
 !/tools/81_validate_multibatch_incremental.py
 !/tools/82_run_multibatch_stress_matrix.py
@@ -85,21 +80,12 @@ venv/
 !/configs/incremental/multibatch_small_sample.yaml
 !/configs/agent_pipeline.yaml
 !/configs/base_dataset.yaml
-!/configs/incremental_no_old_distill_yolo11s.yaml
 !/configs/submission_infer_yolo11s_imgsz640.yaml
 !/configs/local_infer_gpu.yaml
 !/configs/scene_sensor_model.yaml
 !/configs/functional_models.yaml
 !/configs/incremental_detection_policy.yaml
 !/configs/strict_class_incremental_3plus1.yaml
-!/configs/clean_class_incremental_v2.yaml
-!/configs/clean_context_warship_v2.yaml
-!/configs/incremental_method_comparison.yaml
-!/configs/full_yolo_iod_warship.yaml
-!/configs/full_yolo_iod_warship_no_cpr.yaml
-!/configs/full_yolo_iod_warship_gpu3.yaml
-!/patches/
-!/patches/yolo_iod_single_class_grad_mask.patch
 
 # Local competition notes are not part of the public source release.
 /*.md

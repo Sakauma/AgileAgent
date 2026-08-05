@@ -10,8 +10,6 @@ BLOCKER_LABELS = {
     "official_test_dir_missing": "官方测试目录不存在",
     "incremental_compliant_threshold_not_met": "增量协议未全部达到门槛",
     "ascend_310b_not_ready": "Ascend 310B 尚未完成验收",
-    "submission_dryrun_missing_or_invalid": "提交 dry-run 缺失或无效",
-    "submission_smoke_missing_or_invalid": "提交 smoke test 缺失或无效",
     "final_weight_hash_not_verified": "冻结权重哈希未通过",
     "inference_weight_not_frozen_or_verified": "推理权重未冻结或未通过哈希校验",
     "functional_models_invalid": "功能模型注册表无效",
@@ -92,8 +90,6 @@ def build_operator_snapshot(state: Dict[str, Any], decision: Dict[str, Any] | No
         "submission": {
             "official_test_ready": bool(submission.get("official_test_ready")),
             "official_format_confirmed": bool(submission.get("official_format_confirmed")),
-            "dryrun_valid": bool(submission.get("dryrun_valid")),
-            "smoke_valid": bool(submission.get("smoke_valid")),
         },
         "deployment": {
             "x86_nvidia_gpu": "ready" if functional.get("all_x86_gpu_ready") else "blocked",

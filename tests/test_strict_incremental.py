@@ -69,39 +69,6 @@ def test_repository_strict_config_has_only_disjoint_aircraft_and_warship_folds()
     assert 'generation_id=settings["generation_id"]' in smoke
 
 
-def test_clean_v2_configs_share_run_id_and_enforce_strict_gates() -> None:
-    detector = load_yaml("configs/clean_class_incremental_v2.yaml")
-    context = load_yaml("configs/clean_context_warship_v2.yaml")
-    assert detector["experiment"]["run_id"] == context["experiment"]["run_id"]
-    assert detector["model"] == "yolo11s.pt"
-    assert detector["adaptation"]["mode"] == "expanded_single_student"
-    assert detector["adaptation"]["student_init"] == "yolo11s.pt"
-    assert detector["adaptation"]["new_class_channel_init"] == "deterministic_random_reset"
-    assert detector["adaptation"]["update_budget"]["max_epochs"] == 30
-    assert detector["student_train"]["epochs"] == 30
-    assert [item["id"] for item in detector["protocols"]] == ["warship-incremental"]
-    assert detector["protocols"][0]["build_unified_student"] is True
-    assert detector["acceptance"]["max_false_activation_rate"] == 0.15
-    assert detector["acceptance"]["min_lock_precision"] == 0.70
-    assert detector["runtime"]["preferred_devices"] == ["1"]
-    assert detector["protocols"][0]["preferred_device"] == "1"
-    assert context["train"]["device"] == "2"
-    assert detector["experiment"]["run_id"] == "clean-ci-v2-warship-r02"
-    assert context["data"]["incremental_train"].endswith("student/splits/train.txt")
-    assert context["acceptance"]["max_old_scene_row_drift"] == 0.000001
-    assert context["data"]["train"].endswith("warship-incremental/base/splits/train.txt")
-    runner = Path("tools/70_run_strict_3plus1.py").read_text(encoding="utf-8")
-    guide = Path("docs/clean-class-incremental-v2.md").read_text(encoding="utf-8")
-    context_runner = Path("tools/60_train_scene_sensor.py").read_text(encoding="utf-8")
-    assert 'parser.add_argument("--check-only"' in runner
-    assert "resolve_device_assignments(config, device_count)" in runner
-    assert '"on_pretrain_routine_end"' in runner
-    assert '"on_train_batch_start"' in runner
-    assert "--check-only" in guide
-    assert 'parser.add_argument("--check-only"' in context_runner
-    assert "doctor --quiet" not in guide
-
-
 def test_strict_dataset_is_disjoint_and_lock_is_deferred(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()

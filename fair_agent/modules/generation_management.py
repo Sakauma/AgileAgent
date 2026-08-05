@@ -359,6 +359,17 @@ def _candidate_lock(generation: Mapping[str, Any]) -> tuple[list[Path], Dict[int
     lock = generation.get("evaluation_lock")
     if not isinstance(lock, Mapping):
         return [], {}
+    mapping = {int(key): int(value) for key, value in lock.get("local_to_global", {}).items()}
+    if lock.get("split"):
+        split = resolve_path(lock["split"])
+        images = [
+            resolve_path(line.strip())
+            for line in split.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if not images or any(not path.is_file() for path in images):
+            raise FileNotFoundError("代际复核split为空或包含缺失图像。")
+        return images, mapping
     manifest_path = resolve_path(lock["manifest"])
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     root = manifest_path.parent
@@ -369,7 +380,37 @@ def _candidate_lock(generation: Mapping[str, Any]) -> tuple[list[Path], Dict[int
         if match is None:
             raise FileNotFoundError(f"封存lock图像不存在：{stem}")
         images.append(match)
-    return images, {int(key): int(value) for key, value in lock.get("local_to_global", {}).items()}
+    return images, mapping
+
+
+def _class_deployment_metrics(
+    predictions: Sequence[Mapping[str, Any]],
+    ground_truth: Sequence[Mapping[str, Any]],
+    images: Sequence[Path],
+    class_id: int,
+    threshold: float,
+) -> Dict[str, Any]:
+    deployment = precision_recall(predictions, ground_truth, class_id, threshold)
+    positives = {
+        str(row["image_id"])
+        for row in ground_truth
+        if int(row["class_id"]) == class_id
+    }
+    negatives = {path.stem for path in images} - positives
+    false_images = {
+        str(row["image_id"])
+        for row in predictions
+        if int(row["class_id"]) == class_id
+        and str(row["image_id"]) in negatives
+        and float(row["confidence"]) >= threshold
+    }
+    return {
+        "precision": float(deployment["precision"]),
+        "recall": float(deployment["recall"]),
+        "negative_image_count": len(negatives),
+        "false_positive_image_count": len(false_images),
+        "false_activation_rate": len(false_images) / len(negatives) if negatives else 0.0,
+    }
 
 
 def _generation_model_ids(generation: Mapping[str, Any]) -> list[str]:
@@ -705,21 +746,16 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
     false_activation_rates = []
     precisions = []
     for class_id in focus_ids:
-        deployment = precision_recall(after_current, current_ground_truth, class_id, thresholds[class_id])
-        positives = {
-            row["image_id"] for row in current_ground_truth if int(row["class_id"]) == class_id
-        }
-        negatives = {path.stem for path in current_images if path.stem not in positives}
-        false_images = {
-            row["image_id"] for row in after_current
-            if int(row["class_id"]) == class_id and row["image_id"] in negatives
-            and float(row["confidence"]) >= thresholds[class_id]
-        }
-        false_rate = len(false_images) / len(negatives) if negatives else 0.0
+        deployment = _class_deployment_metrics(
+            after, ground_truth, image_paths, class_id, thresholds[class_id]
+        )
+        false_rate = float(deployment["false_activation_rate"])
         class_map = evaluate_ap50(after_current, current_ground_truth, [class_id])["map50"]
         per_class[str(class_id)] = {
             "map50": float(class_map), "precision": float(deployment["precision"]),
             "recall": float(deployment["recall"]), "false_activation_rate": float(false_rate),
+            "negative_image_count": int(deployment["negative_image_count"]),
+            "false_positive_image_count": int(deployment["false_positive_image_count"]),
             "threshold": thresholds[class_id],
         }
         false_activation_rates.append(false_rate)
@@ -730,6 +766,8 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
     }
     metrics = {
         "base_map50": float(base_metrics["map50"]),
+        "old_map50_before": float(retention["old_map50_before"]),
+        "old_map50_after": float(retention["old_map50_after"]),
         "historical_old_map50_after": float(historical_after_metrics["map50"]),
         "new_map50": float(new_metrics["map50"]),
         "krr": float(retention["krr"]),

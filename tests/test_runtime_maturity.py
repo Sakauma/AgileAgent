@@ -11,7 +11,6 @@ from fair_agent import cli
 from fair_agent.core.audit import make_run_dir
 from fair_agent.core.blackboard import build_blackboard
 from fair_agent.core.config import load_config
-from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
 from fair_agent.modules.release_verification import _validate_model_manifest, verify_release
 from fair_agent.policies.decision import build_decision
@@ -82,12 +81,13 @@ def test_run_directories_are_unique(tmp_path: Path) -> None:
     assert second.is_dir()
 
 
-def test_decision_commands_use_the_active_python() -> None:
+def test_decision_actions_are_fully_declared() -> None:
     config = load_config()
     state = build_blackboard(config)
     decision = build_decision(config, state, {"sensor": "sar", "scene": "urban", "class_focus": "soldier"})
+    assert decision["candidates"]
+    assert all(item.get("argv") or item.get("handler") for item in decision["candidates"])
     commands = [item for item in decision["candidates"] if item.get("argv")]
-    assert commands
     for item in commands:
         assert item["argv"][0] == sys.executable
         assert all(value != "None" for value in item["argv"])
@@ -186,7 +186,7 @@ def test_pipeline_execute_advances_until_no_action(monkeypatch, tmp_path: Path) 
     assert [step["name"] for step in plan["steps"]] == executed
 
 
-def test_blackboard_uses_demo_evidence_without_private_reports(tmp_path: Path) -> None:
+def test_blackboard_uses_demo_dataset_without_legacy_reports(tmp_path: Path) -> None:
     config = deepcopy(load_config())
     missing_root = tmp_path / "missing"
     for key, value in list(config["inputs"].items()):
@@ -194,35 +194,14 @@ def test_blackboard_uses_demo_evidence_without_private_reports(tmp_path: Path) -
             config["inputs"][key] = [str(missing_root / f"{index}.missing") for index, _ in enumerate(value)]
         else:
             config["inputs"][key] = str(missing_root / f"{key}.missing")
-    config["decision"]["actions"]["diagnose_sar_soldier"]["inputs"] = [str(missing_root / "diagnose.csv")]
-    config["decision"]["actions"]["diagnose_sar_soldier"]["outputs"] = [str(missing_root / "case.csv")]
-    config["decision"]["actions"]["review_incremental_learning"]["inputs"] = [str(missing_root / "summary.csv")]
-    config["decision"]["actions"]["review_incremental_learning"]["outputs"] = [str(missing_root / "summary.md")]
     state = build_blackboard(config)
-    assert state["evidence"]["mode"] == "demo"
+    assert state["evidence"]["mode"] == "mixed"
     assert state["dataset"]["image_count"] == 750
-    assert state["sar_soldier"]["case_bank"]["case_count"] == 53
     assert len(state["incremental_learning"]["protocols"]) == 1
     assert state["incremental_learning"]["protocols"][0]["protocol"] == "incremental_detector"
-    assert state["submission"]["dryrun_valid"] is True
-    assert state["submission"]["smoke_valid"] is True
-
-
-def test_incremental_review_writes_declared_output(tmp_path: Path) -> None:
-    output = tmp_path / "summary.md"
-    config = {"decision": {"actions": {"review_incremental_learning": {"outputs": [str(output)]}}}}
-    summary = {
-        "complete": True,
-        "passed": False,
-        "compliance_verified": True,
-        "acceptance": {"min_new_class_map50": 0.6, "min_krr": 0.95},
-        "protocols": [{"protocol": "p01", "new_class": "small_aircraft", "new_map50": 0.55, "krr": 1.0, "old_raw_image_count": 0, "compliant": True, "passed": False}],
-        "warnings": [],
-    }
-    assert write_incremental_review(config, summary) == output
-    text = output.read_text(encoding="utf-8")
-    assert "合规增量学习复核报告" in text
-    assert "p01" in text
+    assert state["incremental_learning"]["source"] == "models/generations.json"
+    assert "dryrun_valid" not in state["submission"]
+    assert "smoke_valid" not in state["submission"]
 
 
 def test_static_release_verification_passes() -> None:
@@ -295,7 +274,7 @@ def test_cli_frontend_navigates_all_operator_pages(monkeypatch) -> None:
     rendered = "\n".join(output)
     assert "灵动Agent终端工作台" in rendered
     assert "功能模型" in rendered
-    assert "数据与诊断" in rendered
+    assert "数据概况" in rendered
     assert "增量目标检测" in rendered
     assert "部署与提交" in rendered
     assert "终端工作台已退出" in rendered

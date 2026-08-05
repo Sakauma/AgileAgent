@@ -16,48 +16,5 @@
     "missing_images": 0,
     "missing_labels": 0,
     "invalid_errors": 0
-  },
-  "sar_soldier": {
-    "case_bank": {
-      "case_count": 53,
-      "scene": {"forest": 18, "sea": 16, "urban": 19},
-      "status": {"FN_NO_CANDIDATE": 1, "FP": 16, "LOW_CONF": 7, "LOW_IOU": 4, "OK": 16, "TP": 4, "TP_LOW_QUALITY": 27},
-      "recommended_action": {"add_hard_positive_replay": 1, "confidence_stabilization": 1, "false_positive_review": 9, "forest_confidence_stabilization": 5, "localization_quality_review": 15, "localization_replay": 4, "monitor_only": 18},
-      "top_cases": [
-        {"rank": "1", "image_path": "redacted_case_001", "scene": "urban", "statuses": "FP+LOW_IOU+TP_LOW_QUALITY", "priority": "285", "recommended_action": "localization_replay"},
-        {"rank": "2", "image_path": "redacted_case_002", "scene": "forest", "statuses": "FP+LOW_CONF+LOW_IOU", "priority": "175", "recommended_action": "localization_replay"},
-        {"rank": "3", "image_path": "redacted_case_003", "scene": "urban", "statuses": "FP+LOW_IOU+TP_LOW_QUALITY", "priority": "135", "recommended_action": "localization_replay"},
-        {"rank": "4", "image_path": "redacted_case_004", "scene": "forest", "statuses": "LOW_CONF", "priority": "120", "recommended_action": "forest_confidence_stabilization"},
-        {"rank": "5", "image_path": "redacted_case_005", "scene": "forest", "statuses": "FN_NO_CANDIDATE", "priority": "100", "recommended_action": "add_hard_positive_replay"}
-      ]
-    },
-    "specialist": {
-      "status": "rejected",
-      "metrics_path": "demo_artifacts/agent_demo_state.json",
-      "deltas": {"lock_all_map50": -0.0209626261, "lock_ir_soldier": -0.0998414888, "lock_sar_soldier": 0.0055337527},
-      "accepted": false
-    },
-    "reason": "案例库专用模型未满足联合采纳阈值，主线继续使用统一 YOLO11s。"
-  },
-  "incremental_learning": {
-    "protocols": [
-      {"protocol": "incremental_detector", "new_class": "warship", "task_type": "incremental_object_detection", "incremental_mode": "class_incremental", "learning_data_scope": "incremental_dataset_only", "learning_scope_verified": true, "new_map50": 0.795, "krr": 1.0, "old_raw_image_count": 0, "compliant": true, "passed": true}
-    ],
-    "complete": true,
-    "passed": true,
-    "source": "demo_artifacts/agent_demo_state.json",
-    "compliance_required": true,
-    "compliance_verified": true,
-    "warnings": [],
-    "acceptance": {"min_new_class_map50": 0.6, "min_krr": 0.95},
-    "task_type": "incremental_object_detection",
-    "primary_mode": "class_incremental",
-    "supported_modes": ["class_incremental", "target_incremental"],
-    "learning_data_scope": "incremental_dataset_only",
-    "freshness": {"freshness": "current", "reason": "demo_snapshot", "missing": []}
-  },
-  "submission": {
-    "dryrun": {"image_count": 95, "prediction_count": 3502, "model_sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c", "source": "redacted_lock_val"},
-    "smoke": {"image_count": 5, "prediction_count": 281, "model_sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c", "source": "redacted_lock_sar"}
   }
 }

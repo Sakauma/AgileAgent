@@ -205,13 +205,6 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
     for forbidden in ["datasets_r1_base_train", ".png", ".jpg", "visualizations/"]:
         if forbidden in demo_text:
             errors.append(f"demo_contains_private_reference:{forbidden}")
-    manifest_metrics = {item.get("protocol"): float(item.get("new_map50") or 0) for item in incremental_models}
-    demo_metrics = {item.get("protocol"): float(item.get("new_map50") or 0) for item in demo.get("incremental_learning", {}).get("protocols", [])}
-    if set(manifest_metrics) != set(demo_metrics) or any(
-        abs(manifest_metrics[name] - demo_metrics[name]) > 1e-4 for name in manifest_metrics
-    ):
-        errors.append("demo_incremental_metrics_do_not_match_manifest")
-
     start_script = ROOT / "scripts" / "start_agent.sh"
     start_text = start_script.read_text(encoding="utf-8") if start_script.exists() else ""
     for forbidden in ["pip install", "-m venv", "torch==", "bootstrap_x86.sh\nexec"]:

@@ -135,7 +135,7 @@ performance:
 generation:
   registry: models/generations.json
   runtime_registry: data/generation_registry/runtime.json
-  recheck_lock_split: splits/lock_val.txt
+  recheck_lock_split: splits/lock_val_base_3plus1.txt
   report_root: reports/generation_rechecks
   candidate_id: incremental_detection_generation
   calibrated_threshold: 0.63
@@ -276,10 +276,10 @@ automation:
   run_root: reports/agent_runs
   forbid_overwrite_fixed_reports: true
   allowed_risk_levels: [low]
-  allowed_actions: [refresh_blackboard, diagnose_sar_soldier, review_incremental_learning]
+  allowed_actions: [refresh_blackboard]
   max_steps_per_run: 8
   default_timeout_seconds: 300
-  allowed_output_roots: [reports/agent_runs, reports/agent_blackboard, reports/incremental_no_old_distill, runs/submission]
+  allowed_output_roots: [reports/agent_runs, reports/agent_blackboard, runs/submission]
 
 submission:
   official_test_ready: false
@@ -310,17 +310,6 @@ functional_models:
 inputs:
   data_audit: reports/data_audit_summary.json
   metadata: reports/metadata.csv
-  final_candidate_card: reports/final_candidate_card.md
-  sar_soldier_summary: reports/sar_soldier_error_v2_summary.md
-  sar_soldier_case_bank: reports/agent_blackboard/sar_soldier_case_bank.csv
-  agent_sar_soldier_casebank_split: splits/agent_sar_soldier_casebank_train.txt
-  agent_sar_soldier_casebank_config: configs/agent_sar_soldier_casebank_yolo11s.yaml
-  agent_sar_soldier_casebank_summary: reports/agent_sar_soldier_casebank_summary.md
-  incremental_replay_report: reports/incremental_learning/replay_incremental_report.md
-  incremental_compliant_metrics: reports/incremental_no_old_distill/summary.csv
-  specialist_metrics: reports/agent_sar_soldier_casebank/sar_soldier_replay_metrics.csv
-  submission_smoke_manifest: runs/submission/smoke_yolo11s_imgsz640_lock_sar_20260710/manifest.json
-  submission_dryrun_manifest: runs/submission/dryrun_yolo11s_imgsz640_lock_val_20260710/manifest.json
 
 modules:
   - name: data_gate
@@ -329,20 +318,15 @@ modules:
     inputs: [reports/data_audit_summary.json, reports/metadata.csv]
     outputs: [reports/data_audit_report.md, reports/metadata.csv]
   - name: detector
-    status: frozen_candidate
+    status: active_production
     owner: model
-    inputs: [configs/submission_infer_yolo11s_imgsz640.yaml]
-    outputs: [runs/submission/dryrun_yolo11s_imgsz640_lock_val_20260710]
-  - name: error_analyzer
-    status: ready
-    owner: model
-    inputs: [reports/sar_soldier_error_v2_summary.md]
-    outputs: [reports/error_analysis_sar_soldier_v2]
+    inputs: [models/generations.json]
+    outputs: [models/production/incremental_detection]
   - name: incremental_manager
-    status: ready_for_protocol_extension
+    status: active_production
     owner: incremental
-    inputs: [configs/incremental_yolo11s.yaml, incremental_protocols]
-    outputs: [reports/incremental_learning]
+    inputs: [models/generations.json, configs/incremental_detection_policy.yaml]
+    outputs: [models/production/incremental_detection]
   - name: report_writer
     status: ready
     owner: documentation
@@ -350,9 +334,8 @@ modules:
     outputs: [reports/agent_blackboard]
 
 policies:
-  primary_model: use_unified_yolo11s_imgsz640
+  primary_model: use_incremental_detection_generation
   submission_format: pending_official_confirmation
-  sar_soldier_focus: tiny_object_localization_and_confidence
   incremental_learning: mode_aware_incremental_data_only
   end_device: paused_until_ascend_board_ready
 
@@ -372,11 +355,6 @@ incremental:
   expected_protocols: [incremental_detector]
   require_compliant_no_old_data: true
 
-specialist_acceptance:
-  min_lock_all_delta: 0.0
-  min_lock_ir_soldier_delta: -0.01
-  min_lock_sar_soldier_delta: 0.01
-
 decision:
   default_context:
     sensor: sar
@@ -390,26 +368,11 @@ decision:
   actions:
     formal_submission:
       module: detector
-      argv: ["{python}", tools/42_predict_submission.py, --config, configs/submission_infer_yolo11s_imgsz640.yaml]
+      handler: formal_submission_pending_official_spec
       risk_level: high
       timeout_seconds: 0
-      inputs: [models/base/yolo11s_ir_sar_imgsz640.pt, configs/submission_infer_yolo11s_imgsz640.yaml]
+      inputs: [models/generations.json, models/production/incremental_detection]
       outputs: [runs/submission]
-    diagnose_sar_soldier:
-      module: error_analyzer
-      argv: ["{python}", tools/52_build_sar_soldier_case_bank.py]
-      risk_level: low
-      timeout_seconds: 300
-      inputs: [reports/error_analysis_sar_soldier_v2/image_error_cases.csv]
-      outputs: [reports/agent_blackboard/sar_soldier_case_bank.csv]
-    review_incremental_learning:
-      module: incremental_manager
-      handler: review_incremental_learning
-      risk_level: low
-      timeout_seconds: 60
-      inputs:
-        - reports/incremental_no_old_distill/summary.csv
-      outputs: [reports/incremental_no_old_distill/summary.md]
     refresh_blackboard:
       module: report_writer
       handler: refresh_blackboard

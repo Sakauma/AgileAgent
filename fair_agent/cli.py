@@ -19,10 +19,8 @@ from fair_agent.core.config import ROOT, configured_python, get_key, load_config
 from fair_agent.core.hashes import sha256_file
 from fair_agent.core.runtime_log import StructuredEventLog, event_log_from_config
 from fair_agent.executors.local import append_log, run_command
-from fair_agent.modules.incremental_review import write_incremental_review
 from fair_agent.modules.functional_models import validate_functional_models
 from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
-from fair_agent.modules.status import parse_incremental
 from fair_agent.policies.decision import build_decision, write_decision
 from fair_agent.ui.console import run_console_frontend
 
@@ -406,15 +404,6 @@ def execute_low_risk_action(config: Dict[str, Any], action: Dict[str, Any], log_
         write_blackboard(config, build_blackboard(config))
         append_log(log_path, {"event": "finish", "name": name, "returncode": 0, "time": datetime.now().isoformat(timespec="seconds")})
         return {"action": name, "returncode": 0, "status": "completed"}
-    if handler == "review_incremental_learning":
-        append_log(log_path, {"event": "start", "name": name, "time": datetime.now().isoformat(timespec="seconds")})
-        summary = parse_incremental(config)
-        code = 0 if summary.get("complete") else 1
-        output = None
-        if code == 0:
-            output = write_incremental_review(config, summary)
-        append_log(log_path, {"event": "finish", "name": name, "returncode": code, "summary": summary, "time": datetime.now().isoformat(timespec="seconds")})
-        return {"action": name, "returncode": code, "status": "completed" if code == 0 else "failed", "output": rel_path(output) if output else None}
     argv = [str(value) for value in action.get("argv", [])]
     if not argv:
         return {"action": name, "returncode": 2, "status": "missing_command"}
