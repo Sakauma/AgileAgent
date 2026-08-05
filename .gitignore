@@ -91,5 +91,3 @@ venv/
 /*.md
 !/README.md
 /docs/
-!/docs/
-!/docs/*.md

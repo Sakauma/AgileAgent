@@ -47,12 +47,14 @@ flowchart LR
 
 截至 `2026-08-05`，精简后的公开仓库已重新完成完整 Pytest、静态发布校验、CLI 环境诊断、舰船 3+1 数据审计和 GPU 冒烟测试。现役三类基础模型、增量检测器、场景模型、Web/CLI、固定划分和 production 类别映射均保持可用；删除内容只包括已退出主线的实验实现、重复报告入口和失效配置。
 
-## 仓库导航
+## 阅读导航
 
-- [完整文件索引](docs/repository-file-index.md)：列出公开仓库全部文件及职责。
-- [Agent 操作指南](docs/agent-operations.md)：Web、CLI、检测和运维入口。
-- [增量学习工作台](docs/incremental-workbench.md)：上传、训练、校准、复核与上线流程。
-- [TensorRT 部署指南](docs/tensorrt-deployment.md)：目标设备导出与验收。
+- [快速开始](#快速开始)：环境、首次配置、一键启动和可选 TensorRT 加速。
+- [使用方式](#使用方式)：Web 与 CLI 检测入口。
+- [增量学习工作台](#增量学习工作台)：上传、训练、校准、复核与上线流程。
+- [配置管理](#配置管理)：YAML 参数和 CLI 覆盖。
+- [可复现实验](#可复现实验)：舰船 3+1、多批次和压力回归。
+- [开发与验收](#开发与验收)：测试、发布检查和 GPU 冒烟命令。
 
 ## 快速开始
 
@@ -86,7 +88,7 @@ cp configs/agent_pipeline.yaml "$PROFILE"
 "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" tensorrt validate --activate
 ```
 
-脚本会完成环境核对、模型导出、SHA256 登记和完整性校验；第二条命令会完成 CUDA/TensorRT 精度对齐与 API 性能门禁，全部通过后才原子启用。生成文件保存在 `runs/engines/`，不会进入版本控制。完整说明见 [TensorRT 部署指南](docs/tensorrt-deployment.md)。
+脚本会完成环境核对、模型导出、SHA256 登记和完整性校验；第二条命令会完成 CUDA/TensorRT 精度对齐与 API 性能门禁，全部通过后才原子启用。生成文件保存在 `runs/engines/`，不会进入版本控制。
 
 需要 INT8 PTQ 时，在设备配置中设置 `tensorrt_backend.precision: int8`，然后使用一条命令完成代表样本选择、校准、导出和门禁：
 
@@ -251,7 +253,7 @@ agile-agent incremental-data train --batch-id BATCH_ID
 agile-agent incremental-data jobs --batch-id BATCH_ID
 ```
 
-完整数据约定和状态流转见 [增量学习工作台](docs/incremental-workbench.md)。
+Web 与 CLI 使用同一状态机和配置，批次状态、任务日志及最终门禁结论可以通过对应的 `status` 和 `logs` 命令查询。
 
 ## 模型与指标
 
@@ -290,7 +292,7 @@ agile-agent experiment run --config configs/incremental/warship_3plus1.yaml
 agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run_id>/run_manifest.json
 ```
 
-增量阶段禁止读取旧类原始图像、旧类标签和旧数据缓存特征。lock-val 只在权重与阈值冻结后解封。逐文件哈希、状态机和复现边界见 [舰船 3+1 可复现实验](docs/warship-3plus1-reproducibility.md)。
+增量阶段禁止读取旧类原始图像、旧类标签和旧数据缓存特征。lock-val 只在权重与阈值冻结后解封。每次运行的配置快照、状态机、逐图预测和复现边界均保存在独立实验目录。
 
 四批次小样本连续验证使用独立注册表和运行目录，不修改当前 production：
 
@@ -299,7 +301,7 @@ python tools/81_validate_multibatch_incremental.py \
   --config configs/incremental/multibatch_small_sample.yaml
 ```
 
-实验依次执行一次类别增量和三次目标增量。每轮均冻结父权重、累计已接收 lock、重新计算 KRR。活动代际对同一类别只加载最新 owner，历史专家保留在父代际用于回滚，避免推理耗时随同类更新次数线性增长。原始实验后两轮曾因误设的组合 mAP50 硬门禁而未晋升；按赛题满分档重新判分后四轮均通过官方增量指标，详情见 [四批次小样本验证](docs/multibatch-small-sample-validation.md)。
+实验依次执行一次类别增量和三次目标增量。每轮均冻结父权重、累计已接收 lock、重新计算 KRR。活动代际对同一类别只加载最新 owner，历史专家保留在父代际用于回滚，避免推理耗时随同类更新次数线性增长。原始实验后两轮曾因误设的组合 mAP50 硬门禁而未晋升；按赛题满分档重新判分后四轮均通过官方增量指标。
 
 更严格的三组压力测试通过单一矩阵 YAML 顺序执行：
 
@@ -308,7 +310,7 @@ python tools/82_run_multibatch_stress_matrix.py \
   --config configs/incremental/multibatch_stress_matrix.yaml
 ```
 
-矩阵包含极小均衡批次、IR/SAR 偏移和逐轮递减三类场景。RTX 4060 上共 21 轮全部通过赛题满分档硬门禁并连续晋升，最小训练批次为 3 张；详见 [多批次小样本压力测试](docs/multibatch-stress-matrix.md)。
+矩阵包含极小均衡批次、IR/SAR 偏移和逐轮递减三类场景。RTX 4060 上共 21 轮全部通过赛题满分档硬门禁并连续晋升，最小训练批次为 3 张。
 
 ## 开发与验收
 
@@ -340,21 +342,9 @@ models/             # 冻结权重、注册表和指标
 scripts/            # 安装、启动和发布验收
 tools/              # 数据处理、训练和导出入口
 tests/              # 自动化测试
-docs/               # 设计、操作和复现实验文档
 ```
 
 竞赛图像、标签、运行报告、预测结果、设备部署产物、构建缓存和本地凭据均被 Git 忽略。固定数据划分清单由 Git 跟踪，用于在各设备上复现同一 train/dev/lock 边界。TensorRT 导出与校验代码保留在仓库中，生成的 engine 不进入版本控制。
-
-## 文档
-
-- [Agent 操作手册](docs/agent-operations.md)
-- [三种功能模型与协同链路](docs/functional-models.md)
-- [合规增量学习规则](docs/compliant-incremental-learning.md)
-- [增量学习工作台](docs/incremental-workbench.md)
-- [多批次小样本压力测试](docs/multibatch-stress-matrix.md)
-- [全流程审计日志](docs/agent-audit-logging.md)
-- [TensorRT 部署指南](docs/tensorrt-deployment.md)
-- [舰船 3+1 可复现实验](docs/warship-3plus1-reproducibility.md)
 
 ## 已知限制
 

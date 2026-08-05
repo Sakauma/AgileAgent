@@ -1,6 +1,6 @@
 # TensorRT 原生后端
 
-此目录定义灵动Agent的C++/CUDA后端ABI。构建需要CUDA、TensorRT、OpenCV开发包以及与部署GPU匹配的FP16 engine：
+此目录定义灵动Agent的C++/CUDA后端ABI。构建需要CUDA、TensorRT、OpenCV开发包以及与部署GPU匹配、已通过精度验收的FP16、INT8或混合精度engine：
 
 ```bash
 cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
