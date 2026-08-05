@@ -85,7 +85,7 @@ def _predict(
         for path in paths[offset: offset + batch_size]:
             with Image.open(path) as source:
                 source.load()
-                items.append((source.convert("RGB"), path.name, None))
+                items.append((source.convert("RGB"), path.name))
         results.extend(engine.predict_batch(items, float(config["inference"]["confidence_min"]), "auto"))
     mean_ms = sum(float(item["inference_ms"]) for item in results) / max(1, len(results))
     return _rows(results), mean_ms

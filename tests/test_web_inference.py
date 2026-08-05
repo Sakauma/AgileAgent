@@ -13,7 +13,6 @@ from fair_agent.modules.web_inference import (
     annotate_records,
     box_iou,
     build_batch_zip,
-    content_task_id,
     image_png_bytes,
     result_records,
     summarize_records,
@@ -27,21 +26,12 @@ from fair_agent.modules.web_inference import (
     suppress_specialist_conflicts,
     arbitrate_cross_class_conflicts,
     yolo_inference_ms,
-    validate_batch_uploads,
-    validate_image_bytes,
+    decode_batch_images,
+    decode_image_bytes,
     WebInferenceEngine,
 )
 
 
-TEST_LIMITS = {
-    "max_file_bytes": 20 * 1024 * 1024,
-    "max_batch_files": 20,
-    "max_batch_bytes": 200 * 1024 * 1024,
-    "max_image_pixels": 25_000_000,
-    "allowed_image_formats": ["PNG", "JPEG", "BMP", "TIFF"],
-    "decode_backend": "pillow",
-    "decode_workers": 1,
-}
 ROUTING_ARGS = (4, 0.70, 0.30, 0.50, 0.50)
 
 
@@ -146,64 +136,36 @@ def test_batch_zip_contains_images_and_json() -> None:
     assert "annotated_image" not in metadata["results"][0]
 
 
-def test_upload_validation_uses_content_hash_not_filename() -> None:
+def test_upload_validation_decodes_without_content_identity() -> None:
     first = image_png_bytes(Image.new("RGB", (16, 16), "white"))
     second = image_png_bytes(Image.new("RGB", (16, 16), "black"))
-    image, task_id = validate_image_bytes(first, "same.png", TEST_LIMITS)
-    assert image.size == (16, 16)
-    assert task_id == content_task_id(first)
-    assert task_id != content_task_id(second)
+    assert decode_image_bytes(first, "same.png", "pillow").size == (16, 16)
+    assert decode_image_bytes(second, "same.png", "pillow").size == (16, 16)
 
 
-def test_upload_validation_rejects_size_pixels_and_duplicate_batch() -> None:
+def test_image_decode_only_rejects_unreadable_content() -> None:
     data = image_png_bytes(Image.new("RGB", (16, 16), "white"))
     try:
-        validate_image_bytes(data, "large.png", {**TEST_LIMITS, "max_file_bytes": 10})
+        decode_image_bytes(b"not-an-image", "invalid.png", "pillow")
     except ValueError as exc:
-        assert "超过" in str(exc)
+        assert "无法读取图像" in str(exc)
     else:
-        raise AssertionError("oversized upload was accepted")
-    try:
-        validate_image_bytes(data, "pixels.png", {**TEST_LIMITS, "max_image_pixels": 100})
-    except ValueError as exc:
-        assert "像素超过限制" in str(exc)
-    else:
-        raise AssertionError("oversized image was accepted")
-    try:
-        validate_batch_uploads([("a.png", data), ("copy.png", data)], TEST_LIMITS)
-    except ValueError as exc:
-        assert "重复图像" in str(exc)
-    else:
-        raise AssertionError("duplicate image was accepted")
-    try:
-        validate_batch_uploads(
-            [(f"{index}.png", data + bytes([index])) for index in range(TEST_LIMITS["max_batch_files"] + 1)],
-            TEST_LIMITS,
-        )
-    except ValueError as exc:
-        assert "最多处理" in str(exc)
-    else:
-        raise AssertionError("oversized batch was accepted")
+        raise AssertionError("unreadable image was accepted")
+    assert len(decode_batch_images([("a.png", data), ("copy.png", data)], "pillow")) == 2
 
 
-def test_parallel_opencv_decode_preserves_order_and_rejects_duplicates() -> None:
-    limits = {**TEST_LIMITS, "decode_backend": "opencv", "decode_workers": 4}
+def test_parallel_opencv_decode_preserves_order_without_identity_routing() -> None:
     colors = ["red", "green", "blue", "white"]
     rows = [
         (f"{index}.png", image_png_bytes(Image.new("RGB", (16, 16), color)))
         for index, color in enumerate(colors)
     ]
-    validated = validate_batch_uploads(rows, limits)
+    validated = decode_batch_images(rows, "opencv", 4)
     assert [item[0] for item in validated] == [row[0] for row in rows]
     assert [item[2].getpixel((0, 0)) for item in validated] == [
         Image.new("RGB", (1, 1), color).getpixel((0, 0)) for color in colors
     ]
-    try:
-        validate_batch_uploads([rows[0], ("duplicate.png", rows[0][1])], limits)
-    except ValueError as exc:
-        assert "重复图像" in str(exc)
-    else:
-        raise AssertionError("parallel decoder accepted duplicate content")
+    assert len(decode_batch_images([rows[0], ("duplicate.png", rows[0][1])], "opencv", 4)) == 2
 
 
 def test_fair_inference_queue_serializes_concurrent_work() -> None:
@@ -237,11 +199,11 @@ def test_fair_inference_queue_serializes_concurrent_work() -> None:
     assert queue.status() == {"waiting": 0, "active": False, "completed": 4}
 
 
-def test_batch_zip_uses_index_and_task_hash_for_duplicate_stems() -> None:
+def test_batch_zip_uses_index_for_duplicate_stems() -> None:
     annotated = image_png_bytes(Image.new("RGB", (8, 8), "white"))
     items = [
-        {"filename": "same.jpg", "task_id": "a" * 64, "annotated_png": annotated},
-        {"filename": "same.png", "task_id": "b" * 64, "annotated_png": annotated},
+        {"filename": "same.jpg", "annotated_png": annotated},
+        {"filename": "same.png", "annotated_png": annotated},
     ]
     with zipfile.ZipFile(io.BytesIO(build_batch_zip(items))) as archive:
         names = archive.namelist()
@@ -459,7 +421,7 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     }
     engine.queue = FairInferenceQueue()
 
-    result = engine.predict(Image.new("RGB", (100, 100)), "sample.png", 0.5, "task", "auto")
+    result = engine.predict(Image.new("RGB", (100, 100)), "sample.png", 0.5, "auto")
     assert result["class_counts"] == {"new_vehicle": 1, "warship": 2}
     assert result["agent"]["decision"]["executed_protocols"] == ["p05_new_vehicle", "p02_warship"]
     assert result["agent"]["decision"]["fusion_summary"]["suppressed_count"] == 1

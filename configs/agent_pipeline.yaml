@@ -37,8 +37,6 @@ inference:
 routing:
   incremental_enabled: true
   require_acceptance_passed: true
-  source_aware: true
-  unknown_source_policy: base_only
   consensus_iou: 0.30
   fusion_iou: 0.60
   max_specialists_per_image: 4
@@ -55,14 +53,9 @@ routing:
   parallel_context_batch_execution: true
   max_model_workers: 6
 
-limits:
-  max_file_bytes: 20971520
-  max_batch_files: 20
-  max_batch_bytes: 209715200
-  max_image_pixels: 25000000
-  allowed_image_formats: [PNG, JPEG, BMP, TIFF]
-  decode_backend: opencv
-  decode_workers: 4
+decoding:
+  backend: opencv
+  workers: 4
 
 storage:
   max_items: 4

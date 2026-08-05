@@ -1,9 +1,8 @@
 (() => {
   "use strict";
 
-  const LIMITS = { fileBytes: 0, batchFiles: 0, batchBytes: 0, incrementalBytes: 0 };
   const UI = { historyLimit: 0, resultCacheLimit: 0, healthPollMs: 0, toastDurationMs: 0 };
-  const INCREMENTAL = { previewLimit: 0, logTailLines: 0, pollIntervalMs: 0 };
+  const INCREMENTAL = { maxArchiveBytes: 0, previewLimit: 0, logTailLines: 0, pollIntervalMs: 0 };
   const HISTORY_KEY = "agile-agent-session-history-v1";
   const SENSOR_LABELS = { ir: "红外", sar: "SAR" };
   const SCENE_LABELS = { air: "空域", forest: "林地", sea: "海域", urban: "城市场景" };
@@ -13,11 +12,6 @@
     warship: "舰船",
     tank: "坦克",
   };
-  const VALID_TYPES = new Set([
-    "image/png", "image/jpeg", "image/bmp", "image/x-ms-bmp", "image/tiff", "image/x-tiff",
-  ]);
-  const VALID_EXTENSIONS = new Set(["png", "jpg", "jpeg", "bmp", "tif", "tiff"]);
-
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
   const state = {
@@ -55,24 +49,6 @@
 
   function sceneLabel(value) {
     return SCENE_LABELS[value] || value || "未知";
-  }
-
-  function validateFile(file) {
-    const extension = (file.name.split(".").pop() || "").toLowerCase();
-    if (!VALID_TYPES.has(file.type) && !VALID_EXTENSIONS.has(extension)) {
-      throw new Error(`不支持的图像格式：${file.name}`);
-    }
-    if (!file.size) throw new Error(`图像为空：${file.name}`);
-    if (file.size > LIMITS.fileBytes) throw new Error(`单张图像不能超过${formatBytes(LIMITS.fileBytes)}：${file.name}`);
-  }
-
-  function imageDimensions(url) {
-    return new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-      image.onerror = () => reject(new Error("浏览器无法读取这张图像。"));
-      image.src = url;
-    });
   }
 
   function showToast(message, type = "success") {
@@ -139,8 +115,8 @@
       showToast("请选择ZIP格式的增量数据包。", "error");
       return;
     }
-    if (!file.size || file.size > LIMITS.incrementalBytes) {
-      showToast(`数据包不能超过${formatBytes(LIMITS.incrementalBytes)}。`, "error");
+    if (!file.size || file.size > INCREMENTAL.maxArchiveBytes) {
+      showToast(`数据包不能超过${formatBytes(INCREMENTAL.maxArchiveBytes)}。`, "error");
       return;
     }
     state.incrementalFile = file;
@@ -495,29 +471,18 @@
     });
   }
 
-  async function selectSingle(file) {
-    try {
-      validateFile(file);
-      clearSingle(false);
-      state.singleFile = file;
-      state.singlePreviewUrl = URL.createObjectURL(file);
-      $("#previewImage").src = state.singlePreviewUrl;
-      const dimensions = await imageDimensions(state.singlePreviewUrl).catch(() => ({ width: null, height: null }));
-      if (state.singleFile !== file) return;
-      $("#singleFilename").textContent = file.name;
-      $("#singleMeta").textContent = dimensions.width
-        ? `${dimensions.width} × ${dimensions.height} · ${formatBytes(file.size)}`
-        : `服务端读取尺寸 · ${formatBytes(file.size)}`;
-      $("#inputPreview").classList.toggle("is-unavailable", !dimensions.width);
-      $("#singleDropzone").classList.add("is-hidden");
-      $("#inputPreview").classList.remove("is-hidden");
-      $("#detectButton").disabled = false;
-      $("#clearSingle").disabled = false;
-      setWorkflow(2);
-    } catch (error) {
-      clearSingle(false);
-      showToast(error.message || "无法读取图像。", "error");
-    }
+  function selectSingle(file) {
+    clearSingle(false);
+    state.singleFile = file;
+    state.singlePreviewUrl = URL.createObjectURL(file);
+    $("#previewImage").src = state.singlePreviewUrl;
+    $("#singleFilename").textContent = file.name;
+    $("#singleMeta").textContent = "等待识别";
+    $("#singleDropzone").classList.add("is-hidden");
+    $("#inputPreview").classList.remove("is-hidden");
+    $("#detectButton").disabled = false;
+    $("#clearSingle").disabled = false;
+    setWorkflow(2);
   }
 
   function clearSingle(notify = true) {
@@ -659,21 +624,16 @@
     const eligible = Array.isArray(decision.eligible_protocols) ? decision.eligible_protocols : [];
     const skipped = Array.isArray(decision.skipped_protocols) ? decision.skipped_protocols : [];
     const fusion = decision.fusion_summary || {};
-    const sourceScope = decision.source_scope || "unknown";
-    const sourceLabel = sourceScope === "incremental" ? "增量数据" : sourceScope === "base" ? "原始数据" : "通用输入";
-    const sourceDetail = decision.inference_scope === "incremental"
-      ? "调用基础模型与当前代际增量能力"
-      : "按原始数据域处理，仅调用冻结基础模型";
     $("#collaborationMode").textContent = "Agent 自动决策";
     const flow = $("#collaborationFlow");
     flow.replaceChildren();
     const evaluations = protocols.length
       ? protocols.map((item) => `${classLabel(item.class_name || item.new_class)} ${item.activated ? "已激活" : "未激活"}`).join(" · ")
-      : skipped.length ? "当前输入无需调用专项模型" : "保持统一检测流程";
+      : skipped.length ? "部分模型未满足图像内容门控" : "已完成当前生产代际评估";
     const steps = [
-      ["01 来源与场景", `${sourceLabel} · ${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, sourceDetail],
+      ["01 场景理解", `${sensorLabel(context.sensor)} · ${sceneLabel(context.scene)}`, "输入为无标签图像，仅依据图像内容进行决策"],
       ["02 统一检测", `${Number(decision.base_detection_count || 0)} 个基础候选`, "建立当前图像的统一检测结果"],
-      ["03 智能评估", `${eligible.length} 项候选 · ${Number(decision.evaluated_specialists || 0)} 项执行`, evaluations],
+      ["03 代际协同", `${eligible.length} 项候选 · ${Number(decision.evaluated_specialists || 0)} 项执行`, evaluations],
       activated.length
         ? ["04 自动融合", activated.map(classLabel).join("、"), `保留 ${Number(fusion.output_count || result.detection_count || 0)} 个最终目标`]
         : ["04 结果确认", `${result.detection_count || 0} 个目标`, "保持统一检测结果，无需人工选择模型"],
@@ -758,21 +718,12 @@
     downloadBlob(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json;charset=utf-8" }), `agile-agent-${Date.now()}.json`);
   }
 
-  async function selectBatch(fileList) {
-    try {
-      const files = Array.from(fileList);
-      if (!files.length) return;
-      if (files.length > LIMITS.batchFiles) throw new Error(`单批最多选择${LIMITS.batchFiles}张图像。`);
-      const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-      if (totalBytes > LIMITS.batchBytes) throw new Error(`单批图像总大小不能超过${formatBytes(LIMITS.batchBytes)}。`);
-      files.forEach(validateFile);
-      clearBatch(false);
-      state.batchFiles = files;
-      renderBatchQueue();
-    } catch (error) {
-      clearBatch(false);
-      showToast(error.message || "无法读取批量图像。", "error");
-    }
+  function selectBatch(fileList) {
+    const files = Array.from(fileList);
+    if (!files.length) return;
+    clearBatch(false);
+    state.batchFiles = files;
+    renderBatchQueue();
   }
 
   function renderBatchQueue() {
@@ -1055,10 +1006,7 @@
     const response = await fetch("/api/config/public", { cache: "no-store" });
     if (!response.ok) throw new Error(await responseError(response));
     const config = await response.json();
-    LIMITS.fileBytes = Number(config.limits.max_file_bytes);
-    LIMITS.batchFiles = Number(config.limits.max_batch_files);
-    LIMITS.batchBytes = Number(config.limits.max_batch_bytes);
-    LIMITS.incrementalBytes = Number(config.incremental.max_archive_bytes);
+    INCREMENTAL.maxArchiveBytes = Number(config.incremental.max_archive_bytes);
     INCREMENTAL.previewLimit = Number(config.incremental.preview_limit);
     INCREMENTAL.logTailLines = Number(config.incremental.job_log_tail_lines);
     INCREMENTAL.pollIntervalMs = Number(config.incremental.poll_interval_ms);
@@ -1075,10 +1023,7 @@
     });
     $("#confidenceLabel").textContent = `置信度 ${Number(confidence.default).toFixed(2)}`;
     $("#batchConfidenceLabel").textContent = Number(confidence.default).toFixed(2);
-    $("#singleLimitText").textContent = `或点击选择文件 · 最大${formatBytes(LIMITS.fileBytes)}`;
-    $("#batchLimitText").textContent = `单批最多${LIMITS.batchFiles}张，总计不超过${formatBytes(LIMITS.batchBytes)}`;
-    $("#batchIntro").textContent = `一次处理最多${LIMITS.batchFiles}张图像，完成后可逐张查看标注图和结果清单。`;
-    $("#incrementalLimitText").textContent = `包含图像、标签及可选data.yaml · 最大${formatBytes(LIMITS.incrementalBytes)}`;
+    $("#incrementalLimitText").textContent = `包含图像、标签及可选data.yaml · 最大${formatBytes(INCREMENTAL.maxArchiveBytes)}`;
   }
 
   async function initialize() {

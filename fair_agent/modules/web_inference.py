@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import hashlib
 import json
 import re
 import threading
@@ -60,76 +59,51 @@ class FairInferenceQueue:
         return self._executor.submit(execute).result()
 
 
-def content_task_id(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def validate_image_bytes(
+def decode_image_bytes(
     data: bytes,
     filename: str,
-    limits: Mapping[str, Any],
-) -> tuple[Image.Image, str]:
-    max_bytes = int(limits["max_file_bytes"])
-    max_pixels = int(limits["max_image_pixels"])
-    allowed_formats = {str(value).upper() for value in limits["allowed_image_formats"]}
+    decode_backend: str = "opencv",
+) -> Image.Image:
     if not data:
-        raise ValueError(f"图像为空：{filename}")
-    if len(data) > max_bytes:
-        raise ValueError(f"图像超过 {max_bytes // (1024 * 1024)}MB 限制：{filename}")
+        raise ValueError(f"无法读取图像：{filename}")
     try:
-        with Image.open(io.BytesIO(data)) as source:
-            image_format = str(source.format or "").upper()
-            width, height = source.size
-            if image_format not in allowed_formats:
-                raise ValueError(f"不支持的图像格式：{image_format or 'unknown'}")
-            if width <= 0 or height <= 0 or width * height > max_pixels:
-                raise ValueError(f"图像像素超过限制：{width}x{height}")
-            if str(limits.get("decode_backend", "pillow")) == "pillow":
+        if str(decode_backend) == "pillow":
+            with Image.open(io.BytesIO(data)) as source:
                 source.load()
                 image = source.convert("RGB")
-            else:
-                import cv2
-                import numpy as np
+        else:
+            import cv2
+            import numpy as np
 
-                decoded = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
-                if decoded is None or decoded.shape[1] != width or decoded.shape[0] != height:
-                    raise ValueError(f"无法读取图像：{filename}")
-                image = Image.fromarray(cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB))
+            decoded = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if decoded is None:
+                raise ValueError(f"无法读取图像：{filename}")
+            image = Image.fromarray(cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB))
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
         raise ValueError(f"无法读取图像：{filename}") from exc
-    return image, content_task_id(data)
+    return image
 
 
-def validate_batch_uploads(
+def decode_batch_images(
     items: Iterable[tuple[str, bytes]],
-    limits: Mapping[str, Any],
-) -> List[tuple[str, bytes, Image.Image, str]]:
+    decode_backend: str = "opencv",
+    decode_workers: int = 1,
+) -> List[tuple[str, bytes, Image.Image]]:
     rows = list(items)
     if not rows:
         raise ValueError("请选择至少一张图像。")
-    max_files = int(limits["max_batch_files"])
-    max_batch_bytes = int(limits["max_batch_bytes"])
-    if len(rows) > max_files:
-        raise ValueError(f"单批最多处理 {max_files} 张图像。")
-    total_bytes = sum(len(data) for _, data in rows)
-    if total_bytes > max_batch_bytes:
-        raise ValueError(f"单批总大小不能超过 {max_batch_bytes // (1024 * 1024)}MB。")
-    decode_workers = min(int(limits.get("decode_workers", 1)), len(rows))
+    decode_workers = min(max(1, int(decode_workers)), len(rows))
     if decode_workers > 1:
         with ThreadPoolExecutor(max_workers=decode_workers) as pool:
             decoded_rows = list(
-                pool.map(lambda item: validate_image_bytes(item[1], item[0], limits), rows)
+                pool.map(lambda item: decode_image_bytes(item[1], item[0], decode_backend), rows)
             )
     else:
-        decoded_rows = [validate_image_bytes(data, filename, limits) for filename, data in rows]
-    validated = []
-    seen_ids = set()
-    for (filename, data), (image, task_id) in zip(rows, decoded_rows):
-        if task_id in seen_ids:
-            raise ValueError(f"批次中存在重复图像：{filename}")
-        seen_ids.add(task_id)
-        validated.append((filename, data, image, task_id))
-    return validated
+        decoded_rows = [decode_image_bytes(data, filename, decode_backend) for filename, data in rows]
+    return [
+        (filename, data, image)
+        for (filename, data), image in zip(rows, decoded_rows)
+    ]
 
 
 def result_records(result: Any, class_names: Mapping[int, str] | None = None) -> List[Dict[str, Any]]:
@@ -549,7 +523,7 @@ def build_batch_zip(results: Iterable[Dict[str, Any]]) -> bytes:
                 {
                     key: value
                     for key, value in item.items()
-                    if key not in {"annotated_png", "annotated_image", "source_bytes", "task_id"}
+                    if key not in {"annotated_png", "annotated_image", "source_bytes"}
                 }
             )
         archive.writestr("results.json", result_json_bytes({"image_count": len(rows), "results": metadata}))
@@ -722,13 +696,12 @@ class WebInferenceEngine:
         image: Image.Image,
         filename: str,
         confidence: float | None = None,
-        task_id: str | None = None,
         incremental_protocol: str | None = None,
     ) -> Dict[str, Any]:
         result, queue_wait_ms = self.queue.run(
             lambda: self._predict_unlocked(
                 image, filename, self.default_confidence if confidence is None else confidence,
-                task_id, incremental_protocol,
+                incremental_protocol,
             )
         )
         result["queue_wait_ms"] = queue_wait_ms
@@ -736,7 +709,7 @@ class WebInferenceEngine:
 
     def predict_batch(
         self,
-        items: Iterable[tuple[Image.Image, str, str | None]],
+        items: Iterable[tuple[Image.Image, str]],
         confidence: float | None = None,
         incremental_protocol: str | None = "auto",
     ) -> List[Dict[str, Any]]:
@@ -754,7 +727,7 @@ class WebInferenceEngine:
 
     def _predict_batch_unlocked(
         self,
-        items: List[tuple[Image.Image, str, str | None]],
+        items: List[tuple[Image.Image, str]],
         confidence: float,
         incremental_protocol: str | None,
     ) -> List[Dict[str, Any]]:
@@ -763,7 +736,7 @@ class WebInferenceEngine:
         batch_started = time.perf_counter()
         images = [
             image if image.mode == "RGB" else image.convert("RGB")
-            for image, _filename, _task_id in items
+            for image, _filename in items
         ]
         automatic = incremental_protocol == "auto"
         if automatic:
@@ -984,7 +957,7 @@ class WebInferenceEngine:
         results: List[Dict[str, Any]] = []
         batch_total_ms = (time.perf_counter() - batch_started) * 1000
         per_image_batch_total = batch_total_ms / len(images)
-        for index, ((_, filename, task_id), image, context, base_prediction, base_records) in enumerate(
+        for index, ((_, filename), image, context, base_prediction, base_records) in enumerate(
             zip(items, images, contexts, base_predictions, base_records_by_image)
         ):
             context_inference_ms = float(context.pop("_inference_ms", 0.0))
@@ -1013,6 +986,9 @@ class WebInferenceEngine:
             models_used.extend(str(route["id"]) for route in executed)
             decision = {
                 "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
+                "input_mode": "unlabeled_image",
+                "inference_scope": "production",
+                "routing_basis": "image_content_and_active_generation",
                 "evaluated_specialists": len(executed),
                 "base_detection_count": len(base_records),
                 "final_detection_count": len(records),
@@ -1032,7 +1008,6 @@ class WebInferenceEngine:
             }
             results.append({
                 "filename": filename,
-                "task_id": task_id,
                 "image_width": int(image.width),
                 "image_height": int(image.height),
                 "context": context,
@@ -1066,7 +1041,6 @@ class WebInferenceEngine:
         image: Image.Image,
         filename: str,
         confidence: float,
-        task_id: str | None,
         incremental_protocol: str | None,
     ) -> Dict[str, Any]:
         from fair_agent.models.context import predict_context
@@ -1294,6 +1268,9 @@ class WebInferenceEngine:
         })
         decision = {
             "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
+            "input_mode": "unlabeled_image",
+            "inference_scope": "production",
+            "routing_basis": "image_content_and_active_generation",
             "evaluated_specialists": len(executed_routes),
             "base_detection_count": len(base_records),
             "final_detection_count": len(records),
@@ -1319,7 +1296,6 @@ class WebInferenceEngine:
         }
         result = {
             "filename": filename,
-            "task_id": task_id,
             "image_width": int(rgb_image.width),
             "image_height": int(rgb_image.height),
             "context": context,

@@ -56,13 +56,13 @@ def test_web_ui_has_no_collapsible_sidebar_dependency() -> None:
     assert "sidebar" not in content.lower()
 
 
-def test_web_upload_limits_are_owned_by_main_yaml() -> None:
+def test_online_detection_config_only_selects_decoder() -> None:
     config = load_config()
-    assert config["limits"]["max_file_bytes"] == 20 * 1024 * 1024
-    assert config["limits"]["max_batch_files"] == 20
-    assert config["limits"]["max_batch_bytes"] == 200 * 1024 * 1024
+    assert config["decoding"] == {"backend": "opencv", "workers": 4}
+    assert "limits" not in config
     runtime = Path("fair_agent/modules/web_inference.py").read_text(encoding="utf-8")
-    assert "MAX_FILE_BYTES" not in runtime
+    assert "max_image_pixels" not in runtime
+    assert "content_task_id" not in runtime
 
 
 def test_cli_has_no_retired_image_size_commands() -> None:

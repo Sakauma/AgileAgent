@@ -26,12 +26,11 @@ from fair_agent.modules.web_inference import (
     WebInferenceEngine,
     build_batch_zip,
     render_annotated_png,
-    validate_batch_uploads,
-    validate_image_bytes,
+    decode_batch_images,
+    decode_image_bytes,
 )
 from fair_agent.core.config import inference_backend_options, load_config, resolve_path
 from fair_agent.core.runtime_log import StructuredEventLog, new_trace_id
-from fair_agent.modules.inference_provenance import InferenceSourceRouter, attach_source_decision
 from fair_agent.modules.incremental_workbench import IncrementalBatchStore, TrainingJobManager
 
 
@@ -247,7 +246,7 @@ def build_web_settings(
             class_id: "unified_yolo11s_v1" for class_id in class_names
         },
         "routing": routing,
-        "limits": dict(config["limits"]),
+        "decoding": dict(config["decoding"]),
         "storage": dict(config["storage"]),
         "ui": dict(config["ui"]),
         "performance": dict(config["performance"]),
@@ -361,7 +360,7 @@ def public_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: value
         for key, value in result.items()
-        if key not in {"annotated_png", "source_bytes", "task_id"}
+        if key not in {"annotated_png", "source_bytes"}
     }
 
 
@@ -370,13 +369,6 @@ def request_web_settings(request: Request) -> Dict[str, Any]:
     if manager is not None:
         return manager.settings()
     return dict(getattr(request.app.state, "web_settings", WEB_SETTINGS))
-
-
-def resolve_inference_source(request: Request, task_id: str) -> Dict[str, Any]:
-    source = request.app.state.inference_source_router.resolve(task_id)
-    if source.get("rejected"):
-        raise ValueError("图像未登记到原始数据或已接收的增量数据血缘中。")
-    return source
 
 
 def parse_confidence(value: Any, settings: Mapping[str, Any] | None = None) -> float:
@@ -388,16 +380,6 @@ def parse_confidence(value: Any, settings: Mapping[str, Any] | None = None) -> f
     if not float(bounds["min"]) <= confidence <= float(bounds["max"]):
         raise ValueError(f"置信度必须位于{bounds['min']:.2f}到{bounds['max']:.2f}之间。")
     return confidence
-
-
-def multipart_error(exc: HTTPException, settings: Mapping[str, Any] | None = None) -> str:
-    limits = dict((settings or WEB_SETTINGS)["limits"])
-    detail = str(exc.detail or "")
-    if "maximum size" in detail.lower():
-        return f"单张图像不能超过{int(limits['max_file_bytes']) // (1024 * 1024)}MB。"
-    if "too many files" in detail.lower():
-        return f"单批最多上传{int(limits['max_batch_files'])}张图像。"
-    return "上传请求不符合文件数量或大小限制。"
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -450,7 +432,6 @@ async def health(request: Request) -> JSONResponse:
                 "device": f'cuda:{settings["device_index"]}',
                 "backend": settings["backend"],
                 "queue": queue,
-                "limits": public_config_payload(settings)["limits"],
                 "generation_id": settings["generation_id"],
                 "generation_name": settings["generation_name"],
                 "classes": [
@@ -512,17 +493,7 @@ async def capabilities(request: Request) -> JSONResponse:
 
 def public_config_payload(settings: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     settings = dict(settings or WEB_SETTINGS)
-    limits = settings["limits"]
     return {
-        "limits": {
-            "max_file_bytes": int(limits["max_file_bytes"]),
-            "max_file_mb": int(limits["max_file_bytes"]) // (1024 * 1024),
-            "max_batch_files": int(limits["max_batch_files"]),
-            "max_batch_bytes": int(limits["max_batch_bytes"]),
-            "max_batch_mb": int(limits["max_batch_bytes"]) // (1024 * 1024),
-            "max_image_pixels": int(limits["max_image_pixels"]),
-            "allowed_image_formats": list(limits["allowed_image_formats"]),
-        },
         "confidence": dict(settings["confidence"]),
         "ui": dict(settings["ui"]),
         "incremental": {
@@ -548,20 +519,19 @@ async def public_config(request: Request) -> JSONResponse:
 async def detect(request: Request) -> JSONResponse:
     request_started = time.perf_counter()
     settings = request_web_settings(request)
-    limits = settings["limits"]
+    decoding = settings["decoding"]
     upload_started = time.perf_counter()
     try:
-        async with request.form(max_files=1, max_fields=4, max_part_size=int(limits["max_file_bytes"])) as form:
+        async with request.form(max_files=float("inf"), max_fields=float("inf")) as form:
             upload = form.get("file")
             if not isinstance(upload, UploadFile):
                 raise ValueError("请选择一张图像。")
             data = await upload.read()
             upload_ms = (time.perf_counter() - upload_started) * 1000
             decode_started = time.perf_counter()
-            image, task_id = validate_image_bytes(data, upload.filename or "image", limits)
+            image = decode_image_bytes(data, upload.filename or "image", str(decoding["backend"]))
             decode_ms = (time.perf_counter() - decode_started) * 1000
             confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
-            source = resolve_inference_source(request, task_id)
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         result = await run_in_threadpool(
@@ -569,10 +539,8 @@ async def detect(request: Request) -> JSONResponse:
             image,
             upload.filename or "image",
             confidence,
-            task_id,
-            source["incremental_protocol"],
+            "auto",
         )
-        attach_source_decision(result, source)
         payload = public_result(result)
         payload.setdefault("timings", {}).update({
             "upload_parse_ms": round(upload_ms, 3),
@@ -603,49 +571,34 @@ async def detect(request: Request) -> JSONResponse:
 async def batch_detect(request: Request) -> Response:
     request_started = time.perf_counter()
     settings = request_web_settings(request)
-    limits = settings["limits"]
+    decoding = settings["decoding"]
     upload_started = time.perf_counter()
     try:
-        async with request.form(
-            max_files=int(limits["max_batch_files"]),
-            max_fields=4,
-            max_part_size=int(limits["max_file_bytes"]),
-        ) as form:
+        async with request.form(max_files=float("inf"), max_fields=float("inf")) as form:
             uploads = [item for item in form.getlist("files") if isinstance(item, UploadFile)]
             rows = [(item.filename or "image", await item.read()) for item in uploads]
             upload_ms = (time.perf_counter() - upload_started) * 1000
             decode_started = time.perf_counter()
-            validated = validate_batch_uploads(rows, limits)
+            validated = decode_batch_images(
+                rows,
+                str(decoding["backend"]),
+                int(decoding["workers"]),
+            )
             decode_ms = (time.perf_counter() - decode_started) * 1000
             confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
-            sources = [resolve_inference_source(request, task_id) for _name, _data, _image, task_id in validated]
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         engine_started = time.perf_counter()
-        results: list[Dict[str, Any] | None] = [None] * len(validated)
-        groups: Dict[str | None, list[int]] = {}
-        for index, source in enumerate(sources):
-            groups.setdefault(source["incremental_protocol"], []).append(index)
-        for protocol, indices in groups.items():
-            group_results = await run_in_threadpool(
-                engine.predict_batch,
-                [
-                    (validated[index][2], validated[index][0], validated[index][3])
-                    for index in indices
-                ],
-                confidence,
-                protocol,
-            )
-            if len(group_results) != len(indices):
-                raise RuntimeError("批量推理结果数量与输入不一致。")
-            for index, result in zip(indices, group_results):
-                attach_source_decision(result, sources[index])
-                results[index] = result
-        if any(result is None for result in results):
-            raise RuntimeError("批量推理结果不完整。")
-        completed_results = [result for result in results if result is not None]
+        completed_results = await run_in_threadpool(
+            engine.predict_batch,
+            [(image, filename) for filename, _data, image in validated],
+            confidence,
+            "auto",
+        )
+        if len(completed_results) != len(validated):
+            raise RuntimeError("批量推理结果数量与输入不一致。")
         engine_ms = (time.perf_counter() - engine_started) * 1000
-        for result, (_filename, source_bytes, _image, _task_id) in zip(completed_results, validated):
+        for result, (_filename, source_bytes, _image) in zip(completed_results, validated):
             result["source_bytes"] = source_bytes
         total_detections = sum(int(item["detection_count"]) for item in completed_results)
         total_inference = round(sum(float(item["inference_ms"]) for item in completed_results), 1)
@@ -654,7 +607,7 @@ async def batch_detect(request: Request) -> Response:
         cache_ms = (time.perf_counter() - cache_started) * 1000
         public_results = []
         for index, item in enumerate(completed_results):
-            row = {key: value for key, value in item.items() if key not in {"source_bytes", "annotated_png", "task_id"}}
+            row = {key: value for key, value in item.items() if key not in {"source_bytes", "annotated_png"}}
             row["preview_url"] = f"/api/batch/{batch_id}/preview/{index}"
             public_results.append(row)
         system_total = round((time.perf_counter() - request_started) * 1000, 1)
@@ -688,7 +641,7 @@ async def batch_detect(request: Request) -> Response:
                 "timings": {
                     "upload_parse_ms": round(upload_ms, 3),
                     "decode_ms": round(decode_ms, 3),
-                    "queue_wait_ms": float(results[0].get("queue_wait_ms", 0.0)) if results else 0.0,
+                    "queue_wait_ms": float(completed_results[0].get("queue_wait_ms", 0.0)) if completed_results else 0.0,
                     "batch_engine_ms": round(engine_ms, 3),
                     "cache_store_ms": round(cache_ms, 3),
                 },
@@ -696,8 +649,8 @@ async def batch_detect(request: Request) -> Response:
                 "download_url": f"/api/batch/{batch_id}/download",
             }
         )
-    except HTTPException as exc:
-        return JSONResponse({"error": multipart_error(exc)}, status_code=400)
+    except HTTPException:
+        return JSONResponse({"error": "无法读取请求中的图像。"}, status_code=400)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except (RuntimeError, OSError) as exc:
@@ -761,8 +714,8 @@ async def incremental_batches(request: Request) -> JSONResponse:
                 str(form.get("class_names") or "") or None,
             )
         return JSONResponse(result, status_code=201 if result["status"] == "AUDITED" else 422)
-    except HTTPException as exc:
-        return JSONResponse({"error": multipart_error(exc)}, status_code=400)
+    except HTTPException:
+        return JSONResponse({"error": "无法读取请求中的图像。"}, status_code=400)
     except Exception as exc:
         return _incremental_error(exc)
 
@@ -903,7 +856,6 @@ def create_app(
     event_log: StructuredEventLog | None = None,
     config: Mapping[str, Any] | None = None,
     runtime_manager: AtomicEngineProvider | None = None,
-    inference_source_router: InferenceSourceRouter | None = None,
 ) -> Starlette:
     effective_config = dict(config or load_config())
     active_runtime = runtime_manager
@@ -956,12 +908,6 @@ def create_app(
     )
     application.state.event_log = logger
     application.state.incremental_store = store
-    routing = settings["routing"]
-    application.state.inference_source_router = inference_source_router or InferenceSourceRouter(
-        settings["incremental_workbench"],
-        enabled=bool(routing["source_aware"]),
-        unknown_policy=str(routing["unknown_source_policy"]),
-    )
     application.state.training_manager = training_manager or TrainingJobManager(
         store, settings["incremental_workbench"], logger, effective_config,
         active_runtime.promote if active_runtime is not None else None,

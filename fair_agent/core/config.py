@@ -34,7 +34,7 @@ PROTECTED_PREFIXES = (
     "tensorrt_backend.expected_compute_capability",
 )
 KNOWN_TOP_LEVEL = {
-    "schema_version", "seed", "runtime", "web", "inference", "routing", "limits",
+    "schema_version", "seed", "runtime", "web", "inference", "routing", "decoding",
     "storage", "ui", "performance", "native_backend", "tensorrt_backend", "model", "assets", "automation",
     "generation", "submission", "blackboard", "detector", "functional_models", "inputs", "modules",
     "policies", "thresholds", "incremental", "specialist_acceptance", "decision",
@@ -51,12 +51,8 @@ KNOWN_SECTION_KEYS = {
         "detection_evidence_weight", "context_evidence_weight",
         "neutral_context_score", "default_routing_prior",
         "parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution", "max_model_workers",
-        "source_aware", "unknown_source_policy",
     },
-    "limits": {
-        "max_file_bytes", "max_batch_files", "max_batch_bytes", "max_image_pixels",
-        "allowed_image_formats", "decode_backend", "decode_workers",
-    },
+    "decoding": {"backend", "workers"},
     "storage": {"max_items", "ttl_seconds", "max_bytes"},
     "ui": {"history_limit", "result_cache_limit", "health_poll_ms", "toast_duration_ms", "default_view"},
     "performance": {
@@ -283,23 +279,15 @@ def validate_config(
     _number(routing, "max_specialists_per_image", errors, 1)
     _number(routing, "max_model_workers", errors, 1)
     if not all(isinstance(routing.get(key), bool) for key in (
-        "incremental_enabled", "require_acceptance_passed", "preserve_base_class_owners", "source_aware",
+        "incremental_enabled", "require_acceptance_passed", "preserve_base_class_owners",
     )):
         errors.append("routing中的开关必须为布尔值")
     if not all(isinstance(routing.get(key), bool) for key in ("parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution")):
         errors.append("routing中的并行执行开关必须为布尔值")
-    if routing.get("unknown_source_policy") not in {"base_only", "incremental_active", "reject"}:
-        errors.append("routing.unknown_source_policy必须为base_only、incremental_active或reject")
-
-    limits = _require_mapping(config, "limits", errors)
-    for key in ("max_file_bytes", "max_batch_files", "max_batch_bytes", "max_image_pixels"):
-        _number(limits, key, errors, 1)
-    formats = limits.get("allowed_image_formats")
-    if not isinstance(formats, list) or not formats or not all(isinstance(item, str) for item in formats):
-        errors.append("limits.allowed_image_formats 必须是非空字符串列表")
-    if limits.get("decode_backend") not in {"pillow", "opencv"}:
-        errors.append("limits.decode_backend必须为pillow或opencv")
-    _number(limits, "decode_workers", errors, 1, 32)
+    decoding = _require_mapping(config, "decoding", errors)
+    if decoding.get("backend") not in {"pillow", "opencv"}:
+        errors.append("decoding.backend必须为pillow或opencv")
+    _number(decoding, "workers", errors, 1, 32)
     storage = _require_mapping(config, "storage", errors)
     for key in ("max_items", "ttl_seconds", "max_bytes"):
         _number(storage, key, errors, 1)

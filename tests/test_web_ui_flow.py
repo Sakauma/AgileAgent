@@ -8,7 +8,7 @@ from pathlib import Path
 from PIL import Image
 from starlette.testclient import TestClient
 
-from fair_agent.modules.web_inference import content_task_id, image_png_bytes
+from fair_agent.modules.web_inference import image_png_bytes
 from fair_agent.web.app import BatchResultStore, build_web_settings, create_app
 
 
@@ -19,11 +19,10 @@ class FakeEngine:
     def queue_status(self):
         return {"waiting": 0, "active": False, "completed": len(self.calls)}
 
-    def predict(self, image, filename, confidence=0.50, task_id=None, incremental_protocol=None):
-        self.calls.append((filename, confidence, task_id, incremental_protocol))
+    def predict(self, image, filename, confidence=0.50, incremental_protocol=None):
+        self.calls.append((filename, confidence, incremental_protocol))
         return {
             "filename": filename,
-            "task_id": task_id,
             "image_width": image.width,
             "image_height": image.height,
             "context": {
@@ -47,6 +46,9 @@ class FakeEngine:
                 "protocols": [],
                 "decision": {
                     "mode": "automatic",
+                    "input_mode": "unlabeled_image",
+                    "inference_scope": "production",
+                    "routing_basis": "image_content_and_active_generation",
                     "evaluated_specialists": 3,
                     "base_detection_count": 1,
                     "final_detection_count": 1,
@@ -58,34 +60,15 @@ class FakeEngine:
 
     def predict_batch(self, items, confidence=0.50, incremental_protocol=None):
         return [
-            self.predict(image, filename, confidence, task_id, incremental_protocol)
-            for image, filename, task_id in items
+            self.predict(image, filename, confidence, incremental_protocol)
+            for image, filename in items
         ]
 
 
-class IncrementalSourceRouter:
-    def __init__(self, incremental_ids=()) -> None:
-        self.incremental_ids = set(incremental_ids)
-
-    def resolve(self, task_id):
-        incremental = task_id in self.incremental_ids
-        return {
-            "source_scope": "incremental" if incremental else "base",
-            "inference_scope": "incremental" if incremental else "base",
-            "incremental_protocol": "auto" if incremental else None,
-            "known": True,
-            "rejected": False,
-            "reason": "test_incremental" if incremental else "test_base",
-            "generation_id": "generation-1" if incremental else None,
-            "batch_id": "batch-1" if incremental else None,
-        }
-
-
-def client_with_engine(source_router=None) -> tuple[TestClient, FakeEngine]:
+def client_with_engine() -> tuple[TestClient, FakeEngine]:
     engine = FakeEngine()
     return TestClient(create_app(
         engine_provider=lambda: engine,
-        inference_source_router=source_router,
     )), engine
 
 
@@ -115,10 +98,11 @@ def test_health_and_static_product_contract() -> None:
     health = client.get("/api/health")
     assert health.status_code == 200
     assert health.json()["device"] == "cuda:0"
-    assert health.json()["limits"]["max_batch_files"] == 20
+    assert "limits" not in health.json()
     public_config = client.get("/api/config/public")
     assert public_config.status_code == 200
     assert public_config.json()["confidence"] == {"min": 0.01, "max": 1.0, "default": 0.5}
+    assert "limits" not in public_config.json()
     assert "registry" not in json.dumps(public_config.json())
     capabilities = client.get("/api/capabilities")
     assert capabilities.status_code == 200
@@ -203,9 +187,19 @@ def test_single_detection_api_returns_public_json() -> None:
     assert payload["inference_ms"] == 18.2
     assert payload["confidence_threshold"] == 0.21
     assert payload["system_total_ms"] >= 0
-    assert engine.calls == [("sample.png", 0.21, content_task_id(image), None)]
-    assert payload["agent"]["decision"]["source_scope"] == "unknown"
-    assert payload["agent"]["decision"]["inference_scope"] == "base"
+    assert engine.calls == [("sample.png", 0.21, "auto")]
+    assert payload["agent"]["decision"]["input_mode"] == "unlabeled_image"
+    assert payload["agent"]["decision"]["inference_scope"] == "production"
+
+
+def test_single_detection_does_not_filter_filename_extension_or_mime() -> None:
+    client, engine = client_with_engine()
+    response = client.post(
+        "/api/detect",
+        files={"file": ("official-input.bin", png(), "application/octet-stream")},
+    )
+    assert response.status_code == 200
+    assert engine.calls == [("official-input.bin", 0.50, "auto")]
 
 
 def test_single_detection_ignores_manual_protocol_and_uses_agent_auto_mode() -> None:
@@ -217,7 +211,7 @@ def test_single_detection_ignores_manual_protocol_and_uses_agent_auto_mode() -> 
         data={"confidence": "0.20", "incremental_protocol": "p02_new_warship"},
     )
     assert response.status_code == 200
-    assert engine.calls == [("sample.png", 0.20, content_task_id(image), None)]
+    assert engine.calls == [("sample.png", 0.20, "auto")]
 
 
 def test_single_detection_defaults_to_half_confidence() -> None:
@@ -228,13 +222,12 @@ def test_single_detection_defaults_to_half_confidence() -> None:
     )
     assert response.status_code == 200
     assert engine.calls[0][1] == 0.50
-    assert engine.calls[0][3] is None
+    assert engine.calls[0][2] == "auto"
 
 
-def test_registered_incremental_input_activates_agent_route() -> None:
+def test_every_unlabeled_input_uses_active_production_generation() -> None:
     image = png("navy")
-    task_id = content_task_id(image)
-    client, engine = client_with_engine(IncrementalSourceRouter({task_id}))
+    client, engine = client_with_engine()
 
     response = client.post(
         "/api/detect",
@@ -242,10 +235,10 @@ def test_registered_incremental_input_activates_agent_route() -> None:
     )
 
     assert response.status_code == 200
-    assert engine.calls[0][3] == "auto"
+    assert engine.calls[0][2] == "auto"
     decision = response.json()["agent"]["decision"]
-    assert decision["source_scope"] == "incremental"
-    assert decision["source_generation_id"] == "generation-1"
+    assert decision["inference_scope"] == "production"
+    assert "source_scope" not in decision
 
 
 def test_single_detection_rejects_invalid_upload_and_confidence() -> None:
@@ -276,18 +269,6 @@ def test_single_detection_accepts_full_confidence_upper_bound() -> None:
     )
     assert response.status_code == 200
     assert engine.calls[0][1] == 1.00
-
-
-def test_single_detection_rejects_oversized_multipart() -> None:
-    client, engine = client_with_engine()
-    response = client.post(
-        "/api/detect",
-        files={"file": ("oversized.png", b"x" * (20 * 1024 * 1024 + 1), "image/png")},
-        data={"confidence": "0.15"},
-    )
-    assert response.status_code == 400
-    assert "20MB" in response.json()["error"]
-    assert not engine.calls
 
 
 def test_batch_api_returns_archive_and_summary_headers() -> None:
@@ -325,11 +306,10 @@ def test_batch_api_returns_archive_and_summary_headers() -> None:
     assert summary["image_count"] == 2
 
 
-def test_batch_api_groups_base_and_incremental_sources() -> None:
+def test_batch_api_uses_production_generation_for_every_image() -> None:
+    client, engine = client_with_engine()
     base_image = png("white")
     incremental_image = png("navy")
-    router = IncrementalSourceRouter({content_task_id(incremental_image)})
-    client, engine = client_with_engine(router)
 
     response = client.post(
         "/api/batch",
@@ -340,12 +320,14 @@ def test_batch_api_groups_base_and_incremental_sources() -> None:
     )
 
     assert response.status_code == 200
-    assert sorted(call[3] or "base" for call in engine.calls) == ["auto", "base"]
-    scopes = [row["agent"]["decision"]["source_scope"] for row in response.json()["results"]]
-    assert scopes == ["base", "incremental"]
+    assert [call[2] for call in engine.calls] == ["auto", "auto"]
+    assert all(
+        row["agent"]["decision"]["inference_scope"] == "production"
+        for row in response.json()["results"]
+    )
 
 
-def test_batch_api_rejects_duplicate_content() -> None:
+def test_batch_api_does_not_classify_inputs_by_content_identity() -> None:
     client, engine = client_with_engine()
     image = png()
     response = client.post(
@@ -355,9 +337,22 @@ def test_batch_api_rejects_duplicate_content() -> None:
             ("files", ("copy.png", image, "image/png")),
         ],
     )
-    assert response.status_code == 400
-    assert "重复图像" in response.json()["error"]
-    assert not engine.calls
+    assert response.status_code == 200
+    assert len(engine.calls) == 2
+
+
+def test_batch_api_has_no_twenty_image_validation_gate() -> None:
+    client, engine = client_with_engine()
+    image = png()
+    response = client.post(
+        "/api/batch",
+        files=[
+            ("files", (f"image-{index}.data", image, "application/octet-stream"))
+            for index in range(21)
+        ],
+    )
+    assert response.status_code == 200
+    assert len(engine.calls) == 21
 
 
 def test_custom_frontend_has_complete_interaction_contract() -> None:
@@ -369,8 +364,13 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
         assert endpoint in script
     for capability in ["sessionStorage", "dataTransfer.files", "finally"]:
         assert capability in script
-    for internal_term in ["crypto.subtle.digest", "已校验", "singleHash"]:
+    for internal_term in [
+        "crypto.subtle.digest", "已校验", "singleHash", "validateFile",
+        "VALID_TYPES", "VALID_EXTENSIONS", "max_file_bytes", "max_batch_files",
+    ]:
         assert internal_term not in script
+    assert 'id="singleFile" type="file" accept=' not in html
+    assert 'id="batchFiles" type="file" accept=' not in html
     assert "annotated_base64" not in script
     assert "/api/config/public" in script
     assert "drawDetectionCanvas" in script

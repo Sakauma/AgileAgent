@@ -40,7 +40,7 @@
       <div class="detection-workspace">
         <section class="tool-panel upload-panel" aria-labelledby="upload-title">
         <div class="panel-heading"><div><span class="panel-index">输入</span><h2 id="upload-title">输入图像</h2></div><button class="text-button" id="clearSingle" disabled><svg><use href="/assets/icons.svg#trash"/></svg>清除</button></div>
-          <input id="singleFile" type="file" accept="image/png,image/jpeg,image/bmp,image/tiff" hidden>
+          <input id="singleFile" type="file" hidden>
           <button class="dropzone" id="singleDropzone" type="button">
             <span class="drop-icon"><svg><use href="/assets/icons.svg#upload"/></svg></span>
             <strong>拖放图像到这里</strong>
@@ -80,7 +80,7 @@
     <section class="view" id="view-batch" aria-labelledby="batch-title">
       <div class="page-heading"><div><p class="eyebrow">高效处理，结果可追踪</p><h1 id="batch-title">批量检测</h1><p id="batchIntro">完成后可逐张查看标注图和结果清单。</p></div></div>
       <section class="batch-shell">
-        <input id="batchFiles" type="file" accept="image/png,image/jpeg,image/bmp,image/tiff" multiple hidden>
+        <input id="batchFiles" type="file" multiple hidden>
         <button class="batch-dropzone" id="batchDropzone"><span class="drop-icon"><svg><use href="/assets/icons.svg#layers"/></svg></span><div><strong>选择批量图像</strong><small id="batchLimitText">支持多图批量处理</small></div><span class="outline-action">选择文件</span></button>
         <div class="batch-toolbar is-hidden" id="batchToolbar"><div><b id="batchCount">0张</b><span id="batchSize">0 MB</span></div><button class="text-button" id="clearBatch"><svg><use href="/assets/icons.svg#trash"/></svg>清空列表</button></div>
         <div class="file-queue" id="batchQueue"></div>

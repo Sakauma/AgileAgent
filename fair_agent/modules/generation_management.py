@@ -421,7 +421,7 @@ def _run_engine(engine: Any, image_paths: Sequence[Path], config: Mapping[str, A
         for path in image_paths[offset: offset + batch_size]:
             with Image.open(path) as source:
                 source.load()
-                items.append((source.convert("RGB"), path.name, None))
+                items.append((source.convert("RGB"), path.name))
         results.extend(engine.predict_batch(items, float(config["inference"]["confidence_min"]), "auto"))
     return results
 
@@ -522,7 +522,7 @@ def shadow_load_generation(config: Mapping[str, Any], candidate_id: str) -> tupl
         (int(config["inference"]["warmup_width"]), int(config["inference"]["warmup_height"])),
     )
     results = [
-        engine.predict(image, f"shadow-smoke-{index}.png", float(config["inference"]["confidence_default"]), None, "auto")
+        engine.predict(image, f"shadow-smoke-{index}.png", float(config["inference"]["confidence_default"]), "auto")
         for index in range(smoke_count)
     ]
     summary = {
@@ -565,7 +565,7 @@ def _unseal_lock_once(config: Mapping[str, Any], candidate_id: str) -> Dict[str,
     return record
 
 
-def _run_source_scoped_recheck(
+def _run_production_recheck(
     config: Mapping[str, Any],
     registry: Mapping[str, Any],
     parent_id: str,
@@ -576,7 +576,7 @@ def _run_source_scoped_recheck(
     current_incremental_images: Sequence[Path],
 ) -> Dict[str, list[Dict[str, Any]]]:
     base_before = _run_engine(_engine(config, registry, root_generation_id), base_images, config)
-    base_after = _run_engine(_engine(config, registry, root_generation_id), base_images, config)
+    base_after = _run_engine(_engine(config, registry, candidate_id), base_images, config)
     historical_before = (
         _run_engine(_engine(config, registry, parent_id), historical_incremental_images, config)
         if historical_incremental_images else []
@@ -649,7 +649,7 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
                 class_id: metric_floor for class_id in model["per_class_thresholds"]
             }
     root_generation_id = _root_generation_id(registry, candidate_id)
-    scoped_results = _run_source_scoped_recheck(
+    scoped_results = _run_production_recheck(
         config,
         metric_registry,
         parent_id,
@@ -817,10 +817,13 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
                 "images": [rel_path(path) for path in current_images],
             },
         },
-        "inference_scopes": {
-            "base": root_generation_id,
-            "historical_incremental": parent_id,
-            "current_incremental": candidate_id,
+        "evaluation_semantics": "unlabeled_production_all_owners_v2",
+        "inference_generations": {
+            "base_before": root_generation_id,
+            "base_after": candidate_id,
+            "historical_before": parent_id,
+            "historical_after": candidate_id,
+            "current_after": candidate_id,
         },
         "one_time_lock_record": lock_record,
         "thresholds": {str(key): value for key, value in thresholds.items()},

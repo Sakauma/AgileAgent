@@ -479,8 +479,7 @@ def cmd_context_predict(args: argparse.Namespace) -> int:
 
 
 def cmd_detect(args: argparse.Namespace) -> int:
-    from fair_agent.modules.inference_provenance import InferenceSourceRouter, attach_source_decision
-    from fair_agent.modules.web_inference import WebInferenceEngine, validate_image_bytes
+    from fair_agent.modules.web_inference import WebInferenceEngine, decode_image_bytes
     from fair_agent.modules.strict_incremental import load_experiment_profile
     from fair_agent.web.app import build_web_settings
 
@@ -497,7 +496,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 f"{float(inference['confidence_max']):.2f}之间。"
             )
         data = source.read_bytes()
-        image, task_id = validate_image_bytes(data, source.name, config["limits"])
+        image = decode_image_bytes(data, source.name, str(config["decoding"]["backend"]))
         settings = build_web_settings(config)
         if args.profile:
             profile = load_experiment_profile(args.profile)
@@ -548,38 +547,16 @@ def cmd_detect(args: argparse.Namespace) -> int:
             backend_name=settings["backend"],
             native_options=settings["native_backend"],
         )
-        if args.profile:
-            source_decision = {
-                "source_scope": "incremental",
-                "inference_scope": "incremental",
-                "incremental_protocol": "auto",
-                "known": True,
-                "rejected": False,
-                "reason": "explicit_verified_profile",
-                "generation_id": settings["generation_id"],
-                "batch_id": None,
-            }
-        else:
-            source_router = InferenceSourceRouter(
-                settings["incremental_workbench"],
-                enabled=bool(settings["routing"]["source_aware"]),
-                unknown_policy=str(settings["routing"]["unknown_source_policy"]),
-            )
-            source_decision = source_router.resolve(task_id)
-        if source_decision.get("rejected"):
-            raise ValueError("图像未登记到原始数据或已接收的增量数据血缘中。")
         result = engine.predict(
             image,
             source.name,
             confidence,
-            task_id,
-            source_decision["incremental_protocol"],
+            "auto",
         )
-        attach_source_decision(result, source_decision)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"自动检测失败：{exc}")
         return 1
-    public = {key: value for key, value in result.items() if key not in {"annotated_png", "task_id"}}
+    public = {key: value for key, value in result.items() if key != "annotated_png"}
     print(json.dumps(public, ensure_ascii=False, indent=2))
     return 0
 
