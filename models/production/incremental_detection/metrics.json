@@ -1,35 +1,48 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "run_id": "incremental_detection_generation",
-  "protocol": "warship-incremental",
+  "protocol": "incremental-detection",
   "incremental_mode": "class_incremental",
   "learning_data_scope": "incremental_dataset_only",
+  "evaluation_semantics": "unlabeled_production_all_owners_v2",
+  "rechecked_at": "2026-08-05T18:59:39+08:00",
   "old_raw_image_count": 0,
   "activation_threshold": 0.63,
-  "old_map50_before": 0.8273816344198973,
-  "old_map50_after": 0.8273816344198973,
-  "new_map50": 0.795,
-  "full_map50": 0.8192862258149229,
-  "krr": 1.0,
+  "old_map50_before": 0.8717219203307386,
+  "old_map50_after": 0.8727765704446866,
+  "new_map50": 0.8148507462686567,
+  "full_map50": 0.816127778757997,
+  "krr": 1.001209846958475,
+  "lock_image_count": 95,
   "lock_deployment_metrics": {
     "precision": 1.0,
-    "recall": 0.7901234567901234
+    "recall": 0.8024691358024691
   },
   "false_activation": {
     "negative_image_count": 74,
     "false_positive_image_count": 0,
     "false_activation_rate": 0.0
   },
-  "gates": {
+  "mean_inference_ms": 520.278947368422,
+  "performance_context": "x86_cuda_observation_not_ascend_310b",
+  "official_hard_gates": {
     "base_map50": true,
     "new_map50": true,
     "krr": true,
-    "combined_map50": true,
-    "lock_precision": true,
-    "false_activation_rate": true,
-    "old_prediction_equivalent": true,
     "base_weight_unchanged": true,
     "incremental_data_only": true
   },
+  "advisory_checks": {
+    "combined_map50": true,
+    "lock_precision": true,
+    "false_activation_rate": true,
+    "latency_proxy_ms": false,
+    "old_prediction_equivalent": false
+  },
+  "warnings": [
+    "latency_proxy_ms",
+    "old_prediction_equivalent"
+  ],
+  "acceptance_status": "accepted_with_warnings",
   "accepted": true
 }

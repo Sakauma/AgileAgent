@@ -8,10 +8,14 @@
       "new_class": "warship",
       "new_global_id": 2,
       "active_profile": "models/profiles/incremental-detection/active.json",
-      "new_map50": 0.795,
-      "krr": 1.0,
+      "evaluation_semantics": "unlabeled_production_all_owners_v2",
+      "rechecked_at": "2026-08-05T18:59:39+08:00",
+      "new_map50": 0.8148507462686567,
+      "krr": 1.001209846958475,
       "activation_threshold": 0.63,
-      "lock_false_activation_rate": 0.0
+      "lock_false_activation_rate": 0.0,
+      "mean_inference_ms": 520.278947368422,
+      "acceptance_status": "accepted_with_warnings"
     }
   ]
 }

@@ -278,9 +278,13 @@ def test_incremental_lock_chain_accumulates_all_ancestor_rounds(monkeypatch) -> 
 
 def test_lock_recheck_can_only_be_unsealed_once(tmp_path: Path) -> None:
     registry_path = tmp_path / "generations.json"
-    registry_path.write_text(
-        Path("models/generations.json").read_text(encoding="utf-8"), encoding="utf-8"
+    registry = json.loads(Path("models/generations.json").read_text(encoding="utf-8"))
+    candidate = next(
+        item for item in registry["generations"]
+        if item["id"] == "incremental_detection_generation"
     )
+    candidate.pop("lock_recheck", None)
+    registry_path.write_text(json.dumps(registry, ensure_ascii=False), encoding="utf-8")
     config = deepcopy(load_config())
     config["generation"]["registry"] = str(registry_path)
     config["generation"]["runtime_registry"] = str(registry_path)

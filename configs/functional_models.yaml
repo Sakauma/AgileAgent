@@ -32,7 +32,7 @@ models:
         sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
     evidence:
       path: models/manifest.json
-      sha256: fb62f7d66b30e3264036b3c2a3062fc8ceeed5bf70c7f52a3bf0fc442d2c5ad8
+      sha256: a38107f00e307a9f7950a4e1a8b98b69cb0ea5042ae549ae9b01a7dd9e47dd7e
     runtime:
       x86_gpu: true
       ascend_310b: false
@@ -49,7 +49,7 @@ models:
         sha256: 88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3
     evidence:
       path: models/manifest.json
-      sha256: fb62f7d66b30e3264036b3c2a3062fc8ceeed5bf70c7f52a3bf0fc442d2c5ad8
+      sha256: a38107f00e307a9f7950a4e1a8b98b69cb0ea5042ae549ae9b01a7dd9e47dd7e
     runtime:
       x86_gpu: true
       ascend_310b: false

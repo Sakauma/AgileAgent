@@ -69,11 +69,22 @@
         "2": "models/production/incremental_detection/calibration.json"
       },
       "metrics": {
-        "new_map50": 0.9090260372388763
+        "new_map50": 0.8148507462686567,
+        "per_class": {
+          "2": {
+            "map50": 0.8148507462686567,
+            "precision": 1.0,
+            "recall": 0.8024691358024691
+          }
+        }
       },
       "deployment_metrics": {
         "lock_precision": 1.0,
-        "false_activation_rate": 0.0
+        "lock_recall": 0.8024691358024691,
+        "false_activation_rate": 0.0,
+        "negative_image_count": 74,
+        "false_positive_image_count": 0,
+        "evaluation_semantics": "unlabeled_production_all_owners_v2"
       },
       "acceptance": {
         "min_lock_precision": 0.7,
@@ -103,7 +114,8 @@
       "new_class_ids": [0, 1, 3],
       "dataset_fingerprint": null,
       "metrics": {
-        "base_map50": 0.8284863676564004
+        "base_map50": 0.8717219203307386,
+        "evaluation_split": "splits/lock_val_base_3plus1.txt"
       }
     },
     {
@@ -126,23 +138,75 @@
       "old_class_ids": [0, 1, 3],
       "new_class_ids": [2],
       "dataset_fingerprint": null,
+      "data_compliance": {
+        "compliance": "passed",
+        "lineage_evidence": "current",
+        "audit_source": "configs/incremental/warship_3plus1.yaml",
+        "old_raw_image_count": 0,
+        "old_raw_label_count": 0,
+        "old_cache_count": 0,
+        "unverified_cache_count": 0,
+        "base_train_count": 434,
+        "incremental_train_count": 126
+      },
+      "evaluation_lock": {
+        "split": "splits/lock_val_increment_3plus1.txt",
+        "base_split": "splits/lock_val_base_3plus1.txt",
+        "local_to_global": {
+          "2": 2
+        }
+      },
       "metrics": {
-        "base_map50": 0.8273816344198973,
-        "new_map50": 0.795,
-        "krr": 1.0,
-        "combined_map50": 0.8192862258149229,
+        "base_map50": 0.8727765704446866,
+        "old_map50_before": 0.8717219203307386,
+        "old_map50_after": 0.8727765704446866,
+        "historical_old_map50_after": 0.8727765704446866,
+        "new_map50": 0.8148507462686567,
+        "krr": 1.001209846958475,
+        "combined_map50": 0.816127778757997,
         "lock_precision": 1.0,
-        "lock_recall": 0.7901234567901234,
         "false_activation_rate": 0.0,
-        "old_prediction_equivalent": true,
+        "old_prediction_equivalent": false,
+        "per_class": {
+          "2": {
+            "map50": 0.8148507462686567,
+            "precision": 1.0,
+            "recall": 0.8024691358024691,
+            "false_activation_rate": 0.0,
+            "negative_image_count": 74,
+            "false_positive_image_count": 0,
+            "threshold": 0.63
+          }
+        },
+        "cumulative_per_class": {
+          "0": 0.6914378682978042,
+          "1": 0.8334757955356985,
+          "2": 0.8107894736842106,
+          "3": 0.928807977514275
+        },
         "image_count": 95,
-        "negative_image_count": 74,
-        "false_positive_image_count": 0,
-        "mean_inference_ms": 25.405263157894733
+        "historical_image_count": 74,
+        "current_image_count": 21,
+        "specialist_count": 1,
+        "mean_inference_ms": 520.278947368422
       },
       "acceptance": {
         "core_metrics_passed": true,
-        "deployment_recheck_passed": true
+        "deployment_recheck_passed": true,
+        "status": "accepted_with_warnings",
+        "warnings": [
+          "latency_proxy_ms",
+          "old_prediction_equivalent"
+        ]
+      },
+      "lock_recheck": {
+        "status": "completed",
+        "rechecked_at": "2026-08-05T18:59:39+08:00",
+        "evaluation_semantics": "unlabeled_production_all_owners_v2",
+        "warnings": [
+          "latency_proxy_ms",
+          "old_prediction_equivalent"
+        ]
       }
     }
   ],

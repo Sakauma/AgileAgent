@@ -92,7 +92,7 @@ cp configs/agent_pipeline.yaml "$PROFILE"
 "$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" tensorrt calibrate --activate
 ```
 
-Agent 会保证基础模型与增量专家使用各自合规的数据来源；后续新专家仅使用本轮增量 train/dev 自动校准，封存 lock 不参与量化。当前推荐的检测器混合精度策略固定为模块 `0-1` 使用 INT8、模块 `2-23` 使用 FP16，对应 YAML 中的 `mixed_precision.fp16_layer_patterns`；设备本地仍需重新导出并验收 engine。
+Agent 会保证基础模型与增量专家使用各自合规的数据来源；后续新专家仅使用本轮增量 train/dev 自动校准，封存 lock 不参与量化。本机实验验证过的可选混合精度策略为模块 `0-1` 使用 INT8、模块 `2-23` 使用 FP16，对应 YAML 中的 `mixed_precision.fp16_layer_patterns`；公开默认后端仍为 CUDA，每台设备都需在本地重新导出并验收 engine。
 
 ### 首次配置
 
@@ -256,13 +256,13 @@ agile-agent incremental-data jobs --batch-id BATCH_ID
 | 模型 | 功能 | 内部 lock-val 结果 | 状态 |
 | --- | --- | --- | --- |
 | Scene-SensorNet | IR/SAR 与四场景认知 | sensor 0.98947 / scene 0.76842 | production 上下文模型 |
-| 三类基础检测器 | 冻结旧类检测 | 旧类 mAP50 0.82738 | production 旧类所有者 |
-| 增量检测器 | 新类别检测 | New-mAP50 0.79500 / KRR 1.000 | production，当前绑定舰船 |
+| 三类基础检测器 | 冻结旧类检测 | 增量前/后 mAP50 0.87172 / 0.87278 | production 旧类所有者 |
+| 增量检测器 | 新类别检测 | New-mAP50 0.81485 / KRR 1.00121 | production，当前绑定舰船 |
 | 四类统一 YOLO11s | 单模型上限参考 | mAP50 0.91202 | `benchmark_only` |
 
-历史组合系统在 95 张内部 lock-val 上取得 mAP50 `0.81929`、舰船 precision `1.000` 和 recall `0.79012`。这些结果来自已经废止的来源分流评测，不能证明当前无标签 production 的虚警率；基础与增量模型对完整 lock 集共同推理后的新结果才是有效部署证据。检测指标均指 mAP50，且内部结果不是官方隐藏测试成绩。
+当前 production 已按实际使用方式完成复核：基础检测器与增量检测器先对全部 95 张无标签图像共同推理，标签只在预测完成后用于评分。组合 mAP50 为 `0.81613`，舰船 precision 为 `1.000`、recall 为 `0.80247`；74 张不含舰船的图像中误激活 0 张。基础 mAP50、New-mAP50 和 KRR 均达到赛题满分档门槛。检测指标均指 mAP50，且内部结果不是官方隐藏测试成绩。
 
-x86 NVIDIA GPU 上的性能结果只用于工程验证，具体吞吐和单图延迟取决于设备、后端及运行状态，不能替代 Ascend 310B 实测。
+本次 RTX 4060 Laptop、Ultralytics CUDA 组合复核的模型平均推理观察值为 `520.28 ms/图`，未达到内部 x86 时延目标，因此作为非阻塞告警保留。该数值未经 TensorRT 批处理优化，不是 API 总耗时，也不能替代 Ascend 310B 实测 FPS。
 
 ## 配置管理
 
@@ -353,8 +353,6 @@ docs/               # 设计、操作和复现实验文档
 - [全流程审计日志](docs/agent-audit-logging.md)
 - [TensorRT 部署指南](docs/tensorrt-deployment.md)
 - [舰船 3+1 可复现实验](docs/warship-3plus1-reproducibility.md)
-- [增量方法比较](docs/incremental-method-comparison.md)
-- [YOLO-IOD 完整复现](docs/full-yolo-iod-reproduction.md)
 
 ## 已知限制
 
