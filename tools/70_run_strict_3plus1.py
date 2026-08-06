@@ -124,6 +124,15 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
     checks["initial_model"] = {"path": rel_path(model_path), "exists": model_path.is_file()}
     if not model_path.is_file():
         errors.append(f"初始化权重不存在：{rel_path(model_path)}")
+    specialist_model_value = config.get("adaptation", {}).get("specialist_model")
+    if specialist_model_value:
+        specialist_model_path = resolve_path(str(specialist_model_value))
+        checks["specialist_initial_model"] = {
+            "path": rel_path(specialist_model_path),
+            "exists": specialist_model_path.is_file(),
+        }
+        if not specialist_model_path.is_file():
+            errors.append(f"增量专家初始化权重不存在：{rel_path(specialist_model_path)}")
     shared_base_value = config.get("paths", {}).get("shared_base_checkpoint")
     if shared_base_value:
         shared_base = resolve_path(shared_base_value)
@@ -246,6 +255,14 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
     for key, expected_value in expected_agent.items():
         if agent_structure.get(key) != expected_value:
             errors.append(f"agent_structure.{key} 必须为 {expected_value}")
+    specialist_init = str(
+        config.get("adaptation", {}).get("specialist_init", "base_checkpoint")
+    )
+    checks["specialist_initialization"] = specialist_init
+    if specialist_init not in {"base_checkpoint", "generic_pretrained"}:
+        errors.append(
+            "adaptation.specialist_init 必须为 base_checkpoint 或 generic_pretrained"
+        )
 
     checks["training_batch"] = int(config.get("common", {}).get("batch", 0))
     if checks["training_batch"] != 32:
@@ -1616,7 +1633,21 @@ def run_protocol(
                 require_full_epochs=bool(config["training_policy"]["require_full_epochs"]),
             ))
         else:
-            specialist_model = YOLO(str(base_weight))
+            specialist_init = str(
+                config.get("adaptation", {}).get("specialist_init", "base_checkpoint")
+            )
+            if specialist_init == "generic_pretrained":
+                specialist_source = resolve_path(
+                    str(config.get("adaptation", {}).get("specialist_model", config["model"]))
+                )
+            elif specialist_init == "base_checkpoint":
+                specialist_source = base_weight
+            else:
+                raise ValueError(f"未知增量专家初始化策略：{specialist_init}")
+            method_audit["specialist_initialization"] = specialist_init
+            method_audit["specialist_initial_weight"] = rel_path(specialist_source)
+            method_audit["specialist_initial_weight_sha256"] = sha256_file(specialist_source)
+            specialist_model = YOLO(str(specialist_source))
             specialist_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
             specialist_train_result = specialist_model.train(
                 **train_arguments(config, "incremental_train", incremental_dataset, run_dir, "specialist", device)

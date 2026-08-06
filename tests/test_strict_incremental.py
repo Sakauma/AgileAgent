@@ -328,6 +328,7 @@ def test_training_preflight_does_not_open_lock_labels(
         splits[name] = str(path)
     config = load_yaml("configs/strict_class_incremental_3plus1.yaml")
     config["model"] = str(model)
+    config["adaptation"]["specialist_model"] = str(model)
     config["paths"] = {
         "source_splits": splits,
         "dataset_root": str(tmp_path / "datasets"),
@@ -648,6 +649,9 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
     }
     assert arguments["epochs"] == 160
     assert arguments["patience"] == 0
+    assert config["model"] == "yolo11m.pt"
+    assert config["adaptation"]["specialist_init"] == "generic_pretrained"
+    assert config["adaptation"]["specialist_model"] == "yolo11s.pt"
 
     config["base_train"]["patience"] = 1
     with pytest.raises(ValueError, match="patience=0"):

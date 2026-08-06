@@ -1,6 +1,7 @@
 schema_version: 1
 seed: 20260705
-model: yolo11s.pt
+# 更强的基础 owner 提升少样本旧类泛化；新增专家仍使用轻量通用预训练模型。
+model: yolo11m.pt
 
 paths:
   source_splits:
@@ -45,7 +46,7 @@ base_train:
   mosaic: 0.80
   mixup: 0.0
   copy_paste: 0.0
-  multi_scale: 0.25
+  multi_scale: 0.10
   degrees: 3.0
   translate: 0.15
   scale: 0.50
@@ -67,6 +68,9 @@ incremental_train:
 adaptation:
   # 旧类由冻结基础检测器永久负责；增量专家只学习新类。
   mode: frozen_base_plus_new_specialist
+  # 专家不继承已偏向旧类的检测头，仅从通用预训练表征快速学习新增类。
+  specialist_init: generic_pretrained
+  specialist_model: yolo11s.pt
 
 agent_structure:
   architecture: parallel_base_incremental_experts
