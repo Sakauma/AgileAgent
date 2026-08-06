@@ -80,8 +80,6 @@ def audit_base_dataset(dataset: Path) -> Dict[str, Any]:
     if not dataset.is_file():
         raise FileNotFoundError(f"基础 dataset.yaml 不存在：{dataset}")
     payload = yaml.safe_load(dataset.read_text(encoding="utf-8")) or {}
-    if "test" in payload:
-        raise ValueError("基础 dev 调参数据不得声明 test/lock split")
     serialized = json.dumps(payload, ensure_ascii=False).lower()
     if "mixed_test" in serialized or "lock" in serialized:
         raise ValueError("基础 dev 调参数据路径疑似引用 mixed_test/lock")
@@ -102,9 +100,29 @@ def audit_base_dataset(dataset: Path) -> Dict[str, Any]:
         "train_count": len(train_images),
         "dev_count": len(val_images),
         "train_dev_overlap": overlap,
-        "declared_test_split": False,
+        "source_declared_test_split": "test" in payload,
+        "training_declared_test_split": False,
         "lock_data_access": False,
     }
+
+
+def write_train_dev_only_dataset(source: Path, destination: Path) -> Path:
+    payload = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+    sanitized = {
+        key: value
+        for key, value in payload.items()
+        if key in {"path", "train", "val", "names", "nc"}
+    }
+    if "train" not in sanitized or "val" not in sanitized or "names" not in sanitized:
+        raise ValueError("基础 dataset.yaml 缺少 train/val/names")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise FileExistsError(f"拒绝覆盖基础 train/dev 清单：{destination}")
+    destination.write_text(
+        yaml.safe_dump(sanitized, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return destination
 
 
 def metric_per_class(metrics: Any) -> Dict[str, float]:
@@ -135,14 +153,20 @@ def main() -> int:
     sweep_path = args.config if args.config.is_absolute() else ROOT / args.config
     sweep = load_yaml(sweep_path)
     strict = load_yaml(resolve_local(sweep["strict_config"]))
-    dataset = args.dataset.resolve()
-    audit = audit_base_dataset(dataset)
+    source_dataset = args.dataset.resolve()
+    audit = audit_base_dataset(source_dataset)
     project = resolve_local(sweep["project_root"]) / args.sweep_id
     report_dir = resolve_local(sweep["report_root"]) / args.sweep_id
     report_path = report_dir / f"{args.candidate}.json"
     run_dir = project / args.candidate
     if report_path.exists() or run_dir.exists():
         raise FileExistsError(f"拒绝覆盖已有基础调参候选：{args.candidate}")
+    dataset = write_train_dev_only_dataset(
+        source_dataset,
+        project / "_train_dev_only" / f"{args.candidate}.yaml",
+    )
+    audit["training_dataset_yaml"] = str(dataset)
+    audit["training_dataset_yaml_sha256"] = sha256_file(dataset)
 
     arguments = candidate_train_arguments(
         sweep,
@@ -224,4 +248,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

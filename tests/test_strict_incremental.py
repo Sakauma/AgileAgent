@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import yaml
 from torch import nn
 from PIL import Image
 
@@ -709,6 +710,31 @@ def test_base_dev_sweep_keeps_full_budget_and_protects_data_keys(tmp_path: Path)
             tmp_path / "runs",
             "1",
         )
+
+
+def test_base_dev_sweep_removes_declared_test_split(tmp_path: Path) -> None:
+    sweep_script = runpy.run_path("tools/71_sweep_base_dev.py")
+    source = tmp_path / "source.yaml"
+    source.write_text(
+        yaml.safe_dump(
+            {
+                "path": str(tmp_path),
+                "train": "splits/train.txt",
+                "val": "splits/val.txt",
+                "test": "splits/test.txt",
+                "names": {0: "old_a", 1: "old_b", 2: "old_c"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    sanitized = sweep_script["write_train_dev_only_dataset"](
+        source,
+        tmp_path / "sanitized.yaml",
+    )
+    payload = yaml.safe_load(sanitized.read_text(encoding="utf-8"))
+    assert set(payload) == {"path", "train", "val", "names"}
+    assert "test" not in payload
 
 
 def test_context_class_weights_allow_a_missing_incremental_scene() -> None:
