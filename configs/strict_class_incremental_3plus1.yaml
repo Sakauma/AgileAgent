@@ -20,6 +20,8 @@ runtime:
   env:
     NCCL_P2P_DISABLE: "1"
     NCCL_IB_DISABLE: "1"
+    # 768/Batch 32 接近单卡显存上限，减少长训练中的保留段碎片。
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 
 training_policy:
   # 必须跑满各阶段规定的 epoch；达到计分门槛不能触发提前停止。
@@ -51,7 +53,8 @@ base_train:
   mosaic: 0.25
   mixup: 0.0
   copy_paste: 0.0
-  multi_scale: 0.05
+  # 固定768，避免动态升到800后因显存碎片导致中途 OOM。
+  multi_scale: 0.0
   degrees: 2.0
   translate: 0.05
   scale: 0.25

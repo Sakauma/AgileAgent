@@ -661,6 +661,7 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
     assert arguments["lr0"] == 0.00075
     assert arguments["weight_decay"] == 0.001
     assert arguments["mosaic"] == 0.25
+    assert arguments["multi_scale"] == 0.0
     assert arguments["scale"] == 0.25
     assert arguments["translate"] == 0.05
     assert config["model"] == "yolo11m.pt"
