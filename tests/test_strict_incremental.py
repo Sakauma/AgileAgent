@@ -656,28 +656,17 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
     }
     assert arguments["epochs"] == 160
     assert arguments["patience"] == 0
-    assert arguments["imgsz"] == 768
+    assert arguments["imgsz"] == 640
     assert arguments["batch"] == 32
-    assert arguments["lr0"] == 0.00075
-    assert arguments["weight_decay"] == 0.001
-    assert arguments["mosaic"] == 0.25
-    assert arguments["multi_scale"] == 0.0
-    assert arguments["scale"] == 0.25
-    assert arguments["translate"] == 0.05
+    assert arguments["lr0"] == 0.001
+    assert arguments["weight_decay"] == 0.0005
+    assert arguments["mosaic"] == 0.80
+    assert arguments["multi_scale"] == 0.10
+    assert arguments["scale"] == 0.50
+    assert arguments["translate"] == 0.15
     assert config["model"] == "yolo11m.pt"
     assert config["adaptation"]["specialist_init"] == "generic_pretrained"
     assert config["adaptation"]["specialist_model"] == "yolo11s.pt"
-
-    incremental_arguments = script["train_arguments"](
-        config,
-        "incremental_train",
-        Path("incremental_dataset.yaml"),
-        Path("runs"),
-        "specialist",
-        "0",
-    )
-    assert incremental_arguments["imgsz"] == 640
-    assert incremental_arguments["epochs"] == 80
 
     config["base_train"]["patience"] = 1
     with pytest.raises(ValueError, match="patience=0"):
@@ -688,6 +677,37 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
             Path("runs"),
             "base",
             "0",
+        )
+
+
+def test_base_dev_sweep_keeps_full_budget_and_protects_data_keys(tmp_path: Path) -> None:
+    sweep_script = runpy.run_path("tools/71_sweep_base_dev.py")
+    sweep = load_yaml("configs/base_dev_hparam_sweep.yaml")
+    strict_config = load_yaml("configs/strict_class_incremental_3plus1.yaml")
+    arguments = sweep_script["candidate_train_arguments"](
+        sweep,
+        strict_config,
+        "stronger_decay",
+        tmp_path / "dataset.yaml",
+        tmp_path / "runs",
+        "1",
+    )
+    assert arguments["epochs"] == 160
+    assert arguments["patience"] == 0
+    assert arguments["batch"] == 32
+    assert arguments["imgsz"] == 640
+    assert arguments["weight_decay"] == 0.001
+    assert arguments["device"] == "1"
+
+    sweep["candidates"]["stronger_decay"]["overrides"]["epochs"] = 1
+    with pytest.raises(ValueError, match="不得覆盖"):
+        sweep_script["candidate_train_arguments"](
+            sweep,
+            strict_config,
+            "stronger_decay",
+            tmp_path / "dataset.yaml",
+            tmp_path / "runs",
+            "1",
         )
 
 

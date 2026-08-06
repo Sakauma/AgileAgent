@@ -57,6 +57,7 @@ venv/
 !/tools/42_predict_submission.py
 !/tools/60_train_scene_sensor.py
 !/tools/70_run_strict_3plus1.py
+!/tools/71_sweep_base_dev.py
 !/tools/80_export_tensorrt_engines.py
 !/tools/81_validate_multibatch_incremental.py
 !/tools/82_run_multibatch_stress_matrix.py
@@ -73,6 +74,7 @@ venv/
 !/configs/functional_models.yaml
 !/configs/incremental_detection_policy.yaml
 !/configs/strict_class_incremental_3plus1.yaml
+!/configs/base_dev_hparam_sweep.yaml
 
 # Local competition notes are not part of the public source release.
 /*.md

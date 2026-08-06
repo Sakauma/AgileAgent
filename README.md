@@ -196,7 +196,9 @@ python tools/70_run_strict_3plus1.py --check-only
 python tools/70_run_strict_3plus1.py --run-id UNIQUE_RUN_ID
 ```
 
-增量训练阶段只可读取117张 `increment_train` 和18张 `increment_dev`，基础权重在增量阶段保持哈希不变。基础训练固定跑满160 epoch，增量专家固定跑满80 epoch，`patience=0` 禁用 EarlyStopping；达到评分门槛不得提前结束，最终 `best.pt` 从完整 epoch 预算中按验证集 `mAP50` 最高值选择。训练审计若发现任一阶段少跑一个 epoch 即判为失败。基础训练使用固定768尺度（禁用动态多尺度），并针对士兵小目标减弱 Mosaic、缩放和平移；增量训练保持640尺度。各 owner 的推理尺度也只能在各自 dev 集上冻结：当前基础 owner 为896、增量 owner 为640，禁用 TTA，随后所有混合测试图统一使用同一组固定设置。可选正样本原型也只能由这两份增量清单生成；当前计分主线不使用原型硬过滤。89张 `mixed_test` 只在模型和阈值全部冻结后解封。
+增量训练阶段只可读取117张 `increment_train` 和18张 `increment_dev`，基础权重在增量阶段保持哈希不变。基础训练固定跑满160 epoch，增量专家固定跑满80 epoch，`patience=0` 禁用 EarlyStopping；达到评分门槛不得提前结束，最终 `best.pt` 从完整 epoch 预算中按验证集 `mAP50` 最高值选择。训练审计若发现任一阶段少跑一个 epoch 即判为失败。基础与增量训练均使用640尺度；各 owner 的推理尺度只能在各自 dev 集上冻结：当前基础 owner 为896、增量 owner 为640，禁用 TTA，随后所有混合测试图统一使用同一组固定设置。可选正样本原型也只能由这两份增量清单生成；当前计分主线不使用原型硬过滤。89张 `mixed_test` 只在模型和阈值全部冻结后解封。
+
+基础超参只能通过 `tools/71_sweep_base_dev.py` 在三类基础 `train/dev` 上筛选。每个候选必须完整跑满160 epoch，脚本禁止候选覆盖 `data/epochs/patience/device` 等隔离参数，并在896尺度的 base dev 上统一比较；候选选择期间不读取 `mixed_test` 图像或标签。服务器可将不同候选绑定到不同空闲 GPU 并行运行，最终只把 dev 最优配置带入一次正式3+1训练。
 
 ## 使用方式
 
