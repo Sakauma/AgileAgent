@@ -18,6 +18,16 @@ learning_phase:
   teacher_inference_scope: incremental_images_only
   train_validation_overlap_allowed: false
 
+derived_artifacts:
+  allowed:
+    - incremental_positive_prototype
+    - incremental_threshold_calibration
+  required_scope: incremental_dataset_only
+  forbidden_sources:
+    - old_raw_images
+    - old_raw_labels
+    - old_cached_features
+
 mode_contracts:
   class_incremental:
     require_nonempty_base_classes: true

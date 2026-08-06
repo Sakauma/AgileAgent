@@ -14,6 +14,7 @@ import yaml
 from PIL import Image
 
 from fair_agent.core.config import ROOT, rel_path, resolve_path
+from fair_agent.modules.detection_fusion import arbitrate_cross_class_conflicts
 
 
 GLOBAL_CLASS_NAMES = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
@@ -559,6 +560,31 @@ def class_aware_nms(predictions: Sequence[Mapping[str, Any]], iou_threshold: flo
     return output
 
 
+def fuse_old_new_predictions(
+    old_predictions: Sequence[Mapping[str, Any]],
+    new_predictions: Sequence[Mapping[str, Any]],
+    *,
+    nms_iou: float,
+    cross_class: Mapping[str, Any] | None = None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    settings = dict(cross_class or {})
+    if settings.get("enabled", False):
+        old_kept, new_kept, decisions = arbitrate_cross_class_conflicts(
+            old_predictions,
+            new_predictions,
+            float(settings.get("iou", 0.50)),
+            float(settings.get("base_confidence", 0.50)),
+            float(settings.get("incremental_margin", settings.get("specialist_margin", 0.15))),
+            None,
+            bool(settings.get("preserve_base_class_owners", True)),
+        )
+    else:
+        old_kept = [dict(row) for row in old_predictions]
+        new_kept = [dict(row) for row in new_predictions]
+        decisions = []
+    return class_aware_nms(old_kept + new_kept, float(nms_iou)), decisions
+
+
 def subset_rows(rows: Sequence[Mapping[str, Any]], image_ids: Iterable[str]) -> List[Dict[str, Any]]:
     allowed = set(image_ids)
     return [dict(row) for row in rows if str(row["image_id"]) in allowed]
@@ -628,21 +654,64 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     try:
         threshold = float(profile["activation_threshold"])
         new_global_id = int(profile["new_global_id"])
-        mapping = {int(key): int(value) for key, value in profile["base_local_to_global"].items()}
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"严格增量实验档字段无效：{profile_id}") from exc
-    if not 0.01 <= threshold <= 1.0 or set(mapping) != {0, 1, 2} or new_global_id in mapping.values():
+    single_detector = profile.get("deployment") == "single_detector"
+    if single_detector:
+        mapping = {
+            int(key): int(key) for key in profile.get("class_names", GLOBAL_CLASS_NAMES)
+        }
+        if set(mapping) != set(GLOBAL_CLASS_NAMES) or mapping != {
+            class_id: class_id for class_id in GLOBAL_CLASS_NAMES
+        }:
+            raise ValueError(f"严格增量统一学生类别映射无效：{profile_id}")
+        weight_fields = (
+            ("teacher_weight", "teacher_sha256"),
+            ("model_weight", "model_sha256"),
+        )
+    else:
+        try:
+            mapping = {
+                int(key): int(value)
+                for key, value in profile["base_local_to_global"].items()
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"严格增量实验档类别映射无效：{profile_id}") from exc
+        if set(mapping) != {0, 1, 2} or new_global_id in mapping.values():
+            raise ValueError(f"严格增量实验档类别映射或阈值无效：{profile_id}")
+        weight_fields = (
+            ("base_weight", "base_sha256"),
+            ("specialist_weight", "specialist_sha256"),
+        )
+    if not 0.01 <= threshold <= 1.0:
         raise ValueError(f"严格增量实验档类别映射或阈值无效：{profile_id}")
-    for path_key, hash_key in (("base_weight", "base_sha256"), ("specialist_weight", "specialist_sha256")):
+    for path_key, hash_key in weight_fields:
         weight = resolve_path(profile[path_key])
         if not weight.exists() or sha256_file(weight) != profile[hash_key]:
             raise ValueError(f"严格增量实验档权重校验失败：{profile_id}:{path_key}")
+    prototype_source = profile.get("positive_prototype_source")
+    if prototype_source:
+        prototype_path = resolve_path(prototype_source)
+        expected = str(profile.get("positive_prototype_sha256") or "")
+        if not prototype_path.exists() or sha256_file(prototype_path) != expected:
+            raise ValueError(f"严格增量实验档原型校验失败：{profile_id}")
+        prototype = json.loads(prototype_path.read_text(encoding="utf-8"))
+        if (
+            not prototype.get("calibrated")
+            or int(prototype.get("class_id", -1)) != new_global_id
+            or prototype.get("learning_data_scope") != "incremental_dataset_only"
+        ):
+            raise ValueError(f"严格增量实验档原型证据无效：{profile_id}")
+        profile["positive_prototype"] = prototype
     calibration = resolve_path(profile.get("calibration_source", "__missing_calibration__"))
     if not calibration.exists():
         raise ValueError(f"严格增量实验档缺少校准证据：{profile_id}")
+    evidence_weight = profile.get("base_weight") or profile.get("model_weight")
+    if not evidence_weight:
+        raise ValueError(f"严格增量实验档缺少评测权重：{profile_id}")
     metrics_path = resolve_path(
         profile.get("metrics_source")
-        or (Path(profile["base_weight"]).parent / "metrics.json")
+        or (Path(str(evidence_weight)).parent / "metrics.json")
     )
     if not metrics_path.exists():
         raise ValueError(f"严格增量实验档缺少评测证据：{profile_id}")
@@ -656,6 +725,8 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     ):
         raise ValueError(f"严格增量实验档合规证据无效：{profile_id}")
     profile["metrics_source"] = rel_path(metrics_path)
+    profile["deployment"] = "single_detector" if single_detector else "dual_detector"
+    profile["base_local_to_global"] = mapping
     profile["lock_precision"] = metrics.get("lock_deployment_metrics", {}).get("precision")
     profile["lock_recall"] = metrics.get("lock_deployment_metrics", {}).get("recall")
     profile["lock_false_activation_rate"] = metrics.get("false_activation", {}).get("false_activation_rate")

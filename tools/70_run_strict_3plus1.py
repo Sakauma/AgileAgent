@@ -27,13 +27,18 @@ if str(ROOT) not in sys.path:
 
 from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.runtime_log import StructuredEventLog, event_log_from_config, mirror_state_event
+from fair_agent.modules.incremental_rejection import (
+    apply_positive_prototype,
+    calibrate_positive_prototype,
+    fit_positive_prototype,
+)
 from fair_agent.modules.strict_incremental import (
     GLOBAL_CLASS_NAMES,
     bootstrap_metrics,
     build_protocol_dataset,
     calibrate_threshold,
-    class_aware_nms,
     evaluate_ap50,
+    fuse_old_new_predictions,
     image_class_ids,
     load_yaml,
     materialize_lock_data,
@@ -208,6 +213,23 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
     if not protocol_checks:
         errors.append("未声明任何增量协议")
     checks["protocols"] = protocol_checks
+
+    prototype_cfg = dict(config.get("prototype_gate", {}))
+    checks["prototype_gate"] = prototype_cfg
+    if prototype_cfg.get("enabled", False):
+        if int(prototype_cfg.get("grid_size", 0)) < 4:
+            errors.append("prototype_gate.grid_size 不能小于4")
+        if not 0.0 < float(prototype_cfg.get("target_recall", 0.0)) <= 1.0:
+            errors.append("prototype_gate.target_recall 必须位于(0, 1]")
+        if float(prototype_cfg.get("safety_factor", 0.0)) < 1.0:
+            errors.append("prototype_gate.safety_factor 不能小于1")
+    cross_class = dict(config.get("fusion", {}).get("cross_class", {}))
+    checks["cross_class_fusion"] = cross_class
+    if cross_class.get("enabled", False):
+        if not 0.0 <= float(cross_class.get("iou", -1.0)) <= 1.0:
+            errors.append("fusion.cross_class.iou 必须位于[0, 1]")
+        if not 0.0 <= float(cross_class.get("base_confidence", -1.0)) <= 1.0:
+            errors.append("fusion.cross_class.base_confidence 必须位于[0, 1]")
 
     ultralytics_ready = importlib.util.find_spec("ultralytics") is not None
     checks["ultralytics"] = ultralytics_ready
@@ -808,6 +830,12 @@ def write_protocol_report(report_dir: Path, result: Mapping[str, Any]) -> None:
         "calibration_threshold": result["calibration"]["selected"]["threshold"],
         "calibration_precision": result["calibration"]["selected"]["precision"],
         "calibration_recall": result["calibration"]["selected"]["recall"],
+        "prototype_rejected": result.get("positive_prototype", {}).get(
+            "lock_rejected_candidate_count", 0
+        ),
+        "fusion_rejected": result.get("fusion", {}).get(
+            "rejected_incremental_count", 0
+        ),
         "evaluator_error": result["evaluator_error"],
         "accepted": result["accepted"],
     }
@@ -834,6 +862,8 @@ def write_protocol_report(report_dir: Path, result: Mapping[str, Any]) -> None:
         f"- 校准 precision/recall：{result['calibration']['selected']['precision']:.5f} / {result['calibration']['selected']['recall']:.5f}",
         f"- lock precision/recall：{result['lock_deployment_metrics']['precision']:.5f} / {result['lock_deployment_metrics']['recall']:.5f}",
         f"- lock 图像误激活率：{result['false_activation']['false_activation_rate']:.5f}",
+        f"- 正样本原型拒绝候选数：{result.get('positive_prototype', {}).get('lock_rejected_candidate_count', 0)}",
+        f"- 跨类冲突拒绝候选数：{result.get('fusion', {}).get('rejected_incremental_count', 0)}",
         f"- 自定义评测误差：{result['evaluator_error']:.6f}",
         f"- 共享参数相对漂移：{result.get('shared_parameter_relative_drift', 0.0):.6f}",
         f"- bootstrap New-mAP50 95% CI：[{result['bootstrap']['new_map50']['ci95_low']:.5f}, {result['bootstrap']['new_map50']['ci95_high']:.5f}]",
@@ -865,6 +895,7 @@ def freeze_profile(
     specialist_weight: Path,
     calibration: Mapping[str, Any],
     report_dir: Path,
+    prototype_path: Path | None = None,
 ) -> Dict[str, Any]:
     profile_root = resolve_path(config["paths"]["freeze_root"]) / protocol["id"]
     version_dir = profile_root / run_id
@@ -877,6 +908,9 @@ def freeze_profile(
     shutil.copy2(base_weight, frozen_base)
     shutil.copy2(specialist_weight, frozen_specialist)
     frozen_calibration.write_text(json.dumps(calibration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    frozen_prototype = version_dir / "positive_prototype.json" if prototype_path else None
+    if prototype_path is not None and frozen_prototype is not None:
+        shutil.copy2(prototype_path, frozen_prototype)
     shutil.copy2(report_dir / "metrics.json", version_dir / "metrics.json")
     metrics = json.loads((report_dir / "metrics.json").read_text(encoding="utf-8"))
     local_to_global = {int(key): int(value) for key, value in protocol["base_local_to_global"].items()}
@@ -904,6 +938,17 @@ def freeze_profile(
         "lock_precision": metrics["lock_deployment_metrics"]["precision"],
         "lock_recall": metrics["lock_deployment_metrics"]["recall"],
         "lock_false_activation_rate": metrics["false_activation"]["false_activation_rate"],
+        "fusion_policy": metrics.get("fusion", {}).get("cross_class", {}),
+        "positive_prototype": (
+            json.loads(frozen_prototype.read_text(encoding="utf-8"))
+            if frozen_prototype is not None else None
+        ),
+        "positive_prototype_source": (
+            rel_path(frozen_prototype) if frozen_prototype is not None else None
+        ),
+        "positive_prototype_sha256": (
+            sha256_file(frozen_prototype) if frozen_prototype is not None else None
+        ),
     }
     (version_dir / "profile.json").write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     pointer = profile_root / "active.json"
@@ -948,6 +993,7 @@ def freeze_student_profile(
     student_weight: Path,
     calibration: Mapping[str, Any],
     report_dir: Path,
+    prototype_path: Path | None = None,
 ) -> Dict[str, Any]:
     profile_root = resolve_path(config["paths"]["freeze_root"]) / protocol["id"]
     version_dir = profile_root / run_id
@@ -961,6 +1007,9 @@ def freeze_student_profile(
     shutil.copy2(student_weight, frozen_student)
     shutil.copy2(report_dir / "metrics.json", version_dir / "metrics.json")
     frozen_calibration.write_text(json.dumps(calibration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    frozen_prototype = version_dir / "positive_prototype.json" if prototype_path else None
+    if prototype_path is not None and frozen_prototype is not None:
+        shutil.copy2(prototype_path, frozen_prototype)
     metrics = json.loads((report_dir / "metrics.json").read_text(encoding="utf-8"))
     profile = {
         "schema_version": 2,
@@ -980,6 +1029,10 @@ def freeze_student_profile(
         "model_weight": rel_path(frozen_student),
         "model_sha256": sha256_file(frozen_student),
         "class_names": GLOBAL_CLASS_NAMES,
+        "base_local_to_global": {
+            class_id: class_id for class_id in GLOBAL_CLASS_NAMES
+        },
+        "base_local_names": GLOBAL_CLASS_NAMES,
         "new_class": protocol["new_class"],
         "new_global_id": int(protocol["new_global_id"]),
         "activation_threshold": float(calibration["selected"]["threshold"]),
@@ -990,6 +1043,17 @@ def freeze_student_profile(
         "krr": float(metrics["krr"]),
         "full_map50": float(metrics["full_map50"]),
         "old_channel_max_abs_drift": float(metrics["old_channel_max_abs_drift"]),
+        "fusion_policy": metrics.get("fusion", {}).get("cross_class", {}),
+        "positive_prototype": (
+            json.loads(frozen_prototype.read_text(encoding="utf-8"))
+            if frozen_prototype is not None else None
+        ),
+        "positive_prototype_source": (
+            rel_path(frozen_prototype) if frozen_prototype is not None else None
+        ),
+        "positive_prototype_sha256": (
+            sha256_file(frozen_prototype) if frozen_prototype is not None else None
+        ),
     }
     (version_dir / "profile.json").write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     pointer = profile_root / "active.json"
@@ -1238,6 +1302,7 @@ def run_protocol(
 
     new_id = int(protocol["new_global_id"])
     incremental_phase = "student" if unified_student else "incremental"
+    incremental_train = read_split(dataset_dir / incremental_phase / "splits" / "train.txt")
     incremental_val = read_split(dataset_dir / incremental_phase / "splits" / "val.txt")
     incremental_predictor = YOLO(str(incremental_weight))
     incremental_mapping = {class_id: class_id for class_id in GLOBAL_CLASS_NAMES} if unified_student else {0: new_id}
@@ -1257,6 +1322,61 @@ def run_protocol(
     dev_ground_truth = yolo_ground_truth(incremental_val)
     if not unified_student:
         dev_ground_truth = remap_ground_truth(dev_ground_truth, {0: new_id})
+    prototype_gate_cfg = dict(config.get("prototype_gate", {}))
+    positive_prototype: Dict[str, Any] | None = None
+    prototype_path: Path | None = None
+    dev_prototype_rejections: list[Dict[str, Any]] = []
+    if prototype_gate_cfg.get("enabled", False):
+        train_ground_truth = yolo_ground_truth(incremental_train)
+        if not unified_student:
+            train_ground_truth = remap_ground_truth(train_ground_truth, {0: new_id})
+        positive_prototype = fit_positive_prototype(
+            incremental_train,
+            train_ground_truth,
+            new_id,
+            grid_size=int(prototype_gate_cfg.get("grid_size", 8)),
+            minimum_scale=float(prototype_gate_cfg.get("minimum_scale", 0.10)),
+        )
+        positive_prototype = calibrate_positive_prototype(
+            positive_prototype,
+            incremental_val,
+            dev_predictions,
+            dev_ground_truth,
+            target_recall=float(prototype_gate_cfg.get("target_recall", 0.95)),
+            safety_factor=float(prototype_gate_cfg.get("safety_factor", 1.10)),
+            iou_threshold=float(prototype_gate_cfg.get("iou_threshold", 0.50)),
+        )
+        dev_predictions, dev_prototype_rejections = apply_positive_prototype(
+            dev_predictions,
+            incremental_val,
+            positive_prototype,
+        )
+        prototype_path = report_dir / "positive_prototype.json"
+        prototype_path.write_text(
+            json.dumps(positive_prototype, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        rejected_path = report_dir / "predictions" / "dev_prototype_rejected.jsonl"
+        rejected_path.parent.mkdir(parents=True, exist_ok=True)
+        rejected_path.write_text(
+            "".join(
+                json.dumps(row, ensure_ascii=False) + "\n"
+                for row in dev_prototype_rejections
+            ),
+            encoding="utf-8",
+        )
+        _audit_event(
+            config,
+            protocol_id,
+            "POSITIVE_PROTOTYPE_CALIBRATED",
+            source="incremental_train_and_dev_only",
+            train_positive_count=positive_prototype["train_positive_count"],
+            dev_positive_count=positive_prototype["dev_positive_count"],
+            distance_threshold=positive_prototype["distance_threshold"],
+            rejected_dev_candidate_count=len(dev_prototype_rejections),
+            artifact=rel_path(prototype_path),
+            artifact_sha256=sha256_file(prototype_path),
+        )
     calibration_cfg = config["calibration"]
     calibration = calibrate_threshold(
         dev_predictions,
@@ -1307,7 +1427,7 @@ def run_protocol(
         "lock_base",
         report_dir / "predictions" / "lock_base.jsonl",
     )
-    incremental_predictions, incremental_inference_ms, incremental_reference_map50 = validator_records(
+    raw_incremental_predictions, incremental_inference_ms, incremental_reference_map50 = validator_records(
         incremental_predictor,
         student_dataset if unified_student else incremental_dataset,
         "test",
@@ -1321,12 +1441,46 @@ def run_protocol(
         report_dir / "predictions" / "lock_incremental.jsonl",
     )
     ground_truth = yolo_ground_truth(lock_images)
-    combined_predictions = (
-        incremental_predictions
-        if unified_student
-        else class_aware_nms(base_predictions + incremental_predictions, float(config["fusion"]["nms_iou"]))
-    )
+    incremental_predictions = list(raw_incremental_predictions)
+    lock_prototype_rejections: list[Dict[str, Any]] = []
+    if positive_prototype is not None:
+        incremental_predictions, lock_prototype_rejections = apply_positive_prototype(
+            incremental_predictions,
+            incremental_test_images,
+            positive_prototype,
+        )
+        rejected_path = report_dir / "predictions" / "lock_prototype_rejected.jsonl"
+        rejected_path.write_text(
+            "".join(
+                json.dumps(row, ensure_ascii=False) + "\n"
+                for row in lock_prototype_rejections
+            ),
+            encoding="utf-8",
+        )
     old_ids = sorted(base_mapping.values())
+    if unified_student:
+        candidate_old_predictions = [
+            row for row in incremental_predictions if int(row["class_id"]) in old_ids
+        ]
+        candidate_new_predictions = [
+            row for row in incremental_predictions if int(row["class_id"]) == new_id
+        ]
+    else:
+        candidate_old_predictions = list(base_predictions)
+        candidate_new_predictions = list(incremental_predictions)
+    combined_predictions, fusion_decisions = fuse_old_new_predictions(
+        candidate_old_predictions,
+        candidate_new_predictions,
+        nms_iou=float(config["fusion"]["nms_iou"]),
+        cross_class=config["fusion"].get("cross_class"),
+    )
+    fusion_path = report_dir / "predictions" / "lock_fusion_decisions.jsonl"
+    fusion_path.write_text(
+        "".join(
+            json.dumps(row, ensure_ascii=False) + "\n" for row in fusion_decisions
+        ),
+        encoding="utf-8",
+    )
     retention = retention_metrics(base_predictions, combined_predictions, ground_truth, old_ids)
     old_metrics = retention["before_metrics"]
     new_metrics = evaluate_ap50(combined_predictions, ground_truth, [new_id])
@@ -1336,7 +1490,11 @@ def run_protocol(
     old_prediction_equivalent = bool(retention["old_prediction_equivalent"])
     krr = float(retention["krr"])
     reference_map50 = incremental_reference_map50 if unified_student else base_reference_map50
-    evaluator_error = abs(reference_map50 - (float(full_metrics["map50"]) if unified_student else old_before))
+    raw_reference_metric = (
+        float(evaluate_ap50(raw_incremental_predictions, ground_truth, GLOBAL_CLASS_NAMES)["map50"])
+        if unified_student else old_before
+    )
+    evaluator_error = abs(reference_map50 - raw_reference_metric)
     old_channel_drift = (
         old_classification_row_drift(base_weight, incremental_weight, base_mapping)
         if unified_student
@@ -1379,7 +1537,14 @@ def run_protocol(
         "new_map50": float(new_metrics["map50"]) >= float(acceptance["min_new_map50"]),
         "base_map50": old_before >= float(acceptance.get("min_base_map50", 0.0)),
         "krr": krr >= float(acceptance["min_krr"]),
-        "old_prediction_equivalence": old_prediction_equivalent,
+        # A dual-model candidate must leave every old prediction byte-for-byte
+        # equivalent. A unified student is instead governed by KRR plus frozen
+        # old classification rows because its selected shared channels may move.
+        "old_prediction_equivalence": old_prediction_equivalent if not unified_student else True,
+        "prototype_incremental_only": (
+            positive_prototype is None
+            or positive_prototype.get("learning_data_scope") == "incremental_dataset_only"
+        ),
         "calibration_precision": bool(calibration["passed"]) and float(calibration["selected"]["precision"]) >= float(acceptance["min_calibration_precision"]),
         "evaluator_consistency": evaluator_error <= float(acceptance["max_evaluator_error"]),
         "base_weight_unchanged": base_weight_drift <= float(acceptance["max_base_weight_drift"]),
@@ -1439,8 +1604,42 @@ def run_protocol(
         "krr": krr,
         "old_prediction_equivalent": old_prediction_equivalent,
         "ultralytics_base_map50": reference_map50,
+        "raw_reference_map50": raw_reference_metric,
         "evaluator_error": evaluator_error,
         "calibration": calibration,
+        "positive_prototype": {
+            "enabled": positive_prototype is not None,
+            "artifact": rel_path(prototype_path) if prototype_path is not None else None,
+            "artifact_sha256": sha256_file(prototype_path) if prototype_path is not None else None,
+            "method": positive_prototype.get("method") if positive_prototype else None,
+            "distance_threshold": (
+                float(positive_prototype["distance_threshold"])
+                if positive_prototype else None
+            ),
+            "train_positive_count": (
+                int(positive_prototype["train_positive_count"])
+                if positive_prototype else 0
+            ),
+            "dev_positive_count": (
+                int(positive_prototype["dev_positive_count"])
+                if positive_prototype else 0
+            ),
+            "dev_rejected_candidate_count": len(dev_prototype_rejections),
+            "lock_rejected_candidate_count": len(lock_prototype_rejections),
+            "learning_data_scope": (
+                positive_prototype.get("learning_data_scope")
+                if positive_prototype else None
+            ),
+        },
+        "fusion": {
+            "nms_iou": float(config["fusion"]["nms_iou"]),
+            "cross_class": dict(config["fusion"].get("cross_class", {})),
+            "decision_count": len(fusion_decisions),
+            "rejected_incremental_count": sum(
+                row.get("action") == "reject_specialist" for row in fusion_decisions
+            ),
+            "artifact": rel_path(fusion_path),
+        },
         "lock_deployment_metrics": lock_pr,
         "false_activation": false_activation,
         "sensor_metrics": subgroup,
@@ -1468,11 +1667,13 @@ def run_protocol(
     if accepted:
         if unified_student:
             result["profile"] = freeze_student_profile(
-                config, protocol, run_id, base_weight, incremental_weight, calibration, report_dir
+                config, protocol, run_id, base_weight, incremental_weight, calibration,
+                report_dir, prototype_path
             )
         else:
             result["profile"] = freeze_profile(
-                config, protocol, run_id, base_weight, incremental_weight, calibration, report_dir
+                config, protocol, run_id, base_weight, incremental_weight, calibration,
+                report_dir, prototype_path
             )
         (report_dir / "metrics.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

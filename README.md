@@ -32,7 +32,7 @@ flowchart LR
     M --> C
 ```
 
-当前 production 为“增量检测生产代际”：基础检测器负责 `soldier`、`small_aircraft` 和 `tank`，增量检测器当前验证绑定为 `warship`。四类统一 YOLO11s 仅作为性能上限基准，不参与默认推理和回滚。
+当前 production 仍为已验收的“双检测器增量代际”，不会被实验自动覆盖。严格时序3+1候选改为 `YOLO-IOD-lite` 四类统一学生：旧类检测头行冻结，只允许在117张增量图上训练新类行和受控共享通道，并用增量正样本原型及跨类框级竞争抑制误激活。候选只有通过全部门禁后才允许进入发布流程。
 
 ## 当前状态
 
@@ -40,7 +40,7 @@ flowchart LR
 | --- | --- | --- |
 | x86 NVIDIA GPU 推理 | 可用 | 默认 PyTorch CUDA 加载模型权重，不提供 CPU 回退 |
 | Web / CLI | 可用 | 支持检测、决策展示、增量数据管理和结构化日志 |
-| 舰船 3+1 类别增量 | 待按新划分重验 | 旧随机划分证据已归档；本次只建立新的固定 3+1 清单，未重新训练 |
+| 舰船 3+1 类别增量 | 改进候选待重验 | 新时序划分基线已完成；统一学生、正样本原型和跨类冲突裁决尚待服务器复核 |
 | 多轮增量 | 已完成机制验证 | 四批次连续回归和三组共 21 轮压力回归均通过当前硬门禁 |
 | Ascend 310B | 待硬件验证 | 尚无 OM、AscendCL 和真实板端 FPS |
 | 官方隐藏测试提交 | 待赛题信息 | 测试目录和提交格式确认前保持阻塞 |
@@ -171,7 +171,14 @@ agile-agent benchmark-api
 agile-agent experiment run --config configs/incremental/warship_3plus1.yaml
 ```
 
-`benchmark-api` 使用 `splits/strict_3plus1/mixed_test.txt` 中的 89 张旧类与新类混合图像；缺少原始数据时不能用合成图替代正式性能验收。本次划分整理没有启动训练。
+`benchmark-api` 使用 `splits/strict_3plus1/mixed_test.txt` 中的 89 张旧类与新类混合图像；缺少原始数据时不能用合成图替代正式性能验收。严格训练入口固定为：
+
+```bash
+python tools/70_run_strict_3plus1.py --check-only
+python tools/70_run_strict_3plus1.py --run-id UNIQUE_RUN_ID
+```
+
+增量训练阶段只可读取117张 `increment_train` 和18张 `increment_dev`，冻结基础权重可作为教师在这些增量图上推理。正样本原型同样只能由这两份增量清单生成；89张 `mixed_test` 只在模型、阈值和原型全部冻结后解封。
 
 ## 使用方式
 
@@ -267,6 +274,8 @@ Web 与 CLI 使用同一状态机和配置，批次状态、任务日志及最�
 | 四类统一 YOLO11s | 单模型上限参考 | mAP50 0.91202 | `benchmark_only` |
 
 现有 production 曾在已归档旧划分上完成复核：基础检测器与增量检测器先对全部 95 张无标签图像共同推理，标签只在预测完成后用于评分。组合 mAP50 为 `0.81613`，舰船 precision 为 `1.000`、recall 为 `0.80247`；74 张不含舰船的图像中误激活 0 张。这些数值不是新活动划分上的结果，也不是官方隐藏测试成绩；当前 `89` 张混合测试集必须在重新训练后独立复核。
+
+新时序划分的独立专家基线已在服务器完成：Old-mAP50 `0.75546`、New-mAP50 `0.79128`、KRR `0.99889`、四类 mAP50 `0.76379`。主要缺口是 soldier AP50 `0.47156`，以及旧类图上的舰船误激活率 `0.30`；该基线未通过内部门禁且没有替换 production。
 
 本次 RTX 4060 Laptop、Ultralytics CUDA 组合复核的模型平均推理观察值为 `520.28 ms/图`，未达到内部 x86 时延目标，因此作为非阻塞告警保留。该数值未经 TensorRT 批处理优化，不是 API 总耗时，也不能替代 Ascend 310B 实测 FPS。
 

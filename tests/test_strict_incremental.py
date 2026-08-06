@@ -69,6 +69,13 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
     assert config["bootstrap"]["iterations"] == 1000
     assert config["predict"]["evaluation_batch"] == 1
     assert config["predict"]["rect"] is True
+    assert config["common"]["batch"] == 32
+    assert config["adaptation"]["mode"] == "yolo_iod_lite"
+    assert config["protocols"][0]["build_unified_student"] is True
+    assert config["protocols"][0]["base_local_to_global"] == {0: 0, 1: 1, 2: 3}
+    assert config["protocols"][0]["new_global_id"] == 2
+    assert config["prototype_gate"]["enabled"] is True
+    assert config["fusion"]["cross_class"]["enabled"] is True
     runner = Path("tools/70_run_strict_3plus1.py").read_text(encoding="utf-8")
     assert 'mp_context=get_context("spawn")' in runner
     assert 'getattr(result, "path", "")' in runner
@@ -444,3 +451,61 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
         assert "权重校验失败" in str(exc)
     else:
         raise AssertionError("篡改后的实验档被接受")
+
+
+def test_unified_student_profile_is_hash_verified_and_discoverable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(strict, "ROOT", tmp_path)
+    profile_root = tmp_path / "models" / "profiles" / "warship-incremental"
+    profile_root.mkdir(parents=True)
+    teacher = tmp_path / "teacher.pt"
+    student = tmp_path / "student.pt"
+    teacher.write_bytes(b"teacher")
+    student.write_bytes(b"student")
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text('{"selected":{"threshold":0.7}}', encoding="utf-8")
+    prototype = tmp_path / "positive_prototype.json"
+    prototype.write_text(json.dumps({
+        "calibrated": True,
+        "class_id": 2,
+        "learning_data_scope": "incremental_dataset_only",
+    }), encoding="utf-8")
+    metrics = tmp_path / "metrics.json"
+    metrics.write_text(json.dumps({
+        "accepted": True,
+        "incremental_mode": "class_incremental",
+        "learning_data_scope": "incremental_dataset_only",
+        "old_raw_image_count": 0,
+        "gates": {"data": True},
+        "lock_deployment_metrics": {"precision": 0.8, "recall": 0.7},
+        "false_activation": {"false_activation_rate": 0.1},
+    }), encoding="utf-8")
+    payload = {
+        "profile_id": "warship-incremental",
+        "acceptance": "passed",
+        "incremental_mode": "class_incremental",
+        "evidence_level": "verified",
+        "deployment": "single_detector",
+        "activation_threshold": 0.7,
+        "new_global_id": 2,
+        "class_names": {"0": "soldier", "1": "small_aircraft", "2": "warship", "3": "tank"},
+        "calibration_source": str(calibration),
+        "metrics_source": str(metrics),
+        "teacher_weight": str(teacher),
+        "teacher_sha256": hashlib.sha256(b"teacher").hexdigest(),
+        "model_weight": str(student),
+        "model_sha256": hashlib.sha256(b"student").hexdigest(),
+        "positive_prototype_source": str(prototype),
+        "positive_prototype_sha256": hashlib.sha256(prototype.read_bytes()).hexdigest(),
+    }
+    (profile_root / "active.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = load_experiment_profile("warship-incremental")
+
+    assert loaded["deployment"] == "single_detector"
+    assert loaded["base_local_to_global"] == {0: 0, 1: 1, 2: 2, 3: 3}
+    assert loaded["positive_prototype"]["class_id"] == 2
+    assert loaded["deployment_accepted"] is True
+    discovered = strict.discover_experiment_profiles(profile_root.parent)
+    assert discovered["verified_count"] == 1

@@ -490,36 +490,66 @@ def cmd_detect(args: argparse.Namespace) -> int:
         if args.profile:
             profile = load_experiment_profile(args.profile)
             class_names = {int(key): str(value) for key, value in profile["class_names"].items()}
-            base_mapping = {int(key): int(value) for key, value in profile["base_local_to_global"].items()}
-            settings.update({
-                "detector_path": resolve_path(profile["base_weight"]),
-                "class_names": class_names,
-                "base_class_ids": list(base_mapping.values()),
-                "base_local_to_global": base_mapping,
-                "generation_id": f"experiment-{profile['profile_id']}",
-                "base_model_id": f"{profile['profile_id']}_base",
-                "class_owners": {
-                    **{global_id: f"{profile['profile_id']}_base" for global_id in base_mapping.values()},
-                    int(profile["new_global_id"]): profile["profile_id"],
-                },
-                "protocols": {
-                    profile["profile_id"]: {
-                        "id": profile["profile_id"],
-                        "class_name": profile["new_class"],
-                        "new_class": profile["new_class"],
-                        "global_class_id": int(profile["new_global_id"]),
-                        "incremental_mode": "class_incremental",
-                        "weights": resolve_path(profile["specialist_weight"]),
-                        "new_map50": float(profile["new_map50"]),
-                        "krr": float(profile["krr"]),
-                        "available": True,
-                        "activation_threshold": float(profile["activation_threshold"]),
-                        "calibration_source": profile["calibration_source"],
-                        "routing_prior": float(config["routing"]["default_routing_prior"]),
-                        "context_prior": {},
-                    }
-                },
-            })
+            base_mapping = {
+                int(key): int(value)
+                for key, value in profile["base_local_to_global"].items()
+            }
+            if profile.get("deployment") == "single_detector":
+                student_id = f"{profile['profile_id']}_student"
+                prototype = profile.get("positive_prototype")
+                settings.update({
+                    "detector_path": resolve_path(profile["model_weight"]),
+                    "class_names": class_names,
+                    "base_class_ids": list(base_mapping.values()),
+                    "base_local_to_global": base_mapping,
+                    "generation_id": f"experiment-{profile['profile_id']}",
+                    "base_model_id": student_id,
+                    "class_owners": {
+                        global_id: student_id for global_id in base_mapping.values()
+                    },
+                    "protocols": {},
+                    "unified_class_gates": {
+                        "activation_thresholds": {
+                            int(profile["new_global_id"]): float(profile["activation_threshold"])
+                        },
+                        "positive_prototypes": (
+                            {int(profile["new_global_id"]): prototype}
+                            if isinstance(prototype, dict) else {}
+                        ),
+                    },
+                })
+            else:
+                profile_id = profile["profile_id"]
+                settings.update({
+                    "detector_path": resolve_path(profile["base_weight"]),
+                    "class_names": class_names,
+                    "base_class_ids": list(base_mapping.values()),
+                    "base_local_to_global": base_mapping,
+                    "generation_id": f"experiment-{profile_id}",
+                    "base_model_id": f"{profile_id}_base",
+                    "class_owners": {
+                        **{global_id: f"{profile_id}_base" for global_id in base_mapping.values()},
+                        int(profile["new_global_id"]): profile_id,
+                    },
+                    "protocols": {
+                        profile_id: {
+                            "id": profile_id,
+                            "class_name": profile["new_class"],
+                            "new_class": profile["new_class"],
+                            "global_class_id": int(profile["new_global_id"]),
+                            "incremental_mode": "class_incremental",
+                            "weights": resolve_path(profile["specialist_weight"]),
+                            "new_map50": float(profile["new_map50"]),
+                            "krr": float(profile["krr"]),
+                            "available": True,
+                            "activation_threshold": float(profile["activation_threshold"]),
+                            "calibration_source": profile["calibration_source"],
+                            "routing_prior": float(config["routing"]["default_routing_prior"]),
+                            "context_prior": {},
+                            "positive_prototype": profile.get("positive_prototype"),
+                        }
+                    },
+                })
         engine = WebInferenceEngine(
             settings["detector_path"],
             settings["context_path"],
@@ -535,6 +565,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
             class_owners=settings["class_owners"],
             backend_name=settings["backend"],
             native_options=settings["native_backend"],
+            unified_class_gates=settings.get("unified_class_gates"),
         )
         result = engine.predict(
             image,
