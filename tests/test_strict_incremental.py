@@ -400,10 +400,12 @@ def test_every_lock_image_is_seen_by_both_class_owners_and_artifacts_are_hashed(
     class Model:
         def __init__(self) -> None:
             self.inputs: list[str] = []
+            self.image_sizes: list[int] = []
 
         def predict(self, **kwargs):
             source = str(kwargs["source"])
             self.inputs.append(source)
+            self.image_sizes.append(int(kwargs["imgsz"]))
             return [Result(source)]
 
     image_dir = tmp_path / "images"
@@ -424,6 +426,9 @@ def test_every_lock_image_is_seen_by_both_class_owners_and_artifacts_are_hashed(
             "batch": 32,
             "evaluation_batch": 1,
             "rect": True,
+            "base_imgsz": 896,
+            "incremental_imgsz": 640,
+            "augment": False,
         },
         "fusion": {"nms_iou": 0.60, "cross_class": {"enabled": False}},
         "agent_structure": {
@@ -451,6 +456,8 @@ def test_every_lock_image_is_seen_by_both_class_owners_and_artifacts_are_hashed(
     expected = [str(path) for path in images]
     assert base.inputs == expected
     assert specialist.inputs == expected
+    assert base.image_sizes == [896, 896]
+    assert specialist.image_sizes == [640, 640]
     assert frozen["audit"]["base_and_incremental_input_stems_identical"] is True
     assert frozen["audit"]["label_aware_routing"] is False
     assert frozen["audit"]["scene_hard_routing"] is False

@@ -284,6 +284,23 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
     for phase, patience in effective_patience.items():
         if patience != 0:
             errors.append(f"{phase} 必须设置 patience=0 以禁用 EarlyStopping")
+    predict_cfg = dict(config.get("predict", {}))
+    inference_sizes = {
+        "base": int(
+            predict_cfg.get("base_imgsz", config.get("common", {}).get("imgsz", 0))
+        ),
+        "incremental": int(
+            predict_cfg.get(
+                "incremental_imgsz", config.get("common", {}).get("imgsz", 0)
+            )
+        ),
+    }
+    checks["inference_image_sizes"] = inference_sizes
+    for owner, imgsz in inference_sizes.items():
+        if imgsz <= 0 or imgsz % 32:
+            errors.append(f"{owner} owner 推理分辨率必须为正整数且能被32整除")
+    if bool(predict_cfg.get("augment", False)):
+        errors.append("严格计分当前禁止 TTA；各 owner 仅运行一次固定尺度推理")
     acceptance = dict(config.get("acceptance", {}))
     checks["score_acceptance"] = acceptance
     required_score_keys = {"min_base_map50", "min_new_map50", "min_krr"}
@@ -698,10 +715,11 @@ def predict_records(
     config: Mapping[str, Any],
     device: str,
     source_name: str,
+    imgsz: int | None = None,
 ) -> tuple[list[Dict[str, Any]], float]:
     predict = dict(config["predict"])
     predict_args = {
-        "imgsz": int(config["common"]["imgsz"]),
+        "imgsz": int(imgsz if imgsz is not None else config["common"]["imgsz"]),
         "conf": float(predict["conf"]),
         "iou": float(predict["iou"]),
         "max_det": int(predict["max_det"]),
@@ -777,6 +795,12 @@ def predict_records(
     return rows, inference_ms
 
 
+def owner_inference_imgsz(config: Mapping[str, Any], owner: str) -> int:
+    predict = dict(config.get("predict", {}))
+    key = "base_imgsz" if owner == "base" else "incremental_imgsz"
+    return int(predict.get(key, config["common"]["imgsz"]))
+
+
 def write_jsonl_artifact(
     path: Path,
     rows: Sequence[Mapping[str, Any]],
@@ -850,6 +874,7 @@ def freeze_unlabeled_lock_predictions(
         config,
         device,
         "frozen_base_model",
+        owner_inference_imgsz(config, "base"),
     )
     raw_incremental_predictions, incremental_inference_ms = predict_records(
         incremental_predictor,
@@ -858,6 +883,7 @@ def freeze_unlabeled_lock_predictions(
         config,
         device,
         "incremental_student" if unified_student else "incremental_specialist",
+        owner_inference_imgsz(config, "incremental"),
     )
 
     incremental_predictions = list(raw_incremental_predictions)
@@ -902,6 +928,13 @@ def freeze_unlabeled_lock_predictions(
             "base_input_stems": input_stems,
             "incremental_input_stems": input_stems,
             "base_and_incremental_inputs_identical": True,
+            "owner_inference_imgsz": {
+                "base": owner_inference_imgsz(config, "base"),
+                "incremental": owner_inference_imgsz(config, "incremental"),
+            },
+            "test_time_augmentation": bool(
+                config.get("predict", {}).get("augment", False)
+            ),
             "scene_hard_routing": bool(agent_structure["scene_hard_routing"]),
             "label_aware_routing": bool(agent_structure["label_aware_routing"]),
             "filename_class_routing": bool(agent_structure["filename_class_routing"]),
@@ -1030,13 +1063,14 @@ def validator_records(
     project: Path,
     name: str,
     artifact_path: Path,
+    imgsz: int | None = None,
 ) -> tuple[list[Dict[str, Any]], float, float]:
     predict = config["predict"]
     metrics = model.val(
         validator=recording_validator_class(),
         data=str(dataset),
         split=split,
-        imgsz=int(config["common"]["imgsz"]),
+        imgsz=int(imgsz if imgsz is not None else config["common"]["imgsz"]),
         batch=int(predict.get("evaluation_batch", predict["batch"])),
         conf=float(predict["conf"]),
         iou=float(predict["iou"]),
@@ -1270,6 +1304,8 @@ def freeze_profile(
         "lock_recall": metrics["lock_deployment_metrics"]["recall"],
         "lock_false_activation_rate": metrics["false_activation"]["false_activation_rate"],
         "fusion_policy": metrics.get("fusion", {}).get("cross_class", {}),
+        "base_imgsz": int(metrics["inference_image_sizes"]["base"]),
+        "specialist_imgsz": int(metrics["inference_image_sizes"]["incremental"]),
         "positive_prototype": (
             json.loads(frozen_prototype.read_text(encoding="utf-8"))
             if frozen_prototype is not None else None
@@ -1689,6 +1725,7 @@ def run_protocol(
         report_dir / "ultralytics",
         "base_dev",
         report_dir / "predictions" / "base_dev.jsonl",
+        owner_inference_imgsz(config, "base"),
     )
     base_dev_ground_truth = remap_ground_truth(
         yolo_ground_truth(base_val_images), base_mapping
@@ -1727,6 +1764,7 @@ def run_protocol(
         report_dir / "ultralytics",
         "dev_incremental",
         report_dir / "predictions" / "dev_incremental.jsonl",
+        owner_inference_imgsz(config, "incremental"),
     )
     dev_ground_truth = yolo_ground_truth(incremental_val)
     if not unified_student:
@@ -1995,6 +2033,10 @@ def run_protocol(
         "specialist_local_to_global": (None if unified_student else {0: new_id}),
         "adaptation_mode": adaptation_mode,
         "agent_structure": dict(config.get("agent_structure", {})),
+        "inference_image_sizes": {
+            "base": owner_inference_imgsz(config, "base"),
+            "incremental": owner_inference_imgsz(config, "incremental"),
+        },
         "base_weight": rel_path(base_weight),
         "base_weight_sha256": base_hash_before,
         "student_weight": rel_path(incremental_weight) if unified_student else None,

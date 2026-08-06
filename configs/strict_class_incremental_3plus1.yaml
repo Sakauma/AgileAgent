@@ -90,6 +90,10 @@ predict:
   batch: 32
   evaluation_batch: 1
   rect: true
+  # 只依据各自 dev 集冻结；基础小目标受益于更高分辨率，增量专家保持训练尺度。
+  base_imgsz: 896
+  incremental_imgsz: 640
+  augment: false
 
 fusion:
   nms_iou: 0.60
