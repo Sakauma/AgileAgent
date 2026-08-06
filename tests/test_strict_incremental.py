@@ -614,6 +614,52 @@ def test_training_history_records_epochs_best_epoch_and_early_stop(tmp_path: Pat
     assert history["stopped_early"] is True
     assert len(history["epochs"]) == 2
 
+    with pytest.raises(RuntimeError, match="未跑满规定 epoch"):
+        script["training_history"](
+            model,
+            "base",
+            5,
+            require_full_epochs=True,
+        )
+
+    complete = script["training_history"](
+        model,
+        "base",
+        2,
+        require_full_epochs=True,
+    )
+    assert complete["stopped_early"] is False
+
+
+def test_strict_training_arguments_disable_early_stopping() -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+    config = load_yaml("configs/strict_class_incremental_3plus1.yaml")
+    arguments = script["train_arguments"](
+        config,
+        "base_train",
+        Path("dataset.yaml"),
+        Path("runs"),
+        "base",
+        "0",
+    )
+    assert config["training_policy"] == {
+        "require_full_epochs": True,
+        "checkpoint_metric": "map50",
+    }
+    assert arguments["epochs"] == 160
+    assert arguments["patience"] == 0
+
+    config["base_train"]["patience"] = 1
+    with pytest.raises(ValueError, match="patience=0"):
+        script["train_arguments"](
+            config,
+            "base_train",
+            Path("dataset.yaml"),
+            Path("runs"),
+            "base",
+            "0",
+        )
+
 
 def test_context_class_weights_allow_a_missing_incremental_scene() -> None:
     script = runpy.run_path("tools/60_train_scene_sensor.py")

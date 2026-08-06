@@ -196,7 +196,7 @@ python tools/70_run_strict_3plus1.py --check-only
 python tools/70_run_strict_3plus1.py --run-id UNIQUE_RUN_ID
 ```
 
-增量训练阶段只可读取117张 `increment_train` 和18张 `increment_dev`，基础权重在增量阶段保持哈希不变。可选正样本原型也只能由这两份增量清单生成；当前计分主线不使用原型硬过滤。89张 `mixed_test` 只在模型和阈值全部冻结后解封。
+增量训练阶段只可读取117张 `increment_train` 和18张 `increment_dev`，基础权重在增量阶段保持哈希不变。基础训练固定跑满160 epoch，增量专家固定跑满80 epoch，`patience=0` 禁用 EarlyStopping；达到评分门槛不得提前结束，最终 `best.pt` 从完整 epoch 预算中按验证集 `mAP50` 最高值选择。训练审计若发现任一阶段少跑一个 epoch 即判为失败。可选正样本原型也只能由这两份增量清单生成；当前计分主线不使用原型硬过滤。89张 `mixed_test` 只在模型和阈值全部冻结后解封。
 
 ## 使用方式
 

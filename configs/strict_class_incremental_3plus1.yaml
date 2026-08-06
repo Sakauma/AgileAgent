@@ -20,11 +20,17 @@ runtime:
     NCCL_P2P_DISABLE: "1"
     NCCL_IB_DISABLE: "1"
 
+training_policy:
+  # 必须跑满各阶段规定的 epoch；达到计分门槛不能触发提前停止。
+  require_full_epochs: true
+  checkpoint_metric: map50
+
 common:
   imgsz: 640
   batch: 32
   optimizer: AdamW
-  patience: 30
+  # Ultralytics 中 patience=0 明确禁用 EarlyStopping。
+  patience: 0
   cache: false
   plots: true
   amp: true
@@ -32,7 +38,6 @@ common:
 
 base_train:
   epochs: 160
-  patience: 40
   lr0: 0.001
   lrf: 0.01
   cos_lr: true

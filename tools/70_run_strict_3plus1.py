@@ -250,6 +250,23 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
     checks["training_batch"] = int(config.get("common", {}).get("batch", 0))
     if checks["training_batch"] != 32:
         errors.append("严格 3+1 当前基准要求 batch=32")
+    training_policy = dict(config.get("training_policy", {}))
+    common_train = dict(config.get("common", {}))
+    effective_patience = {
+        phase: int({**common_train, **dict(config.get(phase, {}))}.get("patience", -1))
+        for phase in ("base_train", "incremental_train")
+    }
+    checks["training_policy"] = {
+        **training_policy,
+        "effective_patience": effective_patience,
+    }
+    if training_policy.get("require_full_epochs") is not True:
+        errors.append("training_policy.require_full_epochs 必须为 true")
+    if training_policy.get("checkpoint_metric") != "map50":
+        errors.append("training_policy.checkpoint_metric 必须为 map50")
+    for phase, patience in effective_patience.items():
+        if patience != 0:
+            errors.append(f"{phase} 必须设置 patience=0 以禁用 EarlyStopping")
     acceptance = dict(config.get("acceptance", {}))
     checks["score_acceptance"] = acceptance
     required_score_keys = {"min_base_map50", "min_new_map50", "min_krr"}
@@ -375,7 +392,13 @@ def best_weight(model: Any, train_result: Any) -> Path:
     raise FileNotFoundError("训练结束但未找到 best.pt 或 last.pt")
 
 
-def training_history(model: Any, phase: str, requested_epochs: int) -> Dict[str, Any]:
+def training_history(
+    model: Any,
+    phase: str,
+    requested_epochs: int,
+    *,
+    require_full_epochs: bool = False,
+) -> Dict[str, Any]:
     trainer = model.trainer
     results_path = Path(trainer.save_dir) / "results.csv"
     rows: list[Dict[str, Any]] = []
@@ -397,7 +420,7 @@ def training_history(model: Any, phase: str, requested_epochs: int) -> Dict[str,
     )
     best_row = max(rows, key=lambda row: float(row.get(metric_key, float("-inf")))) if metric_key else None
     completed_epochs = len(rows)
-    return {
+    history = {
         "phase": phase,
         "results_csv": rel_path(results_path) if results_path.exists() else None,
         "requested_epochs": int(requested_epochs),
@@ -410,6 +433,12 @@ def training_history(model: Any, phase: str, requested_epochs: int) -> Dict[str,
         "checkpoint_metric": getattr(trainer, "_checkpoint_metric", None),
         "epochs": rows,
     }
+    if require_full_epochs and completed_epochs != int(requested_epochs):
+        raise RuntimeError(
+            f"{phase} 未跑满规定 epoch："
+            f"completed={completed_epochs} requested={int(requested_epochs)}"
+        )
+    return history
 
 
 def _trainer_model(trainer: Any) -> Any:
@@ -580,6 +609,9 @@ def train_arguments(
         "seed": int(config["seed"]),
         "exist_ok": False,
     })
+    if config.get("training_policy", {}).get("require_full_epochs") is True:
+        if int(common.get("patience", -1)) != 0:
+            raise ValueError(f"{phase} 必须设置 patience=0 以禁用 EarlyStopping")
     return common
 
 
@@ -611,6 +643,9 @@ def method_train_arguments(
             "exist_ok": False,
         }
     )
+    if config.get("training_policy", {}).get("require_full_epochs") is True:
+        if int(arguments.get("patience", -1)) != 0:
+            raise ValueError(f"methods.{method}.{stage} 必须设置 patience=0 以禁用 EarlyStopping")
     return arguments
 
 
@@ -1426,6 +1461,7 @@ def run_protocol(
                 base_model,
                 "base",
                 int(config["base_train"]["epochs"]),
+                require_full_epochs=bool(config["training_policy"]["require_full_epochs"]),
             )
             method_audit["base_checkpoint_reused"] = False
         _audit_event(
@@ -1469,6 +1505,7 @@ def run_protocol(
                 current_model,
                 "duet_current",
                 int(config["methods"][adaptation_mode]["current_task_train"]["epochs"]),
+                require_full_epochs=bool(config["training_policy"]["require_full_epochs"]),
             ))
             final_weight = run_dir / "duet_final" / "weights" / "best.pt"
             method_audit.update(
@@ -1513,6 +1550,7 @@ def run_protocol(
                 current_model,
                 "yolo_iod_current_teacher",
                 int(config["methods"][adaptation_mode]["current_teacher_train"]["epochs"]),
+                require_full_epochs=bool(config["training_policy"]["require_full_epochs"]),
             ))
             student_model = YOLO(str(config.get("adaptation", {}).get("student_init", config["model"])))
             student_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
@@ -1547,6 +1585,7 @@ def run_protocol(
                 student_model,
                 "yolo_iod_student",
                 int(config["methods"][adaptation_mode]["student_train"]["epochs"]),
+                require_full_epochs=bool(config["training_policy"]["require_full_epochs"]),
             ))
             method_audit.update(
                 dict(getattr(student_model.trainer, "_incremental_method_audit", {}))
@@ -1574,6 +1613,7 @@ def run_protocol(
                 student_model,
                 "incremental_student",
                 int(config["student_train"]["epochs"]),
+                require_full_epochs=bool(config["training_policy"]["require_full_epochs"]),
             ))
         else:
             specialist_model = YOLO(str(base_weight))
@@ -1586,6 +1626,7 @@ def run_protocol(
                 specialist_model,
                 "incremental_specialist",
                 int(config["incremental_train"]["epochs"]),
+                require_full_epochs=bool(config["training_policy"]["require_full_epochs"]),
             ))
         _audit_event(
             config,
