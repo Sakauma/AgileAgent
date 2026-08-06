@@ -582,7 +582,13 @@ def fuse_old_new_predictions(
         old_kept = [dict(row) for row in old_predictions]
         new_kept = [dict(row) for row in new_predictions]
         decisions = []
-    return class_aware_nms(old_kept + new_kept, float(nms_iou)), decisions
+    # The base validator has already applied NMS. Re-running NMS on old rows can
+    # silently remove an old prediction and lower KRR even though the base model
+    # is byte-for-byte frozen. Only the newly introduced class owner needs a
+    # second NMS pass before the two disjoint ownership streams are concatenated.
+    fused = [dict(row) for row in old_kept]
+    fused.extend(class_aware_nms(new_kept, float(nms_iou)))
+    return fused, decisions
 
 
 def subset_rows(rows: Sequence[Mapping[str, Any]], image_ids: Iterable[str]) -> List[Dict[str, Any]]:

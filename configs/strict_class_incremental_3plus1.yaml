@@ -60,50 +60,22 @@ incremental_train:
   copy_paste: 0.0
 
 adaptation:
-  # 四类统一学生：旧类行冻结，仅使用增量图像做非对称蒸馏和关键通道更新。
-  mode: yolo_iod_lite
-  student_init: yolo11s.pt
-  max_old_channel_drift: 0.000001
+  # 旧类由冻结基础检测器永久负责；增量专家只学习新类。
+  mode: frozen_base_plus_new_specialist
 
-methods:
-  yolo_iod_lite:
-    implementation_level: yolo11s_lightweight_adaptation
-    paper_basis: AAAI-2026-YOLO-IOD
-    kernel_selection_ratio: 0.25
-    kernel_selection_exclude: [.cv3.]
-    distill_quantile: 0.75
-    minimum_teacher_confidence: 0.01
-    loss_weights:
-      old_class: 0.10
-      old_bbox: 0.03
-      old_feature: 0.01
-      current_class: 0.25
-      current_bbox: 0.05
-      current_feature: 0.02
-    cpr:
-      enabled: false
-      reason: strict_increment_images_have_no_old_class_cooccurrence
-    current_teacher_train:
-      epochs: 40
-      lr0: 0.001
-      lrf: 0.01
-      cos_lr: true
-      close_mosaic: 10
-      mosaic: 0.80
-      mixup: 0.0
-      copy_paste: 0.0
-    student_train:
-      epochs: 40
-      lr0: 0.0003
-      lrf: 0.01
-      cos_lr: true
-      close_mosaic: 10
-      mosaic: 0.50
-      mixup: 0.0
-      copy_paste: 0.0
+agent_structure:
+  architecture: parallel_base_incremental_experts
+  inference_scope: every_image
+  old_class_owner: frozen_base
+  new_class_owner: incremental_specialist
+  fusion_level: detection_boxes
+  scene_hard_routing: false
+  label_aware_routing: false
+  filename_class_routing: false
 
 predict:
-  conf: 0.001
+  # 与最终 Agent profile 共用，避免评测时低阈值、部署时高阈值的不一致。
+  conf: 0.01
   iou: 0.70
   max_det: 300
   batch: 32
@@ -120,8 +92,8 @@ fusion:
     preserve_base_class_owners: true
 
 prototype_gate:
-  # 只保存由增量正样本得到的紧凑原型，不保存任何旧类图像或旧类特征。
-  enabled: true
+  # 原型拒识保留为可选风险诊断；当前计分主线不硬过滤候选框，避免损伤 mAP。
+  enabled: false
   grid_size: 8
   minimum_scale: 0.10
   target_recall: 0.95
@@ -129,6 +101,7 @@ prototype_gate:
   iou_threshold: 0.50
 
 calibration:
+  deployment_threshold: 0.01
   threshold_min: 0.01
   threshold_max: 0.99
   threshold_step: 0.01
@@ -140,13 +113,10 @@ bootstrap:
   strata: [sensor, class_presence]
 
 acceptance:
+  # 官方三项计分：基础测试 mAP50、新增类别 New-mAP50、旧类知识保持率。
   min_base_map50: 0.80
   min_new_map50: 0.60
   min_krr: 0.95
-  min_full_map50: 0.80
-  min_calibration_precision: 0.99
-  min_lock_precision: 0.70
-  max_false_activation_rate: 0.15
   max_evaluator_error: 0.005
   max_base_weight_drift: 0.0
 
@@ -161,6 +131,7 @@ protocols:
     new_class: warship
     new_global_id: 2
     base_local_to_global: {0: 0, 1: 1, 2: 3}
-    build_unified_student: true
-    expected_incremental_counts: {train: 117, val: 18, lock_positive: 19}
+    build_unified_student: false
+    # lock 类别数量只能在无标签预测冻结后由评分器获知。
+    expected_incremental_counts: {train: 117, val: 18}
     preferred_device: "0"

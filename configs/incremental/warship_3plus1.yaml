@@ -31,7 +31,6 @@ partition:
       expected_counts:
         train: 117
         dev: 18
-        lock_positive: 19
 
 training:
   adapter_config: configs/strict_class_incremental_3plus1.yaml
@@ -43,7 +42,7 @@ acceptance:
   min_base_map50: 0.80
   min_new_map50: 0.60
   min_krr: 0.95
-  min_full_map50: 0.80
+  # 以下 precision/误激活参数只生成诊断，不参与赛题三项计分。
   calibration_target_precision: 0.99
   min_lock_precision: 0.70
   max_false_activation_rate: 0.15

@@ -363,8 +363,6 @@ def write_strict_3plus1_protocol(
         "increment_train": increment_train,
         "increment_dev": increment_dev,
         "mixed_test": mixed_test,
-        "mixed_test_old_positive": old_test,
-        "mixed_test_new_positive": new_test,
         # 场景识别是独立的已知场景任务，可使用所有类别来源的图像，
         # 但训练代码只能读取场景/传感器标签，不能读取目标类别标签。
         "scene_train": list(pools["pool_train"]),
@@ -386,6 +384,11 @@ def write_strict_3plus1_protocol(
         "increment_class_id": new_id,
         "increment_class_name": class_names[new_id],
         "counts": {name: len(values) for name, values in lists.items()},
+        "mixed_test_composition": {
+            "old_class_images": len(old_test),
+            "new_class_images": len(new_test),
+            "membership_lists_published": False,
+        },
         "paths": {
             name: (output_dir / f"{name}.txt").relative_to(ROOT).as_posix()
             for name in lists
@@ -408,10 +411,20 @@ def write_strict_3plus1_protocol(
             "scene_to_target_class_hard_binding_allowed": False,
         },
         "evaluation": {
+            "base_test_map": "所有 owner 完成完整 mixed_test 无标签推理并冻结预测后，按不含 increment_class_id 的图像子集及 base_class_ids 计分。",
             "old_map_before": "父代在完整 mixed_test 上推理后按 base_class_ids 计分。",
             "old_map_after": "增量后候选代在同一完整 mixed_test 上按 base_class_ids 计分。",
             "new_map": "候选代在同一完整 mixed_test 上按 increment_class_id 计分。",
             "krr": "old_map_after / old_map_before",
+            "score_gates": {
+                "base_test_map50": 0.80,
+                "new_map50": 0.60,
+                "krr": 0.95,
+            },
+            "full_map50_role": "diagnostic_only",
+            "unlabeled_inference_before_scoring": True,
+            "label_aware_routing_allowed": False,
+            "scene_hard_routing_allowed": False,
         },
     }
     _write_json(output_dir / "manifest.json", manifest)
@@ -440,9 +453,12 @@ def active_readme(
             f"| 单类增量验证 | `strict_3plus1/increment_dev.txt` | {counts['increment_dev']} | {protocol['increment_class_name']} |",
             f"| 最终混合测试 | `strict_3plus1/mixed_test.txt` | {counts['mixed_test']} | 全部四类 |",
             "",
-            f"混合测试集由 {counts['mixed_test_old_positive']} 张旧类图和 "
-            f"{counts['mixed_test_new_positive']} 张新增类图组成；不要求同一张图同时含旧类和新类。",
-            "父代和增量后的候选代都必须对完整混合测试集推理，再分别计算 Old-mAP、New-mAP 和 KRR。",
+            f"混合测试集由 {protocol['mixed_test_composition']['old_class_images']} 张旧类图和 "
+            f"{protocol['mixed_test_composition']['new_class_images']} 张新增类图组成；不要求同一张图同时含旧类和新类。",
+            "活动目录不发布旧/新增类别成员清单，单张测试图身份在预测冻结前保持未知。",
+            "冻结基础检测器和增量专家都必须先对完整混合测试集的每张图执行无标签推理并冻结预测，再解封标签评分。",
+            "正式门槛固定为基础测试代理 mAP50 >= 0.80、New-mAP50 >= 0.60、KRR >= 0.95；base_dev 只用于选权重，四类总体 mAP50 只作诊断。",
+            "不得依据测试标签、文件名、数据集身份或场景类别决定是否运行某个类别 owner。",
             "",
             "`pool_train.txt` 与 `pool_dev.txt` 只是生成上述模型专用清单的源池，不能直接作为三类基础检测器的训练数据。",
             "",

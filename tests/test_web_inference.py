@@ -264,6 +264,33 @@ def test_class_incremental_route_does_not_require_base_same_class() -> None:
     assert skipped == []
 
 
+def test_class_incremental_owners_are_not_dropped_by_specialist_budget() -> None:
+    protocols = {
+        f"p{class_id}": {
+            "available": True,
+            "incremental_mode": "class_incremental",
+            "global_class_id": class_id,
+            "activation_threshold": 0.5,
+            "calibration_source": f"p{class_id}/calibration.json",
+            "routing_prior": 0.5,
+        }
+        for class_id in (4, 5, 6)
+    }
+
+    eligible, executed, skipped = plan_specialist_routes(
+        protocols,
+        [],
+        {},
+        {0, 1, 2, 3},
+        1,
+        *ROUTING_ARGS[1:],
+    )
+
+    assert {row["id"] for row in eligible} == {"p4", "p5", "p6"}
+    assert {row["id"] for row in executed} == {"p4", "p5", "p6"}
+    assert skipped == []
+
+
 def test_target_incremental_route_requires_base_class_but_not_scene_match() -> None:
     protocol = {
         "available": True,
@@ -300,6 +327,18 @@ def test_fusion_preserves_unmatched_base_and_removes_same_class_duplicate() -> N
     assert any(item["xyxy"] == [40, 40, 60, 60] for item in fused)
     assert any(item["source"] == "incremental_model" for item in fused)
     assert summary == {"input_count": 3, "output_count": 2, "suppressed_count": 1}
+
+
+def test_fusion_does_not_renms_a_frozen_base_only_owner_stream() -> None:
+    rows = [
+        {"class_id": 0, "confidence": 0.90, "xyxy": [0, 0, 20, 20], "source": "frozen_base_model"},
+        {"class_id": 0, "confidence": 0.80, "xyxy": [1, 1, 19, 19], "source": "frozen_base_model"},
+    ]
+
+    fused, summary = class_aware_nms(rows, 0.60)
+
+    assert len(fused) == 2
+    assert summary == {"input_count": 2, "output_count": 2, "suppressed_count": 0}
 
 
 def test_cross_class_conflict_suppression_uses_configured_margin() -> None:

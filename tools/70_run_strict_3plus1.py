@@ -144,7 +144,17 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
             try:
                 rows = read_split(split_path)
                 missing = [rel_path(path) for path in rows if not path.is_file()]
-                missing_labels = [rel_path(path) for path in rows if path.is_file() and not source_label(path).is_file()]
+                # The lock split is an image-only interface until both models
+                # have finished inference and their predictions are frozen.
+                missing_labels = (
+                    []
+                    if split_name == "lock"
+                    else [
+                        rel_path(path)
+                        for path in rows
+                        if path.is_file() and not source_label(path).is_file()
+                    ]
+                )
             except (OSError, ValueError) as exc:
                 errors.append(f"{split_name} 划分不可读：{exc}")
                 continue
@@ -182,17 +192,29 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
                 )
             )
             item["adaptation_mode"] = adaptation_mode
+            item["build_unified_student"] = bool(protocol.get("build_unified_student", False))
             if adaptation_mode in {"duet_yolo11s", "yolo_iod_lite"}:
                 if not protocol.get("build_unified_student"):
                     raise ValueError(f"{adaptation_mode} 必须生成四类 student 数据视图")
                 if adaptation_mode not in config.get("methods", {}):
                     raise ValueError(f"缺少 methods.{adaptation_mode} 配置")
+            elif adaptation_mode == "frozen_base_plus_new_specialist" and protocol.get(
+                "build_unified_student"
+            ):
+                raise ValueError("双检测器 Agent 不应生成或训练四类 student 数据视图")
             new_id = int(protocol["new_global_id"])
             counts = {
                 split_name: sum(new_id in image_class_ids(image) for image in rows)
                 for split_name, rows in split_rows.items()
+                if split_name in {"train", "val"}
             }
             item["incremental_image_counts"] = counts
+            item["base_only_image_counts"] = {
+                split_name: sum(new_id not in image_class_ids(image) for image in rows)
+                for split_name, rows in split_rows.items()
+                if split_name in {"train", "val"}
+            }
+            item["lock_label_access"] = "forbidden_before_unlabeled_prediction_freeze"
             expected = protocol.get("expected_incremental_counts", {})
             for split_name in ("train", "val"):
                 if split_name in expected and counts.get(split_name) != int(expected[split_name]):
@@ -200,11 +222,6 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
                         f"{protocol_id} {split_name} 新增类样本数不符："
                         f"expected={expected[split_name]} actual={counts.get(split_name)}"
                     )
-            if "lock_positive" in expected and counts.get("lock") != int(expected["lock_positive"]):
-                errors.append(
-                    f"{protocol_id} lock 新增类样本数不符："
-                    f"expected={expected['lock_positive']} actual={counts.get('lock')}"
-                )
             item["valid"] = True
         except (KeyError, OSError, TypeError, ValueError) as exc:
             item["valid"] = False
@@ -213,6 +230,32 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
     if not protocol_checks:
         errors.append("未声明任何增量协议")
     checks["protocols"] = protocol_checks
+
+    agent_structure = dict(config.get("agent_structure", {}))
+    checks["agent_structure"] = agent_structure
+    expected_agent = {
+        "architecture": "parallel_base_incremental_experts",
+        "inference_scope": "every_image",
+        "old_class_owner": "frozen_base",
+        "new_class_owner": "incremental_specialist",
+        "fusion_level": "detection_boxes",
+        "scene_hard_routing": False,
+        "label_aware_routing": False,
+        "filename_class_routing": False,
+    }
+    for key, expected_value in expected_agent.items():
+        if agent_structure.get(key) != expected_value:
+            errors.append(f"agent_structure.{key} 必须为 {expected_value}")
+
+    checks["training_batch"] = int(config.get("common", {}).get("batch", 0))
+    if checks["training_batch"] != 32:
+        errors.append("严格 3+1 当前基准要求 batch=32")
+    acceptance = dict(config.get("acceptance", {}))
+    checks["score_acceptance"] = acceptance
+    required_score_keys = {"min_base_map50", "min_new_map50", "min_krr"}
+    missing_score_keys = sorted(required_score_keys - set(acceptance))
+    if missing_score_keys:
+        errors.append(f"缺少赛题计分门槛：{missing_score_keys}")
 
     prototype_cfg = dict(config.get("prototype_gate", {}))
     checks["prototype_gate"] = prototype_cfg
@@ -230,6 +273,8 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
             errors.append("fusion.cross_class.iou 必须位于[0, 1]")
         if not 0.0 <= float(cross_class.get("base_confidence", -1.0)) <= 1.0:
             errors.append("fusion.cross_class.base_confidence 必须位于[0, 1]")
+        if not bool(cross_class.get("preserve_base_class_owners", False)):
+            errors.append("双检测器 Agent 必须保留基础类别 owner 的预测")
 
     ultralytics_ready = importlib.util.find_spec("ultralytics") is not None
     checks["ultralytics"] = ultralytics_ready
@@ -362,12 +407,43 @@ def training_history(model: Any, phase: str, requested_epochs: int) -> Dict[str,
         "best_metric_value": float(best_row[metric_key]) if best_row and metric_key else None,
         "stopped_early": completed_epochs < int(requested_epochs),
         "stop_reason": "early_stopping_or_interruption" if completed_epochs < int(requested_epochs) else "epoch_budget_reached",
+        "checkpoint_metric": getattr(trainer, "_checkpoint_metric", None),
         "epochs": rows,
     }
 
 
 def _trainer_model(trainer: Any) -> Any:
     return trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+
+
+def configure_map50_checkpointing(trainer: Any) -> None:
+    """Make best.pt and early stopping follow the competition mAP50 metric."""
+    from types import MethodType
+
+    metrics = getattr(getattr(trainer, "validator", None), "metrics", None)
+    box = getattr(metrics, "box", None)
+    if box is None:
+        raise RuntimeError("Ultralytics validator 尚未初始化，无法按 mAP50 选择权重")
+
+    def map50_fitness(metric: Any) -> float:
+        return float(metric.map50)
+
+    box.fitness = MethodType(map50_fitness, box)
+    trainer._checkpoint_metric = "metrics/mAP50(B)"
+
+
+def competition_score_gates(
+    base_map50: float,
+    new_map50: float,
+    krr: float,
+    acceptance: Mapping[str, Any],
+) -> Dict[str, bool]:
+    """Return only the three score-bearing gates stated by the competition."""
+    return {
+        "base_map50": float(base_map50) >= float(acceptance["min_base_map50"]),
+        "new_map50": float(new_map50) >= float(acceptance["min_new_map50"]),
+        "krr": float(krr) >= float(acceptance["min_krr"]),
+    }
 
 
 def configure_expanded_student(
@@ -649,6 +725,196 @@ def predict_records(
     return rows, inference_ms
 
 
+def write_jsonl_artifact(
+    path: Path,
+    rows: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Freeze one prediction-stage artifact without allowing silent overwrite."""
+    if path.exists():
+        raise FileExistsError(f"拒绝覆盖冻结评测记录：{path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(dict(row), ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return {
+        "path": rel_path(path),
+        "sha256": sha256_file(path),
+        "row_count": len(rows),
+    }
+
+
+def write_json_artifact(path: Path, payload: Mapping[str, Any]) -> Dict[str, Any]:
+    if path.exists():
+        raise FileExistsError(f"拒绝覆盖冻结评测记录：{path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(dict(payload), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "path": rel_path(path),
+        "sha256": sha256_file(path),
+    }
+
+
+def freeze_unlabeled_lock_predictions(
+    base_predictor: Any,
+    incremental_predictor: Any,
+    lock_images: Sequence[Path],
+    base_mapping: Mapping[int, int],
+    incremental_mapping: Mapping[int, int],
+    config: Mapping[str, Any],
+    device: str,
+    new_class_id: int,
+    unified_student: bool,
+    positive_prototype: Mapping[str, Any] | None,
+    report_dir: Path,
+) -> Dict[str, Any]:
+    """Run every class owner on every lock image without opening any label.
+
+    This function is deliberately label-blind. It accepts only image paths,
+    frozen models and frozen inference/fusion settings, then persists hashes of
+    all prediction artifacts before the caller is allowed to unseal labels.
+    """
+    input_stems = [path.stem for path in lock_images]
+    if not input_stems or len(input_stems) != len(set(input_stems)):
+        raise ValueError("mixed_test 必须非空且图像 stem 唯一")
+    agent_structure = dict(config.get("agent_structure", {}))
+    if agent_structure.get("inference_scope") != "every_image":
+        raise ValueError("类别增量计分必须在每张 mixed_test 图像运行全部 owner")
+    for forbidden_flag in (
+        "scene_hard_routing",
+        "label_aware_routing",
+        "filename_class_routing",
+    ):
+        if bool(agent_structure.get(forbidden_flag, True)):
+            raise ValueError(f"严格计分禁止 agent_structure.{forbidden_flag}")
+
+    base_predictions, base_inference_ms = predict_records(
+        base_predictor,
+        lock_images,
+        base_mapping,
+        config,
+        device,
+        "frozen_base_model",
+    )
+    raw_incremental_predictions, incremental_inference_ms = predict_records(
+        incremental_predictor,
+        lock_images,
+        incremental_mapping,
+        config,
+        device,
+        "incremental_student" if unified_student else "incremental_specialist",
+    )
+
+    incremental_predictions = list(raw_incremental_predictions)
+    prototype_rejections: list[Dict[str, Any]] = []
+    if positive_prototype is not None:
+        incremental_predictions, prototype_rejections = apply_positive_prototype(
+            incremental_predictions,
+            lock_images,
+            positive_prototype,
+        )
+
+    old_class_ids = set(int(value) for value in base_mapping.values())
+    if unified_student:
+        candidate_old_predictions = [
+            row
+            for row in incremental_predictions
+            if int(row["class_id"]) in old_class_ids
+        ]
+        candidate_new_predictions = [
+            row
+            for row in incremental_predictions
+            if int(row["class_id"]) == int(new_class_id)
+        ]
+    else:
+        candidate_old_predictions = list(base_predictions)
+        candidate_new_predictions = list(incremental_predictions)
+    combined_predictions, fusion_decisions = fuse_old_new_predictions(
+        candidate_old_predictions,
+        candidate_new_predictions,
+        nms_iou=float(config["fusion"]["nms_iou"]),
+        cross_class=config["fusion"].get("cross_class"),
+    )
+
+    prediction_dir = report_dir / "predictions"
+    input_artifact = write_json_artifact(
+        prediction_dir / "lock_unlabeled_inputs.json",
+        {
+            "schema_version": 1,
+            "input_mode": "unlabeled_images",
+            "image_count": len(lock_images),
+            "image_stems": input_stems,
+            "base_input_stems": input_stems,
+            "incremental_input_stems": input_stems,
+            "base_and_incremental_inputs_identical": True,
+            "scene_hard_routing": bool(agent_structure["scene_hard_routing"]),
+            "label_aware_routing": bool(agent_structure["label_aware_routing"]),
+            "filename_class_routing": bool(agent_structure["filename_class_routing"]),
+        },
+    )
+    artifacts = {
+        "inputs": input_artifact,
+        "base_raw": write_jsonl_artifact(
+            prediction_dir / "lock_base_unlabeled.jsonl", base_predictions
+        ),
+        "incremental_raw": write_jsonl_artifact(
+            prediction_dir / "lock_incremental_unlabeled.jsonl",
+            raw_incremental_predictions,
+        ),
+        "incremental_prototype_rejected": write_jsonl_artifact(
+            prediction_dir / "lock_prototype_rejected.jsonl",
+            prototype_rejections,
+        ),
+        "fusion_decisions": write_jsonl_artifact(
+            prediction_dir / "lock_fusion_decisions.jsonl", fusion_decisions
+        ),
+        "fused": write_jsonl_artifact(
+            prediction_dir / "lock_fused_unlabeled.jsonl", combined_predictions
+        ),
+    }
+    return {
+        "base_predictions": base_predictions,
+        "raw_incremental_predictions": raw_incremental_predictions,
+        "incremental_predictions": incremental_predictions,
+        "combined_predictions": combined_predictions,
+        "fusion_decisions": fusion_decisions,
+        "prototype_rejections": prototype_rejections,
+        "base_inference_ms": base_inference_ms,
+        "incremental_inference_ms": incremental_inference_ms,
+        "artifacts": artifacts,
+        "audit": {
+            "unlabeled_inference_completed_before_lock_labels": True,
+            "input_image_count": len(lock_images),
+            "base_input_stems_equal_mixed_test": True,
+            "incremental_input_stems_equal_mixed_test": True,
+            "base_and_incremental_input_stems_identical": True,
+            "scene_hard_routing": bool(agent_structure["scene_hard_routing"]),
+            "label_aware_routing": bool(agent_structure["label_aware_routing"]),
+            "filename_class_routing": bool(agent_structure["filename_class_routing"]),
+            "fusion_inputs": "boxes_confidence_iou_and_fixed_class_owners_only",
+        },
+    }
+
+
+def base_test_image_ids(
+    lock_images: Sequence[Path],
+    ground_truth: Sequence[Mapping[str, Any]],
+    new_class_id: int,
+) -> list[str]:
+    """Select the new-class-free base-test proxy after labels are unsealed."""
+    classes_by_image: Dict[str, set[int]] = {path.stem: set() for path in lock_images}
+    for row in ground_truth:
+        classes_by_image.setdefault(str(row["image_id"]), set()).add(int(row["class_id"]))
+    return [
+        path.stem
+        for path in lock_images
+        if int(new_class_id) not in classes_by_image.get(path.stem, set())
+    ]
+
+
 def remap_ground_truth(rows: Sequence[Mapping[str, Any]], mapping: Mapping[int, int]) -> list[Dict[str, Any]]:
     normalized = {int(key): int(value) for key, value in mapping.items()}
     return [{**row, "class_id": normalized[int(row["class_id"])]} for row in rows]
@@ -822,12 +1088,15 @@ def write_protocol_report(report_dir: Path, result: Mapping[str, Any]) -> None:
     )
     flat = {
         "protocol": result["protocol"],
+        "base_test_map50": result["base_test_map50"],
+        "base_dev_map50": result["base_dev_map50"],
+        "new_map50": result["new_map50"],
+        "krr": result["krr"],
         "old_map50_before": result["old_map50_before"],
         "old_map50_after": result["old_map50_after"],
-        "new_map50": result["new_map50"],
         "full_map50": result["full_map50"],
-        "krr": result["krr"],
-        "calibration_threshold": result["calibration"]["selected"]["threshold"],
+        "deployment_threshold": result["calibration"]["deployment_threshold"],
+        "diagnostic_calibration_threshold": result["calibration"]["selected"]["threshold"],
         "calibration_precision": result["calibration"]["selected"]["precision"],
         "calibration_recall": result["calibration"]["selected"]["recall"],
         "prototype_rejected": result.get("positive_prototype", {}).get(
@@ -854,12 +1123,15 @@ def write_protocol_report(report_dir: Path, result: Mapping[str, Any]) -> None:
         f"- 基础类别：{', '.join(result['base_classes'])}",
         f"- 新增类别：{result['new_class']}",
         f"- 增量方法：{result['adaptation_mode']}",
+        f"- 赛题基础测试 mAP50：{result['base_test_map50']:.5f}",
+        f"- 赛题 New-mAP50：{result['new_map50']:.5f}",
+        f"- 赛题 KRR：{result['krr']:.5f}",
+        f"- 基础 dev mAP50（仅选权重诊断）：{result['base_dev_map50']:.5f}",
         f"- 旧类 mAP50 before/after：{result['old_map50_before']:.5f} / {result['old_map50_after']:.5f}",
-        f"- New-mAP50：{result['new_map50']:.5f}",
-        f"- 四类组合 mAP50：{result['full_map50']:.5f}",
-        f"- KRR：{result['krr']:.5f}",
-        f"- 校准阈值：{result['calibration']['selected']['threshold']:.2f}",
-        f"- 校准 precision/recall：{result['calibration']['selected']['precision']:.5f} / {result['calibration']['selected']['recall']:.5f}",
+        f"- 四类总体 mAP50（仅诊断）：{result['full_map50']:.5f}",
+        f"- 计分/Agent 共用置信度下限：{result['calibration']['deployment_threshold']:.2f}",
+        f"- dev 高精度诊断阈值：{result['calibration']['selected']['threshold']:.2f}",
+        f"- dev 诊断 precision/recall：{result['calibration']['selected']['precision']:.5f} / {result['calibration']['selected']['recall']:.5f}",
         f"- lock precision/recall：{result['lock_deployment_metrics']['precision']:.5f} / {result['lock_deployment_metrics']['recall']:.5f}",
         f"- lock 图像误激活率：{result['false_activation']['false_activation_rate']:.5f}",
         f"- 正样本原型拒绝候选数：{result.get('positive_prototype', {}).get('lock_rejected_candidate_count', 0)}",
@@ -882,7 +1154,7 @@ def write_protocol_report(report_dir: Path, result: Mapping[str, Any]) -> None:
             for sensor, metrics in result["sensor_metrics"].items()
         ],
         "",
-        "lock-val 仅在两份权重和校准阈值冻结后读取，本报告结果不得用于本 run 调参。",
+        "两份模型已先对完整 lock 执行无标签推理并哈希预测，随后才解封标签评分；本报告结果不得用于本 run 调参。",
     ]
     (report_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -920,6 +1192,8 @@ def freeze_profile(
         "run_id": run_id,
         "acceptance": "passed",
         "incremental_mode": "class_incremental",
+        "deployment": "dual_detector",
+        "agent_structure": dict(metrics.get("agent_structure", {})),
         "base_weight": rel_path(frozen_base),
         "base_sha256": sha256_file(frozen_base),
         "specialist_weight": rel_path(frozen_specialist),
@@ -929,12 +1203,17 @@ def freeze_profile(
         "class_names": GLOBAL_CLASS_NAMES,
         "new_class": protocol["new_class"],
         "new_global_id": int(protocol["new_global_id"]),
-        "activation_threshold": float(calibration["selected"]["threshold"]),
+        "activation_threshold": float(
+            calibration.get("deployment_threshold", calibration["selected"]["threshold"])
+        ),
         "calibration_source": rel_path(frozen_calibration),
         "metrics_source": rel_path(version_dir / "metrics.json"),
         "evidence_level": "verified",
+        "base_test_map50": float(metrics["base_test_map50"]),
+        "base_dev_map50": float(metrics["base_dev_map50"]),
         "new_map50": float(metrics["new_map50"]),
         "krr": float(metrics["krr"]),
+        "full_map50": float(metrics["full_map50"]),
         "lock_precision": metrics["lock_deployment_metrics"]["precision"],
         "lock_recall": metrics["lock_deployment_metrics"]["recall"],
         "lock_false_activation_rate": metrics["false_activation"]["false_activation_rate"],
@@ -973,8 +1252,11 @@ def freeze_profile(
         "new_class": profile["new_class"],
         "new_global_id": profile["new_global_id"],
         "active_profile": rel_path(pointer),
+        "base_test_map50": profile["base_test_map50"],
+        "base_dev_map50": profile["base_dev_map50"],
         "new_map50": profile["new_map50"],
         "krr": profile["krr"],
+        "full_map50": profile["full_map50"],
         "activation_threshold": profile["activation_threshold"],
         "lock_false_activation_rate": profile["lock_false_activation_rate"],
     }
@@ -1035,10 +1317,14 @@ def freeze_student_profile(
         "base_local_names": GLOBAL_CLASS_NAMES,
         "new_class": protocol["new_class"],
         "new_global_id": int(protocol["new_global_id"]),
-        "activation_threshold": float(calibration["selected"]["threshold"]),
+        "activation_threshold": float(
+            calibration.get("deployment_threshold", calibration["selected"]["threshold"])
+        ),
         "calibration_source": rel_path(frozen_calibration),
         "metrics_source": rel_path(version_dir / "metrics.json"),
         "evidence_level": "verified",
+        "base_test_map50": float(metrics["base_test_map50"]),
+        "base_dev_map50": float(metrics["base_dev_map50"]),
         "new_map50": float(metrics["new_map50"]),
         "krr": float(metrics["krr"]),
         "full_map50": float(metrics["full_map50"]),
@@ -1069,6 +1355,8 @@ def run_protocol(
     protocol_id: str,
     device: str,
     recheck: bool = False,
+    recheck_base_weight: str | None = None,
+    recheck_incremental_weight: str | None = None,
 ) -> Dict[str, Any]:
     from ultralytics import YOLO
 
@@ -1105,8 +1393,13 @@ def run_protocol(
     started = time.monotonic()
     if recheck:
         configured_base = config.get("paths", {}).get("shared_base_checkpoint")
-        base_weight = resolve_path(configured_base) if configured_base else run_dir / "base" / "weights" / "best.pt"
-        if adaptation_mode == "duet_yolo11s":
+        if recheck_base_weight:
+            base_weight = resolve_path(recheck_base_weight)
+        else:
+            base_weight = resolve_path(configured_base) if configured_base else run_dir / "base" / "weights" / "best.pt"
+        if recheck_incremental_weight:
+            incremental_weight = resolve_path(recheck_incremental_weight)
+        elif adaptation_mode == "duet_yolo11s":
             incremental_weight = run_dir / "duet_final" / "weights" / "best.pt"
         elif adaptation_mode == "yolo_iod_lite":
             incremental_weight = run_dir / "yolo_iod_student" / "weights" / "best.pt"
@@ -1124,6 +1417,7 @@ def run_protocol(
             method_audit["base_checkpoint_reused"] = True
         else:
             base_model = YOLO(str(config["model"]))
+            base_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
             base_train_result = base_model.train(
                 **train_arguments(config, "base_train", base_dataset, run_dir, "base", device)
             )
@@ -1149,6 +1443,7 @@ def run_protocol(
         if adaptation_mode == "duet_yolo11s":
             method_settings = dict(config["methods"][adaptation_mode])
             current_model = YOLO(str(config["model"]))
+            current_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
             current_model.add_callback(
                 "on_pretrain_routine_end",
                 lambda trainer: configure_duet_specialist(
@@ -1201,6 +1496,7 @@ def run_protocol(
         elif adaptation_mode == "yolo_iod_lite":
             method_settings = dict(config["methods"][adaptation_mode])
             current_model = YOLO(str(config["model"]))
+            current_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
             current_result = current_model.train(
                 **method_train_arguments(
                     config,
@@ -1219,6 +1515,7 @@ def run_protocol(
                 int(config["methods"][adaptation_mode]["current_teacher_train"]["epochs"]),
             ))
             student_model = YOLO(str(config.get("adaptation", {}).get("student_init", config["model"])))
+            student_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
             student_model.add_callback(
                 "on_pretrain_routine_end",
                 lambda trainer: configure_yolo_iod_lite_student(
@@ -1261,6 +1558,7 @@ def run_protocol(
             method_audit["current_teacher_weight"] = rel_path(current_weight)
         elif unified_student:
             student_model = YOLO(str(config.get("adaptation", {}).get("student_init", config["model"])))
+            student_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
             student_model.add_callback(
                 "on_pretrain_routine_end",
                 lambda trainer: configure_expanded_student(trainer, base_weight, mapping, new_id),
@@ -1279,6 +1577,7 @@ def run_protocol(
             ))
         else:
             specialist_model = YOLO(str(base_weight))
+            specialist_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
             specialist_train_result = specialist_model.train(
                 **train_arguments(config, "incremental_train", incremental_dataset, run_dir, "specialist", device)
             )
@@ -1299,6 +1598,44 @@ def run_protocol(
         _audit_event(config, protocol_id, "INCREMENT_FROZEN", sha256=sha256_file(incremental_weight))
     base_hash_after = sha256_file(base_weight)
     base_weight_drift = 0.0 if base_hash_before == base_hash_after else 1.0
+
+    base_mapping = {
+        int(key): int(value) for key, value in protocol["base_local_to_global"].items()
+    }
+    old_ids = sorted(base_mapping.values())
+    base_val_images = read_split(dataset_dir / "base" / "splits" / "val.txt")
+    base_predictor = YOLO(str(base_weight))
+    base_dev_predictions, base_dev_inference_ms, base_dev_reference_map50 = validator_records(
+        base_predictor,
+        base_dataset,
+        "val",
+        base_val_images,
+        base_mapping,
+        config,
+        device,
+        "frozen_base_model",
+        report_dir / "ultralytics",
+        "base_dev",
+        report_dir / "predictions" / "base_dev.jsonl",
+    )
+    base_dev_ground_truth = remap_ground_truth(
+        yolo_ground_truth(base_val_images), base_mapping
+    )
+    base_dev_metrics = evaluate_ap50(
+        base_dev_predictions, base_dev_ground_truth, old_ids
+    )
+    base_dev_map50 = float(base_dev_metrics["map50"])
+    base_dev_evaluator_error = abs(
+        float(base_dev_reference_map50) - base_dev_map50
+    )
+    _audit_event(
+        config,
+        protocol_id,
+        "BASE_EVALUATED",
+        split="base_dev",
+        map50=base_dev_map50,
+        ultralytics_map50=float(base_dev_reference_map50),
+    )
 
     new_id = int(protocol["new_global_id"])
     incremental_phase = "student" if unified_student else "incremental"
@@ -1322,6 +1659,10 @@ def run_protocol(
     dev_ground_truth = yolo_ground_truth(incremental_val)
     if not unified_student:
         dev_ground_truth = remap_ground_truth(dev_ground_truth, {0: new_id})
+    raw_dev_metrics = evaluate_ap50(dev_predictions, dev_ground_truth, [new_id])
+    incremental_dev_evaluator_error = abs(
+        float(_dev_reference_map50) - float(raw_dev_metrics["map50"])
+    )
     prototype_gate_cfg = dict(config.get("prototype_gate", {}))
     positive_prototype: Dict[str, Any] | None = None
     prototype_path: Path | None = None
@@ -1387,6 +1728,10 @@ def run_protocol(
         float(calibration_cfg["threshold_step"]),
         float(calibration_cfg["target_precision"]),
     )
+    calibration["deployment_threshold"] = float(
+        calibration_cfg.get("deployment_threshold", config["predict"]["conf"])
+    )
+    calibration["deployment_policy"] = "competition_map50_confidence_floor"
     calibration_path = report_dir / "calibration.json"
     calibration_path.write_text(
         json.dumps(calibration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -1396,105 +1741,81 @@ def run_protocol(
         protocol_id,
         "THRESHOLD_CALIBRATED",
         threshold=float(calibration["selected"]["threshold"]),
+        deployment_threshold=float(calibration["deployment_threshold"]),
         precision=float(calibration["selected"]["precision"]),
         source="incremental_dev_only",
         artifact=rel_path(calibration_path),
         artifact_sha256=sha256_file(calibration_path),
     )
 
-    # This is the first point where lock labels are read or transformed.
-    manifest_path = dataset_dir / "manifest.json"
-    existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    dataset_manifest = existing_manifest if existing_manifest.get("lock_materialized_after_freeze") else materialize_lock_data(
-        protocol, config["paths"]["source_splits"]["lock"], dataset_dir
-    )
-    _audit_event(config, protocol_id, "LOCK_UNSEALED", split_sha256=dataset_manifest["source_split_sha256"]["lock"])
+    # The lock interface remains image-only here. Every class owner receives
+    # the same complete list before any label is opened or transformed.
     lock_images = read_split(config["paths"]["source_splits"]["lock"])
-    base_test_images = read_split(dataset_dir / "base" / "splits" / "test.txt")
-    incremental_test_images = read_split(dataset_dir / incremental_phase / "splits" / "test.txt")
-    base_mapping = {int(key): int(value) for key, value in protocol["base_local_to_global"].items()}
-    base_predictor = YOLO(str(base_weight))
-    base_predictions, base_inference_ms, base_reference_map50 = validator_records(
+    frozen_lock = freeze_unlabeled_lock_predictions(
         base_predictor,
-        base_dataset,
-        "test",
-        base_test_images,
-        base_mapping,
-        config,
-        device,
-        "frozen_base_model",
-        report_dir / "ultralytics",
-        "lock_base",
-        report_dir / "predictions" / "lock_base.jsonl",
-    )
-    raw_incremental_predictions, incremental_inference_ms, incremental_reference_map50 = validator_records(
         incremental_predictor,
-        student_dataset if unified_student else incremental_dataset,
-        "test",
-        incremental_test_images,
+        lock_images,
+        base_mapping,
         incremental_mapping,
         config,
         device,
-        "incremental_student",
-        report_dir / "ultralytics",
-        "lock_incremental",
-        report_dir / "predictions" / "lock_incremental.jsonl",
+        new_id,
+        unified_student,
+        positive_prototype,
+        report_dir,
+    )
+    base_predictions = list(frozen_lock["base_predictions"])
+    combined_predictions = list(frozen_lock["combined_predictions"])
+    fusion_decisions = list(frozen_lock["fusion_decisions"])
+    lock_prototype_rejections = list(frozen_lock["prototype_rejections"])
+    base_inference_ms = float(frozen_lock["base_inference_ms"])
+    incremental_inference_ms = float(frozen_lock["incremental_inference_ms"])
+    lock_inference_audit = dict(frozen_lock["audit"])
+    lock_prediction_artifacts = dict(frozen_lock["artifacts"])
+    _audit_event(
+        config,
+        protocol_id,
+        "LOCK_PREDICTIONS_FROZEN",
+        **lock_inference_audit,
+        artifacts=lock_prediction_artifacts,
+    )
+
+    # This is the first point where lock labels may be read or transformed.
+    manifest_path = dataset_dir / "manifest.json"
+    existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    dataset_manifest = (
+        existing_manifest
+        if existing_manifest.get("lock_materialized_after_freeze")
+        else materialize_lock_data(
+            protocol, config["paths"]["source_splits"]["lock"], dataset_dir
+        )
+    )
+    _audit_event(
+        config,
+        protocol_id,
+        "LOCK_UNSEALED",
+        split_sha256=dataset_manifest["source_split_sha256"]["lock"],
+        predictions_frozen=True,
+        fused_predictions_sha256=lock_prediction_artifacts["fused"]["sha256"],
     )
     ground_truth = yolo_ground_truth(lock_images)
-    incremental_predictions = list(raw_incremental_predictions)
-    lock_prototype_rejections: list[Dict[str, Any]] = []
-    if positive_prototype is not None:
-        incremental_predictions, lock_prototype_rejections = apply_positive_prototype(
-            incremental_predictions,
-            incremental_test_images,
-            positive_prototype,
-        )
-        rejected_path = report_dir / "predictions" / "lock_prototype_rejected.jsonl"
-        rejected_path.write_text(
-            "".join(
-                json.dumps(row, ensure_ascii=False) + "\n"
-                for row in lock_prototype_rejections
-            ),
-            encoding="utf-8",
-        )
-    old_ids = sorted(base_mapping.values())
-    if unified_student:
-        candidate_old_predictions = [
-            row for row in incremental_predictions if int(row["class_id"]) in old_ids
-        ]
-        candidate_new_predictions = [
-            row for row in incremental_predictions if int(row["class_id"]) == new_id
-        ]
-    else:
-        candidate_old_predictions = list(base_predictions)
-        candidate_new_predictions = list(incremental_predictions)
-    combined_predictions, fusion_decisions = fuse_old_new_predictions(
-        candidate_old_predictions,
-        candidate_new_predictions,
-        nms_iou=float(config["fusion"]["nms_iou"]),
-        cross_class=config["fusion"].get("cross_class"),
+    base_test_ids = base_test_image_ids(lock_images, ground_truth, new_id)
+    if not base_test_ids:
+        raise RuntimeError("mixed_test 解封后未找到不含新增类别的基础测试图像")
+    base_test_metrics = evaluate_ap50(
+        subset_rows(base_predictions, base_test_ids),
+        subset_rows(ground_truth, base_test_ids),
+        old_ids,
     )
-    fusion_path = report_dir / "predictions" / "lock_fusion_decisions.jsonl"
-    fusion_path.write_text(
-        "".join(
-            json.dumps(row, ensure_ascii=False) + "\n" for row in fusion_decisions
-        ),
-        encoding="utf-8",
-    )
+    base_test_map50 = float(base_test_metrics["map50"])
     retention = retention_metrics(base_predictions, combined_predictions, ground_truth, old_ids)
-    old_metrics = retention["before_metrics"]
     new_metrics = evaluate_ap50(combined_predictions, ground_truth, [new_id])
     full_metrics = evaluate_ap50(combined_predictions, ground_truth, GLOBAL_CLASS_NAMES)
     old_before = float(retention["old_map50_before"])
     old_after = float(retention["old_map50_after"])
     old_prediction_equivalent = bool(retention["old_prediction_equivalent"])
     krr = float(retention["krr"])
-    reference_map50 = incremental_reference_map50 if unified_student else base_reference_map50
-    raw_reference_metric = (
-        float(evaluate_ap50(raw_incremental_predictions, ground_truth, GLOBAL_CLASS_NAMES)["map50"])
-        if unified_student else old_before
-    )
-    evaluator_error = abs(reference_map50 - raw_reference_metric)
+    evaluator_error = max(base_dev_evaluator_error, incremental_dev_evaluator_error)
     old_channel_drift = (
         old_classification_row_drift(base_weight, incremental_weight, base_mapping)
         if unified_student
@@ -1505,10 +1826,12 @@ def run_protocol(
         if unified_student
         else 0.0
     )
-    selected_threshold = float(calibration["selected"]["threshold"])
-    lock_pr = precision_recall(combined_predictions, ground_truth, new_id, selected_threshold)
+    deployment_threshold = float(calibration["deployment_threshold"])
+    lock_pr = precision_recall(
+        combined_predictions, ground_truth, new_id, deployment_threshold
+    )
     false_activation = image_false_activation_rate(
-        combined_predictions, ground_truth, lock_images, new_id, selected_threshold
+        combined_predictions, ground_truth, lock_images, new_id, deployment_threshold
     )
     subgroup = sensor_metrics(combined_predictions, ground_truth, lock_images, new_id)
     bootstrap_cfg = config["bootstrap"]
@@ -1522,7 +1845,13 @@ def run_protocol(
     )
 
     acceptance = config["acceptance"]
-    gates = {
+    score_gates = competition_score_gates(
+        base_test_map50,
+        float(new_metrics["map50"]),
+        krr,
+        acceptance,
+    )
+    integrity_gates = {
         "data_compliance": (
             dataset_manifest["old_raw_image_count"] == 0
             and dataset_manifest.get("old_raw_label_count", 0) == 0
@@ -1534,42 +1863,51 @@ def run_protocol(
             dataset_manifest.get("student_nc") == 4 if unified_student
             else dataset_manifest["specialist_nc"] == 1
         ),
-        "new_map50": float(new_metrics["map50"]) >= float(acceptance["min_new_map50"]),
-        "base_map50": old_before >= float(acceptance.get("min_base_map50", 0.0)),
-        "krr": krr >= float(acceptance["min_krr"]),
-        # A dual-model candidate must leave every old prediction byte-for-byte
-        # equivalent. A unified student is instead governed by KRR plus frozen
-        # old classification rows because its selected shared channels may move.
-        "old_prediction_equivalence": old_prediction_equivalent if not unified_student else True,
         "prototype_incremental_only": (
             positive_prototype is None
             or positive_prototype.get("learning_data_scope") == "incremental_dataset_only"
         ),
-        "calibration_precision": bool(calibration["passed"]) and float(calibration["selected"]["precision"]) >= float(acceptance["min_calibration_precision"]),
         "evaluator_consistency": evaluator_error <= float(acceptance["max_evaluator_error"]),
         "base_weight_unchanged": base_weight_drift <= float(acceptance["max_base_weight_drift"]),
         "old_channel_isolation": old_channel_drift <= float(config.get("adaptation", {}).get("max_old_channel_drift", 1e-6)),
-        "lock_after_freeze": bool(dataset_manifest["lock_materialized_after_freeze"]),
+        "old_owner_prediction_equivalence": (
+            old_prediction_equivalent if not unified_student else True
+        ),
+        "all_owners_every_lock_image": bool(
+            lock_inference_audit["base_input_stems_equal_mixed_test"]
+            and lock_inference_audit["incremental_input_stems_equal_mixed_test"]
+            and lock_inference_audit["base_and_incremental_input_stems_identical"]
+        ),
+        "label_aware_routing_disabled": not bool(
+            lock_inference_audit["label_aware_routing"]
+        ),
+        "scene_hard_routing_disabled": not bool(
+            lock_inference_audit["scene_hard_routing"]
+        ),
+        "prediction_artifacts_frozen": all(
+            bool(item.get("sha256"))
+            for item in lock_prediction_artifacts.values()
+        ),
+        "lock_after_unlabeled_prediction_freeze": bool(
+            dataset_manifest["lock_materialized_after_freeze"]
+            and lock_inference_audit[
+                "unlabeled_inference_completed_before_lock_labels"
+            ]
+        ),
     }
-    optional_gates = {
-        "lock_precision": (
-            float(lock_pr["precision"]) >= float(acceptance["min_lock_precision"])
-            if "min_lock_precision" in acceptance else True
-        ),
-        "lock_recall": (
-            float(lock_pr["recall"]) >= float(acceptance["min_lock_recall"])
-            if "min_lock_recall" in acceptance else True
-        ),
-        "false_activation_rate": (
-            float(false_activation["false_activation_rate"]) <= float(acceptance["max_false_activation_rate"])
-            if "max_false_activation_rate" in acceptance else True
-        ),
-        "full_map50": (
-            float(full_metrics["map50"]) >= float(acceptance["min_full_map50"])
-            if "min_full_map50" in acceptance else True
-        ),
+    diagnostic_gates = {
+        "calibration_target_precision": bool(calibration["passed"]),
+        "base_dev_map50": base_dev_map50 >= float(acceptance["min_base_map50"]),
     }
-    gates.update(optional_gates)
+    if "min_lock_precision" in acceptance:
+        diagnostic_gates["lock_precision"] = float(lock_pr["precision"]) >= float(
+            acceptance["min_lock_precision"]
+        )
+    if "max_false_activation_rate" in acceptance:
+        diagnostic_gates["false_activation_rate"] = float(
+            false_activation["false_activation_rate"]
+        ) <= float(acceptance["max_false_activation_rate"])
+    gates = {**integrity_gates, **score_gates}
     accepted = all(gates.values())
     result = {
         "schema_version": 2,
@@ -1584,6 +1922,7 @@ def run_protocol(
         "student_local_to_global": ({class_id: class_id for class_id in GLOBAL_CLASS_NAMES} if unified_student else None),
         "specialist_local_to_global": (None if unified_student else {0: new_id}),
         "adaptation_mode": adaptation_mode,
+        "agent_structure": dict(config.get("agent_structure", {})),
         "base_weight": rel_path(base_weight),
         "base_weight_sha256": base_hash_before,
         "student_weight": rel_path(incremental_weight) if unified_student else None,
@@ -1596,6 +1935,12 @@ def run_protocol(
         "method_audit": method_audit,
         "old_raw_image_count": dataset_manifest["old_raw_image_count"],
         "old_raw_stems": dataset_manifest.get("old_raw_stems", []),
+        "base_dev_map50": base_dev_map50,
+        "base_dev_per_class_ap50": base_dev_metrics["per_class_ap50"],
+        "ultralytics_base_dev_map50": float(base_dev_reference_map50),
+        "base_test_map50": base_test_map50,
+        "base_test_per_class_ap50": base_test_metrics["per_class_ap50"],
+        "base_test_image_count": len(base_test_ids),
         "old_map50_before": old_before,
         "old_map50_after": old_after,
         "new_map50": float(new_metrics["map50"]),
@@ -1603,9 +1948,9 @@ def run_protocol(
         "per_class_ap50": full_metrics["per_class_ap50"],
         "krr": krr,
         "old_prediction_equivalent": old_prediction_equivalent,
-        "ultralytics_base_map50": reference_map50,
-        "raw_reference_map50": raw_reference_metric,
         "evaluator_error": evaluator_error,
+        "base_dev_evaluator_error": base_dev_evaluator_error,
+        "incremental_dev_evaluator_error": incremental_dev_evaluator_error,
         "calibration": calibration,
         "positive_prototype": {
             "enabled": positive_prototype is not None,
@@ -1638,20 +1983,48 @@ def run_protocol(
             "rejected_incremental_count": sum(
                 row.get("action") == "reject_specialist" for row in fusion_decisions
             ),
-            "artifact": rel_path(fusion_path),
+            "artifact": lock_prediction_artifacts["fusion_decisions"]["path"],
+            "artifact_sha256": lock_prediction_artifacts["fusion_decisions"]["sha256"],
         },
+        "lock_inference_audit": lock_inference_audit,
+        "lock_prediction_artifacts": lock_prediction_artifacts,
         "lock_deployment_metrics": lock_pr,
         "false_activation": false_activation,
         "sensor_metrics": subgroup,
         "bootstrap": bootstrap,
         "base_inference_ms_total": base_inference_ms,
+        "base_dev_inference_ms_total": base_dev_inference_ms,
         "specialist_inference_ms_total": 0.0 if unified_student else incremental_inference_ms,
         "student_inference_ms_total": incremental_inference_ms if unified_student else None,
         "training_seconds": time.monotonic() - started,
         "evaluation_only_recheck": recheck,
+        "competition_metrics": {
+            "base_test_map50": {
+                "value": base_test_map50,
+                "threshold": float(acceptance["min_base_map50"]),
+                "split": "mixed_test_new_class_free_subset_after_prediction_freeze",
+                "passed": score_gates["base_map50"],
+            },
+            "new_map50": {
+                "value": float(new_metrics["map50"]),
+                "threshold": float(acceptance["min_new_map50"]),
+                "split": "mixed_test",
+                "passed": score_gates["new_map50"],
+            },
+            "krr": {
+                "value": krr,
+                "threshold": float(acceptance["min_krr"]),
+                "split": "mixed_test",
+                "passed": score_gates["krr"],
+            },
+        },
+        "score_gates": score_gates,
+        "integrity_gates": integrity_gates,
+        "diagnostic_gates": diagnostic_gates,
         "gates": gates,
         "accepted": accepted,
         "lock_evaluation_started_after_training_and_calibration": True,
+        "lock_labels_opened_after_prediction_freeze": True,
         "reference_unified_four_class_map50": float(config["reference"]["unified_four_class_map50"]),
     }
     write_protocol_report(report_dir, result)
@@ -1659,7 +2032,7 @@ def run_protocol(
         config,
         protocol_id,
         "EVALUATED",
-        base_map50=old_before,
+        base_test_map50=base_test_map50,
         new_map50=float(new_metrics["map50"]),
         krr=krr,
         full_map50=float(full_metrics["map50"]),
@@ -1706,7 +2079,7 @@ def write_summary(
     lines = [
         "# 严格 3+1 类别增量单一协议汇总",
         "",
-        "| 协议 | 新增类别 | New-mAP50 | KRR | 四类 mAP50 | 结论 |",
+        "| 协议 | 新增类别 | 基础测试 mAP50 | New-mAP50 | KRR | 结论 |",
         "|---|---|---:|---:|---:|---|",
     ]
     for row in results:
@@ -1714,8 +2087,8 @@ def write_summary(
             lines.append(f"| {row['protocol']} | - | - | - | - | 执行错误：{row['error']} |")
         else:
             lines.append(
-                f"| {row['protocol']} | {row['new_class']} | {row['new_map50']:.5f} | "
-                f"{row['krr']:.5f} | {row['full_map50']:.5f} | {'通过' if row['accepted'] else '未通过'} |"
+                f"| {row['protocol']} | {row['new_class']} | {row['base_test_map50']:.5f} | "
+                f"{row['new_map50']:.5f} | {row['krr']:.5f} | {'通过' if row['accepted'] else '未通过'} |"
             )
     (output / f"summary{suffix}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -1727,6 +2100,8 @@ def main() -> int:
     parser.add_argument("--run-id", help="显式指定唯一运行编号，便于多模型共享同一产物目录。")
     parser.add_argument("--check-only", action="store_true", help="只做训练环境与数据只读预检，不创建产物或启动训练。")
     parser.add_argument("--recheck-run", help=argparse.SUPPRESS)
+    parser.add_argument("--recheck-base-weight", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--recheck-incremental-weight", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     config_path = args.config if args.config.is_absolute() else ROOT / args.config
     config = load_yaml(config_path)
@@ -1734,6 +2109,8 @@ def main() -> int:
         raise ValueError("--run-id 与 --recheck-run 不能同时使用")
     if args.check_only and args.recheck_run:
         raise ValueError("--check-only 与 --recheck-run 不能同时使用")
+    if (args.recheck_base_weight or args.recheck_incremental_weight) and not args.recheck_run:
+        raise ValueError("复核权重覆盖参数只能与 --recheck-run 同时使用")
     configured_run_id = config.get("experiment", {}).get("run_id")
     run_id = args.recheck_run or args.run_id or configured_run_id or datetime.now().strftime("strict-%Y%m%d-%H%M%S")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", run_id):
@@ -1767,6 +2144,8 @@ def main() -> int:
                 protocol["id"],
                 assignments[protocol["id"]],
                 bool(args.recheck_run),
+                str(args.recheck_base_weight) if args.recheck_base_weight else None,
+                str(args.recheck_incremental_weight) if args.recheck_incremental_weight else None,
             ): protocol["id"]
             for protocol in config["protocols"]
         }

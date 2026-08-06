@@ -69,7 +69,6 @@ def _fixture(tmp_path: Path) -> Path:
             "min_base_map50": 0.8,
             "min_new_map50": 0.6,
             "min_krr": 0.95,
-            "min_full_map50": 0.8,
             "calibration_target_precision": 0.99,
             "min_lock_precision": 0.7,
             "max_false_activation_rate": 0.15,

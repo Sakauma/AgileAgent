@@ -394,9 +394,28 @@ def plan_specialist_routes(
         }
         eligible.append(route)
     eligible.sort(key=lambda row: (int(row["mode_priority"]), -float(row["routing_score"]), str(row["id"])))
+    # Class-incremental protocols own classes that the base detector cannot
+    # produce. They are therefore mandatory on every unlabeled image and must
+    # never be dropped by a latency budget or context score. The budget applies
+    # only to optional same-class refinement experts.
+    mandatory = [
+        route for route in eligible if route["incremental_mode"] == "class_incremental"
+    ]
+    optional = [
+        route for route in eligible if route["incremental_mode"] != "class_incremental"
+    ]
     limit = max(0, int(max_specialists))
-    executed = eligible if limit == 0 else eligible[:limit]
-    for route in eligible[len(executed) :]:
+    optional_limit = 0 if limit == 0 else max(0, limit - len(mandatory))
+    selected_optional = optional if limit == 0 else optional[:optional_limit]
+    executed = mandatory + selected_optional
+    executed.sort(
+        key=lambda row: (
+            int(row["mode_priority"]),
+            -float(row["routing_score"]),
+            str(row["id"]),
+        )
+    )
+    for route in optional[len(selected_optional) :]:
         skipped.append({"id": route["id"], "reason": "specialist_budget_exceeded", "routing_score": route["routing_score"]})
     return eligible, executed, skipped
 
@@ -409,8 +428,16 @@ def class_aware_nms(
     kept: List[Dict[str, Any]] = []
     suppressed = 0
     for class_id in sorted({int(row["class_id"]) for row in rows}):
+        class_rows = [row for row in rows if int(row["class_id"]) == class_id]
+        if class_rows and all(
+            row.get("source") == "frozen_base_model" for row in class_rows
+        ):
+            # The backend already performed NMS. Keeping this owner stream byte
+            # equivalent prevents Agent post-processing from lowering KRR.
+            kept.extend({**row, "fusion_status": "base_retained"} for row in class_rows)
+            continue
         candidates = sorted(
-            (row for row in rows if int(row["class_id"]) == class_id),
+            class_rows,
             key=lambda row: (-float(row.get("confidence", 0.0)), 0 if row.get("source") == "incremental_model" else 1),
         )
         class_kept: List[Dict[str, Any]] = []
@@ -977,7 +1004,10 @@ class WebInferenceEngine:
                 "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
                 "input_mode": "unlabeled_image",
                 "inference_scope": "production",
-                "routing_basis": "image_content_and_active_generation",
+                "routing_basis": "all_class_owners_plus_optional_content_routing",
+                "class_incremental_execution_policy": "every_image",
+                "label_aware_routing": False,
+                "scene_hard_routing": False,
                 "evaluated_specialists": len(executed),
                 "base_detection_count": len(base_records),
                 "final_detection_count": len(records),
@@ -1273,7 +1303,10 @@ class WebInferenceEngine:
             "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
             "input_mode": "unlabeled_image",
             "inference_scope": "production",
-            "routing_basis": "image_content_and_active_generation",
+            "routing_basis": "all_class_owners_plus_optional_content_routing",
+            "class_incremental_execution_policy": "every_image",
+            "label_aware_routing": False,
+            "scene_hard_routing": False,
             "evaluated_specialists": len(executed_routes),
             "base_detection_count": len(base_records),
             "final_detection_count": len(records),

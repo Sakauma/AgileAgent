@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import copy
 import runpy
@@ -19,6 +20,7 @@ from fair_agent.modules.strict_incremental import (
     calibrate_threshold,
     class_aware_nms,
     evaluate_ap50,
+    fuse_old_new_predictions,
     load_experiment_profile,
     materialize_lock_data,
     load_yaml,
@@ -62,20 +64,33 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
     assert config["protocols"][0]["expected_incremental_counts"] == {
         "train": 117,
         "val": 18,
-        "lock_positive": 19,
     }
+    assert config["acceptance"]["min_base_map50"] == 0.80
     assert config["acceptance"]["min_new_map50"] == 0.60
     assert config["acceptance"]["min_krr"] == 0.95
+    assert "min_full_map50" not in config["acceptance"]
     assert config["bootstrap"]["iterations"] == 1000
     assert config["predict"]["evaluation_batch"] == 1
+    assert config["predict"]["conf"] == 0.01
+    assert config["calibration"]["deployment_threshold"] == 0.01
     assert config["predict"]["rect"] is True
     assert config["common"]["batch"] == 32
-    assert config["adaptation"]["mode"] == "yolo_iod_lite"
-    assert config["protocols"][0]["build_unified_student"] is True
+    assert config["adaptation"]["mode"] == "frozen_base_plus_new_specialist"
+    assert config["protocols"][0]["build_unified_student"] is False
     assert config["protocols"][0]["base_local_to_global"] == {0: 0, 1: 1, 2: 3}
     assert config["protocols"][0]["new_global_id"] == 2
-    assert config["prototype_gate"]["enabled"] is True
+    assert config["prototype_gate"]["enabled"] is False
     assert config["fusion"]["cross_class"]["enabled"] is True
+    assert config["agent_structure"] == {
+        "architecture": "parallel_base_incremental_experts",
+        "inference_scope": "every_image",
+        "old_class_owner": "frozen_base",
+        "new_class_owner": "incremental_specialist",
+        "fusion_level": "detection_boxes",
+        "scene_hard_routing": False,
+        "label_aware_routing": False,
+        "filename_class_routing": False,
+    }
     runner = Path("tools/70_run_strict_3plus1.py").read_text(encoding="utf-8")
     assert 'mp_context=get_context("spawn")' in runner
     assert 'getattr(result, "path", "")' in runner
@@ -228,6 +243,217 @@ def test_ap_calibration_nms_and_bootstrap_are_deterministic() -> None:
     first = bootstrap_metrics(fused, ground_truth, images, 1, iterations=10, seed=7)
     second = bootstrap_metrics(fused, ground_truth, images, 1, iterations=10, seed=7)
     assert first == second
+
+
+def test_dual_agent_fusion_never_re_nmses_frozen_base_predictions() -> None:
+    old = [
+        {"image_id": "old", "class_id": 0, "confidence": 0.9, "xyxy": [0, 0, 10, 10]},
+        {"image_id": "old", "class_id": 0, "confidence": 0.8, "xyxy": [1, 1, 9, 9]},
+    ]
+    new = [
+        {"image_id": "new", "class_id": 2, "confidence": 0.9, "xyxy": [0, 0, 10, 10]},
+        {"image_id": "new", "class_id": 2, "confidence": 0.8, "xyxy": [1, 1, 9, 9]},
+    ]
+
+    fused, decisions = fuse_old_new_predictions(old, new, nms_iou=0.60)
+
+    assert fused[:2] == old
+    assert len(fused) == 3
+    assert decisions == []
+
+
+def test_competition_score_gates_and_checkpoint_fitness_use_map50() -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+
+    class Box:
+        map50 = 0.83
+
+        def fitness(self) -> float:
+            return 0.25
+
+    box = Box()
+    trainer = SimpleNamespace(validator=SimpleNamespace(metrics=SimpleNamespace(box=box)))
+    script["configure_map50_checkpointing"](trainer)
+    assert box.fitness() == 0.83
+    assert trainer._checkpoint_metric == "metrics/mAP50(B)"
+    assert script["competition_score_gates"](
+        0.81,
+        0.61,
+        0.96,
+        {"min_base_map50": 0.80, "min_new_map50": 0.60, "min_krr": 0.95},
+    ) == {"base_map50": True, "new_map50": True, "krr": True}
+
+
+def test_lock_scoring_freezes_unlabeled_predictions_before_reading_labels() -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+    inference_source = inspect.getsource(script["freeze_unlabeled_lock_predictions"])
+    protocol_source = inspect.getsource(script["run_protocol"])
+
+    for forbidden in (
+        "source_label",
+        "image_class_ids",
+        "yolo_ground_truth",
+        "materialize_lock_data",
+    ):
+        assert forbidden not in inference_source
+    assert protocol_source.index("freeze_unlabeled_lock_predictions(") < protocol_source.index(
+        "materialize_lock_data("
+    )
+
+
+def test_training_preflight_does_not_open_lock_labels(
+    tmp_path: Path, monkeypatch
+) -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"weight")
+    source = tmp_path / "source"
+    source.mkdir()
+    images = {
+        "old_train": make_image(source, "old_train", [0]),
+        "new_train": make_image(source, "new_train", [2]),
+        "old_val": make_image(source, "old_val", [0]),
+        "new_val": make_image(source, "new_val", [2]),
+    }
+    lock = source / "lock_without_label.png"
+    Image.new("RGB", (10, 10)).save(lock)
+    splits = {}
+    for name, rows in {
+        "train": [images["old_train"], images["new_train"]],
+        "val": [images["old_val"], images["new_val"]],
+        "lock": [lock],
+    }.items():
+        path = tmp_path / f"{name}.txt"
+        write_split(path, rows)
+        splits[name] = str(path)
+    config = load_yaml("configs/strict_class_incremental_3plus1.yaml")
+    config["model"] = str(model)
+    config["paths"] = {
+        "source_splits": splits,
+        "dataset_root": str(tmp_path / "datasets"),
+        "run_root": str(tmp_path / "runs"),
+        "report_root": str(tmp_path / "reports"),
+        "freeze_root": str(tmp_path / "profiles"),
+    }
+    config["protocols"][0]["expected_incremental_counts"] = {
+        "train": 1,
+        "val": 1,
+    }
+    label_accesses: list[str] = []
+
+    def guarded_source_label(image: Path) -> Path:
+        label_accesses.append(image.stem)
+        if image.stem == lock.stem:
+            raise AssertionError("preflight 不得访问 lock 标签")
+        return image.with_suffix(".txt")
+
+    def guarded_class_ids(image: Path) -> set[int]:
+        if image.stem == lock.stem:
+            raise AssertionError("preflight 不得读取 lock 类别")
+        return {2} if image.stem.startswith("new") else {0}
+
+    globals_ = script["training_preflight"].__globals__
+    monkeypatch.setitem(globals_, "source_label", guarded_source_label)
+    monkeypatch.setitem(globals_, "image_class_ids", guarded_class_ids)
+
+    result = script["training_preflight"](config, "no-lock-label-read")
+
+    assert result["checks"]["protocols"][0]["lock_label_access"] == (
+        "forbidden_before_unlabeled_prediction_freeze"
+    )
+    assert lock.stem not in label_accesses
+
+
+def test_every_lock_image_is_seen_by_both_class_owners_and_artifacts_are_hashed(
+    tmp_path: Path,
+) -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+
+    class TensorValue:
+        def __init__(self, values) -> None:
+            self.values = values
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def tolist(self):
+            return self.values
+
+    class Boxes:
+        xyxy = TensorValue([[0.0, 0.0, 10.0, 10.0]])
+        conf = TensorValue([0.9])
+        cls = TensorValue([0])
+
+        def __len__(self) -> int:
+            return 1
+
+    class Result:
+        def __init__(self, path: str) -> None:
+            self.path = path
+            self.boxes = Boxes()
+            self.speed = {"inference": 1.0}
+
+    class Model:
+        def __init__(self) -> None:
+            self.inputs: list[str] = []
+
+        def predict(self, **kwargs):
+            source = str(kwargs["source"])
+            self.inputs.append(source)
+            return [Result(source)]
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    images = [image_dir / "first.png", image_dir / "second.png"]
+    for image in images:
+        image.write_bytes(b"image")
+    # Prevent the directory fast path so the test can inspect each model call.
+    (image_dir / "not_in_lock.png").write_bytes(b"image")
+    base = Model()
+    specialist = Model()
+    config = {
+        "common": {"imgsz": 640},
+        "predict": {
+            "conf": 0.001,
+            "iou": 0.7,
+            "max_det": 300,
+            "batch": 32,
+            "evaluation_batch": 1,
+            "rect": True,
+        },
+        "fusion": {"nms_iou": 0.60, "cross_class": {"enabled": False}},
+        "agent_structure": {
+            "inference_scope": "every_image",
+            "scene_hard_routing": False,
+            "label_aware_routing": False,
+            "filename_class_routing": False,
+        },
+    }
+
+    frozen = script["freeze_unlabeled_lock_predictions"](
+        base,
+        specialist,
+        images,
+        {0: 0},
+        {0: 2},
+        config,
+        "0",
+        2,
+        False,
+        None,
+        tmp_path / "report",
+    )
+
+    expected = [str(path) for path in images]
+    assert base.inputs == expected
+    assert specialist.inputs == expected
+    assert frozen["audit"]["base_and_incremental_input_stems_identical"] is True
+    assert frozen["audit"]["label_aware_routing"] is False
+    assert frozen["audit"]["scene_hard_routing"] is False
+    assert all(item["sha256"] for item in frozen["artifacts"].values())
 
 
 def test_ap50_matches_ultralytics_partial_recall_sentinel() -> None:

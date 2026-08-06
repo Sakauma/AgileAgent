@@ -107,13 +107,9 @@ def test_fixed_protocol_is_exactly_three_base_classes_plus_warship() -> None:
 def test_mixed_detection_test_and_known_scene_lists_use_correct_scopes() -> None:
     protocol_root = SPLIT_ROOT / "strict_3plus1"
     mixed = set(read_split(protocol_root / "mixed_test.txt"))
-    old_positive = set(read_split(protocol_root / "mixed_test_old_positive.txt"))
-    new_positive = set(read_split(protocol_root / "mixed_test_new_positive.txt"))
     assert len(mixed) == 89
-    assert len(old_positive) == 70
-    assert len(new_positive) == 19
-    assert old_positive | new_positive == mixed
-    assert not old_positive & new_positive
+    assert not (protocol_root / "mixed_test_old_positive.txt").exists()
+    assert not (protocol_root / "mixed_test_new_positive.txt").exists()
     assert mixed == set(read_split(SPLIT_ROOT / "mixed_test.txt"))
 
     assert set(read_split(protocol_root / "scene_train.txt")) == set(
@@ -125,6 +121,11 @@ def test_mixed_detection_test_and_known_scene_lists_use_correct_scopes() -> None
     assert set(read_split(protocol_root / "scene_test.txt")) == mixed
 
     protocol = json.loads((protocol_root / "manifest.json").read_text(encoding="utf-8"))
+    assert protocol["mixed_test_composition"] == {
+        "old_class_images": 70,
+        "new_class_images": 19,
+        "membership_lists_published": False,
+    }
     assert protocol["detection_contract"] == {
         "base_training_classes": [0, 1, 3],
         "base_training_contains_increment_class": False,
@@ -137,3 +138,11 @@ def test_mixed_detection_test_and_known_scene_lists_use_correct_scopes() -> None
     assert protocol["scene_contract"]["known_scenes"] == ["air", "forest", "sea", "urban"]
     assert protocol["scene_contract"]["target_class_labels_access"] is False
     assert protocol["scene_contract"]["scene_to_target_class_hard_binding_allowed"] is False
+    assert protocol["evaluation"]["score_gates"] == {
+        "base_test_map50": 0.8,
+        "new_map50": 0.6,
+        "krr": 0.95,
+    }
+    assert protocol["evaluation"]["full_map50_role"] == "diagnostic_only"
+    assert protocol["evaluation"]["unlabeled_inference_before_scoring"] is True
+    assert protocol["evaluation"]["label_aware_routing_allowed"] is False

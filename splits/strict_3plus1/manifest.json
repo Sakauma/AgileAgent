@@ -20,8 +20,6 @@
     "increment_train": 117,
     "increment_dev": 18,
     "mixed_test": 89,
-    "mixed_test_old_positive": 70,
-    "mixed_test_new_positive": 19,
     "scene_train": 522,
     "scene_dev": 88,
     "scene_test": 89
@@ -32,11 +30,14 @@
     "increment_train": "splits/strict_3plus1/increment_train.txt",
     "increment_dev": "splits/strict_3plus1/increment_dev.txt",
     "mixed_test": "splits/strict_3plus1/mixed_test.txt",
-    "mixed_test_old_positive": "splits/strict_3plus1/mixed_test_old_positive.txt",
-    "mixed_test_new_positive": "splits/strict_3plus1/mixed_test_new_positive.txt",
     "scene_train": "splits/strict_3plus1/scene_train.txt",
     "scene_dev": "splits/strict_3plus1/scene_dev.txt",
     "scene_test": "splits/strict_3plus1/scene_test.txt"
+  },
+  "mixed_test_composition": {
+    "old_class_images": 70,
+    "new_class_images": 19,
+    "membership_lists_published": false
   },
   "detection_contract": {
     "base_training_classes": [
@@ -67,9 +68,19 @@
     "scene_to_target_class_hard_binding_allowed": false
   },
   "evaluation": {
+    "base_test_map": "所有 owner 完成完整 mixed_test 无标签推理并冻结预测后，按不含 increment_class_id 的图像子集及 base_class_ids 计分。",
     "old_map_before": "父代在完整 mixed_test 上推理后按 base_class_ids 计分。",
     "old_map_after": "增量后候选代在同一完整 mixed_test 上按 base_class_ids 计分。",
     "new_map": "候选代在同一完整 mixed_test 上按 increment_class_id 计分。",
-    "krr": "old_map_after / old_map_before"
+    "krr": "old_map_after / old_map_before",
+    "score_gates": {
+      "base_test_map50": 0.8,
+      "new_map50": 0.6,
+      "krr": 0.95
+    },
+    "full_map50_role": "diagnostic_only",
+    "unlabeled_inference_before_scoring": true,
+    "label_aware_routing_allowed": false,
+    "scene_hard_routing_allowed": false
   }
 }
