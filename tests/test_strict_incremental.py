@@ -656,9 +656,27 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
     }
     assert arguments["epochs"] == 160
     assert arguments["patience"] == 0
+    assert arguments["imgsz"] == 768
+    assert arguments["batch"] == 32
+    assert arguments["lr0"] == 0.00075
+    assert arguments["weight_decay"] == 0.001
+    assert arguments["mosaic"] == 0.25
+    assert arguments["scale"] == 0.25
+    assert arguments["translate"] == 0.05
     assert config["model"] == "yolo11m.pt"
     assert config["adaptation"]["specialist_init"] == "generic_pretrained"
     assert config["adaptation"]["specialist_model"] == "yolo11s.pt"
+
+    incremental_arguments = script["train_arguments"](
+        config,
+        "incremental_train",
+        Path("incremental_dataset.yaml"),
+        Path("runs"),
+        "specialist",
+        "0",
+    )
+    assert incremental_arguments["imgsz"] == 640
+    assert incremental_arguments["epochs"] == 80
 
     config["base_train"]["patience"] = 1
     with pytest.raises(ValueError, match="patience=0"):

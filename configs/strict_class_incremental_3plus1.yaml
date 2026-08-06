@@ -27,7 +27,8 @@ training_policy:
   checkpoint_metric: map50
 
 common:
-  imgsz: 640
+  # 基础类别包含约9x14 px（640尺度）的士兵小目标，训练提高到768保留细节。
+  imgsz: 768
   batch: 32
   optimizer: AdamW
   # Ultralytics 中 patience=0 明确禁用 EarlyStopping。
@@ -35,27 +36,36 @@ common:
   cache: false
   plots: true
   amp: true
-  weight_decay: 0.0005
+  weight_decay: 0.001
 
 base_train:
   epochs: 160
-  lr0: 0.001
-  lrf: 0.01
+  # 小数据集预训练微调：降低峰值学习率并避免末段学习率衰减过低。
+  lr0: 0.00075
+  lrf: 0.05
   cos_lr: true
-  close_mosaic: 20
-  mosaic: 0.80
+  warmup_epochs: 5.0
+  warmup_bias_lr: 0.05
+  # 强 Mosaic/缩放会把士兵目标缩至几个像素；仅保留温和的域泛化扰动。
+  close_mosaic: 40
+  mosaic: 0.25
   mixup: 0.0
   copy_paste: 0.0
-  multi_scale: 0.10
-  degrees: 3.0
-  translate: 0.15
-  scale: 0.50
+  multi_scale: 0.05
+  degrees: 2.0
+  translate: 0.05
+  scale: 0.25
   fliplr: 0.50
   hsv_h: 0.0
   hsv_s: 0.0
-  hsv_v: 0.30
+  hsv_v: 0.20
+  box: 9.0
+  cls: 0.75
+  dfl: 1.5
 
 incremental_train:
+  # 增量 dev 已确认640优于更高尺度，避免继承基础阶段的768设置。
+  imgsz: 640
   epochs: 80
   lr0: 0.001
   lrf: 0.01
