@@ -572,6 +572,166 @@ def test_predict_records_rejects_mismatched_result_paths(tmp_path: Path) -> None
         raise AssertionError("错误的 result.path 未被拒绝")
 
 
+def test_predict_records_forwards_augment_flag(tmp_path: Path) -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+    image = tmp_path / "sample.png"
+    image.write_bytes(b"")
+    calls = []
+
+    class Result:
+        path = str(image)
+        boxes = None
+        speed = {"inference": 0.0}
+
+    class Model:
+        def predict(self, **kwargs):
+            calls.append(kwargs)
+            return [Result()]
+
+    script["predict_records"](
+        Model(),
+        [image],
+        {0: 0},
+        {
+            "common": {"imgsz": 640},
+            "predict": {
+                "conf": 0.01,
+                "iou": 0.7,
+                "max_det": 300,
+                "batch": 1,
+                "augment": True,
+            },
+        },
+        "0",
+        "test",
+    )
+
+    assert calls[0]["augment"] is True
+
+
+def test_base_ensemble_lock_predictions_are_frozen_before_label_access() -> None:
+    script = runpy.run_path("tools/73_evaluate_base_ensemble.py")
+    source = inspect.getsource(script["main"])
+
+    freeze_index = source.index('report_dir / "freeze_manifest.json"')
+    label_index = source.index("ground_truth = yolo_ground_truth(lock_images)")
+    assert freeze_index < label_index
+    assert source.index('prediction_dir / "lock_fused_unlabeled.jsonl"') < label_index
+
+
+def test_base_ensemble_class_policies_do_not_require_image_class_routing() -> None:
+    evaluator = runpy.run_path("tools/73_evaluate_base_ensemble.py")
+    ensemble = runpy.run_path("tools/72_select_base_ensemble.py")
+    predictions = {
+        "primary": [
+            {
+                "image_id": "unknown",
+                "class_id": 0,
+                "confidence": 0.8,
+                "xyxy": [0.0, 0.0, 10.0, 10.0],
+            },
+            {
+                "image_id": "unknown",
+                "class_id": 1,
+                "confidence": 0.7,
+                "xyxy": [20.0, 20.0, 30.0, 30.0],
+            },
+        ],
+        "support": [
+            {
+                "image_id": "unknown",
+                "class_id": 0,
+                "confidence": 0.9,
+                "xyxy": [0.0, 0.0, 10.0, 10.0],
+            }
+        ],
+    }
+    policies = {
+        0: {
+            "primary": "primary",
+            "secondary_scales": {"support": 0.8},
+            "scale_before_clustering": True,
+            "iou": 0.5,
+            "agreement_bonus": 0.1,
+            "weighted_boxes": True,
+        },
+        1: {
+            "primary": "primary",
+            "secondary_scales": {},
+            "scale_before_clustering": False,
+            "iou": 0.5,
+            "agreement_bonus": 0.0,
+            "weighted_boxes": False,
+        },
+    }
+
+    fused = evaluator["fuse_base_classes"](
+        predictions, policies, ensemble["fuse_focus_class"]
+    )
+
+    assert {row["class_id"] for row in fused} == {0, 1}
+    assert all(row["image_id"] == "unknown" for row in fused)
+    assert next(row for row in fused if row["class_id"] == 1)["confidence"] == 0.7
+
+
+def test_sliding_base_owner_runs_every_image_and_remaps_local_class() -> None:
+    evaluator = runpy.run_path("tools/73_evaluate_base_ensemble.py")
+    images = [Path("unknown_a.png"), Path("unknown_b.png")]
+    calls = []
+
+    def predict_tiles(_detector, received_images, *args):
+        calls.append((list(received_images), args))
+        return (
+            [
+                {
+                    "image_id": "unknown_a",
+                    "class_id": 0,
+                    "confidence": 0.8,
+                    "xyxy": [1.0, 2.0, 3.0, 4.0],
+                    "source": "tile_owner",
+                }
+            ],
+            12.0,
+            {"tile_count": 18},
+        )
+
+    rows, inference_ms, audit = evaluator["predict_base_owner"](
+        object(),
+        images,
+        {0: 3},
+        {
+            "predict": {
+                "batch": 32,
+                "conf": 0.01,
+                "iou": 0.7,
+                "max_det": 300,
+            }
+        },
+        "0",
+        "tile_owner",
+        {
+            "imgsz": 640,
+            "inference_mode": "sliding_window",
+            "tile": {
+                "width": 320,
+                "height": 256,
+                "overlap": 0.2,
+                "focus_class_local": 0,
+            },
+        },
+        {"evaluation_predictor_class": lambda: object},
+        {"predict_tiles": predict_tiles},
+    )
+
+    assert calls[0][0] == images
+    assert rows[0]["class_id"] == 3
+    assert inference_ms == 12.0
+    assert audit == {
+        "inference_mode": "sliding_window",
+        "tile": {"tile_count": 18},
+    }
+
+
 def test_expanded_student_initializes_ema_and_freezes_batchnorm() -> None:
     script = runpy.run_path("tools/70_run_strict_3plus1.py")
 

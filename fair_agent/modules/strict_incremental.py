@@ -48,6 +48,20 @@ def source_label(image: Path) -> Path:
     sibling = image.parent.parent / "labels" / f"{image.stem}.txt"
     if sibling.exists():
         return sibling
+    # Also support the canonical YOLO layout
+    # ``dataset/images/<split>/x.png -> dataset/labels/<split>/x.txt``.
+    # The strict protocol materializer uses ``<split>/images`` instead, so
+    # both layouts must remain valid without resolving image symlinks back to
+    # their four-class source labels.
+    if image.parent.parent.name == "images":
+        standard = (
+            image.parent.parent.parent
+            / "labels"
+            / image.parent.name
+            / f"{image.stem}.txt"
+        )
+        if standard.exists():
+            return standard
     raise FileNotFoundError(f"找不到图像标签：{image}")
 
 

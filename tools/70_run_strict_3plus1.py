@@ -724,6 +724,7 @@ def predict_records(
         "iou": float(predict["iou"]),
         "max_det": int(predict["max_det"]),
         "rect": bool(predict.get("rect", True)),
+        "augment": bool(predict.get("augment", False)),
         "device": device,
         "verbose": False,
     }

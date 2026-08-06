@@ -1,0 +1,26 @@
+schema_version: 1
+strict_config: configs/strict_class_incremental_3plus1.yaml
+model: yolo11s.pt
+epochs: 160
+project_root: runs/detect/base_small_object_s_final
+report_root: reports/base_small_object_s_final
+
+evaluation:
+  imgsz: 640
+  batch: 1
+  conf: 0.01
+  iou: 0.70
+  rect: true
+  workers: 8
+
+candidates:
+  crop320_low_seed_a:
+    seed: 20260705
+    overrides:
+      mosaic: 0.30
+      close_mosaic: 30
+  crop320_low_seed_b:
+    seed: 20260706
+    overrides:
+      mosaic: 0.30
+      close_mosaic: 30

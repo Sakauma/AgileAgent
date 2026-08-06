@@ -1,0 +1,37 @@
+schema_version: 1
+strict_config: configs/strict_class_incremental_3plus1.yaml
+
+# 类别无关的时序增强 owner。每折只在该折训练源中生成最小目标裁剪，
+# 并把各已知序列最近 25% 的训练帧额外重复一次；验证帧保持完整且从不增强。
+# 五折边界与通用/crop OOF 完全相同，不读取 mixed_test。
+model: yolo11m.pt
+epochs: 160
+project_root: runs/detect/base_refit_recent_crop_cv
+report_root: reports/base_refit_recent_crop_cv
+
+evaluation:
+  imgsz: 896
+  batch: 1
+  conf: 0.01
+  iou: 0.70
+  rect: true
+  workers: 8
+
+candidates:
+  fold_0:
+    seed: 20260705
+    overrides: &recent_crop_overrides
+      mosaic: 0.30
+      close_mosaic: 30
+  fold_1:
+    seed: 20260705
+    overrides: *recent_crop_overrides
+  fold_2:
+    seed: 20260705
+    overrides: *recent_crop_overrides
+  fold_3:
+    seed: 20260705
+    overrides: *recent_crop_overrides
+  fold_4:
+    seed: 20260705
+    overrides: *recent_crop_overrides

@@ -1,0 +1,21 @@
+schema_version: 1
+strict_config: configs/strict_class_incremental_3plus1.yaml
+model: yolo11s.pt
+epochs: 160
+project_root: runs/detect/base_small_object_s_sweep
+report_root: reports/base_small_object_s_sweep
+
+evaluation:
+  imgsz: 896
+  batch: 1
+  conf: 0.01
+  iou: 0.70
+  rect: true
+  workers: 8
+
+candidates:
+  s_crop320_low_mosaic:
+    seed: 20260705
+    overrides:
+      mosaic: 0.30
+      close_mosaic: 30

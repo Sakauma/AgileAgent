@@ -1,0 +1,27 @@
+schema_version: 1
+strict_config: configs/strict_class_incremental_3plus1.yaml
+
+# 在 OOF 候选训练并行期间预计算两个最终 refit seed。仅当完整 OOF 与后置折
+# 均通过选择门禁时才允许冻结进 Agent；48 张 sparse val 只选择 best.pt。
+model: yolo11s.pt
+epochs: 160
+project_root: runs/detect/base_final_refit_s896
+report_root: reports/base_final_refit_s896
+
+evaluation:
+  imgsz: 896
+  batch: 1
+  conf: 0.01
+  iou: 0.70
+  rect: true
+  workers: 8
+
+candidates:
+  seed_a:
+    seed: 20260705
+    overrides: &s896_train
+      imgsz: 896
+      multi_scale: 0.0
+  seed_b:
+    seed: 20260706
+    overrides: *s896_train
