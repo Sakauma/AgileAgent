@@ -7,9 +7,9 @@ experiment:
 
 dataset:
   source_splits:
-    train: splits/train.txt
-    dev: splits/dev_val.txt
-    lock: splits/lock_val.txt
+    train: splits/pool_train.txt
+    dev: splits/pool_dev.txt
+    lock: splits/mixed_test.txt
   class_map:
     0: soldier
     1: small_aircraft
@@ -29,9 +29,9 @@ partition:
       train_selector: contains_only_new_classes
       dev_selector: contains_only_new_classes
       expected_counts:
-        train: 126
-        dev: 22
-        lock_positive: 21
+        train: 117
+        dev: 18
+        lock_positive: 19
 
 training:
   adapter_config: configs/strict_class_incremental_3plus1.yaml

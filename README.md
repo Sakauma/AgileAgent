@@ -40,12 +40,12 @@ flowchart LR
 | --- | --- | --- |
 | x86 NVIDIA GPU 推理 | 可用 | 默认 PyTorch CUDA 加载模型权重，不提供 CPU 回退 |
 | Web / CLI | 可用 | 支持检测、决策展示、增量数据管理和结构化日志 |
-| 舰船 3+1 类别增量 | 已验证 | 单轮内部 lock-val 证据已通过门禁 |
+| 舰船 3+1 类别增量 | 待按新划分重验 | 旧随机划分证据已归档；本次只建立新的固定 3+1 清单，未重新训练 |
 | 多轮增量 | 已完成机制验证 | 四批次连续回归和三组共 21 轮压力回归均通过当前硬门禁 |
 | Ascend 310B | 待硬件验证 | 尚无 OM、AscendCL 和真实板端 FPS |
 | 官方隐藏测试提交 | 待赛题信息 | 测试目录和提交格式确认前保持阻塞 |
 
-截至 `2026-08-05`，精简后的公开仓库已重新完成完整 Pytest、静态发布校验、CLI 环境诊断、舰船 3+1 数据审计和 GPU 冒烟测试。现役三类基础模型、增量检测器、场景模型、Web/CLI、固定划分和 production 类别映射均保持可用；删除内容只包括已退出主线的实验实现、重复报告入口和失效配置。
+截至 `2026-08-05` 的模型与指标来自现已归档的旧随机划分。当前唯一活动划分已切换为时间隔离的固定 3+1 协议；在按该划分重新训练和复核前，旧指标只能作为历史参考，不能作为当前划分成绩。
 
 ## 阅读导航
 
@@ -154,7 +154,9 @@ warship
 tank
 ```
 
-仓库中的 [`splits/`](splits/README.md) 已包含固定的 `560/95/95` train、dev 和 lock 清单，以及对应的 IR/SAR 子集。数据就位后执行：
+仓库中的 [`splits/`](splits/README.md) 是唯一活动划分，固定模拟 `warship` 为新增类别：基础训练/验证为 `405/70` 张且只含 `soldier`、`small_aircraft`、`tank`，增量训练/验证为 `117/18` 张且只含 `warship`，最终混合测试为 `89` 张（`70` 张旧类图 + `19` 张新类图）。场景识别另用 `522/88/89` 张已知场景清单。旧随机逐帧 `560/95/95` 划分保存在 [`archive/splits_legacy_random_560_95_95/`](archive/splits_legacy_random_560_95_95/README.md)，不再作为活动入口。
+
+数据就位后执行：
 
 ```bash
 python tools/00_check_dataset.py
@@ -169,7 +171,7 @@ agile-agent benchmark-api
 agile-agent experiment run --config configs/incremental/warship_3plus1.yaml
 ```
 
-`benchmark-api` 使用 `splits/lock_val.txt` 中的 95 张图像；缺少原始数据时不能用合成图替代正式性能验收。
+`benchmark-api` 使用 `splits/strict_3plus1/mixed_test.txt` 中的 89 张旧类与新类混合图像；缺少原始数据时不能用合成图替代正式性能验收。本次划分整理没有启动训练。
 
 ## 使用方式
 
@@ -257,14 +259,14 @@ Web 与 CLI 使用同一状态机和配置，批次状态、任务日志及最�
 
 ## 模型与指标
 
-| 模型 | 功能 | 内部 lock-val 结果 | 状态 |
+| 模型 | 功能 | 历史归档 lock-val 结果 | 状态 |
 | --- | --- | --- | --- |
 | Scene-SensorNet | IR/SAR 与四场景认知 | sensor 0.98947 / scene 0.76842 | production 上下文模型 |
 | 三类基础检测器 | 冻结旧类检测 | 增量前/后 mAP50 0.87172 / 0.87278 | production 旧类所有者 |
 | 增量检测器 | 新类别检测 | New-mAP50 0.81485 / KRR 1.00121 | production，当前绑定舰船 |
 | 四类统一 YOLO11s | 单模型上限参考 | mAP50 0.91202 | `benchmark_only` |
 
-当前 production 已按实际使用方式完成复核：基础检测器与增量检测器先对全部 95 张无标签图像共同推理，标签只在预测完成后用于评分。组合 mAP50 为 `0.81613`，舰船 precision 为 `1.000`、recall 为 `0.80247`；74 张不含舰船的图像中误激活 0 张。基础 mAP50、New-mAP50 和 KRR 均达到赛题满分档门槛。检测指标均指 mAP50，且内部结果不是官方隐藏测试成绩。
+现有 production 曾在已归档旧划分上完成复核：基础检测器与增量检测器先对全部 95 张无标签图像共同推理，标签只在预测完成后用于评分。组合 mAP50 为 `0.81613`，舰船 precision 为 `1.000`、recall 为 `0.80247`；74 张不含舰船的图像中误激活 0 张。这些数值不是新活动划分上的结果，也不是官方隐藏测试成绩；当前 `89` 张混合测试集必须在重新训练后独立复核。
 
 本次 RTX 4060 Laptop、Ultralytics CUDA 组合复核的模型平均推理观察值为 `520.28 ms/图`，未达到内部 x86 时延目标，因此作为非阻塞告警保留。该数值未经 TensorRT 批处理优化，不是 API 总耗时，也不能替代 Ascend 310B 实测 FPS。
 
@@ -284,7 +286,7 @@ production 代际、类别所有权和权重身份属于受保护状态，只能
 
 ## 可复现实验
 
-舰船 3+1 实验通过单一 YAML 描述基础类别、增量类别、数据划分和验收门槛：
+舰船 3+1 实验通过单一 YAML 描述基础类别、增量类别、数据划分和验收门槛；配置只读取当前 `splits/`：
 
 ```bash
 agile-agent experiment validate --config configs/incremental/warship_3plus1.yaml
@@ -294,7 +296,7 @@ agile-agent experiment reproduce --manifest runs/experiments/warship_3plus1/<run
 
 增量阶段禁止读取旧类原始图像、旧类标签和旧数据缓存特征。lock-val 只在权重与阈值冻结后解封。每次运行的配置快照、状态机、逐图预测和复现边界均保存在独立实验目录。
 
-四批次小样本连续验证使用独立注册表和运行目录，不修改当前 production：
+以下四批次与压力回归配置固定指向归档旧划分，只用于历史复现，不代表当前严格 3+1 划分的结果。四批次小样本连续验证使用独立注册表和运行目录，不修改当前 production：
 
 ```bash
 python tools/81_validate_multibatch_incremental.py \
@@ -339,6 +341,8 @@ fair_agent/
 └── ui/             # 终端工作台
 configs/            # 运行和实验 YAML
 models/             # 冻结权重、注册表和指标
+splits/             # 唯一活动的时间隔离严格 3+1 划分
+archive/            # 仅供历史复现的旧划分
 scripts/            # 安装、启动和发布验收
 tools/              # 数据处理、训练和导出入口
 tests/              # 自动化测试

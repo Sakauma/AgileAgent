@@ -115,7 +115,7 @@
       "dataset_fingerprint": null,
       "metrics": {
         "base_map50": 0.8717219203307386,
-        "evaluation_split": "splits/lock_val_base_3plus1.txt"
+        "evaluation_split": "archive/splits_legacy_random_560_95_95/lock_val_base_3plus1.txt"
       }
     },
     {
@@ -150,8 +150,8 @@
         "incremental_train_count": 126
       },
       "evaluation_lock": {
-        "split": "splits/lock_val_increment_3plus1.txt",
-        "base_split": "splits/lock_val_base_3plus1.txt",
+        "split": "archive/splits_legacy_random_560_95_95/lock_val_increment_3plus1.txt",
+        "base_split": "archive/splits_legacy_random_560_95_95/lock_val_base_3plus1.txt",
         "local_to_global": {
           "2": 2
         }

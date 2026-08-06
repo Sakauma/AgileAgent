@@ -4,17 +4,17 @@ model: yolo11s.pt
 
 paths:
   source_splits:
-    train: splits/train.txt
-    val: splits/dev_val.txt
-    lock: splits/lock_val.txt
+    train: splits/pool_train.txt
+    val: splits/pool_dev.txt
+    lock: splits/mixed_test.txt
   dataset_root: incremental_strict_3plus1
   run_root: runs/detect/strict_3plus1
   report_root: reports/strict_3plus1
   freeze_root: models/profiles
 
 runtime:
-  preferred_devices: ["0", "1"]
-  parallel: true
+  preferred_devices: ["0"]
+  parallel: false
   workers: 8
   env:
     NCCL_P2P_DISABLE: "1"
@@ -81,22 +81,15 @@ acceptance:
   max_base_weight_drift: 0.0
 
 reference:
+  # 历史旧划分上的上限参考，不参与当前划分的验收判定。
   unified_four_class_map50: 0.91202
 
 protocols:
-  - id: strict-p01
-    display_name: 小型飞行器严格 3+1
-    base_classes: [soldier, warship, tank]
-    new_class: small_aircraft
-    new_global_id: 1
-    base_local_to_global: {0: 0, 1: 2, 2: 3}
-    expected_incremental_counts: {train: 131, val: 22, lock_positive: 22}
-    preferred_device: "0"
   - id: warship-incremental
     display_name: 舰船严格 3+1
     base_classes: [soldier, small_aircraft, tank]
     new_class: warship
     new_global_id: 2
     base_local_to_global: {0: 0, 1: 1, 2: 3}
-    expected_incremental_counts: {train: 126, val: 22, lock_positive: 21}
-    preferred_device: "1"
+    expected_incremental_counts: {train: 117, val: 18, lock_positive: 19}
+    preferred_device: "0"

@@ -9,8 +9,9 @@ experiment:
   report_root: reports/multibatch_validation
 
 dataset:
-  source_split: splits/train.txt
-  base_splits: [splits/train.txt, splits/dev_val.txt]
+  # 历史压力实验固定在归档旧划分，不代表当前严格 3+1 测试结果。
+  source_split: archive/splits_legacy_random_560_95_95/train.txt
+  base_splits: [archive/splits_legacy_random_560_95_95/train.txt, archive/splits_legacy_random_560_95_95/dev_val.txt]
   source_global_class_id: 2
   class_name: warship
   sensors: [ir, sar]

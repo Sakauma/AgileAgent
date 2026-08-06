@@ -1503,7 +1503,7 @@ def write_summary(
     path = output / f"summary{suffix}.json"
     path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     lines = [
-        "# 严格 3+1 类别增量双折汇总",
+        "# 严格 3+1 类别增量单一协议汇总",
         "",
         "| 协议 | 新增类别 | New-mAP50 | KRR | 四类 mAP50 | 结论 |",
         "|---|---|---:|---:|---:|---|",
@@ -1521,7 +1521,7 @@ def write_summary(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="运行严格 3+1 类别增量双折实验。")
+    parser = argparse.ArgumentParser(description="运行严格 3+1 类别增量单一协议实验。")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "strict_class_incremental_3plus1.yaml")
     parser.add_argument("--run-id", help="显式指定唯一运行编号，便于多模型共享同一产物目录。")
     parser.add_argument("--check-only", action="store_true", help="只做训练环境与数据只读预检，不创建产物或启动训练。")

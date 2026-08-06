@@ -127,7 +127,7 @@ performance:
   request_timeout_seconds: 180
   benchmark_rounds: 3
   warmup_requests: 3
-  benchmark_split: splits/lock_val.txt
+  benchmark_split: splits/strict_3plus1/mixed_test.txt
   report_root: reports/api_performance
   concurrent_requests: 8
   batch_probe_size: 20
@@ -135,7 +135,8 @@ performance:
 generation:
   registry: models/generations.json
   runtime_registry: data/generation_registry/runtime.json
-  recheck_lock_split: splits/lock_val_base_3plus1.txt
+  # 当前 production 权重仍对应历史划分；该路径只用于复核旧模型证据。
+  recheck_lock_split: archive/splits_legacy_random_560_95_95/lock_val_base_3plus1.txt
   report_root: reports/generation_rechecks
   candidate_id: incremental_detection_generation
   calibrated_threshold: 0.63
@@ -213,8 +214,8 @@ tensorrt_backend:
   int8_calibration:
     enabled: true
     auto_quantize_incremental: true
-    representative_split: splits/train.txt
-    threshold_split: splits/dev_val.txt
+    representative_split: splits/pool_train.txt
+    threshold_split: splits/pool_dev.txt
     cache_root: runs/tensorrt_calibration
     batch_size: 8
     max_images: 256

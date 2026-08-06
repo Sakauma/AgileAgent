@@ -97,17 +97,20 @@ def main() -> int:
     context_model, context_checkpoint = load_context_model(context_weights, f"cuda:{device}")
     context_prediction = None
     context_lock_evaluation = None
+    context_reference_comparable = None
     lock_paths = []
     if not args.load_only:
         context_prediction = predict_context(context_model, context_checkpoint, image, f"cuda:{device}")
-        lock_split = ROOT / "splits" / "lock_val.txt"
+        lock_split = ROOT / "splits" / "strict_3plus1" / "scene_test.txt"
         if lock_split.exists():
             lock_paths = [ROOT / line.strip() for line in lock_split.read_text(encoding="utf-8").splitlines() if line.strip()]
             context_lock_evaluation = evaluate_context_paths(context_model, context_checkpoint, lock_paths, f"cuda:{device}", batch_size=batch_size)
             expected_metrics = json.loads((ROOT / "models" / "context" / "scene_sensor_metrics.json").read_text(encoding="utf-8"))["lock"]
-            for name in ["sensor_accuracy", "scene_accuracy", "joint_accuracy"]:
-                if abs(float(context_lock_evaluation[name]) - float(expected_metrics[name])) > 1e-9:
-                    raise RuntimeError(f"Scene-SensorNet lock 指标不一致：{name}")
+            context_reference_comparable = int(expected_metrics.get("image_count", -1)) == len(lock_paths)
+            if context_reference_comparable:
+                for name in ["sensor_accuracy", "scene_accuracy", "joint_accuracy"]:
+                    if abs(float(context_lock_evaluation[name]) - float(expected_metrics[name])) > 1e-9:
+                        raise RuntimeError(f"Scene-SensorNet lock 指标不一致：{name}")
 
     orchestration_results = []
     if not args.load_only:
@@ -175,6 +178,7 @@ def main() -> int:
             "loaded": True,
             "synthetic_prediction": context_prediction,
             "lock_evaluation": context_lock_evaluation,
+            "historical_reference_comparable": context_reference_comparable,
         },
         "agent_orchestration": orchestration_results,
         "yolo_models": results,

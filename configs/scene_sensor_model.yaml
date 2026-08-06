@@ -1,9 +1,9 @@
 seed: 20260705
 
 data:
-  train: splits/train.txt
-  dev: splits/dev_val.txt
-  lock: splits/lock_val.txt
+  train: splits/strict_3plus1/scene_train.txt
+  dev: splits/strict_3plus1/scene_dev.txt
+  lock: splits/strict_3plus1/scene_test.txt
   image_size: 160
   num_workers: 4
 

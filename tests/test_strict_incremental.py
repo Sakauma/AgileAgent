@@ -50,10 +50,20 @@ def protocol() -> dict:
     }
 
 
-def test_repository_strict_config_has_only_disjoint_aircraft_and_warship_folds() -> None:
+def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
     config = load_yaml("configs/strict_class_incremental_3plus1.yaml")
-    assert [item["id"] for item in config["protocols"]] == ["strict-p01", "warship-incremental"]
-    assert [item["new_class"] for item in config["protocols"]] == ["small_aircraft", "warship"]
+    assert [item["id"] for item in config["protocols"]] == ["warship-incremental"]
+    assert [item["new_class"] for item in config["protocols"]] == ["warship"]
+    assert config["paths"]["source_splits"] == {
+        "train": "splits/pool_train.txt",
+        "val": "splits/pool_dev.txt",
+        "lock": "splits/mixed_test.txt",
+    }
+    assert config["protocols"][0]["expected_incremental_counts"] == {
+        "train": 117,
+        "val": 18,
+        "lock_positive": 19,
+    }
     assert config["acceptance"]["min_new_map50"] == 0.60
     assert config["acceptance"]["min_krr"] == 0.95
     assert config["bootstrap"]["iterations"] == 1000

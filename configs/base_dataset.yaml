@@ -1,7 +1,9 @@
 path: .
-train: splits/train.txt
-val: splits/dev_val.txt
-test: splits/lock_val.txt
+# 仅用于全局标签检查/评估。严格三类基础训练必须由
+# strict_class_incremental_3plus1.yaml 生成连续局部类别 ID 的数据视图。
+train: splits/strict_3plus1/base_train.txt
+val: splits/strict_3plus1/base_dev.txt
+test: splits/strict_3plus1/mixed_test.txt
 names:
   0: soldier
   1: small_aircraft
