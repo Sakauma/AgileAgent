@@ -451,7 +451,18 @@ def test_generation_registry_keeps_verified_rollback_point() -> None:
     registry = load_generation_registry("models/generations.json")
     assert registry["channels"]["production"] == "incremental_detection_generation"
     assert registry["generations_by_id"]["base_detection_generation"]["status"] == "active"
-    assert registry["models_by_id"]["incremental_detector"]["activation_threshold"] == 0.01
+    assert registry["models_by_id"]["incremental_detector"]["activation_threshold"] == 0.63
+
+
+def test_generation_registry_rejects_missing_context_prior_asset(tmp_path: Path) -> None:
+    payload = json.loads(Path("models/generations.json").read_text(encoding="utf-8"))
+    expert = next(item for item in payload["models"] if item["id"] == "incremental_detector")
+    expert["context_gate"]["prior_source"] = str(tmp_path / "missing-context-prior.json")
+    registry_path = tmp_path / "generations.json"
+    registry_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="场景软门控资产非法"):
+        load_generation_registry(registry_path)
 
 
 def test_promotion_rejects_failed_manifest(tmp_path: Path) -> None:

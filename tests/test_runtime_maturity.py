@@ -209,7 +209,13 @@ def test_static_release_verification_passes() -> None:
     result = verify_release()
     assert result["status"] == "passed", result["errors"]
     assert isinstance(result["required_assets"], dict)
-    assert len(result["required_assets"]) == 8
+    assert {
+        "models/production/incremental_detection/calibration.json",
+        "models/production/incremental_detection/context_prior.json",
+        "models/production/incremental_detection/metrics.json",
+        "models/production/incremental_detection/profile.json",
+    } <= set(result["required_assets"])
+    assert all(item["exists"] for item in result["required_assets"].values())
     assert result["functional_models"]["valid"] is True
     assert result["functional_models"]["distinct_function_count"] == 3
     assert result["model_generations"]["production"] == "incremental_detection_generation"
@@ -226,6 +232,9 @@ def test_manifest_blocks_uncalibrated_or_overlapping_true_new_class() -> None:
     candidate["calibration_source"] = "incremental_val/calibration.json"
     candidate["base_class_ids"].append(2)
     assert "manifest_new_class_overlaps_base:incremental_detector" in _validate_model_manifest(manifest)
+    candidate["base_class_ids"].remove(2)
+    candidate["deployment_accepted"] = False
+    assert "manifest_deployment_gates_missing:incremental_detector" in _validate_model_manifest(manifest)
 
 
 def test_low_risk_action_output_cannot_escape_allowlist(tmp_path: Path) -> None:

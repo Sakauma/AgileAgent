@@ -45,10 +45,10 @@ acceptance:
   min_krr: 0.95
 
 diagnostics:
-  # 以下参数只生成诊断，不参与赛题三项计分或模型晋升。
-  calibration_target_precision: 0.99
-  min_lock_precision: 0.70
-  max_false_activation_rate: 0.15
+  # 不改写赛题三项分数，但候选必须通过这些部署质量门禁才能进入 production。
+  calibration_target_precision: 0.95
+  min_lock_precision: 0.90
+  max_false_activation_rate: 0.05
 
 integrity:
   max_base_weight_drift: 0.0

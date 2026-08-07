@@ -4,6 +4,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from fair_agent.modules.detection_fusion import (
+    apply_incremental_candidate_gates,
+    context_adjusted_threshold,
+    learn_context_prior,
+)
 from fair_agent.modules.incremental_rejection import (
     apply_positive_prototype,
     calibrate_positive_prototype,
@@ -103,6 +108,119 @@ def test_cross_class_fusion_suppresses_only_overlapping_incremental_candidate() 
     assert len(fused) == 2
     assert {int(item["class_id"]) for item in fused} == {1, 2}
     assert decisions[0]["action"] == "reject_specialist"
+
+
+def test_cross_class_fusion_detects_incremental_box_covered_by_large_old_box() -> None:
+    old = [
+        {
+            "image_id": "one",
+            "class_id": 3,
+            "confidence": 0.80,
+            "xyxy": [0, 0, 100, 100],
+        }
+    ]
+    new = [
+        {
+            "image_id": "one",
+            "class_id": 2,
+            "confidence": 0.70,
+            "xyxy": [10, 10, 20, 20],
+        }
+    ]
+
+    fused, decisions = fuse_old_new_predictions(
+        old,
+        new,
+        nms_iou=0.60,
+        cross_class={
+            "enabled": True,
+            "iou": 0.50,
+            "incremental_coverage": 0.80,
+            "base_confidence": 0.50,
+            "incremental_margin": 0.15,
+            "preserve_base_class_owners": True,
+        },
+    )
+
+    assert fused == old
+    assert decisions[0]["iou"] == 0.01
+    assert decisions[0]["incremental_coverage"] == 1.0
+    assert decisions[0]["action"] == "reject_specialist"
+
+
+def test_covered_incremental_box_with_stronger_evidence_is_not_deleted() -> None:
+    old = [
+        {"image_id": "one", "class_id": 3, "confidence": 0.80, "xyxy": [0, 0, 100, 100]}
+    ]
+    new = [
+        {"image_id": "one", "class_id": 2, "confidence": 0.96, "xyxy": [10, 10, 20, 20]}
+    ]
+
+    fused, decisions = fuse_old_new_predictions(
+        old,
+        new,
+        nms_iou=0.60,
+        cross_class={
+            "enabled": True,
+            "iou": 0.50,
+            "incremental_coverage": 0.80,
+            "base_confidence": 0.50,
+            "incremental_margin": 0.15,
+            "preserve_base_class_owners": True,
+        },
+    )
+
+    assert fused == old + new
+    assert decisions == []
+
+
+def test_context_prior_is_incremental_train_only_and_missing_context_is_neutral() -> None:
+    prior = learn_context_prior(
+        [
+            {"scene_probabilities": {"sea": 0.9, "forest": 0.1}},
+            {"scene_probabilities": {"sea": 0.8, "forest": 0.2}},
+        ],
+        ("scene",),
+    )
+
+    threshold, affinity = context_adjusted_threshold(0.69, {}, prior, 0.05)
+
+    assert prior["source_split"] == "incremental_train_only"
+    assert prior["sample_count"] == 2
+    assert threshold == 0.69
+    assert affinity == 1.0
+
+
+def test_incompatible_known_context_only_raises_new_box_threshold() -> None:
+    prior = {
+        "source_split": "incremental_train_only",
+        "scene": {"sea": 1.0, "forest": 0.0},
+    }
+    context = {"scene_probabilities": {"sea": 0.0, "forest": 1.0}}
+    records = [
+        {"image_id": "old", "class_id": 0, "confidence": 0.20, "xyxy": [0, 0, 5, 5]},
+        {"image_id": "old", "class_id": 2, "confidence": 0.72, "xyxy": [0, 0, 5, 5]},
+    ]
+
+    kept, rejected = apply_incremental_candidate_gates(
+        records,
+        {2: 0.69},
+        contexts_by_image={"old": context},
+        context_prior=prior,
+        max_context_penalty=0.05,
+    )
+    empty_kept, empty_rejected = apply_incremental_candidate_gates(
+        [],
+        {2: 0.69},
+        contexts_by_image={"old": context},
+        context_prior=prior,
+        max_context_penalty=0.05,
+    )
+
+    assert kept == [records[0]]
+    assert rejected[0]["effective_activation_threshold"] == 0.74
+    assert rejected[0]["context_affinity"] == 0.0
+    assert empty_kept == empty_rejected == []
 
 
 def test_unified_gate_applies_new_class_threshold_and_prototype(tmp_path: Path) -> None:

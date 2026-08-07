@@ -512,6 +512,10 @@ def cmd_detect(args: argparse.Namespace) -> int:
                         "activation_thresholds": {
                             int(profile["new_global_id"]): float(profile["activation_threshold"])
                         },
+                        "context_prior": dict(profile.get("context_prior") or {}),
+                        "context_gate": dict(
+                            profile.get("context_gate") or {"enabled": False}
+                        ),
                         "positive_prototypes": (
                             {int(profile["new_global_id"]): prototype}
                             if isinstance(prototype, dict) else {}
@@ -545,7 +549,10 @@ def cmd_detect(args: argparse.Namespace) -> int:
                             "activation_threshold": float(profile["activation_threshold"]),
                             "calibration_source": profile["calibration_source"],
                             "routing_prior": float(config["routing"]["default_routing_prior"]),
-                            "context_prior": {},
+                            "context_prior": dict(profile.get("context_prior") or {}),
+                            "context_gate": dict(
+                                profile.get("context_gate") or {"enabled": False}
+                            ),
                             "positive_prototype": profile.get("positive_prototype"),
                         }
                     },

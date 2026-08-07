@@ -19,6 +19,7 @@ from fair_agent.modules.web_inference import (
     compose_incremental_records,
     class_aware_nms,
     context_affinity,
+    protocol_effective_thresholds,
     plan_specialist_routes,
     remap_specialist_records,
     remap_base_records,
@@ -365,6 +366,36 @@ def test_dynamic_new_class_mapping_and_neutral_context() -> None:
     assert context_affinity({}, {}, 0.5) == 0.5
 
 
+def test_class_incremental_context_is_soft_and_does_not_disable_execution() -> None:
+    protocol = {
+        "available": True,
+        "incremental_mode": "class_incremental",
+        "global_class_id": 4,
+        "activation_threshold": 0.69,
+        "calibration_source": "incremental_dev/calibration.json",
+        "context_prior": {
+            "source_split": "incremental_train_only",
+            "scene": {"sea": 1.0, "forest": 0.0},
+        },
+        "context_gate": {
+            "enabled": True,
+            "policy": "soft_threshold_penalty",
+            "max_threshold_penalty": 0.05,
+        },
+    }
+    context = {"scene_probabilities": {"sea": 0.0, "forest": 1.0}}
+
+    thresholds, affinity = protocol_effective_thresholds(protocol, context, 0.01)
+    _eligible, executed, skipped = plan_specialist_routes(
+        {"new": protocol}, [], context, {0, 1, 2, 3}, *ROUTING_ARGS
+    )
+
+    assert thresholds == {4: 0.74}
+    assert affinity == 0.0
+    assert [row["id"] for row in executed] == ["new"]
+    assert skipped == []
+
+
 def test_strict_base_local_ids_remap_to_global_space() -> None:
     records = [
         {"class_id": 0, "class_name": "soldier", "confidence": 0.9, "xyxy": [1, 1, 2, 2]},
@@ -403,6 +434,7 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     engine.fusion_iou = 0.60
     engine.max_specialists = 4
     engine.conflict_iou = 0.50
+    engine.conflict_incremental_coverage = None
     engine.conflict_base_confidence = 0.50
     engine.specialist_margin = 0.15
     engine.preserve_base_class_owners = True

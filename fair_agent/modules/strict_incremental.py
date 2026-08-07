@@ -591,6 +591,11 @@ def fuse_old_new_predictions(
             float(settings.get("incremental_margin", settings.get("specialist_margin", 0.15))),
             None,
             bool(settings.get("preserve_base_class_owners", True)),
+            (
+                float(settings["incremental_coverage"])
+                if settings.get("incremental_coverage") is not None
+                else None
+            ),
         )
     else:
         old_kept = [dict(row) for row in old_predictions]
@@ -667,6 +672,8 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     if (
         profile.get("profile_id") != profile_id
         or profile.get("acceptance") != "passed"
+        or profile.get("competition_accepted") is not True
+        or profile.get("deployment_accepted") is not True
         or profile.get("incremental_mode") != "class_incremental"
         or profile.get("evidence_level") != "verified"
     ):
@@ -723,9 +730,57 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
         ):
             raise ValueError(f"严格增量实验档原型证据无效：{profile_id}")
         profile["positive_prototype"] = prototype
+    context_gate = profile.get("context_gate")
+    context_prior = profile.get("context_prior")
+    if not isinstance(context_gate, Mapping):
+        raise ValueError(f"严格增量实验档缺少场景软门控配置：{profile_id}")
+    if context_gate.get("enabled") is True:
+        if (
+            context_gate.get("policy") != "soft_threshold_penalty"
+            or context_gate.get("hard_routing") is not False
+            or context_gate.get("learning_data_scope") != "incremental_train_only"
+            or not isinstance(context_prior, Mapping)
+            or context_prior.get("source_split") != "incremental_train_only"
+        ):
+            raise ValueError(f"严格增量实验档场景软门控证据无效：{profile_id}")
+        penalty = float(context_gate.get("max_threshold_penalty", -1.0))
+        if not 0.0 <= penalty <= 1.0:
+            raise ValueError(f"严格增量实验档场景软门控阈值无效：{profile_id}")
+        context_prior_path = resolve_path(
+            profile.get("context_prior_source", "__missing_context_prior__")
+        )
+        expected = str(profile.get("context_prior_sha256") or "")
+        if (
+            not context_prior_path.is_file()
+            or len(expected) != 64
+            or sha256_file(context_prior_path) != expected
+        ):
+            raise ValueError(f"严格增量实验档场景先验证据缺失：{profile_id}")
+        frozen_prior = json.loads(context_prior_path.read_text(encoding="utf-8"))
+        if frozen_prior != dict(context_prior):
+            raise ValueError(f"严格增量实验档场景先验内容不一致：{profile_id}")
+    elif context_gate.get("enabled") is not False or context_prior not in ({}, None):
+        raise ValueError(f"严格增量实验档场景软门控开关无效：{profile_id}")
     calibration = resolve_path(profile.get("calibration_source", "__missing_calibration__"))
     if not calibration.exists():
         raise ValueError(f"严格增量实验档缺少校准证据：{profile_id}")
+    calibration_payload = json.loads(calibration.read_text(encoding="utf-8"))
+    try:
+        calibrated_threshold = float(calibration_payload["deployment_threshold"])
+        selected_threshold = float(calibration_payload["selected"]["threshold"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"严格增量实验档校准证据无效：{profile_id}") from exc
+    if (
+        calibration_payload.get("passed") is not True
+        or calibration_payload.get("source_split") != "incremental_dev_only"
+        or calibration_payload.get("learning_data_scope")
+        != "incremental_dataset_only"
+        or calibration_payload.get("deployment_policy")
+        != "incremental_dev_calibrated"
+        or abs(calibrated_threshold - threshold) > 1e-12
+        or abs(selected_threshold - threshold) > 1e-12
+    ):
+        raise ValueError(f"严格增量实验档校准证据无效：{profile_id}")
     evidence_weight = profile.get("base_weight") or profile.get("model_weight")
     if not evidence_weight:
         raise ValueError(f"严格增量实验档缺少评测权重：{profile_id}")
@@ -737,7 +792,9 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
         raise ValueError(f"严格增量实验档缺少评测证据：{profile_id}")
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     if (
-        metrics.get("accepted") is not True
+        metrics.get("competition_accepted") is not True
+        or metrics.get("deployment_accepted") is not True
+        or metrics.get("accepted") is not True
         or metrics.get("incremental_mode") != "class_incremental"
         or metrics.get("learning_data_scope") != "incremental_dataset_only"
         or metrics.get("old_raw_image_count") != 0
@@ -750,9 +807,8 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     profile["lock_precision"] = metrics.get("lock_deployment_metrics", {}).get("precision")
     profile["lock_recall"] = metrics.get("lock_deployment_metrics", {}).get("recall")
     profile["lock_false_activation_rate"] = metrics.get("false_activation", {}).get("false_activation_rate")
-    # 赛题晋升只由 metrics.accepted（官方三项分数 + 完整性门禁）决定。
-    # precision 和误激活率继续公开为诊断，但不能形成额外的第四项性能门槛。
-    profile["deployment_accepted"] = True
+    profile["competition_accepted"] = bool(metrics["competition_accepted"])
+    profile["deployment_accepted"] = bool(metrics["deployment_accepted"])
     profile["diagnostic_warnings"] = {
         "lock_precision_below_0_70": bool(
             profile["lock_precision"] is not None

@@ -3,17 +3,21 @@
   "verified_profiles": [
     {
       "profile_id": "incremental-detection",
-      "run_id": "strict750-b98d188-20260807a",
+      "run_id": "fresh-ea7ca27-20260807",
       "incremental_mode": "class_incremental",
       "new_class": "warship",
       "new_global_id": 2,
       "active_profile": "models/profiles/incremental-detection/active.json",
-      "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
-      "rechecked_at": "2026-08-07T16:01:54+08:00",
+      "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4",
+      "rechecked_at": "2026-08-08T00:27:15+08:00",
       "base_test_map50": 0.8141423771111025,
       "new_map50": 0.6386875981161695,
       "krr": 1.0,
-      "activation_threshold": 0.01,
+      "activation_threshold": 0.63,
+      "lock_precision": 0.9245283018867925,
+      "false_activation_rate": 0.014285714285714285,
+      "competition_accepted": true,
+      "deployment_accepted": true,
       "acceptance_status": "passed"
     }
   ]

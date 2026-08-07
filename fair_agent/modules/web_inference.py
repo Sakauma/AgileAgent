@@ -16,6 +16,8 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 from fair_agent.modules.detection_fusion import (
     arbitrate_cross_class_conflicts,
     box_iou,
+    context_adjusted_threshold,
+    context_affinity,
 )
 from fair_agent.modules.incremental_rejection import apply_positive_prototype_to_image
 
@@ -232,16 +234,66 @@ def protocol_positive_prototypes(
     return {}
 
 
+def protocol_effective_thresholds(
+    protocol: Mapping[str, Any],
+    context: Mapping[str, Any],
+    confidence_floor: float,
+) -> tuple[Dict[int, float], float]:
+    """Apply a dev-frozen threshold plus optional known-context soft penalty."""
+    gate = dict(protocol.get("context_gate") or {})
+    prior = protocol.get("context_prior")
+    max_penalty = (
+        float(gate.get("max_threshold_penalty", 0.0))
+        if gate.get("enabled") is True
+        else 0.0
+    )
+    effective: Dict[int, float] = {}
+    affinity = 1.0
+    for class_id, threshold in protocol_thresholds(protocol).items():
+        adjusted, affinity = context_adjusted_threshold(
+            float(threshold), context, prior, max_penalty
+        )
+        effective[int(class_id)] = max(float(confidence_floor), adjusted)
+    return effective, affinity
+
+
+def apply_protocol_thresholds(
+    records: Iterable[Mapping[str, Any]],
+    thresholds: Mapping[int, float],
+    affinity: float,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    kept: List[Dict[str, Any]] = []
+    rejected: List[Dict[str, Any]] = []
+    for raw_row in records:
+        row = dict(raw_row)
+        threshold = thresholds.get(int(row["class_id"]))
+        if threshold is None or float(row.get("confidence", 0.0)) >= float(threshold):
+            kept.append(row)
+            continue
+        rejected.append(
+            {
+                **row,
+                "action": "reject_incremental_candidate",
+                "reason": "below_context_adjusted_activation_threshold",
+                "effective_activation_threshold": round(float(threshold), 6),
+                "context_affinity": round(float(affinity), 6),
+            }
+        )
+    return kept, rejected
+
+
 def apply_unified_class_gates(
     image: Image.Image,
     records: Iterable[Mapping[str, Any]],
     gates: Mapping[str, Any] | None,
+    context: Mapping[str, Any] | None = None,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     settings = dict(gates or {})
-    thresholds = {
-        int(key): float(value)
-        for key, value in dict(settings.get("activation_thresholds") or {}).items()
-    }
+    thresholds, affinity = protocol_effective_thresholds(
+        settings,
+        dict(context or {}),
+        0.0,
+    )
     kept: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []
     for raw_row in records:
@@ -253,7 +305,8 @@ def apply_unified_class_gates(
                     **row,
                     "action": "reject_unified_activation_threshold",
                     "activation_threshold": threshold,
-                    "reason": "below_incremental_activation_threshold",
+                    "context_affinity": round(affinity, 6),
+                    "reason": "below_context_adjusted_activation_threshold",
                 }
             )
         else:
@@ -310,23 +363,6 @@ def compose_incremental_records(
         for item in base_records
     ]
     return old_records + remap_specialist_records(specialist_records, global_class_id)
-
-
-def context_affinity(
-    context: Mapping[str, Any],
-    prior: Mapping[str, Any] | None,
-    neutral_score: float,
-) -> float:
-    """Return a soft context score. Missing priors stay neutral and never reject a route."""
-    prior = dict(prior or {})
-    components: List[float] = []
-    for dimension in ("sensor", "scene"):
-        weights = prior.get(dimension)
-        probabilities = context.get(f"{dimension}_probabilities")
-        if isinstance(weights, Mapping) and isinstance(probabilities, Mapping) and weights:
-            score = sum(float(probabilities.get(name, 0.0)) * float(weight) for name, weight in weights.items())
-            components.append(max(0.0, min(1.0, score)))
-    return sum(components) / len(components) if components else float(neutral_score)
 
 
 def plan_specialist_routes(
@@ -601,6 +637,11 @@ class WebInferenceEngine:
         self.fusion_iou = float(routing["fusion_iou"])
         self.max_specialists = int(routing["max_specialists_per_image"])
         self.conflict_iou = float(routing["conflict_iou"])
+        self.conflict_incremental_coverage = (
+            float(routing["conflict_incremental_coverage"])
+            if routing.get("conflict_incremental_coverage") is not None
+            else None
+        )
         self.conflict_base_confidence = float(routing["conflict_base_confidence"])
         self.specialist_margin = float(routing["specialist_margin"])
         self.preserve_base_class_owners = bool(routing["preserve_base_class_owners"])
@@ -817,9 +858,14 @@ class WebInferenceEngine:
         ]
         base_records_by_image: List[List[Dict[str, Any]]] = []
         unified_gate_decisions_by_image: List[List[Dict[str, Any]]] = []
-        for image, records in zip(images, raw_base_records_by_image):
+        for image, records, context in zip(
+            images, raw_base_records_by_image, contexts
+        ):
             gated, decisions = apply_unified_class_gates(
-                image, records, getattr(self, "unified_class_gates", {})
+                image,
+                records,
+                getattr(self, "unified_class_gates", {}),
+                context,
             )
             base_records_by_image.append(gated)
             unified_gate_decisions_by_image.append(decisions)
@@ -883,18 +929,15 @@ class WebInferenceEngine:
                 local_to_global = protocol.get("local_to_global")
                 if not isinstance(local_to_global, Mapping):
                     local_to_global = {0: class_ids[0]}
-                thresholds = protocol_thresholds(protocol)
-                effective_thresholds = {
-                    class_id: max(float(confidence), float(thresholds.get(class_id, confidence)))
-                    for class_id in class_ids
-                }
+                effective_thresholds, context_score = protocol_effective_thresholds(
+                    protocol, contexts[image_index], float(confidence)
+                )
                 raw_candidates = remap_specialist_records_dynamic(
                     result_records(prediction), local_to_global, self.class_names, str(protocol_id)
                 )
-                threshold_candidates = [
-                    item for item in raw_candidates
-                    if float(item.get("confidence", 0.0)) >= effective_thresholds[int(item["class_id"])]
-                ]
+                threshold_candidates, threshold_rejections = apply_protocol_thresholds(
+                    raw_candidates, effective_thresholds, context_score
+                )
                 prototype_rejections: List[Dict[str, Any]] = []
                 for prototype in protocol_positive_prototypes(protocol).values():
                     threshold_candidates, rejected_by_prototype = apply_positive_prototype_to_image(
@@ -934,6 +977,7 @@ class WebInferenceEngine:
                     self.specialist_margin,
                     protocol.get("confusion_graph"),
                     self.preserve_base_class_owners,
+                    self.conflict_incremental_coverage,
                 )
                 rejected = [
                     row for row in conflict_decisions if row["action"] == "reject_specialist"
@@ -941,7 +985,9 @@ class WebInferenceEngine:
                 activated = bool(candidates)
                 activated_class_names = sorted({str(item["class_name"]) for item in candidates})
                 specialists_by_image[image_index].extend(candidates)
-                conflicts_by_image[image_index].extend(prototype_rejections + conflict_decisions)
+                conflicts_by_image[image_index].extend(
+                    threshold_rejections + prototype_rejections + conflict_decisions
+                )
                 protocol_outputs[image_index].append({
                     "id": str(protocol_id),
                     "class_name": protocol["class_name"],
@@ -956,6 +1002,7 @@ class WebInferenceEngine:
                     "candidate_count": len(candidates),
                     "conflict_suppressed_count": len(rejected),
                     "prototype_rejected_count": len(prototype_rejections),
+                    "activation_rejected_count": len(threshold_rejections),
                     "base_override_count": sum(
                         row["action"] == "suppress_base" for row in conflict_decisions
                     ),
@@ -965,6 +1012,10 @@ class WebInferenceEngine:
                     "activation_threshold": (
                         round(next(iter(effective_thresholds.values())), 2)
                         if len(effective_thresholds) == 1 else None
+                    ),
+                    "context_affinity": round(context_score, 6),
+                    "context_gate_policy": dict(protocol.get("context_gate") or {}).get(
+                        "policy"
                     ),
                     "routing_score": route["routing_score"],
                     "activation_reason": activation_reason if activated else "未产生通过门限的候选框",
@@ -1146,7 +1197,10 @@ class WebInferenceEngine:
             self.class_names,
         )
         base_records, unified_gate_rejections = apply_unified_class_gates(
-            rgb_image, raw_base_records, getattr(self, "unified_class_gates", {})
+            rgb_image,
+            raw_base_records,
+            getattr(self, "unified_class_gates", {}),
+            context,
         )
         eligible_routes, executed_routes, skipped_protocols = plan_specialist_routes(
             protocol_pool,
@@ -1192,18 +1246,15 @@ class WebInferenceEngine:
             local_to_global = protocol.get("local_to_global")
             if not isinstance(local_to_global, Mapping):
                 local_to_global = {0: class_ids[0]}
-            thresholds = protocol_thresholds(protocol)
-            effective_thresholds = {
-                class_id: max(float(confidence), float(thresholds.get(class_id, confidence)))
-                for class_id in class_ids
-            }
+            effective_thresholds, context_score = protocol_effective_thresholds(
+                protocol, context, float(confidence)
+            )
             raw_candidates = remap_specialist_records_dynamic(
                 result_records(specialist_prediction), local_to_global, self.class_names, protocol_id
             )
-            threshold_candidates = [
-                item for item in raw_candidates
-                if float(item.get("confidence", 0.0)) >= effective_thresholds[int(item["class_id"])]
-            ]
+            threshold_candidates, threshold_rejections = apply_protocol_thresholds(
+                raw_candidates, effective_thresholds, context_score
+            )
             prototype_rejections: List[Dict[str, Any]] = []
             for prototype in protocol_positive_prototypes(protocol).values():
                 threshold_candidates, rejected_by_prototype = apply_positive_prototype_to_image(
@@ -1243,11 +1294,14 @@ class WebInferenceEngine:
                 self.specialist_margin,
                 protocol.get("confusion_graph"),
                 self.preserve_base_class_owners,
+                self.conflict_incremental_coverage,
             )
             rejected = [
                 row for row in conflict_decisions if row["action"] == "reject_specialist"
             ]
-            conflict_rejections.extend(prototype_rejections + conflict_decisions)
+            conflict_rejections.extend(
+                threshold_rejections + prototype_rejections + conflict_decisions
+            )
             activated = bool(candidates)
             activated_class_names = sorted({str(item["class_name"]) for item in candidates})
             if activated:
@@ -1266,6 +1320,7 @@ class WebInferenceEngine:
                 "candidate_count": len(candidates),
                 "conflict_suppressed_count": len(rejected),
                 "prototype_rejected_count": len(prototype_rejections),
+                "activation_rejected_count": len(threshold_rejections),
                 "base_override_count": sum(
                     row["action"] == "suppress_base" for row in conflict_decisions
                 ),
@@ -1275,6 +1330,10 @@ class WebInferenceEngine:
                 "activation_threshold": (
                     round(next(iter(effective_thresholds.values())), 2)
                     if len(effective_thresholds) == 1 else None
+                ),
+                "context_affinity": round(context_score, 6),
+                "context_gate_policy": dict(protocol.get("context_gate") or {}).get(
+                    "policy"
                 ),
                 "routing_score": route["routing_score"],
                 "activation_reason": activation_reason if activated else "未产生通过门限的候选框",

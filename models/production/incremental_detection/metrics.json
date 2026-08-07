@@ -1,16 +1,17 @@
 {
   "schema_version": 2,
-  "run_id": "strict750-b98d188-20260807a",
+  "run_id": "fresh-ea7ca27-20260807",
   "protocol": "warship-incremental",
   "incremental_mode": "class_incremental",
   "learning_data_scope": "incremental_dataset_only",
-  "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
-  "rechecked_at": "2026-08-07T16:01:54+08:00",
+  "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4",
+  "rechecked_at": "2026-08-08T00:27:15+08:00",
   "old_raw_image_count": 0,
   "old_raw_label_count": 0,
-  "activation_threshold": 0.01,
-  "base_weight_sha256": "1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96",
-  "specialist_weight_sha256": "92ddcdcc4b17216d734f1033ab0157e87ac187da2a437d6cbb81642dde115adc",
+  "activation_threshold": 0.63,
+  "activation_threshold_source": "incremental_dev_only",
+  "base_weight_sha256": "6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119",
+  "specialist_weight_sha256": "d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957",
   "inference_image_sizes": {
     "base": 896,
     "incremental": 640
@@ -31,8 +32,23 @@
     "base_test_path": "splits/strict_3plus1/base_test.txt",
     "mixed_test_path": "splits/strict_3plus1/mixed_test.txt"
   },
+  "agent_structure": {
+    "architecture": "parallel_base_incremental_experts",
+    "inference_scope": "every_image",
+    "old_class_owner": "frozen_base",
+    "new_class_owner": "incremental_specialist",
+    "fusion_level": "detection_boxes",
+    "scene_hard_routing": false,
+    "label_aware_routing": false,
+    "filename_class_routing": false
+  },
   "base_dev_map50": 0.8927239625552286,
   "base_test_map50": 0.8141423771111025,
+  "base_test_per_class_ap50": {
+    "0": 0.6235157972606741,
+    "1": 0.9769166666666664,
+    "3": 0.8419946674059671
+  },
   "old_map50_before": 0.7923058746623943,
   "old_map50_after": 0.7923058746623943,
   "new_map50": 0.6386875981161695,
@@ -44,6 +60,7 @@
     "2": 0.6386875981161695,
     "3": 0.8074651198330597
   },
+  "old_prediction_equivalent": true,
   "lock_inference_audit": {
     "unlabeled_inference_completed_before_lock_labels": true,
     "input_image_count": 89,
@@ -53,19 +70,54 @@
     "scene_hard_routing": false,
     "label_aware_routing": false,
     "filename_class_routing": false,
-    "fusion_inputs": "boxes_confidence_iou_and_fixed_class_owners_only",
+    "fusion_inputs": "boxes_confidence_iou_fixed_class_owners_soft_known_context",
+    "activation_threshold_source": "incremental_dev_only",
+    "context_prior_source": "incremental_train_only",
+    "context_soft_gating": true,
     "base_test_membership_read_after_prediction_freeze": true,
     "base_test_is_subset_of_mixed_test": true
   },
+  "calibration": {
+    "source": "models/production/incremental_detection/calibration.json",
+    "source_split": "incremental_dev_only",
+    "target_precision": 0.95,
+    "deployment_threshold": 0.63,
+    "deployment_policy": "incremental_dev_calibrated"
+  },
+  "context_gate": {
+    "enabled": true,
+    "policy": "soft_threshold_penalty",
+    "dimensions": ["scene"],
+    "max_threshold_penalty": 0.05,
+    "learning_data_scope": "incremental_train_only",
+    "prior_source": "models/production/incremental_detection/context_prior.json",
+    "hard_routing": false
+  },
+  "fusion": {
+    "nms_iou": 0.6,
+    "cross_class": {
+      "enabled": true,
+      "iou": 0.5,
+      "base_confidence": 0.5,
+      "incremental_margin": 0.15,
+      "preserve_base_class_owners": true
+    },
+    "decision_count": 171,
+    "rejected_incremental_count": 171,
+    "activation_rejected_count": 168
+  },
   "lock_deployment_metrics": {
-    "precision": 0.22171945701357465,
+    "precision": 0.9245283018867925,
     "recall": 0.6447368421052632,
-    "f1": 0.32996632996632996
+    "f1": 0.7596899224806201,
+    "tp": 49,
+    "fp": 4,
+    "targets": 76
   },
   "false_activation": {
     "negative_image_count": 70,
-    "false_activation_image_count": 48,
-    "false_activation_rate": 0.6857142857142857
+    "false_activation_image_count": 1,
+    "false_activation_rate": 0.014285714285714285
   },
   "competition_metrics": {
     "base_test_map50": {
@@ -97,6 +149,7 @@
     "base_nc": true,
     "incremental_output_shape": true,
     "prototype_incremental_only": true,
+    "context_prior_incremental_train_only": true,
     "evaluator_consistency": true,
     "base_weight_unchanged": true,
     "old_channel_isolation": true,
@@ -108,11 +161,17 @@
     "lock_after_unlabeled_prediction_freeze": true,
     "declared_base_test_after_prediction_freeze": true
   },
+  "deployment_gates": {
+    "calibration_target_precision": true,
+    "new_class_precision": true,
+    "new_class_false_activation_rate": true
+  },
   "gates": {
     "data_compliance": true,
     "base_nc": true,
     "incremental_output_shape": true,
     "prototype_incremental_only": true,
+    "context_prior_incremental_train_only": true,
     "evaluator_consistency": true,
     "base_weight_unchanged": true,
     "old_channel_isolation": true,
@@ -125,12 +184,14 @@
     "declared_base_test_after_prediction_freeze": true,
     "base_map50": true,
     "new_map50": true,
-    "krr": true
+    "krr": true,
+    "calibration_target_precision": true,
+    "new_class_precision": true,
+    "new_class_false_activation_rate": true
   },
-  "diagnostic_warnings": [
-    "lock_precision_below_0_70",
-    "false_activation_rate_above_0_15"
-  ],
+  "diagnostic_warnings": [],
+  "competition_accepted": true,
+  "deployment_accepted": true,
   "accepted": true,
   "acceptance_status": "passed"
 }

@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "release": "competition-3plus1-20260807",
-  "created_at": "2026-08-07T16:01:54+08:00",
-  "run_id": "strict750-b98d188-20260807a",
+  "release": "competition-3plus1-agent-v4-20260808",
+  "created_at": "2026-08-08T00:27:15+08:00",
+  "run_id": "fresh-ea7ca27-20260807",
   "base_model": {
     "architecture": "YOLO11s",
     "path": "models/production/incremental_detection/three_class_base_detector.pt",
@@ -22,18 +22,23 @@
     "metric": "mAP50",
     "base_test_map50": 0.8141423771111025,
     "evaluation_split": "splits/strict_3plus1/base_test.txt",
-    "sha256": "1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96"
+    "sha256": "6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119"
   },
   "functional_models": [
     {
       "id": "scene_sensor_net_v1",
       "function": "context_perception",
       "path": "models/context/scene_sensor_net.pt",
+      "metrics_path": "models/context/scene_sensor_metrics.json",
       "status": "verified",
-      "lock_sensor_accuracy": 0.98947,
-      "lock_scene_accuracy": 0.76842,
-      "lock_joint_accuracy": 0.76842,
-      "sha256": "926baa7c5d4ebf70ebbe143a425490101aa563eecf36ef56d895db68aa23dc72"
+      "train_image_count": 573,
+      "dev_image_count": 88,
+      "lock_image_count": 89,
+      "lock_sensor_accuracy": 0.9662921348314607,
+      "lock_scene_accuracy": 0.8089887640449438,
+      "lock_joint_accuracy": 0.7752808988764045,
+      "sha256": "d75d67725061f93133218461441603de5a5dd52964a742a1466c5d9ecfce9333",
+      "metrics_sha256": "3759f4d195c7c13d62ca6bb6ccc1c72c97375dd7d1fa0c465d4e1eb27d7bbade"
     },
     {
       "id": "three_class_base_detector",
@@ -41,7 +46,7 @@
       "path": "models/production/incremental_detection/three_class_base_detector.pt",
       "status": "verified",
       "base_test_map50": 0.8141423771111025,
-      "sha256": "1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96"
+      "sha256": "6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119"
     },
     {
       "id": "incremental_model_bank_v1",
@@ -57,7 +62,9 @@
       "passed_protocols": 1,
       "total_protocols": 1,
       "old_raw_image_count": 0,
-      "true_class_incremental_verified": true
+      "true_class_incremental_verified": true,
+      "competition_accepted": true,
+      "deployment_accepted": true
     }
   ],
   "incremental_models": [
@@ -71,27 +78,36 @@
       "global_class_id": 2,
       "base_model_id": "three_class_base_detector",
       "base_class_ids": [0, 1, 3],
-      "activation_threshold": 0.01,
+      "activation_threshold": 0.63,
       "calibration_source": "models/production/incremental_detection/calibration.json",
       "evidence_level": "verified",
       "available": true,
-      "context_prior": {},
+      "context_prior": {
+        "source": "models/production/incremental_detection/context_prior.json",
+        "sha256": "85cea399a0691e42d55c60927880828eeaa27107bd9f9da18a43fe031b53247e",
+        "learning_data_scope": "incremental_train_only"
+      },
+      "context_gate": {
+        "policy": "soft_threshold_penalty",
+        "max_threshold_penalty": 0.05,
+        "hard_routing": false
+      },
       "path": "models/production/incremental_detection/incremental_detector.pt",
-      "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
-      "rechecked_at": "2026-08-07T16:01:54+08:00",
+      "sha256": "d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957",
+      "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4",
+      "rechecked_at": "2026-08-08T00:27:15+08:00",
       "base_test_map50": 0.8141423771111025,
       "old_map50_before": 0.7923058746623943,
       "old_map50_after": 0.7923058746623943,
       "new_map50": 0.6386875981161695,
       "full_map50": 0.7539013055258381,
       "krr": 1.0,
-      "lock_precision": 0.22171945701357465,
+      "lock_precision": 0.9245283018867925,
       "lock_recall": 0.6447368421052632,
-      "false_activation_rate": 0.6857142857142857,
-      "diagnostic_warnings": [
-        "lock_precision_below_0_70",
-        "false_activation_rate_above_0_15"
-      ],
+      "false_activation_rate": 0.014285714285714285,
+      "diagnostic_warnings": [],
+      "competition_accepted": true,
+      "deployment_accepted": true,
       "acceptance": "passed"
     }
   ],
@@ -100,7 +116,8 @@
     "基础项只在不含新增类别的70张基础测试图上计算。",
     "New-mAP与KRR在完整89张旧类加新类混合测试集上计算。",
     "两个检测 owner 对每张混合测试图统一推理，不按标签、文件名或场景硬路由。",
-    "precision与误激活率只作诊断，不增加第四项赛题晋升门槛。",
+    "官方三项与数据完整性决定competition_accepted；新增类precision和老图误激活率决定deployment_accepted。",
+    "新增类阈值0.63只由incremental_dev校准，场景软先验只由incremental_train学习。",
     "仓库不包含竞赛数据集和标签。"
   ]
 }

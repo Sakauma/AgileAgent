@@ -8,6 +8,7 @@ learning_phase:
     - incremental_images
     - incremental_labels
     - frozen_base_weights
+    - frozen_context_model
   forbidden_inputs:
     - old_raw_images
     - old_raw_labels
@@ -22,6 +23,7 @@ derived_artifacts:
   allowed:
     - incremental_positive_prototype
     - incremental_threshold_calibration
+    - incremental_context_prior
   required_scope: incremental_dataset_only
   forbidden_sources:
     - old_raw_images
@@ -51,3 +53,6 @@ acceptance:
   min_new_map50: 0.60
   min_krr: 0.95
   max_old_raw_image_count: 0
+  deployment_quality:
+    min_new_class_precision: 0.90
+    max_new_class_false_activation_rate: 0.05

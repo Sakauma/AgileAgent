@@ -13,7 +13,7 @@
       "role": "frozen_base",
       "backend": "ultralytics",
       "path": "models/production/incremental_detection/three_class_base_detector.pt",
-      "sha256": "1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96",
+      "sha256": "6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119",
       "imgsz": 896,
       "owns_classes": [0, 1, 3],
       "local_to_global": {
@@ -27,39 +27,63 @@
       "id": "incremental_detector",
       "display_name": "增量检测器",
       "role": "class_incremental_expert",
+      "incremental_mode": "class_incremental",
       "backend": "ultralytics",
       "path": "models/production/incremental_detection/incremental_detector.pt",
-      "sha256": "92ddcdcc4b17216d734f1033ab0157e87ac187da2a437d6cbb81642dde115adc",
+      "sha256": "d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957",
       "imgsz": 640,
       "owns_classes": [2],
       "local_to_global": {
         "0": 2
       },
-      "activation_threshold": 0.01,
+      "activation_threshold": 0.63,
       "per_class_thresholds": {
-        "2": 0.01
+        "2": 0.63
       },
       "calibration_source": "models/production/incremental_detection/calibration.json",
       "calibration_sources": {
         "2": "models/production/incremental_detection/calibration.json"
+      },
+      "context_prior": {
+        "schema_version": 1,
+        "source_split": "incremental_train_only",
+        "sample_count": 132,
+        "scene": {
+          "air": 0.18617863533239534,
+          "forest": 0.1406559143799205,
+          "sea": 1.0,
+          "urban": 0.0958989831276946
+        }
+      },
+      "context_gate": {
+        "enabled": true,
+        "policy": "soft_threshold_penalty",
+        "dimensions": ["scene"],
+        "max_threshold_penalty": 0.05,
+        "learning_data_scope": "incremental_train_only",
+        "prior_source": "models/production/incremental_detection/context_prior.json",
+        "prior_sha256": "85cea399a0691e42d55c60927880828eeaa27107bd9f9da18a43fe031b53247e",
+        "hard_routing": false
       },
       "metrics": {
         "new_map50": 0.6386875981161695,
         "per_class": {
           "2": {
             "map50": 0.6386875981161695,
-            "precision": 0.22171945701357465,
+            "precision": 0.9245283018867925,
             "recall": 0.6447368421052632
           }
         }
       },
       "deployment_metrics": {
-        "false_activation_rate": 0.6857142857142857,
-        "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
-        "diagnostic_only": true
+        "lock_precision": 0.9245283018867925,
+        "false_activation_rate": 0.014285714285714285,
+        "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4"
       },
       "acceptance": {
         "official_score_gates_passed": true,
+        "competition_gates_passed": true,
+        "deployment_quality_gates_passed": true,
         "integrity_gates_passed": true,
         "passed": true
       },
@@ -77,6 +101,7 @@
         "1": "three_class_base_detector",
         "3": "three_class_base_detector"
       },
+      "model_members": ["three_class_base_detector"],
       "status": "active",
       "old_class_ids": [],
       "new_class_ids": [0, 1, 3],
@@ -90,7 +115,7 @@
     {
       "id": "incremental_detection_generation",
       "display_name": "增量检测生产代际",
-      "run_id": "strict750-b98d188-20260807a",
+      "run_id": "fresh-ea7ca27-20260807",
       "parent": "base_detection_generation",
       "classes": [0, 1, 2, 3],
       "class_owners": {
@@ -99,6 +124,10 @@
         "2": "incremental_detector",
         "3": "three_class_base_detector"
       },
+      "model_members": [
+        "three_class_base_detector",
+        "incremental_detector"
+      ],
       "status": "active",
       "old_class_ids": [0, 1, 3],
       "new_class_ids": [2],
@@ -135,12 +164,12 @@
         "per_class": {
           "2": {
             "map50": 0.6386875981161695,
-            "precision": 0.22171945701357465,
+            "precision": 0.9245283018867925,
             "recall": 0.6447368421052632,
-            "false_activation_rate": 0.6857142857142857,
+            "false_activation_rate": 0.014285714285714285,
             "negative_image_count": 70,
-            "false_activation_image_count": 48,
-            "threshold": 0.01
+            "false_activation_image_count": 1,
+            "threshold": 0.63
           }
         },
         "cumulative_per_class": {
@@ -156,20 +185,23 @@
       },
       "acceptance": {
         "core_metrics_passed": true,
+        "competition_gates_passed": true,
+        "deployment_quality_gates_passed": true,
         "deployment_recheck_passed": true,
         "status": "passed",
-        "diagnostic_warnings": [
-          "lock_precision_below_0_70",
-          "false_activation_rate_above_0_15"
-        ]
+        "diagnostic_warnings": []
       },
       "lock_recheck": {
         "status": "completed",
-        "rechecked_at": "2026-08-07T16:01:54+08:00",
-        "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
+        "rechecked_at": "2026-08-08T00:27:15+08:00",
+        "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4",
+        "input_image_count": 89,
         "label_aware_routing": false,
         "filename_class_routing": false,
-        "scene_hard_routing": false
+        "scene_hard_routing": false,
+        "activation_threshold_source": "incremental_dev_only",
+        "context_prior_source": "incremental_train_only",
+        "fusion_inputs": "boxes_confidence_iou_fixed_class_owners_soft_known_context"
       }
     }
   ],

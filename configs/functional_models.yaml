@@ -11,10 +11,10 @@ models:
     outputs: [sensor_ir_sar, scene_air_forest_sea_urban, confidence]
     artifacts:
       - path: models/context/scene_sensor_net.pt
-        sha256: 926baa7c5d4ebf70ebbe143a425490101aa563eecf36ef56d895db68aa23dc72
+        sha256: d75d67725061f93133218461441603de5a5dd52964a742a1466c5d9ecfce9333
     evidence:
       path: models/context/scene_sensor_metrics.json
-      sha256: 34171ef39af05bd2fa41a853f95d69bb50d42d09045a3f75a7ba70368a611a14
+      sha256: 3759f4d195c7c13d62ca6bb6ccc1c72c97375dd7d1fa0c465d4e1eb27d7bbade
       require_acceptance_passed: true
     runtime:
       x86_gpu: true
@@ -29,10 +29,10 @@ models:
     outputs: [old_class_boxes, class_ids, confidence]
     artifacts:
       - path: models/production/incremental_detection/three_class_base_detector.pt
-        sha256: 1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96
+        sha256: 6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119
     evidence:
       path: models/manifest.json
-      sha256: 6e57fa80fb4735f00bf5da0280d77822276783d16a9e7ed6d40df8f34e288f4e
+      sha256: 13567101d9c02876130ce0d2d9461b24858236eb0e02ebb20e0fb46fb4f2aeb5
     runtime:
       x86_gpu: true
       ascend_310b: false
@@ -47,10 +47,10 @@ models:
     outputs: [new_class_boxes, routing_trace, new_map50, krr, acceptance]
     artifacts:
       - path: models/production/incremental_detection/incremental_detector.pt
-        sha256: 92ddcdcc4b17216d734f1033ab0157e87ac187da2a437d6cbb81642dde115adc
+        sha256: d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957
     evidence:
       path: models/manifest.json
-      sha256: 6e57fa80fb4735f00bf5da0280d77822276783d16a9e7ed6d40df8f34e288f4e
+      sha256: 13567101d9c02876130ce0d2d9461b24858236eb0e02ebb20e0fb46fb4f2aeb5
     runtime:
       x86_gpu: true
       ascend_310b: false
@@ -59,10 +59,10 @@ models:
 collaboration:
   - from: scene_sensor_net_v1
     to: three_class_base_detector
-    payload: agent_policy_context
+    payload: soft_known_context
     status: implemented
     proof_command: python -m fair_agent.cli decide --source IMAGE --class-focus soldier
-    purpose: 场景与传感器结果只作解释性上下文，不决定目标类别 owner 是否运行
+    purpose: 已知场景结果只对新增框阈值施加最多0.05软惩罚，不决定类别owner是否运行
   - from: three_class_base_detector
     to: incremental_model_bank_v1
     payload: parallel_old_class_predictions
@@ -72,5 +72,5 @@ collaboration:
     to: three_class_base_detector
     payload: fixed_class_owner_box_fusion
     status: implemented
-    proof_command: python -m pytest -q tests/test_web_inference.py tests/test_web_ui_flow.py
-    purpose: 仅按固定类别所有权、置信度与框重叠关系融合，不读取标签、文件名或场景类别
+    proof_command: python -m pytest -q tests/test_web_inference.py tests/test_incremental_rejection.py
+    purpose: 按固定类别所有权、dev阈值、框重叠和已知场景软证据融合，不读取标签、文件名或测试集身份

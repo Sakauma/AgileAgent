@@ -30,7 +30,9 @@ def test_three_distinct_functional_models_are_registered() -> None:
         item for item in result["models"] if item["function"] == "incremental_object_detection"
     )
     assert incremental["evidence"]["summary"]["true_class_incremental_verified"] is True
-    assert incremental["evidence"]["summary"]["production_class_incremental"]["activation_threshold"] == 0.01
+    production = incremental["evidence"]["summary"]["production_class_incremental"]
+    assert production["activation_threshold"] == 0.63
+    assert production["deployment_accepted"] is True
     assert incremental["artifact_count"] == 1
     assert incremental["evidence"]["summary"]["protocol_count"] == 1
     assert incremental["runtime"]["imgsz"] == 640
@@ -67,7 +69,7 @@ def test_registry_describes_the_real_policy_integration() -> None:
     detector = next(item for item in registry["models"] if item["function"] == "multimodal_target_detection")
     assert detector["inputs"] == ["image_rgb"]
     first_edge = registry["collaboration"][0]
-    assert first_edge["payload"] == "agent_policy_context"
+    assert first_edge["payload"] == "soft_known_context"
     assert first_edge["status"] == "implemented"
 
 

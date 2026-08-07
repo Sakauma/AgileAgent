@@ -93,7 +93,7 @@ incremental_workbench:
     cache_roots: []
   lifecycle:
     auto_continue: true
-    calibration_target_precision: 0.99
+    calibration_target_precision: 0.95
     threshold_min: 0.01
     threshold_max: 0.99
     threshold_step: 0.01
@@ -139,7 +139,7 @@ generation:
   recheck_lock_split: splits/strict_3plus1/base_test.txt
   report_root: reports/generation_rechecks
   candidate_id: incremental_detection_generation
-  calibrated_threshold: 0.01
+  calibrated_threshold: 0.63
   auto_promote: true
   shadow_smoke_images: 1
 
@@ -151,8 +151,9 @@ gates:
     old_data_overlap_max: 0
   advisory:
     cumulative_map50_min: 0.80
-    lock_precision_min: 0.70
-    false_activation_rate_max: 0.15
+    # 仍不属于赛题第四项分数，但这两项必须通过才能切换 production。
+    lock_precision_min: 0.90
+    false_activation_rate_max: 0.05
     latency_proxy_ms_max: 33.3
 
 incremental_guardian:
@@ -256,7 +257,7 @@ tensorrt_backend:
 
 model:
   weights: models/production/incremental_detection/three_class_base_detector.pt
-  expected_sha256: 1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96
+  expected_sha256: 6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119
 
 assets:
   manifest: models/manifest.json
@@ -266,6 +267,10 @@ assets:
     - models/pretrained/yolo11s.pt
     - models/production/incremental_detection/three_class_base_detector.pt
     - models/production/incremental_detection/incremental_detector.pt
+    - models/production/incremental_detection/calibration.json
+    - models/production/incremental_detection/context_prior.json
+    - models/production/incremental_detection/metrics.json
+    - models/production/incremental_detection/profile.json
     - models/context/scene_sensor_net.pt
     - models/context/scene_sensor_metrics.json
     - models/manifest.json
@@ -343,7 +348,7 @@ thresholds:
   min_base_map50: 0.80
   min_new_class_map50: 0.60
   min_krr: 0.95
-  preferred_export_conf: null
+  preferred_export_conf: 0.63
   fallback_export_conf: 0.01
 
 incremental:

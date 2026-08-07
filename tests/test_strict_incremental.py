@@ -74,7 +74,20 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
     assert config["bootstrap"]["iterations"] == 1000
     assert config["predict"]["evaluation_batch"] == 1
     assert config["predict"]["conf"] == 0.01
-    assert config["calibration"]["deployment_threshold"] == 0.01
+    assert config["calibration"]["deployment_policy"] == "incremental_dev_calibrated"
+    assert config["calibration"]["target_precision"] == 0.95
+    assert "deployment_threshold" not in config["calibration"]
+    assert config["context_gate"] == {
+        "enabled": True,
+        "model": "models/context/scene_sensor_net.pt",
+        "dimensions": ["scene"],
+        "max_threshold_penalty": 0.05,
+        "batch_size": 32,
+    }
+    assert config["deployment_acceptance"] == {
+        "min_new_class_precision": 0.90,
+        "max_new_class_false_activation_rate": 0.05,
+    }
     assert config["predict"]["rect"] is True
     assert config["common"]["batch"] == 32
     assert config["model"] == "models/pretrained/yolo11s.pt"
@@ -87,6 +100,7 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
     assert config["protocols"][0]["new_global_id"] == 2
     assert config["prototype_gate"]["enabled"] is False
     assert config["fusion"]["cross_class"]["enabled"] is True
+    assert "incremental_coverage" not in config["fusion"]["cross_class"]
     assert config["agent_structure"] == {
         "architecture": "parallel_base_incremental_experts",
         "inference_scope": "every_image",
@@ -494,6 +508,10 @@ def test_every_lock_image_is_seen_by_both_class_owners_and_artifacts_are_hashed(
         2,
         False,
         None,
+        0.5,
+        None,
+        None,
+        0.0,
         tmp_path / "report",
     )
 
@@ -505,6 +523,7 @@ def test_every_lock_image_is_seen_by_both_class_owners_and_artifacts_are_hashed(
     assert frozen["audit"]["base_and_incremental_input_stems_identical"] is True
     assert frozen["audit"]["label_aware_routing"] is False
     assert frozen["audit"]["scene_hard_routing"] is False
+    assert frozen["audit"]["fusion_inputs"] == "boxes_confidence_fixed_class_owners"
     assert all(item["sha256"] for item in frozen["artifacts"].values())
 
 
@@ -782,7 +801,14 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
     base.write_bytes(b"base")
     specialist.write_bytes(b"specialist")
     calibration = tmp_path / "calibration.json"
-    calibration.write_text('{"selected":{"threshold":0.5}}', encoding="utf-8")
+    calibration.write_text(json.dumps({
+        "passed": True,
+        "source_split": "incremental_dev_only",
+        "learning_data_scope": "incremental_dataset_only",
+        "deployment_policy": "incremental_dev_calibrated",
+        "deployment_threshold": 0.5,
+        "selected": {"threshold": 0.5},
+    }), encoding="utf-8")
     metrics = tmp_path / "metrics.json"
     metrics.write_text(json.dumps({
         "accepted": True,
@@ -790,8 +816,10 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
         "learning_data_scope": "incremental_dataset_only",
         "old_raw_image_count": 0,
         "gates": {"data": True},
+        "competition_accepted": True,
+        "deployment_accepted": True,
         "lock_deployment_metrics": {"precision": 0.9, "recall": 0.8},
-        "false_activation": {"false_activation_rate": 0.8},
+        "false_activation": {"false_activation_rate": 0.01},
     }), encoding="utf-8")
     payload = {
         "profile_id": "strict-p01",
@@ -800,6 +828,8 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
         "evidence_level": "verified",
         "activation_threshold": 0.5,
         "new_global_id": 1,
+        "competition_accepted": True,
+        "deployment_accepted": True,
         "base_local_to_global": {"0": 0, "1": 2, "2": 3},
         "calibration_source": str(calibration),
         "metrics_source": str(metrics),
@@ -807,16 +837,32 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
         "base_sha256": hashlib.sha256(b"base").hexdigest(),
         "specialist_weight": str(specialist),
         "specialist_sha256": hashlib.sha256(b"specialist").hexdigest(),
+        "context_prior": {},
+        "context_gate": {"enabled": False},
     }
     (profile_root / "active.json").write_text(json.dumps(payload), encoding="utf-8")
     loaded = load_experiment_profile("strict-p01")
     assert loaded["acceptance"] == "passed"
     assert loaded["deployment_accepted"] is True
-    assert loaded["diagnostic_warnings"]["false_activation_rate_above_0_15"] is True
+    assert loaded["diagnostic_warnings"]["false_activation_rate_above_0_15"] is False
     discovered = strict.discover_experiment_profiles(profile_root.parent)
     assert discovered["true_class_incremental_verified"] is True
     assert discovered["verified_count"] == 1
     assert discovered["core_verified_count"] == 1
+    metrics_payload = json.loads(metrics.read_text(encoding="utf-8"))
+    metrics_payload["deployment_accepted"] = False
+    metrics.write_text(json.dumps(metrics_payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="合规证据无效"):
+        load_experiment_profile("strict-p01")
+    metrics_payload["deployment_accepted"] = True
+    metrics.write_text(json.dumps(metrics_payload), encoding="utf-8")
+    calibration_payload = json.loads(calibration.read_text(encoding="utf-8"))
+    calibration_payload["source_split"] = "mixed_test"
+    calibration.write_text(json.dumps(calibration_payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="校准证据无效"):
+        load_experiment_profile("strict-p01")
+    calibration_payload["source_split"] = "incremental_dev_only"
+    calibration.write_text(json.dumps(calibration_payload), encoding="utf-8")
     specialist.write_bytes(b"changed")
     try:
         load_experiment_profile("strict-p01")
@@ -837,7 +883,14 @@ def test_unified_student_profile_is_hash_verified_and_discoverable(
     teacher.write_bytes(b"teacher")
     student.write_bytes(b"student")
     calibration = tmp_path / "calibration.json"
-    calibration.write_text('{"selected":{"threshold":0.7}}', encoding="utf-8")
+    calibration.write_text(json.dumps({
+        "passed": True,
+        "source_split": "incremental_dev_only",
+        "learning_data_scope": "incremental_dataset_only",
+        "deployment_policy": "incremental_dev_calibrated",
+        "deployment_threshold": 0.7,
+        "selected": {"threshold": 0.7},
+    }), encoding="utf-8")
     prototype = tmp_path / "positive_prototype.json"
     prototype.write_text(json.dumps({
         "calibrated": True,
@@ -847,6 +900,8 @@ def test_unified_student_profile_is_hash_verified_and_discoverable(
     metrics = tmp_path / "metrics.json"
     metrics.write_text(json.dumps({
         "accepted": True,
+        "competition_accepted": True,
+        "deployment_accepted": True,
         "incremental_mode": "class_incremental",
         "learning_data_scope": "incremental_dataset_only",
         "old_raw_image_count": 0,
@@ -862,6 +917,8 @@ def test_unified_student_profile_is_hash_verified_and_discoverable(
         "deployment": "single_detector",
         "activation_threshold": 0.7,
         "new_global_id": 2,
+        "competition_accepted": True,
+        "deployment_accepted": True,
         "class_names": {"0": "soldier", "1": "small_aircraft", "2": "warship", "3": "tank"},
         "calibration_source": str(calibration),
         "metrics_source": str(metrics),
@@ -871,6 +928,8 @@ def test_unified_student_profile_is_hash_verified_and_discoverable(
         "model_sha256": hashlib.sha256(b"student").hexdigest(),
         "positive_prototype_source": str(prototype),
         "positive_prototype_sha256": hashlib.sha256(prototype.read_bytes()).hexdigest(),
+        "context_prior": {},
+        "context_gate": {"enabled": False},
     }
     (profile_root / "active.json").write_text(json.dumps(payload), encoding="utf-8")
 

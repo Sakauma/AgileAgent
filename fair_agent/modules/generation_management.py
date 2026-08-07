@@ -31,7 +31,17 @@ def _configured_registry_path(config: Mapping[str, Any]) -> Path:
     if source != default_source:
         return source
     runtime = resolve_path(generation["runtime_registry"])
-    if not runtime.exists():
+    install_verified_source = not runtime.exists()
+    if runtime.exists():
+        try:
+            load_generation_registry(runtime)
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            # A runtime registry is mutable user state, so a release upgrade may
+            # leave behind an older schema or an expert that no longer passes
+            # the current deployment gates. Never start from that unsafe state;
+            # atomically seed a fresh runtime copy from the verified release.
+            install_verified_source = True
+    if install_verified_source:
         runtime.parent.mkdir(parents=True, exist_ok=True)
         temporary = runtime.with_suffix(runtime.suffix + ".tmp")
         shutil.copy2(source, temporary)
@@ -794,10 +804,15 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         config["gates"],
         config["incremental_guardian"],
     )
-    gates = {
+    competition_gates = {
         name: bool(result["passed"])
         for name, result in assessment["official_hard"].items()
     }
+    deployment_gates = {
+        name: bool(result["passed"])
+        for name, result in assessment["deployment_quality"].items()
+    }
+    gates = {**competition_gates, **deployment_gates}
     diagnostic_checks = {
         **{
             name: bool(result["passed"])
@@ -866,6 +881,8 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         "one_time_lock_record": lock_record,
         "thresholds": {str(key): value for key, value in thresholds.items()},
         "metrics": metrics,
+        "competition_gates": competition_gates,
+        "deployment_gates": deployment_gates,
         "gates": gates,
         "diagnostic_checks": diagnostic_checks,
         "guardian_assessment": assessment,
@@ -873,7 +890,9 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
             *assessment["warnings"],
             *(["old_prediction_equivalent"] if not metrics["old_prediction_equivalent"] else []),
         ])),
-        "accepted": bool(assessment["accepted"]),
+        "competition_accepted": bool(assessment["competition_accepted"]),
+        "deployment_accepted": bool(assessment["deployment_accepted"]),
+        "accepted": bool(assessment["deployment_accepted"]),
         "predictions_before": rel_path(before_path), "predictions_before_sha256": sha256_file(before_path),
         "predictions_after": rel_path(after_path), "predictions_after_sha256": sha256_file(after_path),
     }
@@ -931,14 +950,25 @@ def _promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_p
         "manifest": rel_path(path),
         "manifest_sha256": sha256_file(path),
     }
-    generation["acceptance"] = {"core_metrics_passed": True, "deployment_recheck_passed": True}
+    generation["acceptance"] = {
+        "core_metrics_passed": True,
+        "competition_gates_passed": True,
+        "deployment_quality_gates_passed": True,
+        "deployment_recheck_passed": True,
+    }
     generation["status"] = "active"
     for model_id in candidate_models:
         models[model_id]["deployment_metrics"] = {
             "lock_precision": manifest["metrics"]["lock_precision"],
             "false_activation_rate": manifest["metrics"]["false_activation_rate"],
         }
-        models[model_id]["acceptance"]["passed"] = True
+        models[model_id]["acceptance"].update(
+            {
+                "competition_gates_passed": True,
+                "deployment_quality_gates_passed": True,
+                "passed": True,
+            }
+        )
         models[model_id]["status"] = "active"
     registry["channels"]["production"] = candidate_id
     registry["channels"]["candidate"] = candidate_id

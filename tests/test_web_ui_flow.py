@@ -152,7 +152,7 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
     assert settings["active_class_ids"] == [0, 1, 2, 3]
     assert settings["base_local_to_global"] == {0: 0, 1: 1, 2: 3}
     assert list(settings["protocols"]) == ["incremental_detector"]
-    assert settings["protocols"]["incremental_detector"]["activation_threshold"] == 0.01
+    assert settings["protocols"]["incremental_detector"]["activation_threshold"] == 0.63
     assert settings["class_names"] == {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
 
 

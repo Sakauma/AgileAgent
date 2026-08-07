@@ -146,6 +146,7 @@ def build_web_settings(
             "calibration_source": item.get("calibration_source"),
             "routing_prior": float(item.get("routing_prior", routing["default_routing_prior"])),
             "context_prior": dict(item.get("context_prior") or {}),
+            "context_gate": dict(item.get("context_gate") or {"enabled": False}),
             "evidence_level": item.get("evidence_level"),
             "consensus_iou": consensus_iou,
         }

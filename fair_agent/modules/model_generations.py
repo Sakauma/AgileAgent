@@ -37,6 +37,14 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
         model["calibration_sources"] = {
             int(key): str(value) for key, value in (raw_sources or {}).items()
         }
+        raw_context_prior = model.get("context_prior") or {}
+        raw_context_gate = model.get("context_gate") or {"enabled": False}
+        if not isinstance(raw_context_prior, Mapping) or not isinstance(
+            raw_context_gate, Mapping
+        ):
+            raise ValueError(f"模型场景软门控格式非法：{model['id']}")
+        model["context_prior"] = dict(raw_context_prior)
+        model["context_gate"] = dict(raw_context_gate)
         confusion_graph = model.get("confusion_graph")
         if isinstance(confusion_graph, Mapping):
             graph_path = resolve_path(confusion_graph.get("path", ""))
@@ -93,7 +101,11 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
                 if model["role"] not in {"class_incremental_expert", "target_incremental_expert"}:
                     continue
                 acceptance = model.get("acceptance", {})
-                if acceptance.get("passed") is not True:
+                if (
+                    acceptance.get("passed") is not True
+                    or acceptance.get("competition_gates_passed") is not True
+                    or acceptance.get("deployment_quality_gates_passed") is not True
+                ):
                     raise ValueError(f"未通过部署门禁的增量专家不得进入active代际：{generation['id']}")
                 thresholds = model["per_class_thresholds"]
                 active_owned = model["owns_classes"] & set(owners)
@@ -104,6 +116,37 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
                 missing_sources = active_owned - set(model["calibration_sources"])
                 if missing_sources:
                     raise ValueError(f"active增量专家缺少逐类dev校准证据：{model_id}")
+                context_gate = model["context_gate"]
+                context_prior = model["context_prior"]
+                if context_gate.get("enabled") is True:
+                    if (
+                        context_gate.get("policy") != "soft_threshold_penalty"
+                        or context_gate.get("hard_routing") is not False
+                        or context_gate.get("learning_data_scope")
+                        != "incremental_train_only"
+                        or context_prior.get("source_split")
+                        != "incremental_train_only"
+                    ):
+                        raise ValueError(f"active增量专家场景软门控证据非法：{model_id}")
+                    penalty = float(context_gate.get("max_threshold_penalty", -1.0))
+                    if not 0.0 <= penalty <= 1.0:
+                        raise ValueError(f"active增量专家场景软门控阈值非法：{model_id}")
+                    prior_path = resolve_path(context_gate.get("prior_source", ""))
+                    expected_prior_hash = str(
+                        context_gate.get("prior_sha256") or ""
+                    )
+                    if (
+                        not prior_path.is_file()
+                        or len(expected_prior_hash) != 64
+                        or sha256_file(prior_path) != expected_prior_hash
+                        or json.loads(prior_path.read_text(encoding="utf-8"))
+                        != context_prior
+                    ):
+                        raise ValueError(
+                            f"active增量专家场景软门控资产非法：{model_id}"
+                        )
+                elif context_gate.get("enabled") is not False or context_prior:
+                    raise ValueError(f"active增量专家场景软门控开关非法：{model_id}")
         generation["class_owners"] = owners
         generation["model_members"] = model_members
         generation["old_class_ids"] = {int(value) for value in generation.get("old_class_ids", [])}
@@ -189,7 +232,8 @@ def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict
             "activation_threshold": thresholds[first_class] if len(owned) == 1 else None,
             "calibration_source": calibration_sources[first_class] if len(owned) == 1 else None,
             "routing_prior": 1.0,
-            "context_prior": {},
+            "context_prior": dict(model.get("context_prior") or {}),
+            "context_gate": dict(model.get("context_gate") or {"enabled": False}),
             "confusion_graph": (
                 model.get("confusion_graph", {}).get("payload")
                 if model.get("confusion_graph", {}).get("hash_valid")

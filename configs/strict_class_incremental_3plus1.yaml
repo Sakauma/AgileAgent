@@ -121,11 +121,27 @@ prototype_gate:
   iou_threshold: 0.50
 
 calibration:
-  deployment_threshold: 0.01
+  # 只能用增量 dev 校准；禁止为了 lock mAP 使用 0.01 低阈值部署。
+  deployment_policy: incremental_dev_calibrated
   threshold_min: 0.01
   threshold_max: 0.99
   threshold_step: 0.01
-  target_precision: 0.99
+  # 比 Agent 的0.90部署门槛保留5个百分点安全余量，同时避免过度牺牲召回率。
+  target_precision: 0.95
+
+context_gate:
+  # 场景类别均为已知类。这里只把已知场景兼容性作为新增框阈值的软惩罚，
+  # 不能据此跳过任一检测器，也不能把“未知场景”直接解释成新增目标。
+  enabled: true
+  model: models/context/scene_sensor_net.pt
+  dimensions: [scene]
+  max_threshold_penalty: 0.05
+  batch_size: 32
+
+deployment_acceptance:
+  # 这两项不改写官方三项分数，但决定模型能否进入实际 Agent。
+  min_new_class_precision: 0.90
+  max_new_class_false_activation_rate: 0.05
 
 bootstrap:
   iterations: 1000

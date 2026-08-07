@@ -77,7 +77,7 @@ def diagnose_assessment(
         code = warning_codes.get(name, name.upper())
         diagnoses.append({
             "code": code,
-            "severity": "warning",
+            "severity": "blocking" if result.get("blocking") else "warning",
             "metric": name,
             "actions": list(recovery_actions.get(code, [])),
         })
@@ -147,15 +147,15 @@ def assess_incremental_candidate(
             float(metrics["lock_precision"]),
             float(advisory_config["lock_precision_min"]),
             ">=",
-            "Agent部署风险观察指标",
-            False,
+            "Agent production部署质量门禁（不改变赛题分数）",
+            True,
         ),
         "false_activation_rate": _check(
             float(metrics["false_activation_rate"]),
             float(advisory_config["false_activation_rate_max"]),
             "<=",
-            "Agent部署风险观察指标",
-            False,
+            "Agent production部署质量门禁（不改变赛题分数）",
+            True,
         ),
         "latency_proxy_ms": _check(
             float(metrics["mean_inference_ms"]),
@@ -165,7 +165,14 @@ def assess_incremental_candidate(
             False,
         ),
     }
-    accepted = all(item["passed"] for item in official_hard.values())
+    competition_accepted = all(item["passed"] for item in official_hard.values())
+    deployment_quality = {
+        name: advisory[name]
+        for name in ("lock_precision", "false_activation_rate")
+    }
+    deployment_accepted = competition_accepted and all(
+        item["passed"] for item in deployment_quality.values()
+    )
     diagnoses = diagnose_assessment(
         official_hard,
         advisory,
@@ -173,11 +180,24 @@ def assess_incremental_candidate(
     )
     return {
         "schema_version": 1,
-        "accepted": accepted,
-        "status": "accepted_with_warnings" if accepted and any(not row["passed"] for row in advisory.values()) else (
-            "accepted" if accepted else "rejected"
+        "competition_accepted": competition_accepted,
+        "deployment_accepted": deployment_accepted,
+        "accepted": deployment_accepted,
+        "status": (
+            "competition_rejected"
+            if not competition_accepted
+            else (
+                "deployment_rejected"
+                if not deployment_accepted
+                else (
+                    "accepted_with_warnings"
+                    if any(not row["passed"] for row in advisory.values())
+                    else "accepted"
+                )
+            )
         ),
         "official_hard": official_hard,
+        "deployment_quality": deployment_quality,
         "advisory": advisory,
         "warnings": [name for name, row in advisory.items() if not row["passed"]],
         "diagnoses": diagnoses,

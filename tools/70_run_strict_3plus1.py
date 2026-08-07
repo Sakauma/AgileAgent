@@ -27,6 +27,10 @@ if str(ROOT) not in sys.path:
 
 from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.runtime_log import StructuredEventLog, event_log_from_config, mirror_state_event
+from fair_agent.modules.detection_fusion import (
+    apply_incremental_candidate_gates,
+    learn_context_prior,
+)
 from fair_agent.modules.incremental_rejection import (
     apply_positive_prototype,
     calibrate_positive_prototype,
@@ -338,10 +342,86 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
     if cross_class.get("enabled", False):
         if not 0.0 <= float(cross_class.get("iou", -1.0)) <= 1.0:
             errors.append("fusion.cross_class.iou 必须位于[0, 1]")
+        incremental_coverage = cross_class.get("incremental_coverage")
+        if incremental_coverage is not None and not 0.0 <= float(
+            incremental_coverage
+        ) <= 1.0:
+            errors.append("fusion.cross_class.incremental_coverage 必须位于[0, 1]")
         if not 0.0 <= float(cross_class.get("base_confidence", -1.0)) <= 1.0:
             errors.append("fusion.cross_class.base_confidence 必须位于[0, 1]")
+        if not 0.0 <= float(cross_class.get("incremental_margin", -1.0)) <= 1.0:
+            errors.append("fusion.cross_class.incremental_margin 必须位于[0, 1]")
         if not bool(cross_class.get("preserve_base_class_owners", False)):
             errors.append("双检测器 Agent 必须保留基础类别 owner 的预测")
+
+    calibration_cfg = dict(config.get("calibration", {}))
+    checks["calibration"] = calibration_cfg
+    deployment_policy = str(calibration_cfg.get("deployment_policy", ""))
+    if deployment_policy not in {"incremental_dev_calibrated", "fixed"}:
+        errors.append(
+            "calibration.deployment_policy 必须为 incremental_dev_calibrated 或 fixed"
+        )
+    if deployment_policy == "fixed" and calibration_cfg.get(
+        "deployment_threshold"
+    ) is None:
+        errors.append("固定部署阈值策略必须声明 calibration.deployment_threshold")
+    for key in ("threshold_min", "threshold_max", "target_precision"):
+        if not 0.0 <= float(calibration_cfg.get(key, -1.0)) <= 1.0:
+            errors.append(f"calibration.{key} 必须位于[0, 1]")
+    if float(calibration_cfg.get("threshold_step", 0.0)) <= 0.0:
+        errors.append("calibration.threshold_step 必须大于0")
+    if float(calibration_cfg.get("threshold_min", 1.0)) >= float(
+        calibration_cfg.get("threshold_max", 0.0)
+    ):
+        errors.append("calibration.threshold_min 必须小于 threshold_max")
+    if calibration_cfg.get("deployment_threshold") is not None and not 0.0 <= float(
+        calibration_cfg["deployment_threshold"]
+    ) <= 1.0:
+        errors.append("calibration.deployment_threshold 必须位于[0, 1]")
+
+    context_gate = dict(config.get("context_gate", {}))
+    checks["context_gate"] = context_gate
+    if not isinstance(context_gate.get("enabled"), bool):
+        errors.append("context_gate.enabled 必须为布尔值")
+    if context_gate.get("enabled", False):
+        context_model = resolve_path(str(context_gate.get("model") or ""))
+        checks["context_gate"] = {
+            **context_gate,
+            "resolved_model": rel_path(context_model),
+            "model_exists": context_model.is_file(),
+        }
+        if not context_model.is_file():
+            errors.append(f"场景软门控模型不存在：{rel_path(context_model)}")
+        dimensions = context_gate.get("dimensions")
+        if (
+            not isinstance(dimensions, list)
+            or not dimensions
+            or any(value not in {"scene", "sensor"} for value in dimensions)
+        ):
+            errors.append("context_gate.dimensions 必须是 scene/sensor 的非空列表")
+        if len(set(dimensions or [])) != len(dimensions or []):
+            errors.append("context_gate.dimensions 不得重复")
+        if not 0.0 <= float(
+            context_gate.get("max_threshold_penalty", -1.0)
+        ) <= 1.0:
+            errors.append("context_gate.max_threshold_penalty 必须位于[0, 1]")
+        if int(context_gate.get("batch_size", 0)) < 1:
+            errors.append("context_gate.batch_size 必须为正整数")
+
+    deployment_acceptance = dict(config.get("deployment_acceptance", {}))
+    checks["deployment_acceptance"] = deployment_acceptance
+    required_deployment_gates = {
+        "min_new_class_precision",
+        "max_new_class_false_activation_rate",
+    }
+    missing_deployment_gates = sorted(
+        required_deployment_gates - set(deployment_acceptance)
+    )
+    if missing_deployment_gates:
+        errors.append(f"缺少 Agent 部署门槛：{missing_deployment_gates}")
+    for key in required_deployment_gates & set(deployment_acceptance):
+        if not 0.0 <= float(deployment_acceptance[key]) <= 1.0:
+            errors.append(f"deployment_acceptance.{key} 必须位于[0, 1]")
 
     ultralytics_ready = importlib.util.find_spec("ultralytics") is not None
     checks["ultralytics"] = ultralytics_ready
@@ -851,6 +931,41 @@ def write_json_artifact(path: Path, payload: Mapping[str, Any]) -> Dict[str, Any
     }
 
 
+def predict_context_records(
+    model: Any,
+    checkpoint: Mapping[str, Any],
+    images: Sequence[Path],
+    device: str,
+    batch_size: int,
+) -> Dict[str, Dict[str, Any]]:
+    """Predict known sensor/scene probabilities without reading labels."""
+    from PIL import Image
+
+    from fair_agent.models.context import predict_context_batch
+
+    output: Dict[str, Dict[str, Any]] = {}
+    for start in range(0, len(images), int(batch_size)):
+        paths = images[start : start + int(batch_size)]
+        opened = []
+        try:
+            for path in paths:
+                with Image.open(path) as source:
+                    opened.append(source.convert("RGB"))
+            predictions = predict_context_batch(
+                model, dict(checkpoint), opened, device
+            )
+        finally:
+            for image in opened:
+                image.close()
+        for path, prediction in zip(paths, predictions):
+            output[path.stem] = {
+                key: value
+                for key, value in prediction.items()
+                if key != "_inference_ms"
+            }
+    return output
+
+
 def freeze_unlabeled_lock_predictions(
     base_predictor: Any,
     incremental_predictor: Any,
@@ -862,6 +977,10 @@ def freeze_unlabeled_lock_predictions(
     new_class_id: int,
     unified_student: bool,
     positive_prototype: Mapping[str, Any] | None,
+    deployment_threshold: float,
+    context_prior: Mapping[str, Any] | None,
+    contexts_by_image: Mapping[str, Mapping[str, Any]] | None,
+    max_context_penalty: float,
     report_dir: Path,
 ) -> Dict[str, Any]:
     """Run every class owner on every lock image without opening any label.
@@ -927,11 +1046,18 @@ def freeze_unlabeled_lock_predictions(
     else:
         candidate_old_predictions = list(base_predictions)
         candidate_new_predictions = list(incremental_predictions)
-    combined_predictions, fusion_decisions = fuse_old_new_predictions(
+    pre_activation_predictions, fusion_decisions = fuse_old_new_predictions(
         candidate_old_predictions,
         candidate_new_predictions,
         nms_iou=float(config["fusion"]["nms_iou"]),
         cross_class=config["fusion"].get("cross_class"),
+    )
+    combined_predictions, activation_rejections = apply_incremental_candidate_gates(
+        pre_activation_predictions,
+        {int(new_class_id): float(deployment_threshold)},
+        contexts_by_image=contexts_by_image,
+        context_prior=context_prior,
+        max_context_penalty=float(max_context_penalty),
     )
 
     prediction_dir = report_dir / "predictions"
@@ -955,6 +1081,7 @@ def freeze_unlabeled_lock_predictions(
             "scene_hard_routing": bool(agent_structure["scene_hard_routing"]),
             "label_aware_routing": bool(agent_structure["label_aware_routing"]),
             "filename_class_routing": bool(agent_structure["filename_class_routing"]),
+            "context_soft_gating": bool(context_prior),
         },
     )
     artifacts = {
@@ -973,16 +1100,42 @@ def freeze_unlabeled_lock_predictions(
         "fusion_decisions": write_jsonl_artifact(
             prediction_dir / "lock_fusion_decisions.jsonl", fusion_decisions
         ),
+        "fused_pre_activation": write_jsonl_artifact(
+            prediction_dir / "lock_fused_pre_activation.jsonl",
+            pre_activation_predictions,
+        ),
+        "activation_rejected": write_jsonl_artifact(
+            prediction_dir / "lock_activation_rejected.jsonl",
+            activation_rejections,
+        ),
+        "contexts": write_json_artifact(
+            prediction_dir / "lock_context_predictions.json",
+            {
+                "schema_version": 1,
+                "input_mode": "unlabeled_images",
+                "predictions": dict(contexts_by_image or {}),
+            },
+        ),
         "fused": write_jsonl_artifact(
             prediction_dir / "lock_fused_unlabeled.jsonl", combined_predictions
         ),
     }
+    fusion_inputs = ["boxes", "confidence"]
+    cross_class = dict(config.get("fusion", {}).get("cross_class", {}))
+    if cross_class.get("enabled", False):
+        fusion_inputs.append("iou")
+        if cross_class.get("incremental_coverage") is not None:
+            fusion_inputs.append("incremental_coverage")
+    fusion_inputs.append("fixed_class_owners")
+    if context_prior:
+        fusion_inputs.append("soft_known_context")
     return {
         "base_predictions": base_predictions,
         "raw_incremental_predictions": raw_incremental_predictions,
         "incremental_predictions": incremental_predictions,
         "combined_predictions": combined_predictions,
         "fusion_decisions": fusion_decisions,
+        "activation_rejections": activation_rejections,
         "prototype_rejections": prototype_rejections,
         "base_inference_ms": base_inference_ms,
         "incremental_inference_ms": incremental_inference_ms,
@@ -996,7 +1149,14 @@ def freeze_unlabeled_lock_predictions(
             "scene_hard_routing": bool(agent_structure["scene_hard_routing"]),
             "label_aware_routing": bool(agent_structure["label_aware_routing"]),
             "filename_class_routing": bool(agent_structure["filename_class_routing"]),
-            "fusion_inputs": "boxes_confidence_iou_and_fixed_class_owners_only",
+            "fusion_inputs": "_".join(fusion_inputs),
+            "activation_threshold_source": "incremental_dev_only",
+            "context_prior_source": (
+                str((context_prior or {}).get("source_split"))
+                if context_prior
+                else None
+            ),
+            "context_soft_gating": bool(context_prior),
         },
     }
 
@@ -1218,7 +1378,16 @@ def write_protocol_report(report_dir: Path, result: Mapping[str, Any]) -> None:
         "fusion_rejected": result.get("fusion", {}).get(
             "rejected_incremental_count", 0
         ),
+        "activation_rejected": result.get("fusion", {}).get(
+            "activation_rejected_count", 0
+        ),
+        "lock_new_class_precision": result["lock_deployment_metrics"]["precision"],
+        "lock_false_activation_rate": result["false_activation"][
+            "false_activation_rate"
+        ],
         "evaluator_error": result["evaluator_error"],
+        "competition_accepted": result["competition_accepted"],
+        "deployment_accepted": result["deployment_accepted"],
         "accepted": result["accepted"],
     }
     with (report_dir / "metrics.csv").open("w", encoding="utf-8", newline="") as handle:
@@ -1242,19 +1411,22 @@ def write_protocol_report(report_dir: Path, result: Mapping[str, Any]) -> None:
         f"- 基础 dev mAP50（仅选权重诊断）：{result['base_dev_map50']:.5f}",
         f"- 旧类 mAP50 before/after：{result['old_map50_before']:.5f} / {result['old_map50_after']:.5f}",
         f"- 四类总体 mAP50（仅诊断）：{result['full_map50']:.5f}",
-        f"- 计分/Agent 共用置信度下限：{result['calibration']['deployment_threshold']:.2f}",
-        f"- dev 高精度诊断阈值：{result['calibration']['selected']['threshold']:.2f}",
-        f"- dev 诊断 precision/recall：{result['calibration']['selected']['precision']:.5f} / {result['calibration']['selected']['recall']:.5f}",
+        f"- 增量 dev 冻结的计分/Agent 共用阈值：{result['calibration']['deployment_threshold']:.2f}",
+        f"- 阈值校准策略：{result['calibration']['deployment_policy']}",
+        f"- dev 校准 precision/recall：{result['calibration']['selected']['precision']:.5f} / {result['calibration']['selected']['recall']:.5f}",
         f"- lock precision/recall：{result['lock_deployment_metrics']['precision']:.5f} / {result['lock_deployment_metrics']['recall']:.5f}",
         f"- lock 图像误激活率：{result['false_activation']['false_activation_rate']:.5f}",
+        f"- 场景软阈值惩罚：{'启用' if result['context_gate']['enabled'] else '关闭'}（最大 +{result['context_gate']['max_threshold_penalty']:.2f}）",
         f"- 正样本原型拒绝候选数：{result.get('positive_prototype', {}).get('lock_rejected_candidate_count', 0)}",
         f"- 跨类冲突拒绝候选数：{result.get('fusion', {}).get('rejected_incremental_count', 0)}",
+        f"- 阈值/场景门控拒绝候选数：{result.get('fusion', {}).get('activation_rejected_count', 0)}",
         f"- 自定义评测误差：{result['evaluator_error']:.6f}",
         f"- 共享参数相对漂移：{result.get('shared_parameter_relative_drift', 0.0):.6f}",
         f"- bootstrap New-mAP50 95% CI：[{result['bootstrap']['new_map50']['ci95_low']:.5f}, {result['bootstrap']['new_map50']['ci95_high']:.5f}]",
         f"- bootstrap 四类 mAP50 95% CI：[{result['bootstrap']['full_map50']['ci95_low']:.5f}, {result['bootstrap']['full_map50']['ci95_high']:.5f}]",
         inference_line,
-        f"- 结论：{'通过' if result['accepted'] else '未通过'}",
+        f"- 赛题三项与完整性结论：{'通过' if result['competition_accepted'] else '未通过'}",
+        f"- Agent 部署质量结论：{'通过' if result['deployment_accepted'] else '未通过'}",
         "",
         "## 新增类传感器分组",
         "",
@@ -1270,6 +1442,41 @@ def write_protocol_report(report_dir: Path, result: Mapping[str, Any]) -> None:
         "两份模型已先对完整 lock 执行无标签推理并哈希预测，随后才解封标签评分；本报告结果不得用于本 run 调参。",
     ]
     (report_dir / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def freeze_context_gate(
+    version_dir: Path, metrics: Mapping[str, Any]
+) -> Dict[str, Any]:
+    gate = dict(metrics.get("context_gate", {}))
+    prior = gate.pop("prior", None)
+    gate.pop("prior_artifact", None)
+    if not gate.get("enabled", False):
+        return {
+            "context_prior": {},
+            "context_gate": {**gate, "enabled": False},
+            "context_prior_source": None,
+            "context_prior_sha256": None,
+        }
+    if not isinstance(prior, Mapping) or prior.get(
+        "source_split"
+    ) != "incremental_train_only":
+        raise ValueError("待冻结场景先验不是仅由 incremental_train 学习")
+    frozen_prior = version_dir / "context_prior.json"
+    frozen_prior.write_text(
+        json.dumps(dict(prior), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "context_prior": dict(prior),
+        "context_gate": {
+            **gate,
+            "enabled": True,
+            "learning_data_scope": "incremental_train_only",
+            "prior_source": rel_path(frozen_prior),
+        },
+        "context_prior_source": rel_path(frozen_prior),
+        "context_prior_sha256": sha256_file(frozen_prior),
+    }
 
 
 def freeze_profile(
@@ -1298,12 +1505,15 @@ def freeze_profile(
         shutil.copy2(prototype_path, frozen_prototype)
     shutil.copy2(report_dir / "metrics.json", version_dir / "metrics.json")
     metrics = json.loads((report_dir / "metrics.json").read_text(encoding="utf-8"))
+    context_profile = freeze_context_gate(version_dir, metrics)
     local_to_global = {int(key): int(value) for key, value in protocol["base_local_to_global"].items()}
     profile = {
         "schema_version": 1,
         "profile_id": protocol["id"],
         "run_id": run_id,
-        "acceptance": "passed",
+        "acceptance": "passed" if metrics.get("deployment_accepted") else "rejected",
+        "competition_accepted": bool(metrics.get("competition_accepted")),
+        "deployment_accepted": bool(metrics.get("deployment_accepted")),
         "incremental_mode": "class_incremental",
         "deployment": "dual_detector",
         "agent_structure": dict(metrics.get("agent_structure", {})),
@@ -1331,6 +1541,7 @@ def freeze_profile(
         "lock_recall": metrics["lock_deployment_metrics"]["recall"],
         "lock_false_activation_rate": metrics["false_activation"]["false_activation_rate"],
         "fusion_policy": metrics.get("fusion", {}).get("cross_class", {}),
+        **context_profile,
         "base_imgsz": int(metrics["inference_image_sizes"]["base"]),
         "specialist_imgsz": int(metrics["inference_image_sizes"]["incremental"]),
         "positive_prototype": (
@@ -1374,6 +1585,9 @@ def freeze_profile(
         "full_map50": profile["full_map50"],
         "activation_threshold": profile["activation_threshold"],
         "lock_false_activation_rate": profile["lock_false_activation_rate"],
+        "lock_precision": profile["lock_precision"],
+        "competition_accepted": profile["competition_accepted"],
+        "deployment_accepted": profile["deployment_accepted"],
     }
     registry["verified_profiles"] = [entries[key] for key in sorted(entries)]
     registry_tmp = registry_path.with_suffix(".json.tmp")
@@ -1408,11 +1622,14 @@ def freeze_student_profile(
     if prototype_path is not None and frozen_prototype is not None:
         shutil.copy2(prototype_path, frozen_prototype)
     metrics = json.loads((report_dir / "metrics.json").read_text(encoding="utf-8"))
+    context_profile = freeze_context_gate(version_dir, metrics)
     profile = {
         "schema_version": 2,
         "profile_id": protocol["id"],
         "run_id": run_id,
-        "acceptance": "passed",
+        "acceptance": "passed" if metrics.get("deployment_accepted") else "rejected",
+        "competition_accepted": bool(metrics.get("competition_accepted")),
+        "deployment_accepted": bool(metrics.get("deployment_accepted")),
         "incremental_mode": "class_incremental",
         "adaptation_mode": str(metrics.get("adaptation_mode", "expanded_single_student")),
         "new_channel_initialization": (
@@ -1445,6 +1662,7 @@ def freeze_student_profile(
         "full_map50": float(metrics["full_map50"]),
         "old_channel_max_abs_drift": float(metrics["old_channel_max_abs_drift"]),
         "fusion_policy": metrics.get("fusion", {}).get("cross_class", {}),
+        **context_profile,
         "positive_prototype": (
             json.loads(frozen_prototype.read_text(encoding="utf-8"))
             if frozen_prototype is not None else None
@@ -1865,10 +2083,65 @@ def run_protocol(
         float(calibration_cfg["threshold_step"]),
         float(calibration_cfg["target_precision"]),
     )
-    calibration["deployment_threshold"] = float(
-        calibration_cfg.get("deployment_threshold", config["predict"]["conf"])
+    deployment_policy = str(
+        calibration_cfg.get("deployment_policy", "incremental_dev_calibrated")
     )
-    calibration["deployment_policy"] = "competition_map50_confidence_floor"
+    if deployment_policy == "incremental_dev_calibrated":
+        deployment_threshold = float(calibration["selected"]["threshold"])
+    elif deployment_policy == "fixed":
+        if calibration_cfg.get("deployment_threshold") is None:
+            raise ValueError("固定部署阈值策略缺少 calibration.deployment_threshold")
+        deployment_threshold = float(calibration_cfg["deployment_threshold"])
+    else:
+        raise ValueError(f"未知部署阈值策略：{deployment_policy}")
+    calibration["deployment_threshold"] = deployment_threshold
+    calibration["deployment_policy"] = deployment_policy
+    calibration["source_split"] = "incremental_dev_only"
+    calibration["learning_data_scope"] = "incremental_dataset_only"
+
+    context_gate_cfg = dict(config.get("context_gate", {}))
+    context_model = context_checkpoint = None
+    context_prior: Dict[str, Any] = {}
+    context_prior_path: Path | None = None
+    context_device = device if str(device).startswith("cuda:") else f"cuda:{device}"
+    if context_gate_cfg.get("enabled", False):
+        from fair_agent.models.context import load_context_model
+
+        context_model_path = resolve_path(context_gate_cfg["model"])
+        context_model, context_checkpoint = load_context_model(
+            context_model_path, context_device
+        )
+        train_contexts = predict_context_records(
+            context_model,
+            context_checkpoint,
+            incremental_train,
+            context_device,
+            int(context_gate_cfg.get("batch_size", 32)),
+        )
+        context_prior = learn_context_prior(
+            list(train_contexts.values()),
+            tuple(context_gate_cfg.get("dimensions", ["scene"])),
+        )
+        if not any(
+            isinstance(context_prior.get(dimension), Mapping)
+            and bool(context_prior.get(dimension))
+            for dimension in context_gate_cfg.get("dimensions", ["scene"])
+        ):
+            raise RuntimeError("增量训练集未产生可用的已知场景先验")
+        context_prior_path = report_dir / "context_prior.json"
+        context_prior_path.write_text(
+            json.dumps(context_prior, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        _audit_event(
+            config,
+            protocol_id,
+            "CONTEXT_PRIOR_LEARNED",
+            source="incremental_train_only",
+            sample_count=len(train_contexts),
+            artifact=rel_path(context_prior_path),
+            artifact_sha256=sha256_file(context_prior_path),
+        )
     calibration_path = report_dir / "calibration.json"
     calibration_path.write_text(
         json.dumps(calibration, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -1888,6 +2161,17 @@ def run_protocol(
     # The lock interface remains image-only here. Every class owner receives
     # the same complete list before any label is opened or transformed.
     lock_images = read_split(config["paths"]["source_splits"]["lock"])
+    lock_contexts = (
+        predict_context_records(
+            context_model,
+            context_checkpoint,
+            lock_images,
+            context_device,
+            int(context_gate_cfg.get("batch_size", 32)),
+        )
+        if context_model is not None and context_checkpoint is not None
+        else {}
+    )
     frozen_lock = freeze_unlabeled_lock_predictions(
         base_predictor,
         incremental_predictor,
@@ -1899,11 +2183,16 @@ def run_protocol(
         new_id,
         unified_student,
         positive_prototype,
+        deployment_threshold,
+        context_prior,
+        lock_contexts,
+        float(context_gate_cfg.get("max_threshold_penalty", 0.0)),
         report_dir,
     )
     base_predictions = list(frozen_lock["base_predictions"])
     combined_predictions = list(frozen_lock["combined_predictions"])
     fusion_decisions = list(frozen_lock["fusion_decisions"])
+    activation_rejections = list(frozen_lock["activation_rejections"])
     lock_prototype_rejections = list(frozen_lock["prototype_rejections"])
     base_inference_ms = float(frozen_lock["base_inference_ms"])
     incremental_inference_ms = float(frozen_lock["incremental_inference_ms"])
@@ -2016,6 +2305,10 @@ def run_protocol(
             positive_prototype is None
             or positive_prototype.get("learning_data_scope") == "incremental_dataset_only"
         ),
+        "context_prior_incremental_train_only": (
+            not context_prior
+            or context_prior.get("source_split") == "incremental_train_only"
+        ),
         "evaluator_consistency": evaluator_error <= float(integrity["max_evaluator_error"]),
         "base_weight_unchanged": base_weight_drift <= float(integrity["max_base_weight_drift"]),
         "old_channel_isolation": old_channel_drift <= float(config.get("adaptation", {}).get("max_old_channel_drift", 1e-6)),
@@ -2049,7 +2342,6 @@ def run_protocol(
         ),
     }
     diagnostic_gates = {
-        "calibration_target_precision": bool(calibration["passed"]),
         "base_dev_map50": base_dev_map50 >= float(acceptance["min_base_map50"]),
     }
     diagnostics = dict(config.get("diagnostics", {}))
@@ -2061,8 +2353,19 @@ def run_protocol(
         diagnostic_gates["false_activation_rate"] = float(
             false_activation["false_activation_rate"]
         ) <= float(diagnostics["max_false_activation_rate"])
-    gates = {**integrity_gates, **score_gates}
-    accepted = all(gates.values())
+    deployment_acceptance = dict(config.get("deployment_acceptance", {}))
+    deployment_gates = {
+        "calibration_target_precision": bool(calibration["passed"]),
+        "new_class_precision": float(lock_pr["precision"])
+        >= float(deployment_acceptance["min_new_class_precision"]),
+        "new_class_false_activation_rate": float(false_activation["false_activation_rate"])
+        <= float(deployment_acceptance["max_new_class_false_activation_rate"]),
+    }
+    competition_gates = {**integrity_gates, **score_gates}
+    competition_accepted = all(competition_gates.values())
+    deployment_accepted = competition_accepted and all(deployment_gates.values())
+    gates = {**competition_gates, **deployment_gates}
+    accepted = deployment_accepted
     result = {
         "schema_version": 2,
         "run_id": run_id,
@@ -2110,6 +2413,23 @@ def run_protocol(
         "base_dev_evaluator_error": base_dev_evaluator_error,
         "incremental_dev_evaluator_error": incremental_dev_evaluator_error,
         "calibration": calibration,
+        "context_gate": {
+            "enabled": bool(context_prior),
+            "policy": "soft_threshold_penalty",
+            "dimensions": list(context_gate_cfg.get("dimensions", [])),
+            "max_threshold_penalty": float(
+                context_gate_cfg.get("max_threshold_penalty", 0.0)
+            ),
+            "prior": context_prior or None,
+            "prior_artifact": (
+                rel_path(context_prior_path) if context_prior_path is not None else None
+            ),
+            "learning_data_scope": (
+                "incremental_train_only" if context_prior else None
+            ),
+            "lock_context_count": len(lock_contexts),
+            "hard_routing": False,
+        },
         "positive_prototype": {
             "enabled": positive_prototype is not None,
             "artifact": rel_path(prototype_path) if prototype_path is not None else None,
@@ -2141,6 +2461,7 @@ def run_protocol(
             "rejected_incremental_count": sum(
                 row.get("action") == "reject_specialist" for row in fusion_decisions
             ),
+            "activation_rejected_count": len(activation_rejections),
             "artifact": lock_prediction_artifacts["fusion_decisions"]["path"],
             "artifact_sha256": lock_prediction_artifacts["fusion_decisions"]["sha256"],
         },
@@ -2178,8 +2499,11 @@ def run_protocol(
         },
         "score_gates": score_gates,
         "integrity_gates": integrity_gates,
+        "deployment_gates": deployment_gates,
         "diagnostic_gates": diagnostic_gates,
         "gates": gates,
+        "competition_accepted": competition_accepted,
+        "deployment_accepted": deployment_accepted,
         "accepted": accepted,
         "lock_evaluation_started_after_training_and_calibration": True,
         "lock_labels_opened_after_prediction_freeze": True,
@@ -2227,6 +2551,12 @@ def write_summary(
         "schema_version": 1,
         "run_id": run_id,
         "protocols": list(results),
+        "competition_passed_protocols": [
+            row["protocol"] for row in results if row.get("competition_accepted")
+        ],
+        "deployment_passed_protocols": [
+            row["protocol"] for row in results if row.get("deployment_accepted")
+        ],
         "passed_protocols": [row["protocol"] for row in results if row.get("accepted")],
         "failed_protocols": [row["protocol"] for row in results if not row.get("accepted")],
     }
@@ -2236,16 +2566,20 @@ def write_summary(
     lines = [
         "# 严格 3+1 类别增量单一协议汇总",
         "",
-        "| 协议 | 新增类别 | 基础测试 mAP50 | New-mAP50 | KRR | 结论 |",
-        "|---|---|---:|---:|---:|---|",
+        "| 协议 | 新增类别 | 基础测试 mAP50 | New-mAP50 | KRR | 赛题结论 | 部署结论 |",
+        "|---|---|---:|---:|---:|---|---|",
     ]
     for row in results:
         if "error" in row:
-            lines.append(f"| {row['protocol']} | - | - | - | - | 执行错误：{row['error']} |")
+            lines.append(
+                f"| {row['protocol']} | - | - | - | - | 执行错误 | {row['error']} |"
+            )
         else:
             lines.append(
                 f"| {row['protocol']} | {row['new_class']} | {row['base_test_map50']:.5f} | "
-                f"{row['new_map50']:.5f} | {row['krr']:.5f} | {'通过' if row['accepted'] else '未通过'} |"
+                f"{row['new_map50']:.5f} | {row['krr']:.5f} | "
+                f"{'通过' if row['competition_accepted'] else '未通过'} | "
+                f"{'通过' if row['deployment_accepted'] else '未通过'} |"
             )
     (output / f"summary{suffix}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

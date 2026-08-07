@@ -1,6 +1,6 @@
 seed: 20260705
 model: models/production/incremental_detection/three_class_base_detector.pt
-expected_sha256: 1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96
+expected_sha256: 6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119
 source:
   path: data/images
   type: dir

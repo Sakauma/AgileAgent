@@ -46,7 +46,7 @@ KNOWN_SECTION_KEYS = {
     "inference": {"backend", "imgsz", "specialist_imgsz", "iou", "max_det", "batch_size", "confidence_min", "confidence_max", "confidence_default", "warmup_iterations", "warmup_batch_size", "warmup_width", "warmup_height", "preload_specialists", "quantize", "cudnn_benchmark", "compile"},
     "routing": {
         "incremental_enabled", "require_acceptance_passed", "consensus_iou", "fusion_iou",
-        "max_specialists_per_image", "conflict_iou", "conflict_base_confidence",
+        "max_specialists_per_image", "conflict_iou", "conflict_incremental_coverage", "conflict_base_confidence",
         "specialist_margin", "preserve_base_class_owners",
         "detection_evidence_weight", "context_evidence_weight",
         "neutral_context_score", "default_routing_prior",
@@ -274,6 +274,8 @@ def validate_config(
         "neutral_context_score", "default_routing_prior",
     ):
         _number(routing, key, errors, 0.0, 1.0)
+    if routing.get("conflict_incremental_coverage") is not None:
+        _number(routing, "conflict_incremental_coverage", errors, 0.0, 1.0)
     if abs(float(routing.get("detection_evidence_weight", 0)) + float(routing.get("context_evidence_weight", 0)) - 1.0) > 1e-9:
         errors.append("routing的检测证据权重与上下文证据权重之和必须为1")
     _number(routing, "max_specialists_per_image", errors, 1)
