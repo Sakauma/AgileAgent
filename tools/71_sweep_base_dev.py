@@ -29,6 +29,15 @@ PROTECTED_TRAIN_KEYS = {
     "patience",
     "project",
 }
+ALLOWED_EVALUATION_OVERRIDE_KEYS = {
+    "imgsz",
+    "batch",
+    "conf",
+    "iou",
+    "rect",
+    "workers",
+    "classes",
+}
 
 
 def resolve_local(path: str | Path) -> Path:
@@ -74,6 +83,21 @@ def candidate_train_arguments(
     if int(arguments["patience"]) != 0:
         raise ValueError("基础超参候选必须设置 patience=0")
     return arguments
+
+
+def candidate_evaluation_settings(
+    sweep: Mapping[str, Any], candidate_name: str
+) -> Dict[str, Any]:
+    candidate = dict(sweep.get("candidates", {}).get(candidate_name, {}))
+    if not candidate:
+        raise ValueError(f"未知基础超参候选：{candidate_name}")
+    overrides = dict(candidate.get("evaluation_overrides", {}))
+    unknown = sorted(set(overrides) - ALLOWED_EVALUATION_OVERRIDE_KEYS)
+    if unknown:
+        raise ValueError(f"候选包含未知 evaluation override：{unknown}")
+    evaluation = dict(sweep["evaluation"])
+    evaluation.update(overrides)
+    return evaluation
 
 
 def audit_base_dataset(dataset: Path) -> Dict[str, Any]:
@@ -262,7 +286,7 @@ def main() -> int:
         require_full_epochs=True,
     )
 
-    evaluation = dict(sweep["evaluation"])
+    evaluation = candidate_evaluation_settings(sweep, args.candidate)
     evaluator = YOLO(str(best_weight))
     evaluation_arguments: Dict[str, Any] = {
         "data": str(dataset),

@@ -51,3 +51,10 @@ candidates:
       <<: *focus_default
       mosaic: 0.0
       close_mosaic: 0
+  expert_1024:
+    seed: 20260705
+    overrides:
+      <<: *focus_default
+      imgsz: 1024
+    evaluation_overrides:
+      imgsz: 1024

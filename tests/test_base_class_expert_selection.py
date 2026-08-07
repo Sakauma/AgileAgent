@@ -223,6 +223,22 @@ def test_trainer_accepts_frozen_class_expert_lineage(tmp_path: Path) -> None:
         )
 
 
+def test_candidate_may_raise_evaluation_resolution_without_changing_data() -> None:
+    sweep = {
+        "evaluation": {"imgsz": 896, "classes": [0], "batch": 1},
+        "candidates": {
+            "expert_1024": {"evaluation_overrides": {"imgsz": 1024}},
+            "invalid": {"evaluation_overrides": {"data": "forbidden.yaml"}},
+        },
+    }
+
+    settings = TRAINER["candidate_evaluation_settings"](sweep, "expert_1024")
+
+    assert settings == {"imgsz": 1024, "classes": [0], "batch": 1}
+    with pytest.raises(ValueError, match="未知 evaluation override"):
+        TRAINER["candidate_evaluation_settings"](sweep, "invalid")
+
+
 def make_baseline_report(tmp_path: Path) -> Path:
     dataset_root = tmp_path / "datasets" / "origin_4"
     dataset_yaml = dataset_root / "dataset.yaml"
