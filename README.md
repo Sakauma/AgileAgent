@@ -202,7 +202,7 @@ python tools/70_run_strict_3plus1.py --check-only
 python tools/70_run_strict_3plus1.py --run-id UNIQUE_RUN_ID
 ```
 
-唯一正式配方为 `YOLO11s`：基础 owner 使用 `imgsz=896 / batch=32 / epochs=160 / patience=0`，增量专家使用 `imgsz=640 / batch=32 / epochs=80 / patience=0`，均禁用提前停止并在完整预算后选择 best。当前基础 best 为 seed `20260705`、best epoch `85`；基础局部类别 `0/1/2` 映射到全局 `0/1/3`，增量局部类别 `0` 映射到全局 `2`。未来官方增量数据到达后只替换类别映射与清单并重新训练，不依赖 `warship` 语义。
+唯一正式配方为 `YOLO11s`，基础和增量阶段都从仓库内的 `models/pretrained/yolo11s.pt` 初始化：基础 owner 使用 `imgsz=896 / batch=32 / epochs=160 / patience=0`，增量专家使用 `imgsz=640 / batch=32 / epochs=80 / patience=0`，均禁用提前停止并在完整预算后选择 best。当前基础 best 为 seed `20260705`、best epoch `85`；基础局部类别 `0/1/2` 映射到全局 `0/1/3`，增量局部类别 `0` 映射到全局 `2`。旧的四类 `imgsz=640` benchmark 权重已移除，不属于训练或运行入口。未来官方增量数据到达后只替换类别映射与清单并重新训练，不依赖 `warship` 语义。
 
 ## 使用方式
 
@@ -292,9 +292,10 @@ Web 与 CLI 使用同一状态机和配置，批次状态、任务日志及最�
 
 | 模型 | 功能 | 当前750张模拟验收 | 状态 |
 | --- | --- | --- | --- |
+| YOLO11s 通用预训练权重 | 基础与增量训练初始化 | 不直接计分 | `models/pretrained/yolo11s.pt`，由 Git 固定版本 |
 | Scene-SensorNet | IR/SAR 与四场景认知 | sensor 0.98947 / scene 0.76842 | production 上下文模型，不参与目标类别硬路由 |
-| 三类基础检测器 | 冻结旧类检测 | 基础 mAP50 `0.81414` | production 旧类 owner |
-| 增量检测器 | 新类别检测 | New-mAP50 `0.63869` / KRR `1.00000` | production 新类 owner，当前模拟绑定舰船 |
+| 三类基础检测器 | 冻结旧类检测 | 基础 mAP50 `0.81414` | production 旧类 owner，推理尺寸 `896` |
+| 增量检测器 | 新类别检测 | New-mAP50 `0.63869` / KRR `1.00000` | production 新类 owner，推理尺寸 `640`，当前模拟绑定舰船 |
 
 最终基础权重 SHA256 为 `1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96`，增量权重 SHA256 为 `92ddcdcc4b17216d734f1033ab0157e87ac187da2a437d6cbb81642dde115adc`。本次89张混合测试的四类总体 mAP50 为 `0.75390`，仅作诊断；上述结果不是官方隐藏测试成绩。
 

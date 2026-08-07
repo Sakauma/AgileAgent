@@ -15,6 +15,7 @@ venv/
 
 # Private competition data and derived artifacts
 /datasets*/
+/datasets_r1_base_train
 /20260701*/
 /分析结果/
 /incremental_protocols/

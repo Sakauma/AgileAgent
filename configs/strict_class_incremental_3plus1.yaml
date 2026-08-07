@@ -1,7 +1,7 @@
 schema_version: 1
 seed: 20260705
 # 唯一正式模板：基础 owner 与新增类专家都从通用 YOLO11s 预训练权重初始化。
-model: yolo11s.pt
+model: models/pretrained/yolo11s.pt
 
 paths:
   source_splits:
@@ -39,6 +39,7 @@ common:
   cache: false
   plots: true
   amp: true
+  deterministic: true
   weight_decay: 0.0005
 
 base_train:
@@ -76,7 +77,7 @@ adaptation:
   mode: frozen_base_plus_new_specialist
   # 专家不继承已偏向旧类的检测头，仅从通用预训练表征快速学习新增类。
   specialist_init: generic_pretrained
-  specialist_model: yolo11s.pt
+  specialist_model: models/pretrained/yolo11s.pt
 
 agent_structure:
   architecture: parallel_base_incremental_experts

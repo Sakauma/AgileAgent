@@ -150,8 +150,11 @@ def test_reproduce_rejects_changed_source_data_before_training(tmp_path: Path) -
     assert not (tmp_path / "runs" / "must-not-start").exists()
 
 
-def test_generation_zero_excludes_warship_and_benchmark_cannot_own_production(tmp_path: Path) -> None:
+def test_generation_zero_excludes_warship_and_base_cannot_claim_unregistered_class(tmp_path: Path) -> None:
     registry = load_generation_registry("models/generations.json")
+    assert "benchmark" not in registry["channels"]
+    assert "four_class_unified_benchmark" not in registry["models_by_id"]
+    assert not Path("models/base/yolo11s_ir_sar_imgsz640.pt").exists()
     generation_zero = registry["generations_by_id"]["base_detection_generation"]
     assert set(generation_zero["classes"]) == {0, 1, 3}
     assert 2 not in generation_zero["class_owners"]
@@ -163,10 +166,10 @@ def test_generation_zero_excludes_warship_and_benchmark_cannot_own_production(tm
     broken = deepcopy(payload)
     generation = next(item for item in broken["generations"] if item["id"] == "base_detection_generation")
     generation["classes"].append(2)
-    generation["class_owners"]["2"] = "four_class_unified_benchmark"
+    generation["class_owners"]["2"] = "three_class_base_detector"
     broken_path = tmp_path / "generations.json"
     broken_path.write_text(json.dumps(broken), encoding="utf-8")
-    with pytest.raises(ValueError, match="benchmark_only"):
+    with pytest.raises(ValueError, match="未登记对应类别"):
         load_generation_registry(broken_path)
 
     premature = deepcopy(payload)

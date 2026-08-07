@@ -77,7 +77,8 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
     assert config["calibration"]["deployment_threshold"] == 0.01
     assert config["predict"]["rect"] is True
     assert config["common"]["batch"] == 32
-    assert config["model"] == "yolo11s.pt"
+    assert config["model"] == "models/pretrained/yolo11s.pt"
+    assert config["common"]["deterministic"] is True
     assert config["base_train"]["imgsz"] == 896
     assert config["incremental_train"]["imgsz"] == 640
     assert config["adaptation"]["mode"] == "frozen_base_plus_new_specialist"
@@ -744,9 +745,9 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
     assert arguments["multi_scale"] == 0.0
     assert arguments["scale"] == 0.50
     assert arguments["translate"] == 0.15
-    assert config["model"] == "yolo11s.pt"
+    assert config["model"] == "models/pretrained/yolo11s.pt"
     assert config["adaptation"]["specialist_init"] == "generic_pretrained"
-    assert config["adaptation"]["specialist_model"] == "yolo11s.pt"
+    assert config["adaptation"]["specialist_model"] == "models/pretrained/yolo11s.pt"
 
     config["base_train"]["patience"] = 1
     with pytest.raises(ValueError, match="patience=0"):

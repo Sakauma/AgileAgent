@@ -263,6 +263,7 @@ assets:
   generation_registry: models/generations.json
   checksums: models/SHA256SUMS.txt
   required:
+    - models/pretrained/yolo11s.pt
     - models/production/incremental_detection/three_class_base_detector.pt
     - models/production/incremental_detection/incremental_detector.pt
     - models/context/scene_sensor_net.pt

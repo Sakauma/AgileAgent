@@ -120,9 +120,11 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
     production = generations[str(channels["production"])]
     if production.get("status") != "active":
         raise ValueError("production频道只能引用active代际")
-    benchmark_id = str(channels.get("benchmark") or "")
-    if benchmark_id not in models or models[benchmark_id].get("role") != "benchmark_only":
-        raise ValueError("benchmark频道必须引用benchmark_only模型")
+    benchmark_id = channels.get("benchmark")
+    if benchmark_id is not None:
+        benchmark_id = str(benchmark_id)
+        if benchmark_id not in models or models[benchmark_id].get("role") != "benchmark_only":
+            raise ValueError("benchmark频道必须引用benchmark_only模型")
     registry["class_map"] = classes
     registry["models_by_id"] = models
     registry["generations_by_id"] = generations

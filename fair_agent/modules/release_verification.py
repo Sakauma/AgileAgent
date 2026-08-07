@@ -143,7 +143,6 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             "production_classes": sorted(production["classes"]),
             "candidate": candidate_id,
             "candidate_status": candidate.get("status"),
-            "benchmark": generation_registry["channels"]["benchmark"],
             "production_metrics": production.get("metrics", {}),
         }
     except (KeyError, OSError, TypeError, ValueError) as exc:

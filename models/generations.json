@@ -24,22 +24,6 @@
       "evidence": "基础阶段只使用三种基础类别，增量阶段权重保持不变"
     },
     {
-      "id": "four_class_unified_benchmark",
-      "display_name": "四类统一检测基准（非赛题增量入口）",
-      "role": "benchmark_only",
-      "backend": "ultralytics",
-      "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
-      "sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c",
-      "owns_classes": [0, 1, 2, 3],
-      "local_to_global": {
-        "0": 0,
-        "1": 1,
-        "2": 2,
-        "3": 3
-      },
-      "status": "benchmark_only"
-    },
-    {
       "id": "incremental_detector",
       "display_name": "增量检测器",
       "role": "class_incremental_expert",
@@ -191,8 +175,7 @@
   ],
   "channels": {
     "production": "incremental_detection_generation",
-    "candidate": "incremental_detection_generation",
-    "benchmark": "four_class_unified_benchmark"
+    "candidate": "incremental_detection_generation"
   },
   "external_blockers": [
     "ascend_310b_not_available",
