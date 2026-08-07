@@ -1,0 +1,53 @@
+schema_version: 1
+strict_config: configs/strict_class_incremental_3plus1.yaml
+
+# 类别无关的困难基础类 owner 模板。当前 focus=0 在训练前由开发侧逐类 AP 确定，
+# 不是对图片做语义路由；部署时该 owner 仍接收每一张未知图片。
+model: yolo11s.pt
+epochs: 160
+project_root: runs/detect/base_class_expert_forward
+report_root: reports/base_class_expert_forward
+
+evaluation:
+  imgsz: 896
+  batch: 1
+  conf: 0.01
+  iou: 0.70
+  rect: true
+  workers: 8
+  classes: [0]
+
+candidates:
+  expert_default:
+    seed: 20260705
+    overrides: &focus_default
+      classes: [0]
+      imgsz: 896
+      multi_scale: 0.0
+  expert_lr75e4:
+    seed: 20260705
+    overrides:
+      <<: *focus_default
+      lr0: 0.00075
+  expert_lr5e4:
+    seed: 20260705
+    overrides:
+      <<: *focus_default
+      lr0: 0.0005
+  expert_cls10:
+    seed: 20260705
+    overrides:
+      <<: *focus_default
+      cls: 1.0
+  expert_mosaic05:
+    seed: 20260705
+    overrides:
+      <<: *focus_default
+      mosaic: 0.5
+      close_mosaic: 30
+  expert_nomosaic:
+    seed: 20260705
+    overrides:
+      <<: *focus_default
+      mosaic: 0.0
+      close_mosaic: 0

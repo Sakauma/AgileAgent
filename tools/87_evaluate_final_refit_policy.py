@@ -66,6 +66,7 @@ def verify_oof_selection(config: Mapping[str, Any]) -> dict[str, Any]:
         policy_report.get("selection_scope")
         != "base_train_and_dev_oof_tune_validate"
         or bool(policy_report.get("lock_data_access", True))
+        or int(policy_report.get("focus_class_id", 0)) != 0
         or not bool(policy_report.get("validation_labels_opened_after_policy_selection", False))
         or not bool(policy_report.get("validation_predictions_frozen_before_labels", False))
     ):
@@ -115,6 +116,125 @@ def verify_oof_selection(config: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def verify_class_fusion_policy(
+    config: Mapping[str, Any],
+    focus_audit: Mapping[str, Any],
+    class_id: int,
+    path: Path,
+) -> dict[str, Any]:
+    """Verify one non-focus class policy selected without validation labels."""
+    reject_test_reference(path, f"class {class_id} fusion policy")
+    report = json.loads(path.read_text(encoding="utf-8"))
+    selected = dict(report.get("selected_policy", {}))
+    if (
+        report.get("selection_scope")
+        != "base_train_and_dev_oof_tune_validate"
+        or bool(report.get("lock_data_access", True))
+        or int(report.get("focus_class_id", -1)) != int(class_id)
+        or not bool(report.get("validation_labels_opened_after_policy_selection", False))
+        or not bool(report.get("validation_predictions_frozen_before_labels", False))
+        or int(selected.get("degraded_tuning_fold_count", -1))
+        > int(config["selection_requirements"]["max_degraded_tuning_folds"])
+    ):
+        raise ValueError(f"class {class_id} fusion policy 未通过无泄露审计")
+
+    focus_report = json.loads(
+        Path(str(focus_audit["policy_path"])).read_text(encoding="utf-8")
+    )
+    manifest_sha256 = str(report.get("manifest_sha256", ""))
+    if not manifest_sha256 or manifest_sha256 != str(
+        focus_report.get("manifest_sha256", "")
+    ):
+        raise ValueError(f"class {class_id} fusion 没有使用相同 OOF manifest")
+
+    mapping = {str(key): str(value) for key, value in config["oof_owner_mapping"].items()}
+    secondaries = list(map(str, selected.get("secondaries", [])))
+    expected_sources = {"generic", *secondaries}
+    if not expected_sources <= set(mapping):
+        raise ValueError(f"class {class_id} fusion owner mapping 不完整")
+    policy = dict(config["base_fusion"]["class_policies"][class_id])
+    secondary_scales = {
+        str(name): float(scale)
+        for name, scale in dict(policy.get("secondary_scales", {})).items()
+    }
+    if (
+        str(policy.get("primary")) != mapping["generic"]
+        or set(secondary_scales) != {mapping[name] for name in secondaries}
+        or any(
+            abs(value - float(selected["secondary_scale"])) > 1e-12
+            for value in secondary_scales.values()
+        )
+        or abs(float(policy["iou"]) - float(selected["fusion_iou"])) > 1e-12
+        or abs(
+            float(policy.get("agreement_bonus", 0.0))
+            - float(selected["agreement_bonus"])
+        )
+        > 1e-12
+        or bool(policy.get("weighted_boxes", False))
+        != bool(selected["weighted_boxes"])
+        or bool(policy.get("scale_before_clustering", True))
+    ):
+        raise ValueError(f"class {class_id} 最终配置与 OOF fusion policy 不一致")
+
+    sources = dict(report.get("sources", {}))
+    source_audit = {}
+    for source_name in sorted(expected_sources):
+        entry = dict(sources.get(source_name, {}))
+        source_path = Path(str(entry.get("path", ""))).resolve()
+        reject_test_reference(source_path, f"class {class_id} OOF source {source_name}")
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        model_name = mapping[source_name]
+        model_config = dict(config["models"][model_name])
+        folds = dict(source.get("models", {}))
+        if (
+            sha256_file(source_path) != str(entry.get("sha256", ""))
+            or source.get("selection_scope") != "base_train_and_dev_oof_only"
+            or bool(source.get("lock_data_access", True))
+            or str(source.get("manifest_sha256", "")) != manifest_sha256
+            or str(source.get("inference_mode", ""))
+            != str(model_config.get("inference_mode", "full_frame"))
+            or set(folds) != {f"fold_{index}" for index in range(5)}
+            or any(
+                int(row.get("completed_epochs", -1))
+                != int(config["selection_requirements"]["required_epochs"])
+                or int(row.get("imgsz", -1)) != int(model_config["imgsz"])
+                for row in folds.values()
+            )
+        ):
+            raise ValueError(f"class {class_id} OOF fusion source 无效：{source_name}")
+        source_audit[source_name] = {
+            "path": str(source_path),
+            "sha256": sha256_file(source_path),
+            "mapped_model": model_name,
+            "imgsz": int(model_config["imgsz"]),
+        }
+
+    tuning = dict(report.get("tuning", {}))
+    validation = dict(report.get("validation", {}))
+    all_oof = dict(report.get("all_oof_diagnostic", {}))
+    if (
+        float(tuning.get("delta_map50", 0.0)) <= 0.0
+        or float(validation.get("delta_map50", 0.0)) <= 0.0
+        or str(class_id) not in dict(tuning.get("fused_per_class_ap50", {}))
+        or str(class_id) not in dict(validation.get("fused_per_class_ap50", {}))
+        or str(class_id) not in dict(all_oof.get("fused_per_class_ap50", {}))
+    ):
+        raise ValueError(f"class {class_id} fusion 未在调参与后置验证同时改善")
+    return {
+        "path": str(path),
+        "sha256": sha256_file(path),
+        "focus_class_id": int(class_id),
+        "selected_policy": selected,
+        "sources": source_audit,
+        "tuning_ap50": float(tuning["fused_per_class_ap50"][str(class_id)]),
+        "post_selection_validation_ap50": float(
+            validation["fused_per_class_ap50"][str(class_id)]
+        ),
+        "all_oof_ap50": float(all_oof["fused_per_class_ap50"][str(class_id)]),
+        "validation_predictions_frozen_before_labels": True,
+    }
+
+
 def verify_class_owner_selection(
     config: Mapping[str, Any], focus_audit: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -144,11 +264,28 @@ def verify_class_owner_selection(
     if not required_sources <= set(mapping):
         raise ValueError("class owner mapping 缺少 baseline 或选中 owner")
     class_results = {int(key): dict(value) for key, value in report["class_results"].items()}
+    fusion_paths = {
+        int(key): resolve_path(value)
+        for key, value in dict(
+            config["paths"].get("class_fusion_policy_reports", {})
+        ).items()
+    }
+    if not set(fusion_paths) <= set(selected):
+        raise ValueError("class fusion policy 只能覆盖已选择 owner 的非 focus 类")
+    class_fusions = {
+        class_id: verify_class_fusion_policy(
+            config, focus_audit, class_id, fusion_path
+        )
+        for class_id, fusion_path in sorted(fusion_paths.items())
+    }
     for class_id, source_name in selected.items():
         policy = dict(config["base_fusion"]["class_policies"][class_id])
         if (
             str(policy.get("primary")) != mapping[source_name]
-            or dict(policy.get("secondary_scales", {}))
+            or (
+                class_id not in class_fusions
+                and dict(policy.get("secondary_scales", {}))
+            )
             or str(class_results[class_id].get("selected_owner")) != source_name
         ):
             raise ValueError(f"class {class_id} 最终 owner 与 OOF 选择不一致")
@@ -195,7 +332,11 @@ def verify_class_owner_selection(
         [
             float(focus_policy["tuning_per_class_ap50"]["0"]),
             float(class_results[1]["tuning"]["ap50"]),
-            float(class_results[3]["tuning"]["ap50"]),
+            (
+                float(class_fusions[3]["tuning_ap50"])
+                if 3 in class_fusions
+                else float(class_results[3]["tuning"]["ap50"])
+            ),
         ]
     ) / 3.0
     focus_report = policy_report
@@ -203,14 +344,22 @@ def verify_class_owner_selection(
         [
             float(focus_report["validation"]["fused_per_class_ap50"]["0"]),
             float(class_results[1]["validation"]["ap50"]),
-            float(class_results[3]["validation"]["ap50"]),
+            (
+                float(class_fusions[3]["post_selection_validation_ap50"])
+                if 3 in class_fusions
+                else float(class_results[3]["validation"]["ap50"])
+            ),
         ]
     ) / 3.0
     all_oof_map50 = sum(
         [
             float(focus_report["all_oof_diagnostic"]["fused_per_class_ap50"]["0"]),
             float(class_results[1]["all_oof"]["ap50"]),
-            float(class_results[3]["all_oof"]["ap50"]),
+            (
+                float(class_fusions[3]["all_oof_ap50"])
+                if 3 in class_fusions
+                else float(class_results[3]["all_oof"]["ap50"])
+            ),
         ]
     ) / 3.0
     requirements = dict(config["selection_requirements"])
@@ -226,6 +375,9 @@ def verify_class_owner_selection(
         "selected_owners": {str(key): value for key, value in selected.items()},
         "owner_mapping": mapping,
         "sources": source_audit,
+        "class_fusion_policies": {
+            str(key): value for key, value in class_fusions.items()
+        },
         "tuning_map50": tuning_map50,
         "post_selection_validation_map50": validation_map50,
         "all_oof_map50": all_oof_map50,

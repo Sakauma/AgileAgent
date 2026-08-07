@@ -1,5 +1,5 @@
 schema_version: 1
-candidate_id: base-s896-classwise-oof-20260807-v4
+candidate_id: base-s896-classwise-oof-20260807-v5
 selection_scope: base_train_dev_oof_policy_and_refit_weights
 lock_data_access_during_selection: false
 
@@ -8,12 +8,14 @@ paths:
   # 不能重新声明为独立测试证据。
   lock_split: splits/mixed_test.txt
   report_root: reports/base_ensemble_regression
-  selection_report: reports/base_final_refit_selection/s896-classwise-oof-v4.json
+  selection_report: reports/base_final_refit_selection/s896-classwise-oof-v5.json
   oof_candidate_selection_report: reports/base_refit_oof/final-policy-selection-s896-20260807-v2.json
   oof_policy_report: reports/base_refit_oof/fusion-s896-tune-validate-20260807-v1.json
   class_owner_selection_report: reports/base_refit_oof/class-owner-selection-s896-20260807-v2.json
+  class_fusion_policy_reports:
+    3: reports/base_refit_oof/tank-fusion-3pass-s896-tune-validate-20260807-v1.json
   checkpoint_holdout_manifest: runs/detect/base_final_refit_data/manifest.json
-  checkpoint_holdout_report: reports/base_final_refit_agent/s896-classwise-oof-v4/report.json
+  checkpoint_holdout_report: reports/base_final_refit_agent/s896-classwise-oof-v5/report.json
   training_reports:
     s896_b_896: reports/base_final_refit_s896/final-refit-s896-20260807-v1/seed_b.json
     generic_b_1024: reports/base_final_refit/final-refit-20260807-v1/seed_b.json
@@ -63,8 +65,9 @@ predict:
   augment: false
 
 base_fusion:
-  # 三个基础推理 pass 都对每张未知图片执行。融合只依据预测框及预测类别，
-  # 不读取图片文件名、场景、测试标签，也不先判断图片属于新类还是旧类。
+  # 三个基础推理 pass 都对每张未知图片执行。soldier 与 tank 分别使用
+  # OOF 冻结的逐类框融合，aircraft 由 s896 直接负责；规则只依据预测框
+  # 及预测类别，不读取文件名、场景、测试标签或图片的新旧类别身份。
   class_policies:
     0:
       primary: s896_b_896
@@ -84,10 +87,12 @@ base_fusion:
       weighted_boxes: false
     3:
       primary: s896_b_896
-      secondary_scales: {}
+      secondary_scales:
+        crop_a_full_640: 0.50
+        generic_b_1024: 0.50
       scale_before_clustering: false
       iou: 0.45
-      agreement_bonus: 0.0
+      agreement_bonus: 0.10
       weighted_boxes: false
 
 incremental_fusion:

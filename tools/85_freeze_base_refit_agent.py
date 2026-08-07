@@ -199,6 +199,7 @@ def validate_oof_evidence(
     if (
         policy.get("selection_scope") != "base_train_and_dev_oof_tune_validate"
         or bool(policy.get("lock_data_access", True))
+        or int(policy.get("focus_class_id", 0)) != 0
         or not bool(policy.get("validation_labels_opened_after_policy_selection", False))
         or not bool(policy.get("validation_predictions_frozen_before_labels", False))
     ):

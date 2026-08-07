@@ -417,6 +417,74 @@ def test_freeze_rejects_image_routing_in_prediction_manifest(tmp_path: Path) -> 
         FREEZER["freeze_selection"](config_path)
 
 
+def test_nonfocus_class_fusion_policy_is_verified(tmp_path: Path) -> None:
+    config_path, reports = build_fixture(tmp_path)
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["base_fusion"]["class_policies"][3] = {
+        "primary": "generic_b_1024",
+        "secondary_scales": {"crop_a_full_640": 0.5},
+        "scale_before_clustering": False,
+        "iou": 0.45,
+        "agreement_bonus": 0.1,
+        "weighted_boxes": False,
+    }
+    fusion_path = tmp_path / "reports" / "tank_fusion.json"
+    generic = reports["oof_generic"]
+    crop = reports["oof_crop"]
+    write_json(
+        fusion_path,
+        {
+            "selection_scope": "base_train_and_dev_oof_tune_validate",
+            "lock_data_access": False,
+            "manifest_sha256": "fixture-manifest-sha256",
+            "focus_class_id": 3,
+            "validation_labels_opened_after_policy_selection": True,
+            "validation_predictions_frozen_before_labels": True,
+            "selected_policy": {
+                "secondaries": ["crop_full"],
+                "fusion_iou": 0.45,
+                "secondary_scale": 0.5,
+                "agreement_bonus": 0.1,
+                "weighted_boxes": False,
+                "degraded_tuning_fold_count": 0,
+            },
+            "sources": {
+                "generic": {
+                    "path": str(generic.resolve()),
+                    "sha256": FREEZER["sha256_file"](generic),
+                },
+                "crop_full": {
+                    "path": str(crop.resolve()),
+                    "sha256": FREEZER["sha256_file"](crop),
+                },
+            },
+            "tuning": {
+                "delta_map50": 0.01,
+                "fused_per_class_ap50": {"0": 0.6, "1": 0.99, "3": 0.95},
+            },
+            "validation": {
+                "delta_map50": 0.005,
+                "fused_per_class_ap50": {"0": 0.62, "1": 0.99, "3": 0.97},
+            },
+            "all_oof_diagnostic": {
+                "fused_per_class_ap50": {"0": 0.61, "1": 0.99, "3": 0.96},
+            },
+        },
+    )
+
+    audit = FINAL_EVALUATOR["verify_class_fusion_policy"](
+        config,
+        {"policy_path": str(reports["policy"])},
+        3,
+        fusion_path,
+    )
+
+    assert audit["focus_class_id"] == 3
+    assert audit["tuning_ap50"] == pytest.approx(0.95)
+    assert audit["post_selection_validation_ap50"] == pytest.approx(0.97)
+    assert audit["all_oof_ap50"] == pytest.approx(0.96)
+
+
 def test_regression_evidence_cannot_claim_independent_test() -> None:
     evidence = EVALUATOR["evaluation_evidence"](
         {

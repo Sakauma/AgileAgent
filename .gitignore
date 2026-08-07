@@ -72,6 +72,12 @@ venv/
 !/tools/86_select_base_oof_policy.py
 !/tools/87_evaluate_final_refit_policy.py
 !/tools/88_select_base_class_owners.py
+!/tools/89_build_base_forward_backtest.py
+!/tools/90_select_base_forward_backtest.py
+!/tools/91_validate_base_forward_backtest.py
+!/tools/92_build_base_rolling_forward.py
+!/tools/93_select_base_class_expert.py
+!/tools/94_validate_base_class_expert.py
 !/tools/80_export_tensorrt_engines.py
 !/tools/81_validate_multibatch_incremental.py
 !/tools/82_run_multibatch_stress_matrix.py
@@ -102,6 +108,8 @@ venv/
 !/configs/base_final_refit_recent_crop.yaml
 !/configs/base_refit_s896_cv.yaml
 !/configs/base_final_refit_s896.yaml
+!/configs/base_forward_backtest_s896.yaml
+!/configs/base_class_expert_forward.yaml
 
 # Local competition notes are not part of the public source release.
 /*.md

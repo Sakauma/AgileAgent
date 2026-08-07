@@ -1,0 +1,59 @@
+schema_version: 1
+strict_config: configs/strict_class_incremental_3plus1.yaml
+
+# 只在连续块0-2训练、块3调参；块4必须等候选冻结后才可验证。
+# 每个候选都使用 YOLO11s@896、batch=32、epochs=160、patience=0。
+model: yolo11s.pt
+epochs: 160
+project_root: runs/detect/base_forward_backtest_s896
+report_root: reports/base_forward_backtest_s896
+
+evaluation:
+  imgsz: 896
+  batch: 1
+  conf: 0.01
+  iou: 0.70
+  rect: true
+  workers: 8
+
+candidates:
+  forward_baseline:
+    seed: 20260705
+    overrides: &s896_default
+      imgsz: 896
+      multi_scale: 0.0
+  recent_r1_f25:
+    seed: 20260705
+    overrides: *s896_default
+  recent_r2_f25:
+    seed: 20260705
+    overrides: *s896_default
+  recent_r1_f15:
+    seed: 20260705
+    overrides: *s896_default
+  recent_r1_f35:
+    seed: 20260705
+    overrides: *s896_default
+  recent_r1_f25_wd1e3:
+    seed: 20260705
+    overrides:
+      <<: *s896_default
+      weight_decay: 0.001
+  recent_r1_f25_lr75e4:
+    seed: 20260705
+    overrides:
+      <<: *s896_default
+      lr0: 0.00075
+  recent_r1_f25_mild_geometry:
+    seed: 20260705
+    overrides:
+      <<: *s896_default
+      mosaic: 0.60
+      translate: 0.10
+      scale: 0.40
+  recent_crop_r1_f25:
+    seed: 20260705
+    overrides:
+      <<: *s896_default
+      mosaic: 0.30
+      close_mosaic: 30

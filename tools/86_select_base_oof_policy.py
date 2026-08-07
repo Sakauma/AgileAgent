@@ -46,6 +46,7 @@ def load_candidate(
     if (
         report.get("selection_scope") != "base_train_and_dev_oof_tune_validate"
         or bool(report.get("lock_data_access", True))
+        or int(report.get("focus_class_id", 0)) != 0
         or int(selected.get("degraded_tuning_fold_count", -1))
         > max_degraded_tuning_folds
         or float(selected.get("tuning_delta_vs_generic", 0.0)) <= 0.0

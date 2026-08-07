@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tune base small-object fusion on OOF folds and validate on later OOF folds."""
+"""Tune one base class' fusion on OOF folds and validate on later OOF folds."""
 
 from __future__ import annotations
 
@@ -142,6 +142,13 @@ def main() -> int:
     )
     parser.add_argument("--weighted-box-options", default="false,true")
     parser.add_argument("--max-degraded-tuning-folds", type=int, default=0)
+    parser.add_argument(
+        "--focus-class-id",
+        type=int,
+        choices=CLASS_IDS,
+        default=0,
+        help="只融合该全局基础类别；其他类别保持 primary 原始预测。",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     paths = {
@@ -238,7 +245,7 @@ def main() -> int:
                 source,
                 "generic",
                 selected_secondaries,
-                0,
+                int(args.focus_class_id),
                 key[0],
                 key[1],
                 key[2],
@@ -307,7 +314,7 @@ def main() -> int:
             source,
             "generic",
             selected_secondaries,
-            0,
+            int(args.focus_class_id),
             selected_key[0],
             selected_key[1],
             selected_key[2],
@@ -337,6 +344,7 @@ def main() -> int:
         "lock_data_access": False,
         "manifest": str(manifest_path),
         "manifest_sha256": next(iter(manifest_hashes)),
+        "focus_class_id": int(args.focus_class_id),
         "tuning_folds": sorted(tuning_folds),
         "validation_folds": sorted(validation_folds),
         "secondaries": selected_secondaries,
