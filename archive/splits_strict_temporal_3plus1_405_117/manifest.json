@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "protocol": "full_coverage_strict_3plus1_dataset_partition",
+  "protocol": "temporal_strict_3plus1_dataset_partition",
   "seed": 20260705,
   "source_image_count": 750,
   "class_map": {
@@ -10,25 +10,19 @@
     "3": "tank"
   },
   "simulated_increment_class": "warship",
-  "allocation_policy": {
-    "all_source_images_used": true,
-    "reclaimed_previous_embargo_to_pool_train": true,
-    "reclaimed_image_count": 51,
-    "dev_and_test_membership_preserved": true,
-    "temporal_gap_constraint": null
-  },
+  "embargo_frame_distance": 4,
   "counts": {
-    "pool_train": 573,
+    "pool_train": 522,
     "pool_dev": 88,
     "mixed_test": 89,
-    "embargo": 0
+    "embargo": 51
   },
   "class_image_counts": {
     "pool_train": {
-      "0": 310,
-      "1": 131,
-      "2": 132,
-      "3": 310
+      "0": 282,
+      "1": 123,
+      "2": 117,
+      "3": 282
     },
     "pool_dev": {
       "0": 48,
@@ -42,12 +36,17 @@
       "2": 19,
       "3": 48
     },
-    "embargo": {}
+    "embargo": {
+      "0": 28,
+      "1": 8,
+      "2": 15,
+      "3": 28
+    }
   },
   "sensor_counts": {
     "pool_train": {
-      "ir": 405,
-      "sar": 168
+      "ir": 376,
+      "sar": 146
     },
     "pool_dev": {
       "ir": 68,
@@ -57,20 +56,22 @@
       "ir": 67,
       "sar": 22
     },
-    "embargo": {}
+    "embargo": {
+      "ir": 29,
+      "sar": 22
+    }
   },
   "sequence_details": [
     {
       "sequence": "ir|r1_base|air",
       "source_count": 175,
       "counts": {
-        "pool_train": 131,
+        "pool_train": 123,
         "pool_dev": 22,
         "mixed_test": 22,
-        "embargo": 0
+        "embargo": 8
       },
-      "reclaimed_to_pool_train": 8,
-      "historical_frame_bounds": {
+      "frame_bounds": {
         "train_last": 123,
         "dev_first": 128,
         "dev_last": 149,
@@ -81,13 +82,12 @@
       "sequence": "ir|r1_base|forest",
       "source_count": 130,
       "counts": {
-        "pool_train": 97,
+        "pool_train": 90,
         "pool_dev": 17,
         "mixed_test": 16,
-        "embargo": 0
+        "embargo": 7
       },
-      "reclaimed_to_pool_train": 7,
-      "historical_frame_bounds": {
+      "frame_bounds": {
         "train_last": 107,
         "dev_first": 112,
         "dev_last": 129,
@@ -98,13 +98,12 @@
       "sequence": "ir|r1_base|sea",
       "source_count": 105,
       "counts": {
-        "pool_train": 81,
+        "pool_train": 73,
         "pool_dev": 12,
         "mixed_test": 12,
-        "embargo": 0
+        "embargo": 8
       },
-      "reclaimed_to_pool_train": 8,
-      "historical_frame_bounds": {
+      "frame_bounds": {
         "train_last": 87,
         "dev_first": 92,
         "dev_last": 103,
@@ -115,13 +114,12 @@
       "sequence": "ir|r1_base|urban",
       "source_count": 130,
       "counts": {
-        "pool_train": 96,
+        "pool_train": 90,
         "pool_dev": 17,
         "mixed_test": 17,
-        "embargo": 0
+        "embargo": 6
       },
-      "reclaimed_to_pool_train": 6,
-      "historical_frame_bounds": {
+      "frame_bounds": {
         "train_last": 100,
         "dev_first": 105,
         "dev_last": 124,
@@ -132,13 +130,12 @@
       "sequence": "sar|r1_base|forest",
       "source_count": 73,
       "counts": {
-        "pool_train": 59,
+        "pool_train": 51,
         "pool_dev": 7,
         "mixed_test": 7,
-        "embargo": 0
+        "embargo": 8
       },
-      "reclaimed_to_pool_train": 8,
-      "historical_frame_bounds": {
+      "frame_bounds": {
         "train_last": 59,
         "dev_first": 64,
         "dev_last": 71,
@@ -149,13 +146,12 @@
       "sequence": "sar|r1_base|sea",
       "source_count": 64,
       "counts": {
-        "pool_train": 51,
+        "pool_train": 44,
         "pool_dev": 6,
         "mixed_test": 7,
-        "embargo": 0
+        "embargo": 7
       },
-      "reclaimed_to_pool_train": 7,
-      "historical_frame_bounds": {
+      "frame_bounds": {
         "train_last": 52,
         "dev_first": 57,
         "dev_last": 62,
@@ -166,13 +162,12 @@
       "sequence": "sar|r1_base|urban",
       "source_count": 73,
       "counts": {
-        "pool_train": 58,
+        "pool_train": 51,
         "pool_dev": 7,
         "mixed_test": 8,
-        "embargo": 0
+        "embargo": 7
       },
-      "reclaimed_to_pool_train": 7,
-      "historical_frame_bounds": {
+      "frame_bounds": {
         "train_last": 59,
         "dev_first": 64,
         "dev_last": 71,
@@ -180,5 +175,5 @@
       }
     }
   ],
-  "strict_3plus1_manifest": "splits/strict_3plus1/manifest.json"
+  "strict_3plus1_manifest": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/manifest.json"
 }

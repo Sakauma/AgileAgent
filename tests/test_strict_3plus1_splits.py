@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -7,10 +8,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SPLIT_ROOT = ROOT / "splits"
 EXPECTED_POOL_COUNTS = {
-    "pool_train": 522,
+    "pool_train": 573,
     "pool_dev": 88,
     "mixed_test": 89,
-    "embargo": 51,
+    "embargo": 0,
 }
 
 
@@ -18,13 +19,11 @@ def read_split(path: Path) -> list[str]:
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def sequence_and_frame(path: str) -> tuple[str, int]:
-    parts = Path(path).stem.split("_")
-    assert len(parts) == 5
-    return "|".join(parts[:4]), int(parts[4])
+def logical_sha256(rows: list[str]) -> str:
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
 
 
-def test_active_source_pools_are_complete_disjoint_and_temporally_isolated() -> None:
+def test_active_source_pools_are_complete_disjoint_and_use_all_750_images() -> None:
     assert not (ROOT / "splits_v2").exists()
     assert not any(
         (SPLIT_ROOT / name).exists()
@@ -43,22 +42,13 @@ def test_active_source_pools_are_complete_disjoint_and_temporally_isolated() -> 
     all_paths = [path for rows in pools.values() for path in rows]
     assert len(all_paths) == 750
     assert len(set(all_paths)) == 750
-
-    for first_name, second_name in (
-        ("pool_train", "pool_dev"),
-        ("pool_train", "mixed_test"),
-        ("pool_dev", "mixed_test"),
-    ):
-        first = [sequence_and_frame(path) for path in pools[first_name]]
-        second = [sequence_and_frame(path) for path in pools[second_name]]
-        for first_sequence, first_frame in first:
-            distances = [
-                abs(first_frame - second_frame)
-                for second_sequence, second_frame in second
-                if second_sequence == first_sequence
-            ]
-            assert distances
-            assert min(distances) > 4
+    assert pools["embargo"] == []
+    assert logical_sha256(pools["pool_dev"]) == (
+        "aaf49d10ffe77157ed1f32c46af13a7bb7c24156dc06c9479f14348a04c29eb7"
+    )
+    assert logical_sha256(pools["mixed_test"]) == (
+        "c3e28ffdfedc4e52149c18b1ec05119ef4ff8d9f17974a096a4fd6d5df813602"
+    )
 
 
 def test_active_sensor_subsets_match_source_pools() -> None:
@@ -78,8 +68,15 @@ def test_fixed_protocol_is_exactly_three_base_classes_plus_warship() -> None:
     protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
     protocol_root = protocol_path.parent
 
-    assert top["protocol"] == "temporal_strict_3plus1_dataset_partition"
+    assert top["protocol"] == "full_coverage_strict_3plus1_dataset_partition"
     assert top["counts"] == EXPECTED_POOL_COUNTS
+    assert top["allocation_policy"] == {
+        "all_source_images_used": True,
+        "reclaimed_previous_embargo_to_pool_train": True,
+        "reclaimed_image_count": 51,
+        "dev_and_test_membership_preserved": True,
+        "temporal_gap_constraint": None,
+    }
     assert top["simulated_increment_class"] == "warship"
     assert protocol["protocol"] == "strict_3plus1_class_incremental_simulation"
     assert protocol["base_class_ids"] == [0, 1, 3]
@@ -91,9 +88,9 @@ def test_fixed_protocol_is_exactly_three_base_classes_plus_warship() -> None:
     base_dev = set(read_split(protocol_root / "base_dev.txt"))
     increment_train = set(read_split(protocol_root / "increment_train.txt"))
     increment_dev = set(read_split(protocol_root / "increment_dev.txt"))
-    assert len(base_train) == 405
+    assert len(base_train) == 441
     assert len(base_dev) == 70
-    assert len(increment_train) == 117
+    assert len(increment_train) == 132
     assert len(increment_dev) == 18
     assert not base_train & increment_train
     assert not base_dev & increment_dev

@@ -15,29 +15,29 @@
   "increment_class_id": 2,
   "increment_class_name": "warship",
   "counts": {
-    "base_train": 441,
+    "base_train": 405,
     "base_dev": 70,
-    "increment_train": 132,
+    "increment_train": 117,
     "increment_dev": 18,
     "mixed_test": 89,
-    "scene_train": 573,
+    "scene_train": 522,
     "scene_dev": 88,
     "scene_test": 89
+  },
+  "paths": {
+    "base_train": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/base_train.txt",
+    "base_dev": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/base_dev.txt",
+    "increment_train": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/increment_train.txt",
+    "increment_dev": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/increment_dev.txt",
+    "mixed_test": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/mixed_test.txt",
+    "scene_train": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/scene_train.txt",
+    "scene_dev": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/scene_dev.txt",
+    "scene_test": "archive/splits_strict_temporal_3plus1_405_117/strict_3plus1/scene_test.txt"
   },
   "mixed_test_composition": {
     "old_class_images": 70,
     "new_class_images": 19,
     "membership_lists_published": false
-  },
-  "paths": {
-    "base_train": "splits/strict_3plus1/base_train.txt",
-    "base_dev": "splits/strict_3plus1/base_dev.txt",
-    "increment_train": "splits/strict_3plus1/increment_train.txt",
-    "increment_dev": "splits/strict_3plus1/increment_dev.txt",
-    "mixed_test": "splits/strict_3plus1/mixed_test.txt",
-    "scene_train": "splits/strict_3plus1/scene_train.txt",
-    "scene_dev": "splits/strict_3plus1/scene_dev.txt",
-    "scene_test": "splits/strict_3plus1/scene_test.txt"
   },
   "detection_contract": {
     "base_training_classes": [

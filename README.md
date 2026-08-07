@@ -32,7 +32,7 @@ flowchart LR
     M --> C
 ```
 
-当前 production 仍为已验收的“双检测器增量代际”，不会被实验自动覆盖。严格时序3+1采用可迁移的并行 Agent：冻结三类基础检测器永久负责旧类别，增量专家从通用预训练表征初始化、只读取117/18张新增类 train/dev 并只负责新增类别；两个 owner 对每张图共同推理后做框级融合，不使用场景到目标类别的硬路由。候选只有在基础 mAP50、New-mAP50 和 KRR 三项赛题指标及数据完整性检查全部通过后才允许注册。
+当前 production 仍为已验收的“双检测器增量代际”，不会被实验自动覆盖。严格全量3+1采用可迁移的并行 Agent：冻结三类基础检测器永久负责旧类别，增量专家从通用预训练表征初始化、只读取132/18张新增类 train/dev 并只负责新增类别；两个 owner 对每张图共同推理后做框级融合，不使用场景到目标类别的硬路由。候选只有在基础 mAP50、New-mAP50 和 KRR 三项赛题指标及数据完整性检查全部通过后才允许注册。
 
 ## 当前状态
 
@@ -154,7 +154,7 @@ warship
 tank
 ```
 
-仓库中的 [`splits/`](splits/README.md) 是唯一活动划分，固定模拟 `warship` 为新增类别：基础训练/验证为 `405/70` 张且只含 `soldier`、`small_aircraft`、`tank`，增量训练/验证为 `117/18` 张且只含 `warship`，最终混合测试为 `89` 张（`70` 张旧类图 + `19` 张新类图）。场景识别另用 `522/88/89` 张已知场景清单。旧随机逐帧 `560/95/95` 划分保存在 [`archive/splits_legacy_random_560_95_95/`](archive/splits_legacy_random_560_95_95/README.md)，不再作为活动入口。
+仓库中的 [`splits/`](splits/README.md) 是唯一活动划分，固定模拟 `warship` 为新增类别：基础训练/验证为 `441/70` 张且只含 `soldier`、`small_aircraft`、`tank`，增量训练/验证为 `132/18` 张且只含 `warship`，最终混合测试为 `89` 张（`70` 张旧类图 + `19` 张新类图）。场景识别使用 `573/88/89` 张已知场景清单，以上清单互斥且完整覆盖全部750张图。上一版 `405/70 + 117/18 + 89` 严格时序划分保存在 [`archive/splits_strict_temporal_3plus1_405_117/`](archive/splits_strict_temporal_3plus1_405_117/README.md)，旧随机逐帧 `560/95/95` 划分保存在 [`archive/splits_legacy_random_560_95_95/`](archive/splits_legacy_random_560_95_95/README.md)，均不再作为活动入口。
 
 ### 官方固定评分口径（不得改写）
 
@@ -217,13 +217,13 @@ python tools/70_run_strict_3plus1.py --check-only
 python tools/70_run_strict_3plus1.py --run-id UNIQUE_RUN_ID
 ```
 
-增量训练阶段只可读取117张 `increment_train` 和18张 `increment_dev`，基础权重在增量阶段保持哈希不变。基础训练固定跑满160 epoch，增量专家固定跑满80 epoch，`patience=0` 禁用 EarlyStopping；达到评分门槛不得提前结束，最终 `best.pt` 从完整 epoch 预算中按验证集 `mAP50` 最高值选择。训练审计若发现任一阶段少跑一个 epoch 即判为失败。当前高分基础主 owner 为 `YOLO11s@896`，五个连续块 OOF 模型及两个最终 refit seed 均使用 `batch=32 / imgsz=896 / epochs=160 / patience=0` 跑满；最终使用 seed B 的 `best.pt`（best epoch 92），而不是在达到门槛时提前停止。增量 owner 仍为640尺度；禁用 TTA，随后所有混合测试图统一使用冻结设置。可选正样本原型也只能由增量 train/dev 生成；当前计分主线不使用原型硬过滤。
+增量训练阶段只可读取132张 `increment_train` 和18张 `increment_dev`，基础权重在增量阶段保持哈希不变。基础训练固定跑满160 epoch，增量专家固定跑满80 epoch，`patience=0` 禁用 EarlyStopping；达到评分门槛不得提前结束，最终 `best.pt` 从完整 epoch 预算中按验证集 `mAP50` 最高值选择。训练审计若发现任一阶段少跑一个 epoch 即判为失败。上一版划分的高分基础主 owner 为 `YOLO11s@896`，五个连续块 OOF 模型及两个最终 refit seed 均使用 `batch=32 / imgsz=896 / epochs=160 / patience=0` 跑满；最终使用 seed B 的 `best.pt`（best epoch 92），而不是在达到门槛时提前停止。本轮全量划分必须重新训练和独立验收，不能沿用上一版数值作为成绩。增量 owner 仍为640尺度；禁用 TTA，随后所有混合测试图统一使用冻结设置。可选正样本原型也只能由增量 train/dev 生成；当前计分主线不使用原型硬过滤。
 
 冻结基础 Agent 共执行三个无条件推理 pass：`s896_b_896`、`crop_a_full_640`、`generic_b_1024`。三者都接收每张未知图片；aircraft 由 `s896_b_896` 直接负责，soldier 使用 OOF 选定的三 pass 框级融合（IoU `0.45`、secondary scale `1.00`、agreement bonus `0.15`、weighted boxes 开启），tank 使用同三 pass 的独立逐类融合（IoU `0.45`、secondary scale `0.50`、agreement bonus `0.10`、weighted boxes 关闭）。类别映射仍为基础局部 `0/1/2 -> 全局 0/1/3`，增量局部 `0 -> 全局 2`，跨类别压制关闭。
 
 基础超参只能通过 `tools/71_sweep_base_dev.py` 在三类基础 `train/dev` 上筛选。工具会先从源 YAML 生成不含 `test` 字段的 train/dev-only 清单；每个候选必须完整跑满160 epoch，且禁止覆盖 `data/epochs/patience/device` 等隔离参数，并在896尺度的 base dev 上统一比较。候选选择期间不读取 `mixed_test` 图像或标签。服务器可将不同候选绑定到不同空闲 GPU 并行运行，最终只把 dev 最优配置带入一次正式3+1训练。
 
-为针对“开发高、后续时刻下降”的风险，`tools/89_build_base_forward_backtest.py` 还会从五个连续块构造扩展窗口回测：块0–2训练、块3调参，候选固定后再用块0–3训练、块4后置验证。`tools/90_select_base_forward_backtest.py` 只允许读取块3报告，并要求候选跑满160 epoch且任一基础类别相对基线下降不超过0.01；选择报告生成时块4必须仍标记为 sealed。51张 `embargo` 是保证相邻数据边界帧距大于4的隔离带，不是备用测试集，不能挪作独立性能声明。
+为针对“开发高、后续时刻下降”的风险，`tools/89_build_base_forward_backtest.py` 仍可从五个连续块构造扩展窗口回测：块0–2训练、块3调参，候选固定后再用块0–3训练、块4后置验证。`tools/90_select_base_forward_backtest.py` 只允许读取块3报告，并要求候选跑满160 epoch且任一基础类别相对基线下降不超过0.01；选择报告生成时块4必须仍标记为 sealed。该回测和51张 `embargo` 属于上一版开发协议；当前活动划分已将这51张图全部并入训练源池，不再要求序列边界帧距大于4。
 
 `forward-tune-20260807-v1` 在块3上选择了 `recent_r1_f25_lr75e4`：mAP50 从基线 `0.84604` 提升到 `0.85761`。该候选随后按相同配方在块0–3重新训练并完整跑满160 epoch，但块4统一复评只有 `0.87344`，低于基线 `0.88162`；soldier AP50 也从 `0.71602` 降到 `0.68966`，超过单类回退上限，因此 `tools/91_validate_base_forward_backtest.py` 将其明确标记为 `accepted=false`，不得进入最终 refit。块4至此已经解封，后续只能标记为 `reused_not_independent` 开发回归。
 

@@ -164,7 +164,7 @@ def write_legacy_splits(
 
 
 # ---------------------------------------------------------------------------
-# Leakage-resistant source pools and one fixed strict 3+1 simulation.
+# Full-coverage source pools and one fixed strict 3+1 simulation.
 # ---------------------------------------------------------------------------
 
 
@@ -198,10 +198,17 @@ def _trim_later_split(
         raise ValueError("连续帧隔离带耗尽了后续划分。")
 
 
-def temporal_source_pools(
+def full_coverage_source_pools(
     rows: Sequence[Dict[str, str]],
-    embargo_frame_distance: int = EMBARGO_FRAME_DISTANCE,
+    historical_embargo_frame_distance: int = EMBARGO_FRAME_DISTANCE,
 ) -> tuple[Dict[str, List[Dict[str, str]]], List[Dict[str, Any]]]:
+    """Preserve the existing dev/test members and reclaim every embargo image.
+
+    The previous active split removed four frames on each side of a temporal
+    boundary.  Temporal isolation is not part of the competition protocol, so
+    those images now belong to the training pool.  The old boundary calculation
+    remains here only to make the preserved dev/test membership reproducible.
+    """
     grouped: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     for row in rows:
         grouped[sequence_key(row)].append(row)
@@ -227,13 +234,31 @@ def temporal_source_pools(
         dev_rows = list(ordered[train_count : train_count + dev_count])
         test_rows = list(ordered[train_count + dev_count :])
         embargo_rows: List[Dict[str, str]] = []
-        _trim_later_split(train_rows, dev_rows, embargo_rows, embargo_frame_distance)
-        _trim_later_split(dev_rows, test_rows, embargo_rows, embargo_frame_distance)
+        _trim_later_split(
+            train_rows,
+            dev_rows,
+            embargo_rows,
+            historical_embargo_frame_distance,
+        )
+        _trim_later_split(
+            dev_rows,
+            test_rows,
+            embargo_rows,
+            historical_embargo_frame_distance,
+        )
+
+        historical_frame_bounds = {
+            "train_last": frame_id(train_rows[-1]),
+            "dev_first": frame_id(dev_rows[0]),
+            "dev_last": frame_id(dev_rows[-1]),
+            "test_first": frame_id(test_rows[0]),
+        }
+        reclaimed_rows = list(embargo_rows)
+        train_rows.extend(reclaimed_rows)
 
         pools["pool_train"].extend(train_rows)
         pools["pool_dev"].extend(dev_rows)
         pools["mixed_test"].extend(test_rows)
-        pools["embargo"].extend(embargo_rows)
         details.append(
             {
                 "sequence": key,
@@ -242,55 +267,29 @@ def temporal_source_pools(
                     "pool_train": len(train_rows),
                     "pool_dev": len(dev_rows),
                     "mixed_test": len(test_rows),
-                    "embargo": len(embargo_rows),
+                    "embargo": 0,
                 },
-                "frame_bounds": {
-                    "train_last": frame_id(train_rows[-1]),
-                    "dev_first": frame_id(dev_rows[0]),
-                    "dev_last": frame_id(dev_rows[-1]),
-                    "test_first": frame_id(test_rows[0]),
-                },
+                "reclaimed_to_pool_train": len(reclaimed_rows),
+                "historical_frame_bounds": historical_frame_bounds,
             }
         )
 
     for values in pools.values():
         values.sort(key=lambda row: row["image_path"])
-    _validate_temporal_pools(rows, pools, embargo_frame_distance)
+    _validate_full_coverage_pools(rows, pools)
     return pools, details
 
 
-def _validate_temporal_pools(
+def _validate_full_coverage_pools(
     source_rows: Sequence[Dict[str, str]],
     pools: Mapping[str, Sequence[Dict[str, str]]],
-    embargo_frame_distance: int,
 ) -> None:
     expected = {row["image_path"] for row in source_rows}
     all_paths = [row["image_path"] for values in pools.values() for row in values]
     if len(all_paths) != len(set(all_paths)) or set(all_paths) != expected:
         raise RuntimeError("活动源池没有互斥且完整覆盖 750 张图像。")
-
-    for first_name, second_name in (
-        ("pool_train", "pool_dev"),
-        ("pool_train", "mixed_test"),
-        ("pool_dev", "mixed_test"),
-    ):
-        first_by_sequence: Dict[str, List[int]] = defaultdict(list)
-        second_by_sequence: Dict[str, List[int]] = defaultdict(list)
-        for row in pools[first_name]:
-            first_by_sequence[sequence_key(row)].append(frame_id(row))
-        for row in pools[second_name]:
-            second_by_sequence[sequence_key(row)].append(frame_id(row))
-        for key in set(first_by_sequence) & set(second_by_sequence):
-            minimum = min(
-                abs(first - second)
-                for first in first_by_sequence[key]
-                for second in second_by_sequence[key]
-            )
-            if minimum <= embargo_frame_distance:
-                raise RuntimeError(
-                    f"{first_name}/{second_name} 在 {key} 的最小帧距为 {minimum}，"
-                    f"未超过阈值 {embargo_frame_distance}。"
-                )
+    if pools.get("embargo"):
+        raise RuntimeError("750 张全量划分不允许保留未使用的 embargo 图像。")
 
 
 def _class_image_counts(
@@ -468,12 +467,13 @@ def active_readme(
             "覆盖 air、forest、sea、urban 全部已知场景。场景训练只能读取场景/传感器标签，不得读取目标类别标签、"
             "共享检测器特征或建立场景到目标类别的硬绑定。",
             "",
-            "## 连续帧隔离",
+            "## 750 张全量覆盖",
             "",
             f"源池为 {len(pools['pool_train'])}/{len(pools['pool_dev'])}/{len(pools['mixed_test'])}，"
-            f"另有 {len(pools['embargo'])} 张边界隔离图。任意训练、开发和测试序列边界帧距均大于 "
-            f"{EMBARGO_FRAME_DISTANCE}。旧随机逐帧划分已归档到 "
-            "`archive/splits_legacy_random_560_95_95/`，只用于历史复现。",
+            "三者互斥且恰好覆盖全部 750 张图。上一版的 51 张边界隔离图已全部并入训练源池，"
+            "活动划分不再强制连续帧边界间距；3+1 类别隔离和测试标签封存约束保持不变。"
+            "上一版严格时序划分已归档到 `archive/splits_strict_temporal_3plus1_405_117/`，"
+            "旧随机逐帧划分已归档到 `archive/splits_legacy_random_560_95_95/`。",
             "",
             "可用其他可独立拆分的类别重新生成模板实例：",
             "",
@@ -503,7 +503,7 @@ def write_strict_3plus1_splits(
             f"classes={sorted(all_ids)}"
         )
 
-    pools, sequence_details = temporal_source_pools(rows)
+    pools, sequence_details = full_coverage_source_pools(rows)
     for name, values in pools.items():
         write_split(output_dir / f"{name}.txt", values)
     for sensor in ("ir", "sar"):
@@ -522,12 +522,20 @@ def write_strict_3plus1_splits(
     )
     manifest = {
         "schema_version": 2,
-        "protocol": "temporal_strict_3plus1_dataset_partition",
+        "protocol": "full_coverage_strict_3plus1_dataset_partition",
         "seed": SEED,
         "source_image_count": len(rows),
         "class_map": {str(index): name for index, name in enumerate(class_names)},
         "simulated_increment_class": protocol["increment_class_name"],
-        "embargo_frame_distance": EMBARGO_FRAME_DISTANCE,
+        "allocation_policy": {
+            "all_source_images_used": True,
+            "reclaimed_previous_embargo_to_pool_train": True,
+            "reclaimed_image_count": sum(
+                int(item["reclaimed_to_pool_train"]) for item in sequence_details
+            ),
+            "dev_and_test_membership_preserved": True,
+            "temporal_gap_constraint": None,
+        },
         "counts": {name: len(values) for name, values in pools.items()},
         "class_image_counts": {
             name: _class_image_counts(values, all_ids) for name, values in pools.items()

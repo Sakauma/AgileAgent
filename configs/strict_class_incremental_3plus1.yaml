@@ -148,5 +148,5 @@ protocols:
     base_local_to_global: {0: 0, 1: 1, 2: 3}
     build_unified_student: false
     # lock 类别数量只能在无标签预测冻结后由评分器获知。
-    expected_incremental_counts: {train: 117, val: 18}
+    expected_incremental_counts: {train: 132, val: 18}
     preferred_device: "0"

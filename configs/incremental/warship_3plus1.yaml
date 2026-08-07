@@ -29,7 +29,7 @@ partition:
       train_selector: contains_only_new_classes
       dev_selector: contains_only_new_classes
       expected_counts:
-        train: 117
+        train: 132
         dev: 18
 
 training:

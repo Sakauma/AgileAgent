@@ -63,7 +63,7 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
         "lock": "splits/mixed_test.txt",
     }
     assert config["protocols"][0]["expected_incremental_counts"] == {
-        "train": 117,
+        "train": 132,
         "val": 18,
     }
     assert config["acceptance"]["min_base_map50"] == 0.80
