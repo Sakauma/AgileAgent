@@ -30,9 +30,12 @@ def test_three_distinct_functional_models_are_registered() -> None:
         item for item in result["models"] if item["function"] == "incremental_object_detection"
     )
     assert incremental["evidence"]["summary"]["true_class_incremental_verified"] is True
-    assert incremental["evidence"]["summary"]["production_class_incremental"]["activation_threshold"] == 0.63
+    assert incremental["evidence"]["summary"]["production_class_incremental"]["activation_threshold"] == 0.01
     assert incremental["artifact_count"] == 1
     assert incremental["evidence"]["summary"]["protocol_count"] == 1
+    assert incremental["runtime"]["imgsz"] == 640
+    base = next(item for item in result["models"] if item["function"] == "multimodal_target_detection")
+    assert base["runtime"]["imgsz"] == 896
 
 
 def test_functional_registry_rejects_tampered_hash(tmp_path: Path) -> None:

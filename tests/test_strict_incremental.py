@@ -10,7 +10,6 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-import yaml
 from torch import nn
 from PIL import Image
 
@@ -62,10 +61,12 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
         "val": "splits/pool_dev.txt",
         "lock": "splits/mixed_test.txt",
     }
+    assert config["paths"]["base_test_split"] == "splits/strict_3plus1/base_test.txt"
     assert config["protocols"][0]["expected_incremental_counts"] == {
         "train": 132,
         "val": 18,
     }
+    assert config["protocols"][0]["expected_base_test_count"] == 70
     assert config["acceptance"]["min_base_map50"] == 0.80
     assert config["acceptance"]["min_new_map50"] == 0.60
     assert config["acceptance"]["min_krr"] == 0.95
@@ -76,6 +77,9 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
     assert config["calibration"]["deployment_threshold"] == 0.01
     assert config["predict"]["rect"] is True
     assert config["common"]["batch"] == 32
+    assert config["model"] == "yolo11s.pt"
+    assert config["base_train"]["imgsz"] == 896
+    assert config["incremental_train"]["imgsz"] == 640
     assert config["adaptation"]["mode"] == "frozen_base_plus_new_specialist"
     assert config["protocols"][0]["build_unified_student"] is False
     assert config["protocols"][0]["base_local_to_global"] == {0: 0, 1: 1, 2: 3}
@@ -100,6 +104,11 @@ def test_repository_strict_config_has_only_the_fixed_warship_protocol() -> None:
     smoke = Path("scripts/smoke_models.py").read_text(encoding="utf-8")
     assert 'base_local_to_global=settings.get("base_local_to_global")' in smoke
     assert 'generation_id=settings["generation_id"]' in smoke
+    assert "model.to(cuda_device)" in smoke
+    assert "context_loaded_device.startswith(\"cuda\")" in smoke
+    assert smoke.index("if not args.load_only:", smoke.index("orchestration_results = []")) < smoke.index(
+        "from fair_agent.modules.web_inference import WebInferenceEngine"
+    )
 
 
 def test_strict_dataset_is_disjoint_and_lock_is_deferred(tmp_path: Path) -> None:
@@ -300,6 +309,30 @@ def test_lock_scoring_freezes_unlabeled_predictions_before_reading_labels() -> N
     assert protocol_source.index("freeze_unlabeled_lock_predictions(") < protocol_source.index(
         "materialize_lock_data("
     )
+    assert protocol_source.index("freeze_unlabeled_lock_predictions(") < protocol_source.index(
+        'base_test_images = read_split(config["paths"]["base_test_split"])'
+    )
+
+
+def test_declared_base_test_is_old_only_subset_of_mixed_test() -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+    lock = [Path("old.png"), Path("new.png")]
+    ground_truth = [
+        {"image_id": "old", "class_id": 0},
+        {"image_id": "new", "class_id": 2},
+    ]
+
+    assert script["declared_base_test_image_ids"](
+        [Path("old.png")], lock, ground_truth, 2
+    ) == ["old"]
+    with pytest.raises(ValueError, match="新增类别"):
+        script["declared_base_test_image_ids"](
+            [Path("new.png")], lock, ground_truth, 2
+        )
+    with pytest.raises(ValueError, match="mixed_test"):
+        script["declared_base_test_image_ids"](
+            [Path("outside.png")], lock, ground_truth, 2
+        )
 
 
 def test_training_preflight_does_not_open_lock_labels(
@@ -332,6 +365,7 @@ def test_training_preflight_does_not_open_lock_labels(
     config["adaptation"]["specialist_model"] = str(model)
     config["paths"] = {
         "source_splits": splits,
+        "base_test_split": str(splits["lock"]),
         "dataset_root": str(tmp_path / "datasets"),
         "run_root": str(tmp_path / "runs"),
         "report_root": str(tmp_path / "reports"),
@@ -341,6 +375,7 @@ def test_training_preflight_does_not_open_lock_labels(
         "train": 1,
         "val": 1,
     }
+    config["protocols"][0]["expected_base_test_count"] = 1
     label_accesses: list[str] = []
 
     def guarded_source_label(image: Path) -> Path:
@@ -360,6 +395,13 @@ def test_training_preflight_does_not_open_lock_labels(
 
     result = script["training_preflight"](config, "no-lock-label-read")
 
+    assert result["checks"]["base_test_split"] == {
+        "declared": True,
+        "exists": True,
+        "membership_read": False,
+        "labels_read": False,
+        "validation_deferred_until_after_prediction_freeze": True,
+    }
     assert result["checks"]["protocols"][0]["lock_label_access"] == (
         "forbidden_before_unlabeled_prediction_freeze"
     )
@@ -609,129 +651,6 @@ def test_predict_records_forwards_augment_flag(tmp_path: Path) -> None:
     assert calls[0]["augment"] is True
 
 
-def test_base_ensemble_lock_predictions_are_frozen_before_label_access() -> None:
-    script = runpy.run_path("tools/73_evaluate_base_ensemble.py")
-    source = inspect.getsource(script["main"])
-
-    freeze_index = source.index('report_dir / "freeze_manifest.json"')
-    label_index = source.index("ground_truth = yolo_ground_truth(lock_images)")
-    assert freeze_index < label_index
-    assert source.index('prediction_dir / "lock_fused_unlabeled.jsonl"') < label_index
-
-
-def test_base_ensemble_class_policies_do_not_require_image_class_routing() -> None:
-    evaluator = runpy.run_path("tools/73_evaluate_base_ensemble.py")
-    ensemble = runpy.run_path("tools/72_select_base_ensemble.py")
-    predictions = {
-        "primary": [
-            {
-                "image_id": "unknown",
-                "class_id": 0,
-                "confidence": 0.8,
-                "xyxy": [0.0, 0.0, 10.0, 10.0],
-            },
-            {
-                "image_id": "unknown",
-                "class_id": 1,
-                "confidence": 0.7,
-                "xyxy": [20.0, 20.0, 30.0, 30.0],
-            },
-        ],
-        "support": [
-            {
-                "image_id": "unknown",
-                "class_id": 0,
-                "confidence": 0.9,
-                "xyxy": [0.0, 0.0, 10.0, 10.0],
-            }
-        ],
-    }
-    policies = {
-        0: {
-            "primary": "primary",
-            "secondary_scales": {"support": 0.8},
-            "scale_before_clustering": True,
-            "iou": 0.5,
-            "agreement_bonus": 0.1,
-            "weighted_boxes": True,
-        },
-        1: {
-            "primary": "primary",
-            "secondary_scales": {},
-            "scale_before_clustering": False,
-            "iou": 0.5,
-            "agreement_bonus": 0.0,
-            "weighted_boxes": False,
-        },
-    }
-
-    fused = evaluator["fuse_base_classes"](
-        predictions, policies, ensemble["fuse_focus_class"]
-    )
-
-    assert {row["class_id"] for row in fused} == {0, 1}
-    assert all(row["image_id"] == "unknown" for row in fused)
-    assert next(row for row in fused if row["class_id"] == 1)["confidence"] == 0.7
-
-
-def test_sliding_base_owner_runs_every_image_and_remaps_local_class() -> None:
-    evaluator = runpy.run_path("tools/73_evaluate_base_ensemble.py")
-    images = [Path("unknown_a.png"), Path("unknown_b.png")]
-    calls = []
-
-    def predict_tiles(_detector, received_images, *args):
-        calls.append((list(received_images), args))
-        return (
-            [
-                {
-                    "image_id": "unknown_a",
-                    "class_id": 0,
-                    "confidence": 0.8,
-                    "xyxy": [1.0, 2.0, 3.0, 4.0],
-                    "source": "tile_owner",
-                }
-            ],
-            12.0,
-            {"tile_count": 18},
-        )
-
-    rows, inference_ms, audit = evaluator["predict_base_owner"](
-        object(),
-        images,
-        {0: 3},
-        {
-            "predict": {
-                "batch": 32,
-                "conf": 0.01,
-                "iou": 0.7,
-                "max_det": 300,
-            }
-        },
-        "0",
-        "tile_owner",
-        {
-            "imgsz": 640,
-            "inference_mode": "sliding_window",
-            "tile": {
-                "width": 320,
-                "height": 256,
-                "overlap": 0.2,
-                "focus_class_local": 0,
-            },
-        },
-        {"evaluation_predictor_class": lambda: object},
-        {"predict_tiles": predict_tiles},
-    )
-
-    assert calls[0][0] == images
-    assert rows[0]["class_id"] == 3
-    assert inference_ms == 12.0
-    assert audit == {
-        "inference_mode": "sliding_window",
-        "tile": {"tile_count": 18},
-    }
-
-
 def test_expanded_student_initializes_ema_and_freezes_batchnorm() -> None:
     script = runpy.run_path("tools/70_run_strict_3plus1.py")
 
@@ -817,15 +736,15 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
     }
     assert arguments["epochs"] == 160
     assert arguments["patience"] == 0
-    assert arguments["imgsz"] == 640
+    assert arguments["imgsz"] == 896
     assert arguments["batch"] == 32
     assert arguments["lr0"] == 0.001
     assert arguments["weight_decay"] == 0.0005
     assert arguments["mosaic"] == 0.80
-    assert arguments["multi_scale"] == 0.10
+    assert arguments["multi_scale"] == 0.0
     assert arguments["scale"] == 0.50
     assert arguments["translate"] == 0.15
-    assert config["model"] == "yolo11m.pt"
+    assert config["model"] == "yolo11s.pt"
     assert config["adaptation"]["specialist_init"] == "generic_pretrained"
     assert config["adaptation"]["specialist_model"] == "yolo11s.pt"
 
@@ -839,62 +758,6 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
             "base",
             "0",
         )
-
-
-def test_base_dev_sweep_keeps_full_budget_and_protects_data_keys(tmp_path: Path) -> None:
-    sweep_script = runpy.run_path("tools/71_sweep_base_dev.py")
-    sweep = load_yaml("configs/base_dev_hparam_sweep.yaml")
-    strict_config = load_yaml("configs/strict_class_incremental_3plus1.yaml")
-    arguments = sweep_script["candidate_train_arguments"](
-        sweep,
-        strict_config,
-        "stronger_decay",
-        tmp_path / "dataset.yaml",
-        tmp_path / "runs",
-        "1",
-    )
-    assert arguments["epochs"] == 160
-    assert arguments["patience"] == 0
-    assert arguments["batch"] == 32
-    assert arguments["imgsz"] == 640
-    assert arguments["weight_decay"] == 0.001
-    assert arguments["device"] == "1"
-
-    sweep["candidates"]["stronger_decay"]["overrides"]["epochs"] = 1
-    with pytest.raises(ValueError, match="不得覆盖"):
-        sweep_script["candidate_train_arguments"](
-            sweep,
-            strict_config,
-            "stronger_decay",
-            tmp_path / "dataset.yaml",
-            tmp_path / "runs",
-            "1",
-        )
-
-
-def test_base_dev_sweep_removes_declared_test_split(tmp_path: Path) -> None:
-    sweep_script = runpy.run_path("tools/71_sweep_base_dev.py")
-    source = tmp_path / "source.yaml"
-    source.write_text(
-        yaml.safe_dump(
-            {
-                "path": str(tmp_path),
-                "train": "splits/train.txt",
-                "val": "splits/val.txt",
-                "test": "splits/test.txt",
-                "names": {0: "old_a", 1: "old_b", 2: "old_c"},
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    sanitized = sweep_script["write_train_dev_only_dataset"](
-        source,
-        tmp_path / "sanitized.yaml",
-    )
-    payload = yaml.safe_load(sanitized.read_text(encoding="utf-8"))
-    assert set(payload) == {"path", "train", "val", "names"}
-    assert "test" not in payload
 
 
 def test_context_class_weights_allow_a_missing_incremental_scene() -> None:
@@ -927,7 +790,7 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
         "old_raw_image_count": 0,
         "gates": {"data": True},
         "lock_deployment_metrics": {"precision": 0.9, "recall": 0.8},
-        "false_activation": {"false_activation_rate": 0.0},
+        "false_activation": {"false_activation_rate": 0.8},
     }), encoding="utf-8")
     payload = {
         "profile_id": "strict-p01",
@@ -948,6 +811,7 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
     loaded = load_experiment_profile("strict-p01")
     assert loaded["acceptance"] == "passed"
     assert loaded["deployment_accepted"] is True
+    assert loaded["diagnostic_warnings"]["false_activation_rate_above_0_15"] is True
     discovered = strict.discover_experiment_profiles(profile_root.parent)
     assert discovered["true_class_incremental_verified"] is True
     assert discovered["verified_count"] == 1

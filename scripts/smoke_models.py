@@ -22,7 +22,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="在 x86 NVIDIA GPU 上校验并加载发布的 YOLO 权重。")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "local_infer_gpu.yaml")
     parser.add_argument("--registry", type=Path, default=ROOT / "configs" / "functional_models.yaml")
-    parser.add_argument("--load-only", action="store_true", help="只加载模型，不执行合成图推理。")
+    parser.add_argument("--load-only", action="store_true", help="只把模型加载到 CUDA，不执行合成图或 Web 推理。")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
     predict = dict(config["predict"])
@@ -42,8 +42,6 @@ def main() -> int:
         from ultralytics import YOLO
         import torch
         from fair_agent.models.context import evaluate_context_paths, load_context_model, predict_context
-        from fair_agent.modules.web_inference import WebInferenceEngine
-        from fair_agent.web.app import build_web_settings
     except ImportError as exc:
         raise SystemExit("缺少 Ultralytics 或 PyTorch，请安装推理依赖。") from exc
 
@@ -53,26 +51,43 @@ def main() -> int:
     detection_entry = next(item for item in functional["models"] if item["function"] == "multimodal_target_detection")
     incremental_entry = next(item for item in functional["models"] if item["function"] == "incremental_object_detection")
     context_entry = next(item for item in functional["models"] if item["function"] == "context_perception")
-    model_paths = [ROOT / detection_entry["artifacts"][0]["path"]]
-    model_paths.extend(ROOT / artifact["path"] for artifact in incremental_entry["artifacts"])
+    model_specs = [
+        (
+            ROOT / detection_entry["artifacts"][0]["path"],
+            int(detection_entry.get("runtime", {}).get("imgsz", imgsz)),
+        )
+    ]
+    model_specs.extend(
+        (
+            ROOT / artifact["path"],
+            int(incremental_entry.get("runtime", {}).get("imgsz", imgsz)),
+        )
+        for artifact in incremental_entry["artifacts"]
+    )
     image = Image.new("RGB", (imgsz, imgsz), color=(0, 0, 0))
     results = []
     base_model = None
-    for path in model_paths:
+    cuda_device = f"cuda:{device}"
+    for index, (path, model_imgsz) in enumerate(model_specs):
         started = time.perf_counter()
         model = YOLO(str(path))
-        if path == model_paths[0]:
+        model.to(cuda_device)
+        loaded_device = str(next(model.model.parameters()).device)
+        if not loaded_device.startswith("cuda"):
+            raise RuntimeError(f"模型 {path} 未加载到 CUDA：{loaded_device}")
+        if index == 0:
             base_model = model
         prediction_count = None
         if not args.load_only:
-            prediction = model.predict(source=image, imgsz=imgsz, device=device, verbose=False)
+            prediction = model.predict(source=image, imgsz=model_imgsz, device=device, verbose=False)
             prediction_count = len(prediction)
             if prediction_count != 1:
                 raise RuntimeError(f"模型 {path} 返回了异常的结果数量：{prediction_count}")
         results.append({
             "model": path.relative_to(ROOT).as_posix(),
             "device": device,
-            "imgsz": imgsz,
+            "loaded_device": loaded_device,
+            "imgsz": model_imgsz,
             "loaded": True,
             "synthetic_results": prediction_count,
             "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -94,7 +109,10 @@ def main() -> int:
             raise RuntimeError(f"批量推理结果数量异常：expected={batch_size} actual={batch_result_count}")
 
     context_weights = ROOT / context_entry["artifacts"][0]["path"]
-    context_model, context_checkpoint = load_context_model(context_weights, f"cuda:{device}")
+    context_model, context_checkpoint = load_context_model(context_weights, cuda_device)
+    context_loaded_device = str(next(context_model.parameters()).device)
+    if not context_loaded_device.startswith("cuda"):
+        raise RuntimeError(f"场景模型未加载到 CUDA：{context_loaded_device}")
     context_prediction = None
     context_lock_evaluation = None
     context_reference_comparable = None
@@ -114,6 +132,12 @@ def main() -> int:
 
     orchestration_results = []
     if not args.load_only:
+        try:
+            from fair_agent.modules.web_inference import WebInferenceEngine
+            from fair_agent.web.app import build_web_settings
+        except ImportError as exc:
+            raise SystemExit("完整 smoke 缺少 Web 可选依赖；模型级验证请使用 --load-only。") from exc
+
         del base_model
         del model
         del prediction
@@ -176,6 +200,7 @@ def main() -> int:
             "model": context_entry["id"],
             "weights": context_entry["artifacts"][0]["path"],
             "loaded": True,
+            "loaded_device": context_loaded_device,
             "synthetic_prediction": context_prediction,
             "lock_evaluation": context_lock_evaluation,
             "historical_reference_comparable": context_reference_comparable,

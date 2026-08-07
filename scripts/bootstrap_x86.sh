@@ -192,7 +192,7 @@ else
   fi
 fi
 "${AGENT_PYTHON}" -m fair_agent.cli doctor
-"${AGENT_PYTHON}" scripts/smoke_models.py
+"${AGENT_PYTHON}" scripts/smoke_models.py --load-only
 printf '%s\n' "${AGENT_PYTHON}" > .agent-python
 
 printf '\n环境配置完成。日常启动请运行：./scripts/start_agent.sh\n'

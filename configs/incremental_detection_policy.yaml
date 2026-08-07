@@ -47,6 +47,7 @@ evaluation_phase:
   model_selection_allowed: false
 
 acceptance:
+  min_base_map50: 0.80
   min_new_map50: 0.60
   min_krr: 0.95
   max_old_raw_image_count: 0

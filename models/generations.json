@@ -13,32 +13,24 @@
       "role": "frozen_base",
       "backend": "ultralytics",
       "path": "models/production/incremental_detection/three_class_base_detector.pt",
-      "sha256": "9616dda7577b1a33cb2210e4a63d2967083017726e6b2cc236f2f86d77c3d1b6",
-      "owns_classes": [
-        0,
-        1,
-        3
-      ],
+      "sha256": "1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96",
+      "imgsz": 896,
+      "owns_classes": [0, 1, 3],
       "local_to_global": {
         "0": 0,
         "1": 1,
         "2": 3
       },
-      "evidence": "未接触赛题舰船图像和标签"
+      "evidence": "基础阶段只使用三种基础类别，增量阶段权重保持不变"
     },
     {
       "id": "four_class_unified_benchmark",
-      "display_name": "四类统一检测基准",
+      "display_name": "四类统一检测基准（非赛题增量入口）",
       "role": "benchmark_only",
       "backend": "ultralytics",
       "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
       "sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c",
-      "owns_classes": [
-        0,
-        1,
-        2,
-        3
-      ],
+      "owns_classes": [0, 1, 2, 3],
       "local_to_global": {
         "0": 0,
         "1": 1,
@@ -53,42 +45,38 @@
       "role": "class_incremental_expert",
       "backend": "ultralytics",
       "path": "models/production/incremental_detection/incremental_detector.pt",
-      "sha256": "88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3",
-      "owns_classes": [
-        2
-      ],
+      "sha256": "92ddcdcc4b17216d734f1033ab0157e87ac187da2a437d6cbb81642dde115adc",
+      "imgsz": 640,
+      "owns_classes": [2],
       "local_to_global": {
         "0": 2
       },
-      "activation_threshold": 0.63,
+      "activation_threshold": 0.01,
       "per_class_thresholds": {
-        "2": 0.63
+        "2": 0.01
       },
       "calibration_source": "models/production/incremental_detection/calibration.json",
       "calibration_sources": {
         "2": "models/production/incremental_detection/calibration.json"
       },
       "metrics": {
-        "new_map50": 0.8148507462686567,
+        "new_map50": 0.6386875981161695,
         "per_class": {
           "2": {
-            "map50": 0.8148507462686567,
-            "precision": 1.0,
-            "recall": 0.8024691358024691
+            "map50": 0.6386875981161695,
+            "precision": 0.22171945701357465,
+            "recall": 0.6447368421052632
           }
         }
       },
       "deployment_metrics": {
-        "lock_precision": 1.0,
-        "lock_recall": 0.8024691358024691,
-        "false_activation_rate": 0.0,
-        "negative_image_count": 74,
-        "false_positive_image_count": 0,
-        "evaluation_semantics": "unlabeled_production_all_owners_v2"
+        "false_activation_rate": 0.6857142857142857,
+        "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
+        "diagnostic_only": true
       },
       "acceptance": {
-        "min_lock_precision": 0.7,
-        "max_false_activation_rate": 0.15,
+        "official_score_gates_passed": true,
+        "integrity_gates_passed": true,
         "passed": true
       },
       "status": "active"
@@ -99,11 +87,7 @@
       "id": "base_detection_generation",
       "display_name": "基础检测代际",
       "parent": null,
-      "classes": [
-        0,
-        1,
-        3
-      ],
+      "classes": [0, 1, 3],
       "class_owners": {
         "0": "three_class_base_detector",
         "1": "three_class_base_detector",
@@ -114,20 +98,17 @@
       "new_class_ids": [0, 1, 3],
       "dataset_fingerprint": null,
       "metrics": {
-        "base_map50": 0.8717219203307386,
-        "evaluation_split": "archive/splits_legacy_random_560_95_95/lock_val_base_3plus1.txt"
+        "base_test_map50": 0.8141423771111025,
+        "evaluation_split": "splits/strict_3plus1/base_test.txt",
+        "image_count": 70
       }
     },
     {
       "id": "incremental_detection_generation",
       "display_name": "增量检测生产代际",
+      "run_id": "strict750-b98d188-20260807a",
       "parent": "base_detection_generation",
-      "classes": [
-        0,
-        1,
-        2,
-        3
-      ],
+      "classes": [0, 1, 2, 3],
       "class_owners": {
         "0": "three_class_base_detector",
         "1": "three_class_base_detector",
@@ -146,67 +127,65 @@
         "old_raw_label_count": 0,
         "old_cache_count": 0,
         "unverified_cache_count": 0,
-        "base_train_count": 434,
-        "incremental_train_count": 126
+        "base_train_count": 441,
+        "base_dev_count": 70,
+        "incremental_train_count": 132,
+        "incremental_dev_count": 18
       },
       "evaluation_lock": {
-        "split": "archive/splits_legacy_random_560_95_95/lock_val_increment_3plus1.txt",
-        "base_split": "archive/splits_legacy_random_560_95_95/lock_val_base_3plus1.txt",
+        "split": "splits/strict_3plus1/mixed_test.txt",
+        "base_split": "splits/strict_3plus1/base_test.txt",
+        "prediction_scope": "all_owners_on_all_89_images_before_labels",
         "local_to_global": {
-          "2": 2
+          "0": 2
         }
       },
       "metrics": {
-        "base_map50": 0.8727765704446866,
-        "old_map50_before": 0.8717219203307386,
-        "old_map50_after": 0.8727765704446866,
-        "historical_old_map50_after": 0.8727765704446866,
-        "new_map50": 0.8148507462686567,
-        "krr": 1.001209846958475,
-        "combined_map50": 0.816127778757997,
-        "lock_precision": 1.0,
-        "false_activation_rate": 0.0,
-        "old_prediction_equivalent": false,
+        "base_test_map50": 0.8141423771111025,
+        "old_map50_before": 0.7923058746623943,
+        "old_map50_after": 0.7923058746623943,
+        "new_map50": 0.6386875981161695,
+        "krr": 1.0,
+        "full_map50": 0.7539013055258381,
+        "old_prediction_equivalent": true,
         "per_class": {
           "2": {
-            "map50": 0.8148507462686567,
-            "precision": 1.0,
-            "recall": 0.8024691358024691,
-            "false_activation_rate": 0.0,
-            "negative_image_count": 74,
-            "false_positive_image_count": 0,
-            "threshold": 0.63
+            "map50": 0.6386875981161695,
+            "precision": 0.22171945701357465,
+            "recall": 0.6447368421052632,
+            "false_activation_rate": 0.6857142857142857,
+            "negative_image_count": 70,
+            "false_activation_image_count": 48,
+            "threshold": 0.01
           }
         },
         "cumulative_per_class": {
-          "0": 0.6914378682978042,
-          "1": 0.8334757955356985,
-          "2": 0.8107894736842106,
-          "3": 0.928807977514275
+          "0": 0.5972023411762704,
+          "1": 0.972250162977853,
+          "2": 0.6386875981161695,
+          "3": 0.8074651198330597
         },
-        "image_count": 95,
-        "historical_image_count": 74,
-        "current_image_count": 21,
-        "specialist_count": 1,
-        "mean_inference_ms": 520.278947368422
+        "image_count": 89,
+        "base_test_image_count": 70,
+        "new_class_image_count": 19,
+        "specialist_count": 1
       },
       "acceptance": {
         "core_metrics_passed": true,
         "deployment_recheck_passed": true,
-        "status": "accepted_with_warnings",
-        "warnings": [
-          "latency_proxy_ms",
-          "old_prediction_equivalent"
+        "status": "passed",
+        "diagnostic_warnings": [
+          "lock_precision_below_0_70",
+          "false_activation_rate_above_0_15"
         ]
       },
       "lock_recheck": {
         "status": "completed",
-        "rechecked_at": "2026-08-05T18:59:39+08:00",
-        "evaluation_semantics": "unlabeled_production_all_owners_v2",
-        "warnings": [
-          "latency_proxy_ms",
-          "old_prediction_equivalent"
-        ]
+        "rechecked_at": "2026-08-07T16:01:54+08:00",
+        "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
+        "label_aware_routing": false,
+        "filename_class_routing": false,
+        "scene_hard_routing": false
       }
     }
   ],
@@ -216,6 +195,7 @@
     "benchmark": "four_class_unified_benchmark"
   },
   "external_blockers": [
-    "ascend_310b_not_available"
+    "ascend_310b_not_available",
+    "official_hidden_test_not_available"
   ]
 }

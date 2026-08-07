@@ -20,55 +20,57 @@ models:
       x86_gpu: true
       ascend_310b: false
 
-  - id: unified_yolo11s_v1
+  - id: three_class_base_detector
     function: multimodal_target_detection
-    display_name: IR/SAR 统一目标检测模型
+    display_name: 三类冻结基础检测器
     implementation: yolo11s
     status: verified
     inputs: [image_rgb]
-    outputs: [boxes, class_ids, confidence]
+    outputs: [old_class_boxes, class_ids, confidence]
     artifacts:
-      - path: models/base/yolo11s_ir_sar_imgsz640.pt
-        sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
+      - path: models/production/incremental_detection/three_class_base_detector.pt
+        sha256: 1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96
     evidence:
       path: models/manifest.json
-      sha256: a38107f00e307a9f7950a4e1a8b98b69cb0ea5042ae549ae9b01a7dd9e47dd7e
+      sha256: 6e57fa80fb4735f00bf5da0280d77822276783d16a9e7ed6d40df8f34e288f4e
     runtime:
       x86_gpu: true
       ascend_310b: false
+      imgsz: 896
 
   - id: incremental_model_bank_v1
     function: incremental_object_detection
     display_name: 增量目标检测模型库
-    implementation: mode_aware_incremental_router_and_specialist_bank
+    implementation: parallel_frozen_base_and_incremental_experts
     status: verified
-    inputs: [incremental_images_labels, frozen_base_weights, class_focus]
-    outputs: [incremental_boxes, incremental_mode, routing_trace, new_map50, krr, acceptance]
+    inputs: [incremental_images_labels, frozen_base_weights]
+    outputs: [new_class_boxes, routing_trace, new_map50, krr, acceptance]
     artifacts:
       - path: models/production/incremental_detection/incremental_detector.pt
-        sha256: 88f8af94fd548f318c12202bc99d4675a947b9144e456e9bd4b9ca3b05615dd3
+        sha256: 92ddcdcc4b17216d734f1033ab0157e87ac187da2a437d6cbb81642dde115adc
     evidence:
       path: models/manifest.json
-      sha256: a38107f00e307a9f7950a4e1a8b98b69cb0ea5042ae549ae9b01a7dd9e47dd7e
+      sha256: 6e57fa80fb4735f00bf5da0280d77822276783d16a9e7ed6d40df8f34e288f4e
     runtime:
       x86_gpu: true
       ascend_310b: false
+      imgsz: 640
 
 collaboration:
   - from: scene_sensor_net_v1
-    to: unified_yolo11s_v1
+    to: three_class_base_detector
     payload: agent_policy_context
     status: implemented
     proof_command: python -m fair_agent.cli decide --source IMAGE --class-focus soldier
-    purpose: 认知概率作为软路由分数参与专项模型排序，不作为场景硬拒绝条件
-  - from: unified_yolo11s_v1
+    purpose: 场景与传感器结果只作解释性上下文，不决定目标类别 owner 是否运行
+  - from: three_class_base_detector
     to: incremental_model_bank_v1
-    payload: weak_class_and_error_cases
+    payload: parallel_old_class_predictions
     status: implemented
-    purpose: 基础检测为目标增量专项模型提供候选类别证据；真正新类协议不依赖旧模型同类框
+    purpose: 基础 owner 与全部增量 owner 对每张未知图并行推理
   - from: incremental_model_bank_v1
-    to: unified_yolo11s_v1
-    payload: gated_incremental_predictions
+    to: three_class_base_detector
+    payload: fixed_class_owner_box_fusion
     status: implemented
     proof_command: python -m pytest -q tests/test_web_inference.py tests/test_web_ui_flow.py
-    purpose: Agent 执行已上线的增量检测器，以逐框 NMS 融合冻结基础结果和历次注入后登记的新类候选
+    purpose: 仅按固定类别所有权、置信度与框重叠关系融合，不读取标签、文件名或场景类别

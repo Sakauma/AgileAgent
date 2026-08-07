@@ -88,25 +88,29 @@ def test_fixed_protocol_is_exactly_three_base_classes_plus_warship() -> None:
     base_dev = set(read_split(protocol_root / "base_dev.txt"))
     increment_train = set(read_split(protocol_root / "increment_train.txt"))
     increment_dev = set(read_split(protocol_root / "increment_dev.txt"))
+    base_test = set(read_split(protocol_root / "base_test.txt"))
     assert len(base_train) == 441
     assert len(base_dev) == 70
     assert len(increment_train) == 132
     assert len(increment_dev) == 18
+    assert len(base_test) == 70
     assert not base_train & increment_train
     assert not base_dev & increment_dev
     assert base_train | increment_train == set(read_split(SPLIT_ROOT / "pool_train.txt"))
     assert base_dev | increment_dev == set(read_split(SPLIT_ROOT / "pool_dev.txt"))
     assert all("_sea_" not in path for path in base_train | base_dev)
     assert all("_sea_" in path for path in increment_train | increment_dev)
+    assert all("_sea_" not in path for path in base_test)
     assert not (SPLIT_ROOT / "pseudo_incremental").exists()
 
 
 def test_mixed_detection_test_and_known_scene_lists_use_correct_scopes() -> None:
     protocol_root = SPLIT_ROOT / "strict_3plus1"
     mixed = set(read_split(protocol_root / "mixed_test.txt"))
+    base_test = set(read_split(protocol_root / "base_test.txt"))
     assert len(mixed) == 89
-    assert not (protocol_root / "mixed_test_old_positive.txt").exists()
-    assert not (protocol_root / "mixed_test_new_positive.txt").exists()
+    assert len(base_test) == 70
+    assert base_test < mixed
     assert mixed == set(read_split(SPLIT_ROOT / "mixed_test.txt"))
 
     assert set(read_split(protocol_root / "scene_train.txt")) == set(
@@ -121,7 +125,7 @@ def test_mixed_detection_test_and_known_scene_lists_use_correct_scopes() -> None
     assert protocol["mixed_test_composition"] == {
         "old_class_images": 70,
         "new_class_images": 19,
-        "membership_lists_published": False,
+        "base_test_list_published_for_scoring_only": True,
     }
     assert protocol["detection_contract"] == {
         "base_training_classes": [0, 1, 3],

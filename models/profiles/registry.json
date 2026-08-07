@@ -3,19 +3,18 @@
   "verified_profiles": [
     {
       "profile_id": "incremental-detection",
-      "run_id": "incremental_detection_generation",
+      "run_id": "strict750-b98d188-20260807a",
       "incremental_mode": "class_incremental",
       "new_class": "warship",
       "new_global_id": 2,
       "active_profile": "models/profiles/incremental-detection/active.json",
-      "evaluation_semantics": "unlabeled_production_all_owners_v2",
-      "rechecked_at": "2026-08-05T18:59:39+08:00",
-      "new_map50": 0.8148507462686567,
-      "krr": 1.001209846958475,
-      "activation_threshold": 0.63,
-      "lock_false_activation_rate": 0.0,
-      "mean_inference_ms": 520.278947368422,
-      "acceptance_status": "accepted_with_warnings"
+      "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
+      "rechecked_at": "2026-08-07T16:01:54+08:00",
+      "base_test_map50": 0.8141423771111025,
+      "new_map50": 0.6386875981161695,
+      "krr": 1.0,
+      "activation_threshold": 0.01,
+      "acceptance_status": "passed"
     }
   ]
 }

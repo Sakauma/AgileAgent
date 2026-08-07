@@ -139,9 +139,9 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
     assert settings["detector_path"].name == "three_class_base_detector.pt"
     assert settings["device_index"] == "0"
     assert settings["predict"] == {
-            "imgsz": 640, "specialist_imgsz": 512, "iou": 0.7, "max_det": 300, "batch_size": 20,
+            "imgsz": 896, "specialist_imgsz": 640, "iou": 0.7, "max_det": 300, "batch_size": 20,
             "warmup_iterations": 1, "warmup_batch_size": 1,
-        "warmup_width": 640, "warmup_height": 512,
+        "warmup_width": 896, "warmup_height": 896,
         "confidence_default": 0.5, "preload_specialists": True,
         "quantize": None, "cudnn_benchmark": True, "compile": False,
     }
@@ -152,7 +152,7 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
     assert settings["active_class_ids"] == [0, 1, 2, 3]
     assert settings["base_local_to_global"] == {0: 0, 1: 1, 2: 3}
     assert list(settings["protocols"]) == ["incremental_detector"]
-    assert settings["protocols"]["incremental_detector"]["activation_threshold"] == 0.63
+    assert settings["protocols"]["incremental_detector"]["activation_threshold"] == 0.01
     assert settings["class_names"] == {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
 
 

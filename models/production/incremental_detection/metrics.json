@@ -1,48 +1,136 @@
 {
   "schema_version": 2,
-  "run_id": "incremental_detection_generation",
-  "protocol": "incremental-detection",
+  "run_id": "strict750-b98d188-20260807a",
+  "protocol": "warship-incremental",
   "incremental_mode": "class_incremental",
   "learning_data_scope": "incremental_dataset_only",
-  "evaluation_semantics": "unlabeled_production_all_owners_v2",
-  "rechecked_at": "2026-08-05T18:59:39+08:00",
+  "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
+  "rechecked_at": "2026-08-07T16:01:54+08:00",
   "old_raw_image_count": 0,
-  "activation_threshold": 0.63,
-  "old_map50_before": 0.8717219203307386,
-  "old_map50_after": 0.8727765704446866,
-  "new_map50": 0.8148507462686567,
-  "full_map50": 0.816127778757997,
-  "krr": 1.001209846958475,
-  "lock_image_count": 95,
+  "old_raw_label_count": 0,
+  "activation_threshold": 0.01,
+  "base_weight_sha256": "1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96",
+  "specialist_weight_sha256": "92ddcdcc4b17216d734f1033ab0157e87ac187da2a437d6cbb81642dde115adc",
+  "inference_image_sizes": {
+    "base": 896,
+    "incremental": 640
+  },
+  "training": {
+    "base_epochs_completed": 160,
+    "base_best_epoch": 85,
+    "incremental_epochs_completed": 80,
+    "early_stopping_disabled": true
+  },
+  "splits": {
+    "base_train": 441,
+    "base_dev": 70,
+    "increment_train": 132,
+    "increment_dev": 18,
+    "base_test": 70,
+    "mixed_test": 89,
+    "base_test_path": "splits/strict_3plus1/base_test.txt",
+    "mixed_test_path": "splits/strict_3plus1/mixed_test.txt"
+  },
+  "base_dev_map50": 0.8927239625552286,
+  "base_test_map50": 0.8141423771111025,
+  "old_map50_before": 0.7923058746623943,
+  "old_map50_after": 0.7923058746623943,
+  "new_map50": 0.6386875981161695,
+  "full_map50": 0.7539013055258381,
+  "krr": 1.0,
+  "per_class_ap50": {
+    "0": 0.5972023411762704,
+    "1": 0.972250162977853,
+    "2": 0.6386875981161695,
+    "3": 0.8074651198330597
+  },
+  "lock_inference_audit": {
+    "unlabeled_inference_completed_before_lock_labels": true,
+    "input_image_count": 89,
+    "base_input_stems_equal_mixed_test": true,
+    "incremental_input_stems_equal_mixed_test": true,
+    "base_and_incremental_input_stems_identical": true,
+    "scene_hard_routing": false,
+    "label_aware_routing": false,
+    "filename_class_routing": false,
+    "fusion_inputs": "boxes_confidence_iou_and_fixed_class_owners_only",
+    "base_test_membership_read_after_prediction_freeze": true,
+    "base_test_is_subset_of_mixed_test": true
+  },
   "lock_deployment_metrics": {
-    "precision": 1.0,
-    "recall": 0.8024691358024691
+    "precision": 0.22171945701357465,
+    "recall": 0.6447368421052632,
+    "f1": 0.32996632996632996
   },
   "false_activation": {
-    "negative_image_count": 74,
-    "false_positive_image_count": 0,
-    "false_activation_rate": 0.0
+    "negative_image_count": 70,
+    "false_activation_image_count": 48,
+    "false_activation_rate": 0.6857142857142857
   },
-  "mean_inference_ms": 520.278947368422,
-  "performance_context": "x86_cuda_observation_not_ascend_310b",
-  "official_hard_gates": {
+  "competition_metrics": {
+    "base_test_map50": {
+      "value": 0.8141423771111025,
+      "threshold": 0.8,
+      "split": "declared_base_test_old_only_after_mixed_prediction_freeze",
+      "passed": true
+    },
+    "new_map50": {
+      "value": 0.6386875981161695,
+      "threshold": 0.6,
+      "split": "mixed_test",
+      "passed": true
+    },
+    "krr": {
+      "value": 1.0,
+      "threshold": 0.95,
+      "split": "mixed_test",
+      "passed": true
+    }
+  },
+  "score_gates": {
     "base_map50": true,
     "new_map50": true,
-    "krr": true,
+    "krr": true
+  },
+  "integrity_gates": {
+    "data_compliance": true,
+    "base_nc": true,
+    "incremental_output_shape": true,
+    "prototype_incremental_only": true,
+    "evaluator_consistency": true,
     "base_weight_unchanged": true,
-    "incremental_data_only": true
+    "old_channel_isolation": true,
+    "old_owner_prediction_equivalence": true,
+    "all_owners_every_lock_image": true,
+    "label_aware_routing_disabled": true,
+    "scene_hard_routing_disabled": true,
+    "prediction_artifacts_frozen": true,
+    "lock_after_unlabeled_prediction_freeze": true,
+    "declared_base_test_after_prediction_freeze": true
   },
-  "advisory_checks": {
-    "combined_map50": true,
-    "lock_precision": true,
-    "false_activation_rate": true,
-    "latency_proxy_ms": false,
-    "old_prediction_equivalent": false
+  "gates": {
+    "data_compliance": true,
+    "base_nc": true,
+    "incremental_output_shape": true,
+    "prototype_incremental_only": true,
+    "evaluator_consistency": true,
+    "base_weight_unchanged": true,
+    "old_channel_isolation": true,
+    "old_owner_prediction_equivalence": true,
+    "all_owners_every_lock_image": true,
+    "label_aware_routing_disabled": true,
+    "scene_hard_routing_disabled": true,
+    "prediction_artifacts_frozen": true,
+    "lock_after_unlabeled_prediction_freeze": true,
+    "declared_base_test_after_prediction_freeze": true,
+    "base_map50": true,
+    "new_map50": true,
+    "krr": true
   },
-  "warnings": [
-    "latency_proxy_ms",
-    "old_prediction_equivalent"
+  "diagnostic_warnings": [
+    "lock_precision_below_0_70",
+    "false_activation_rate_above_0_15"
   ],
-  "acceptance_status": "accepted_with_warnings",
-  "accepted": true
+  "accepted": true,
+  "acceptance_status": "passed"
 }

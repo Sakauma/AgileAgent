@@ -1,24 +1,28 @@
 {
   "schema_version": 2,
-  "release": "x86-20260710",
-  "created_at": "2026-07-10T00:00:00+08:00",
+  "release": "competition-3plus1-20260807",
+  "created_at": "2026-08-07T16:01:54+08:00",
+  "run_id": "strict750-b98d188-20260807a",
   "base_model": {
     "architecture": "YOLO11s",
-    "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
-    "imgsz": 640,
-    "classes": ["soldier", "small_aircraft", "warship", "tank"],
+    "path": "models/production/incremental_detection/three_class_base_detector.pt",
+    "imgsz": 896,
+    "classes": ["soldier", "small_aircraft", "tank"],
     "class_map": {
       "0": "soldier",
       "1": "small_aircraft",
-      "2": "warship",
       "3": "tank"
     },
-    "status": "gpu_smoke_verified",
+    "local_to_global": {
+      "0": 0,
+      "1": 1,
+      "2": 3
+    },
+    "status": "verified",
     "metric": "mAP50",
-    "lock_all_map50": 0.91202,
-    "lock_sar_map50": 0.88158,
-    "lock_sar_soldier_map50": 0.72962,
-    "sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c"
+    "base_test_map50": 0.8141423771111025,
+    "evaluation_split": "splits/strict_3plus1/base_test.txt",
+    "sha256": "1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96"
   },
   "functional_models": [
     {
@@ -32,12 +36,12 @@
       "sha256": "926baa7c5d4ebf70ebbe143a425490101aa563eecf36ef56d895db68aa23dc72"
     },
     {
-      "id": "unified_yolo11s_v1",
+      "id": "three_class_base_detector",
       "function": "multimodal_target_detection",
-      "path": "models/base/yolo11s_ir_sar_imgsz640.pt",
+      "path": "models/production/incremental_detection/three_class_base_detector.pt",
       "status": "verified",
-      "lock_all_map50": 0.91202,
-      "sha256": "387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c"
+      "base_test_map50": 0.8141423771111025,
+      "sha256": "1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96"
     },
     {
       "id": "incremental_model_bank_v1",
@@ -67,34 +71,36 @@
       "global_class_id": 2,
       "base_model_id": "three_class_base_detector",
       "base_class_ids": [0, 1, 3],
-      "activation_threshold": 0.63,
+      "activation_threshold": 0.01,
       "calibration_source": "models/production/incremental_detection/calibration.json",
       "evidence_level": "verified",
       "available": true,
       "context_prior": {},
       "path": "models/production/incremental_detection/incremental_detector.pt",
-      "evaluation_semantics": "unlabeled_production_all_owners_v2",
-      "rechecked_at": "2026-08-05T18:59:39+08:00",
-      "base_map50": 0.8727765704446866,
-      "old_map50_before": 0.8717219203307386,
-      "old_map50_after": 0.8727765704446866,
-      "new_map50": 0.8148507462686567,
-      "combined_map50": 0.816127778757997,
-      "krr": 1.001209846958475,
-      "lock_precision": 1.0,
-      "lock_recall": 0.8024691358024691,
-      "false_activation_rate": 0.0,
-      "mean_inference_ms": 520.278947368422,
-      "performance_context": "x86_cuda_observation_not_ascend_310b",
-      "warnings": ["latency_proxy_ms", "old_prediction_equivalent"],
+      "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v3",
+      "rechecked_at": "2026-08-07T16:01:54+08:00",
+      "base_test_map50": 0.8141423771111025,
+      "old_map50_before": 0.7923058746623943,
+      "old_map50_after": 0.7923058746623943,
+      "new_map50": 0.6386875981161695,
+      "full_map50": 0.7539013055258381,
+      "krr": 1.0,
+      "lock_precision": 0.22171945701357465,
+      "lock_recall": 0.6447368421052632,
+      "false_activation_rate": 0.6857142857142857,
+      "diagnostic_warnings": [
+        "lock_precision_below_0_70",
+        "false_activation_rate_above_0_15"
+      ],
       "acceptance": "passed"
     }
   ],
   "notes": [
-    "所有报告指标均为 mAP50。",
-    "活动增量能力统一登记为增量检测器，具体新增类别由每轮类别绑定元数据描述。",
-    "当前已验证类别绑定为舰船，使用三类冻结基础模型之外的全局类别 ID，并通过增量 dev 完成激活阈值校准。",
-    "未通过或仅用于演练的历史模型不随公开发布分发。",
+    "所有赛题报告指标均为 mAP50。",
+    "基础项只在不含新增类别的70张基础测试图上计算。",
+    "New-mAP与KRR在完整89张旧类加新类混合测试集上计算。",
+    "两个检测 owner 对每张混合测试图统一推理，不按标签、文件名或场景硬路由。",
+    "precision与误激活率只作诊断，不增加第四项赛题晋升门槛。",
     "仓库不包含竞赛数据集和标签。"
   ]
 }

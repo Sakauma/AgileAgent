@@ -451,7 +451,7 @@ def test_generation_registry_keeps_verified_rollback_point() -> None:
     registry = load_generation_registry("models/generations.json")
     assert registry["channels"]["production"] == "incremental_detection_generation"
     assert registry["generations_by_id"]["base_detection_generation"]["status"] == "active"
-    assert registry["models_by_id"]["incremental_detector"]["activation_threshold"] == 0.63
+    assert registry["models_by_id"]["incremental_detector"]["activation_threshold"] == 0.01
 
 
 def test_promotion_rejects_failed_manifest(tmp_path: Path) -> None:

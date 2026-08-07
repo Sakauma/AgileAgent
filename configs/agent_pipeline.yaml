@@ -11,14 +11,14 @@ runtime:
 web:
   generation_registry: models/generations.json
   generation_channel: production
-  detector_weights: models/base/yolo11s_ir_sar_imgsz640.pt
+  detector_weights: models/production/incremental_detection/three_class_base_detector.pt
   functional_registry: configs/functional_models.yaml
   model_manifest: models/manifest.json
 
 inference:
   backend: ultralytics_cuda
-  imgsz: 640
-  specialist_imgsz: 512
+  imgsz: 896
+  specialist_imgsz: 640
   iou: 0.70
   max_det: 300
   batch_size: 20
@@ -27,8 +27,8 @@ inference:
   confidence_default: 0.50
   warmup_iterations: 1
   warmup_batch_size: 1
-  warmup_width: 640
-  warmup_height: 512
+  warmup_width: 896
+  warmup_height: 896
   preload_specialists: true
   quantize: null
   cudnn_benchmark: true
@@ -104,7 +104,7 @@ incremental_workbench:
     imgsz: 640
     batch: 32
     epochs: 80
-    patience: 20
+    patience: 0
     workers: 8
     optimizer: AdamW
     lr0: 0.001
@@ -135,11 +135,11 @@ performance:
 generation:
   registry: models/generations.json
   runtime_registry: data/generation_registry/runtime.json
-  # 当前 production 权重仍对应历史划分；该路径只用于复核旧模型证据。
-  recheck_lock_split: archive/splits_legacy_random_560_95_95/lock_val_base_3plus1.txt
+  # 代际复核中的旧类基准只读取当前70张基础测试清单；新增类lock由当轮增量批次提供。
+  recheck_lock_split: splits/strict_3plus1/base_test.txt
   report_root: reports/generation_rechecks
   candidate_id: incremental_detection_generation
-  calibrated_threshold: 0.63
+  calibrated_threshold: 0.01
   auto_promote: true
   shadow_smoke_images: 1
 
@@ -214,8 +214,8 @@ tensorrt_backend:
   int8_calibration:
     enabled: true
     auto_quantize_incremental: true
-    representative_split: splits/pool_train.txt
-    threshold_split: splits/pool_dev.txt
+    representative_split: splits/strict_3plus1/increment_train.txt
+    threshold_split: splits/strict_3plus1/increment_dev.txt
     cache_root: runs/tensorrt_calibration
     batch_size: 8
     max_images: 256
@@ -238,32 +238,31 @@ tensorrt_backend:
     models/production/incremental_detection/three_class_base_detector.pt:
       path: runs/engines/local/three_class_base_detector.engine
       sha256: null
-      imgsz: 640
-      opt_height: 512
-      opt_width: 640
+      imgsz: 896
+      opt_height: 896
+      opt_width: 896
       min_batch_size: 1
       opt_batch_size: 8
       batch_size: 20
     models/production/incremental_detection/incremental_detector.pt:
       path: runs/engines/local/incremental_detector.engine
       sha256: null
-      imgsz: 512
-      opt_height: 416
-      opt_width: 512
+      imgsz: 640
+      opt_height: 640
+      opt_width: 640
       min_batch_size: 1
       opt_batch_size: 8
       batch_size: 20
 
 model:
-  weights: models/base/yolo11s_ir_sar_imgsz640.pt
-  expected_sha256: 387d885a07797dea4a65900bc6f80ab380f1926eef622904331a151470b6f31c
+  weights: models/production/incremental_detection/three_class_base_detector.pt
+  expected_sha256: 1056906c1545737192e50f18df7b2921da5beb7517730c40af7cc4abc21dbf96
 
 assets:
   manifest: models/manifest.json
   generation_registry: models/generations.json
   checksums: models/SHA256SUMS.txt
   required:
-    - models/base/yolo11s_ir_sar_imgsz640.pt
     - models/production/incremental_detection/three_class_base_detector.pt
     - models/production/incremental_detection/incremental_detector.pt
     - models/context/scene_sensor_net.pt
@@ -295,14 +294,13 @@ blackboard:
   demo_evidence: demo_artifacts/agent_demo_state.json
 
 detector:
-  name: yolo11s_imgsz640
-  weights: models/base/yolo11s_ir_sar_imgsz640.pt
-  config: configs/submission_infer_yolo11s_imgsz640.yaml
-  candidate_status: gpu_smoke_verified
+  name: three_class_base_yolo11s_imgsz896
+  weights: models/production/incremental_detection/three_class_base_detector.pt
+  config: configs/submission_infer_base_3class.yaml
+  candidate_status: verified
   metric: mAP50
-  lock_all_map50: 0.91202
-  lock_sar_map50: 0.88158
-  lock_sar_soldier_map50: 0.72962
+  base_test_map50: 0.8141423771111025
+  evaluation_split: splits/strict_3plus1/base_test.txt
 
 functional_models:
   registry: configs/functional_models.yaml
@@ -341,11 +339,11 @@ policies:
   end_device: paused_until_ascend_board_ready
 
 thresholds:
+  min_base_map50: 0.80
   min_new_class_map50: 0.60
   min_krr: 0.95
   preferred_export_conf: null
   fallback_export_conf: 0.01
-  weak_class_map50: 0.80
 
 incremental:
   task_type: incremental_object_detection

@@ -51,6 +51,7 @@ def _fixture(tmp_path: Path) -> Path:
         "experiment": {"id": "synthetic", "seed": 20260705, "output_root": str(tmp_path / "runs")},
         "dataset": {
             "source_splits": {"train": str(train), "dev": str(dev), "lock": str(lock_split)},
+            "base_test_split": str(lock_split),
             "class_map": {0: "old", 2: "new"},
         },
         "audit": {"cache_roots": []},
@@ -69,9 +70,13 @@ def _fixture(tmp_path: Path) -> Path:
             "min_base_map50": 0.8,
             "min_new_map50": 0.6,
             "min_krr": 0.95,
+        },
+        "diagnostics": {
             "calibration_target_precision": 0.99,
             "min_lock_precision": 0.7,
             "max_false_activation_rate": 0.15,
+        },
+        "integrity": {
             "max_base_weight_drift": 0.0,
         },
     }

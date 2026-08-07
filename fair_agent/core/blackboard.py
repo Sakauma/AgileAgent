@@ -75,7 +75,7 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
         detector["name"] = f"yolo11s_imgsz{selected_imgsz}"
         detector["imgsz"] = selected_imgsz
         detector["candidate_status"] = frozen_candidate.get("status", detector.get("candidate_status"))
-        for key in ["combined_all_map50", "combined_sar_map50", "combined_soldier_map50", "bootstrap_delta_ci95"]:
+        for key in ["base_test_map50", "evaluation_split"]:
             if key in frozen_candidate:
                 detector[key] = frozen_candidate[key]
 
@@ -89,12 +89,17 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     if not data_audit:
         data_audit = dict(demo.get("data_audit", {}))
 
-    weights_path = resolve_path(model_cfg.get("weights") or "models/base/yolo11s_ir_sar_imgsz640.pt")
+    weights_path = resolve_path(
+        model_cfg.get("weights")
+        or "models/production/incremental_detection/three_class_base_detector.pt"
+    )
     weights_hash = hash_if_exists(weights_path)
     expected_hash = model_cfg.get("expected_sha256")
     weights_hash["matches_expected"] = bool(expected_hash and weights_hash.get("sha256") == expected_hash)
 
-    inference_config_path = resolve_path(detector.get("config", "configs/submission_infer_yolo11s_imgsz640.yaml"))
+    inference_config_path = resolve_path(
+        detector.get("config", "configs/submission_infer_base_3class.yaml")
+    )
     inference_config: Dict[str, Any] = {}
     if inference_config_path.exists():
         loaded = yaml.safe_load(inference_config_path.read_text(encoding="utf-8"))
@@ -319,9 +324,8 @@ def render_blackboard_report(state: Dict[str, Any]) -> str:
         f"- 候选状态：`{detector.get('candidate_status')}`",
         f"- 权重：`{weights.get('path')}`",
         f"- SHA256 匹配：`{weights.get('matches_expected')}`",
-        f"- lock_all mAP50：`{detector.get('lock_all_map50')}`",
-        f"- lock_sar mAP50：`{detector.get('lock_sar_map50')}`",
-        f"- lock_sar soldier mAP50：`{detector.get('lock_sar_soldier_map50')}`",
+        f"- 基础测试 mAP50：`{detector.get('base_test_map50')}`",
+        f"- 基础测试清单：`{detector.get('evaluation_split')}`",
         "",
         "## 三个功能模型",
         "",

@@ -10,6 +10,7 @@ dataset:
     train: splits/pool_train.txt
     dev: splits/pool_dev.txt
     lock: splits/mixed_test.txt
+  base_test_split: splits/strict_3plus1/base_test.txt
   class_map:
     0: soldier
     1: small_aircraft
@@ -36,14 +37,18 @@ training:
   adapter_config: configs/strict_class_incremental_3plus1.yaml
   protocol_id: warship-incremental
   pretrained_lineage: generic_pretrained_yolo11s
-  claim: 未接触赛题舰船图像和标签
+  claim: 基础阶段只读取三种基础类别，增量阶段只读取当轮新增类别
 
 acceptance:
   min_base_map50: 0.80
   min_new_map50: 0.60
   min_krr: 0.95
-  # 以下 precision/误激活参数只生成诊断，不参与赛题三项计分。
+
+diagnostics:
+  # 以下参数只生成诊断，不参与赛题三项计分或模型晋升。
   calibration_target_precision: 0.99
   min_lock_precision: 0.70
   max_false_activation_rate: 0.15
+
+integrity:
   max_base_weight_drift: 0.0

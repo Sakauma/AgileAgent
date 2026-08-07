@@ -301,7 +301,7 @@ def run_prediction(config: Mapping[str, Any], source_override: str | None, outpu
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=Path, default=ROOT / "configs" / "submission_infer_yolo11s_imgsz640.yaml")
+    parser.add_argument("--config", type=Path, default=ROOT / "configs" / "submission_infer_base_3class.yaml")
     parser.add_argument("--source", help="Override source directory, image file, or txt list.")
     parser.add_argument("--output", help="Override output directory.")
     parser.add_argument("--limit", type=int, help="Optional smoke-test limit.")

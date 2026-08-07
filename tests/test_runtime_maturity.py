@@ -108,6 +108,7 @@ def test_bootstrap_selects_only_supported_python() -> None:
     assert "nvidia-smi" in content
     assert "2.5.1+cu124" in content
     assert "0.20.1+cu124" in content
+    assert 'scripts/smoke_models.py --load-only' in content
 
 
 def test_bootstrap_reuses_compatible_cuda_environment() -> None:
@@ -208,7 +209,7 @@ def test_static_release_verification_passes() -> None:
     result = verify_release()
     assert result["status"] == "passed", result["errors"]
     assert isinstance(result["required_assets"], dict)
-    assert len(result["required_assets"]) == 8
+    assert len(result["required_assets"]) == 7
     assert result["functional_models"]["valid"] is True
     assert result["functional_models"]["distinct_function_count"] == 3
     assert result["model_generations"]["production"] == "incremental_detection_generation"
@@ -284,5 +285,7 @@ def test_cli_frontend_pages_share_operator_state() -> None:
     config = load_config()
     state = build_blackboard(config)
     decision = build_decision(config, state, {"sensor": "sar", "scene": "all", "class_focus": "soldier"})
-    assert "0.91202" in render_page("overview", state, decision)
+    overview = render_page("overview", state, decision)
+    assert "0.8141423771111025" in overview
+    assert "0.91202" not in overview
     assert "waiting_for_hardware" in render_page("deployment", state, decision)

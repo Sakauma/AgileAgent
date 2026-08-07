@@ -175,6 +175,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             errors.append("incremental_detection_replay_gate_missing")
 
     inference_configs = {}
+    expected_base_imgsz = int(manifest.get("base_model", {}).get("imgsz") or 0)
     for name in ["configs/local_infer_gpu.yaml", config["detector"]["config"]]:
         path = resolve_path(name)
         data = _load_yaml(path)
@@ -192,8 +193,8 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             errors.append(f"inference_hash_mismatch:{name}")
         if not details["device"].isdigit():
             errors.append(f"inference_device_not_gpu:{name}")
-        if int(details["imgsz"] or 0) != 640:
-            errors.append(f"inference_imgsz_not_640:{name}")
+        if int(details["imgsz"] or 0) != expected_base_imgsz:
+            errors.append(f"inference_imgsz_mismatch:{name}")
         if int(details["batch"] or 0) != 32:
             errors.append(f"inference_batch_not_32:{name}")
 

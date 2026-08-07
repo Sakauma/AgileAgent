@@ -1,13 +1,15 @@
 schema_version: 1
 seed: 20260705
-# 更强的基础 owner 提升少样本旧类泛化；新增专家仍使用轻量通用预训练模型。
-model: yolo11m.pt
+# 唯一正式模板：基础 owner 与新增类专家都从通用 YOLO11s 预训练权重初始化。
+model: yolo11s.pt
 
 paths:
   source_splits:
     train: splits/pool_train.txt
     val: splits/pool_dev.txt
     lock: splits/mixed_test.txt
+  # 该清单只在全部 owner 对完整 mixed_test 完成无标签推理并冻结预测后读取。
+  base_test_split: splits/strict_3plus1/base_test.txt
   dataset_root: incremental_strict_3plus1
   run_root: runs/detect/strict_3plus1
   report_root: reports/strict_3plus1
@@ -41,6 +43,7 @@ common:
 
 base_train:
   epochs: 160
+  imgsz: 896
   lr0: 0.001
   lrf: 0.01
   cos_lr: true
@@ -48,7 +51,7 @@ base_train:
   mosaic: 0.80
   mixup: 0.0
   copy_paste: 0.0
-  multi_scale: 0.10
+  multi_scale: 0.0
   degrees: 3.0
   translate: 0.15
   scale: 0.50
@@ -59,6 +62,7 @@ base_train:
 
 incremental_train:
   epochs: 80
+  imgsz: 640
   lr0: 0.001
   lrf: 0.01
   cos_lr: true
@@ -128,16 +132,15 @@ bootstrap:
   strata: [sensor, class_presence]
 
 acceptance:
-  # 官方三项计分：基础测试 mAP50、新增类别 New-mAP50、旧类知识保持率。
+  # 唯一三项赛题计分门槛。
   min_base_map50: 0.80
   min_new_map50: 0.60
   min_krr: 0.95
+
+integrity:
+  # 只用于证明评分实现和冻结约束可信，不增加第四个性能门槛。
   max_evaluator_error: 0.005
   max_base_weight_drift: 0.0
-
-reference:
-  # 历史旧划分上的上限参考，不参与当前划分的验收判定。
-  unified_four_class_map50: 0.91202
 
 protocols:
   - id: warship-incremental
@@ -149,4 +152,5 @@ protocols:
     build_unified_student: false
     # lock 类别数量只能在无标签预测冻结后由评分器获知。
     expected_incremental_counts: {train: 132, val: 18}
+    expected_base_test_count: 70
     preferred_device: "0"

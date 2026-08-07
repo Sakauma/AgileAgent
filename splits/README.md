@@ -11,11 +11,12 @@
 | 三类基础验证 | `strict_3plus1/base_dev.txt` | 70 | soldier, small_aircraft, tank |
 | 单类增量训练 | `strict_3plus1/increment_train.txt` | 132 | warship |
 | 单类增量验证 | `strict_3plus1/increment_dev.txt` | 18 | warship |
+| 基础测试 | `strict_3plus1/base_test.txt` | 70 | soldier, small_aircraft, tank |
 | 最终混合测试 | `strict_3plus1/mixed_test.txt` | 89 | 全部四类 |
 
 混合测试集由 70 张旧类图和 19 张新增类图组成；不要求同一张图同时含旧类和新类。
-活动目录不发布旧/新增类别成员清单，单张测试图身份在预测冻结前保持未知。
-冻结基础检测器和增量专家都必须先对完整混合测试集的每张图执行无标签推理并冻结预测，再解封标签评分。
+`base_test.txt` 只定义基础指标的评分子集，不得用于图片级模型路由。
+冻结基础检测器和增量专家都必须先对完整混合测试集的每张图执行无标签推理并冻结预测，随后评分器才读取 base_test 清单和标签。
 正式门槛固定为基础测试代理 mAP50 >= 0.80、New-mAP50 >= 0.60、KRR >= 0.95；base_dev 只用于选权重，四类总体 mAP50 只作诊断。
 不得依据测试标签、文件名、数据集身份或场景类别决定是否运行某个类别 owner。
 

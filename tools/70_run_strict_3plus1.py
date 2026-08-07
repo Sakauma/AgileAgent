@@ -188,6 +188,22 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
             errors.append("train、val、lock 存在重复图像 stem")
     checks["splits"] = {"counts": split_counts, "intersections": intersections}
 
+    base_test_value = config.get("paths", {}).get("base_test_split")
+    if not base_test_value:
+        errors.append("paths.base_test_split 必须显式声明基础测试清单")
+        checks["base_test_split"] = {"declared": False}
+    else:
+        base_test_path = resolve_path(base_test_value)
+        if not base_test_path.is_file():
+            errors.append("基础测试清单不存在")
+        checks["base_test_split"] = {
+            "declared": True,
+            "exists": base_test_path.is_file(),
+            "membership_read": False,
+            "labels_read": False,
+            "validation_deferred_until_after_prediction_freeze": True,
+        }
+
     protocol_checks = []
     for protocol in config.get("protocols", []):
         protocol_id = str(protocol.get("id") or "unknown")
@@ -985,20 +1001,30 @@ def freeze_unlabeled_lock_predictions(
     }
 
 
-def base_test_image_ids(
+def declared_base_test_image_ids(
+    base_test_images: Sequence[Path],
     lock_images: Sequence[Path],
     ground_truth: Sequence[Mapping[str, Any]],
     new_class_id: int,
 ) -> list[str]:
-    """Select the new-class-free base-test proxy after labels are unsealed."""
+    """Validate and return the predeclared old-only scoring subset after freeze."""
+    lock_ids = {path.stem for path in lock_images}
+    base_ids = [path.stem for path in base_test_images]
+    if not base_ids or len(base_ids) != len(set(base_ids)):
+        raise ValueError("base_test 清单必须非空且 stem 唯一")
+    if not set(base_ids) <= lock_ids:
+        raise ValueError("base_test 清单必须是 mixed_test 的子集")
     classes_by_image: Dict[str, set[int]] = {path.stem: set() for path in lock_images}
     for row in ground_truth:
         classes_by_image.setdefault(str(row["image_id"]), set()).add(int(row["class_id"]))
-    return [
-        path.stem
-        for path in lock_images
-        if int(new_class_id) not in classes_by_image.get(path.stem, set())
+    invalid = [
+        image_id
+        for image_id in base_ids
+        if int(new_class_id) in classes_by_image.get(image_id, set())
     ]
+    if invalid:
+        raise ValueError("base_test 清单包含新增类别图像")
+    return base_ids
 
 
 def remap_ground_truth(rows: Sequence[Mapping[str, Any]], mapping: Mapping[int, int]) -> list[Dict[str, Any]]:
@@ -1910,9 +1936,20 @@ def run_protocol(
         fused_predictions_sha256=lock_prediction_artifacts["fused"]["sha256"],
     )
     ground_truth = yolo_ground_truth(lock_images)
-    base_test_ids = base_test_image_ids(lock_images, ground_truth, new_id)
-    if not base_test_ids:
-        raise RuntimeError("mixed_test 解封后未找到不含新增类别的基础测试图像")
+    # base_test 成员信息也不得参与图片级模型路由；只有完整 mixed_test 的
+    # 预测及其哈希冻结后，评分器才读取该预先固定的旧类子集。
+    base_test_images = read_split(config["paths"]["base_test_split"])
+    base_test_ids = declared_base_test_image_ids(
+        base_test_images, lock_images, ground_truth, new_id
+    )
+    expected_base_test = protocol.get("expected_base_test_count")
+    if expected_base_test is not None and len(base_test_ids) != int(expected_base_test):
+        raise RuntimeError(
+            f"基础测试样本数不符：expected={int(expected_base_test)} "
+            f"actual={len(base_test_ids)}"
+        )
+    lock_inference_audit["base_test_membership_read_after_prediction_freeze"] = True
+    lock_inference_audit["base_test_is_subset_of_mixed_test"] = True
     base_test_metrics = evaluate_ap50(
         subset_rows(base_predictions, base_test_ids),
         subset_rows(ground_truth, base_test_ids),
@@ -1956,6 +1993,7 @@ def run_protocol(
     )
 
     acceptance = config["acceptance"]
+    integrity = config["integrity"]
     score_gates = competition_score_gates(
         base_test_map50,
         float(new_metrics["map50"]),
@@ -1978,8 +2016,8 @@ def run_protocol(
             positive_prototype is None
             or positive_prototype.get("learning_data_scope") == "incremental_dataset_only"
         ),
-        "evaluator_consistency": evaluator_error <= float(acceptance["max_evaluator_error"]),
-        "base_weight_unchanged": base_weight_drift <= float(acceptance["max_base_weight_drift"]),
+        "evaluator_consistency": evaluator_error <= float(integrity["max_evaluator_error"]),
+        "base_weight_unchanged": base_weight_drift <= float(integrity["max_base_weight_drift"]),
         "old_channel_isolation": old_channel_drift <= float(config.get("adaptation", {}).get("max_old_channel_drift", 1e-6)),
         "old_owner_prediction_equivalence": (
             old_prediction_equivalent if not unified_student else True
@@ -2005,19 +2043,24 @@ def run_protocol(
                 "unlabeled_inference_completed_before_lock_labels"
             ]
         ),
+        "declared_base_test_after_prediction_freeze": bool(
+            lock_inference_audit["base_test_membership_read_after_prediction_freeze"]
+            and lock_inference_audit["base_test_is_subset_of_mixed_test"]
+        ),
     }
     diagnostic_gates = {
         "calibration_target_precision": bool(calibration["passed"]),
         "base_dev_map50": base_dev_map50 >= float(acceptance["min_base_map50"]),
     }
-    if "min_lock_precision" in acceptance:
+    diagnostics = dict(config.get("diagnostics", {}))
+    if "min_lock_precision" in diagnostics:
         diagnostic_gates["lock_precision"] = float(lock_pr["precision"]) >= float(
-            acceptance["min_lock_precision"]
+            diagnostics["min_lock_precision"]
         )
-    if "max_false_activation_rate" in acceptance:
+    if "max_false_activation_rate" in diagnostics:
         diagnostic_gates["false_activation_rate"] = float(
             false_activation["false_activation_rate"]
-        ) <= float(acceptance["max_false_activation_rate"])
+        ) <= float(diagnostics["max_false_activation_rate"])
     gates = {**integrity_gates, **score_gates}
     accepted = all(gates.values())
     result = {
@@ -2117,7 +2160,7 @@ def run_protocol(
             "base_test_map50": {
                 "value": base_test_map50,
                 "threshold": float(acceptance["min_base_map50"]),
-                "split": "mixed_test_new_class_free_subset_after_prediction_freeze",
+                "split": "declared_base_test_old_only_after_mixed_prediction_freeze",
                 "passed": score_gates["base_map50"],
             },
             "new_map50": {
@@ -2140,7 +2183,6 @@ def run_protocol(
         "accepted": accepted,
         "lock_evaluation_started_after_training_and_calibration": True,
         "lock_labels_opened_after_prediction_freeze": True,
-        "reference_unified_four_class_map50": float(config["reference"]["unified_four_class_map50"]),
     }
     write_protocol_report(report_dir, result)
     _audit_event(

@@ -82,6 +82,8 @@ def validate_experiment_config(config: Mapping[str, Any]) -> None:
     splits = dataset.get("source_splits", {})
     if set(splits) != {"train", "dev", "lock"}:
         errors.append("dataset.source_splits must contain train/dev/lock")
+    if not dataset.get("base_test_split"):
+        errors.append("dataset.base_test_split is required")
     try:
         class_map = _class_map(config)
     except (KeyError, TypeError, ValueError):
@@ -121,14 +123,22 @@ def validate_experiment_config(config: Mapping[str, Any]) -> None:
         "min_base_map50",
         "min_new_map50",
         "min_krr",
-        "calibration_target_precision",
-        "min_lock_precision",
-        "max_false_activation_rate",
-        "max_base_weight_drift",
     }
     missing_acceptance = sorted(required_acceptance - set(acceptance))
     if missing_acceptance:
         errors.append("acceptance is missing: " + ", ".join(missing_acceptance))
+    diagnostics = config.get("diagnostics", {})
+    required_diagnostics = {
+        "calibration_target_precision",
+        "min_lock_precision",
+        "max_false_activation_rate",
+    }
+    missing_diagnostics = sorted(required_diagnostics - set(diagnostics))
+    if missing_diagnostics:
+        errors.append("diagnostics is missing: " + ", ".join(missing_diagnostics))
+    integrity = config.get("integrity", {})
+    if "max_base_weight_drift" not in integrity:
+        errors.append("integrity is missing: max_base_weight_drift")
     if errors:
         raise ValueError("Invalid incremental experiment config: " + "; ".join(errors))
 
@@ -493,6 +503,7 @@ def compile_training_adapter(config: Mapping[str, Any], ledger: ExperimentLedger
         "val": config["dataset"]["source_splits"]["dev"],
         "lock": config["dataset"]["source_splits"]["lock"],
     }
+    adapter["paths"]["base_test_split"] = config["dataset"]["base_test_split"]
     adapter["paths"].update({
         "dataset_root": str(ledger.root / "data_views"),
         "run_root": str(ledger.root / "training"),
@@ -507,18 +518,29 @@ def compile_training_adapter(config: Mapping[str, Any], ledger: ExperimentLedger
         "new_global_id": new_id,
         "base_local_to_global": {local: global_id for local, global_id in enumerate(base_ids)},
         "expected_incremental_counts": expected,
+        "expected_base_test_count": len(
+            read_split(config["dataset"]["base_test_split"])
+        ),
         "preferred_device": preferred_device,
     }]
     acceptance = config["acceptance"]
-    adapter["calibration"]["target_precision"] = float(acceptance["calibration_target_precision"])
+    diagnostics = config["diagnostics"]
+    integrity = config["integrity"]
+    adapter["calibration"]["target_precision"] = float(
+        diagnostics["calibration_target_precision"]
+    )
     adapter["acceptance"].update({
         "min_base_map50": float(acceptance["min_base_map50"]),
         "min_new_map50": float(acceptance["min_new_map50"]),
         "min_krr": float(acceptance["min_krr"]),
-        "min_lock_precision": float(acceptance["min_lock_precision"]),
-        "max_false_activation_rate": float(acceptance["max_false_activation_rate"]),
-        "max_base_weight_drift": float(acceptance["max_base_weight_drift"]),
     })
+    adapter["diagnostics"] = {
+        "min_lock_precision": float(diagnostics["min_lock_precision"]),
+        "max_false_activation_rate": float(diagnostics["max_false_activation_rate"]),
+    }
+    adapter["integrity"]["max_base_weight_drift"] = float(
+        integrity["max_base_weight_drift"]
+    )
     adapter["experiment_audit"] = {
         "root": str(ledger.root),
         "events": str(ledger.events_path),

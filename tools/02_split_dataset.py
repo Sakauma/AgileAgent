@@ -349,18 +349,21 @@ def write_strict_3plus1_protocol(
     base_train, increment_train = partition_detection(pools["pool_train"], "pool_train")
     base_dev, increment_dev = partition_detection(pools["pool_dev"], "pool_dev")
     mixed_test = list(pools["mixed_test"])
-    old_test = [row for row in mixed_test if class_ids(row) & old_ids]
+    base_test = [row for row in mixed_test if class_ids(row) and new_id not in class_ids(row)]
     new_test = [row for row in mixed_test if new_id in class_ids(row)]
-    if {row["image_path"] for row in old_test + new_test} != {
+    if {row["image_path"] for row in base_test + new_test} != {
         row["image_path"] for row in mixed_test
     }:
         raise RuntimeError("混合测试集没有被旧类图与新增类图完整覆盖。")
+    if {row["image_path"] for row in base_test} & {row["image_path"] for row in new_test}:
+        raise ValueError("基础测试集不得包含模拟新增类别。")
 
     lists = {
         "base_train": base_train,
         "base_dev": base_dev,
         "increment_train": increment_train,
         "increment_dev": increment_dev,
+        "base_test": base_test,
         "mixed_test": mixed_test,
         # 场景识别是独立的已知场景任务，可使用所有类别来源的图像，
         # 但训练代码只能读取场景/传感器标签，不能读取目标类别标签。
@@ -371,9 +374,9 @@ def write_strict_3plus1_protocol(
     for name, values in lists.items():
         write_split(output_dir / f"{name}.txt", values)
 
-    same_image = {
-        row["image_path"] for row in old_test
-    } & {row["image_path"] for row in new_test}
+    same_image = {row["image_path"] for row in base_test} & {
+        row["image_path"] for row in new_test
+    }
     manifest = {
         "schema_version": 2,
         "protocol": "strict_3plus1_class_incremental_simulation",
@@ -384,9 +387,9 @@ def write_strict_3plus1_protocol(
         "increment_class_name": class_names[new_id],
         "counts": {name: len(values) for name, values in lists.items()},
         "mixed_test_composition": {
-            "old_class_images": len(old_test),
+            "old_class_images": len(base_test),
             "new_class_images": len(new_test),
-            "membership_lists_published": False,
+            "base_test_list_published_for_scoring_only": True,
         },
         "paths": {
             name: (output_dir / f"{name}.txt").relative_to(ROOT).as_posix()
@@ -410,7 +413,7 @@ def write_strict_3plus1_protocol(
             "scene_to_target_class_hard_binding_allowed": False,
         },
         "evaluation": {
-            "base_test_map": "所有 owner 完成完整 mixed_test 无标签推理并冻结预测后，按不含 increment_class_id 的图像子集及 base_class_ids 计分。",
+            "base_test_map": "所有 owner 完成完整 mixed_test 无标签推理并冻结预测后，读取预先固定的 base_test 清单并按 base_class_ids 计分。",
             "old_map_before": "父代在完整 mixed_test 上推理后按 base_class_ids 计分。",
             "old_map_after": "增量后候选代在同一完整 mixed_test 上按 base_class_ids 计分。",
             "new_map": "候选代在同一完整 mixed_test 上按 increment_class_id 计分。",
@@ -450,12 +453,13 @@ def active_readme(
             f"| 三类基础验证 | `strict_3plus1/base_dev.txt` | {counts['base_dev']} | {', '.join(protocol['base_class_names'])} |",
             f"| 单类增量训练 | `strict_3plus1/increment_train.txt` | {counts['increment_train']} | {protocol['increment_class_name']} |",
             f"| 单类增量验证 | `strict_3plus1/increment_dev.txt` | {counts['increment_dev']} | {protocol['increment_class_name']} |",
+            f"| 基础测试 | `strict_3plus1/base_test.txt` | {counts['base_test']} | {', '.join(protocol['base_class_names'])} |",
             f"| 最终混合测试 | `strict_3plus1/mixed_test.txt` | {counts['mixed_test']} | 全部四类 |",
             "",
             f"混合测试集由 {protocol['mixed_test_composition']['old_class_images']} 张旧类图和 "
             f"{protocol['mixed_test_composition']['new_class_images']} 张新增类图组成；不要求同一张图同时含旧类和新类。",
-            "活动目录不发布旧/新增类别成员清单，单张测试图身份在预测冻结前保持未知。",
-            "冻结基础检测器和增量专家都必须先对完整混合测试集的每张图执行无标签推理并冻结预测，再解封标签评分。",
+            "`base_test.txt` 只定义基础指标的评分子集，不得用于图片级模型路由。",
+            "冻结基础检测器和增量专家都必须先对完整混合测试集的每张图执行无标签推理并冻结预测，随后评分器才读取 base_test 清单和标签。",
             "正式门槛固定为基础测试代理 mAP50 >= 0.80、New-mAP50 >= 0.60、KRR >= 0.95；base_dev 只用于选权重，四类总体 mAP50 只作诊断。",
             "不得依据测试标签、文件名、数据集身份或场景类别决定是否运行某个类别 owner。",
             "",

@@ -159,9 +159,12 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     or manifest_entry.get("status") != item.get("status")
                 ):
                     errors.append(f"functional_evidence_model_mismatch:{model_id}")
-                if not isinstance(base.get("lock_all_map50"), (int, float)):
+                if not isinstance(base.get("base_test_map50"), (int, float)):
                     errors.append(f"functional_evidence_metric_missing:{model_id}")
-                evidence_summary = {"lock_all_map50": base.get("lock_all_map50")}
+                evidence_summary = {
+                    "base_test_map50": base.get("base_test_map50"),
+                    "evaluation_split": base.get("evaluation_split"),
+                }
             elif function_name == "incremental_object_detection":
                 protocols = evidence_data.get("incremental_models", [])
                 manifest_entry = next(
@@ -259,6 +262,7 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                 },
                 "x86_gpu": bool(runtime.get("x86_gpu")),
                 "ascend_310b": bool(runtime.get("ascend_310b")),
+                "runtime": dict(runtime),
             }
         )
 

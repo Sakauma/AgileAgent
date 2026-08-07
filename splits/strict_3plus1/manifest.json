@@ -19,6 +19,7 @@
     "base_dev": 70,
     "increment_train": 132,
     "increment_dev": 18,
+    "base_test": 70,
     "mixed_test": 89,
     "scene_train": 573,
     "scene_dev": 88,
@@ -27,13 +28,14 @@
   "mixed_test_composition": {
     "old_class_images": 70,
     "new_class_images": 19,
-    "membership_lists_published": false
+    "base_test_list_published_for_scoring_only": true
   },
   "paths": {
     "base_train": "splits/strict_3plus1/base_train.txt",
     "base_dev": "splits/strict_3plus1/base_dev.txt",
     "increment_train": "splits/strict_3plus1/increment_train.txt",
     "increment_dev": "splits/strict_3plus1/increment_dev.txt",
+    "base_test": "splits/strict_3plus1/base_test.txt",
     "mixed_test": "splits/strict_3plus1/mixed_test.txt",
     "scene_train": "splits/strict_3plus1/scene_train.txt",
     "scene_dev": "splits/strict_3plus1/scene_dev.txt",
@@ -68,7 +70,7 @@
     "scene_to_target_class_hard_binding_allowed": false
   },
   "evaluation": {
-    "base_test_map": "所有 owner 完成完整 mixed_test 无标签推理并冻结预测后，按不含 increment_class_id 的图像子集及 base_class_ids 计分。",
+    "base_test_map": "所有 owner 完成完整 mixed_test 无标签推理并冻结预测后，读取预先固定的 base_test 清单并按 base_class_ids 计分。",
     "old_map_before": "父代在完整 mixed_test 上推理后按 base_class_ids 计分。",
     "old_map_after": "增量后候选代在同一完整 mixed_test 上按 base_class_ids 计分。",
     "new_map": "候选代在同一完整 mixed_test 上按 increment_class_id 计分。",
