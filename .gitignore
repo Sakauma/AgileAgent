@@ -59,6 +59,8 @@ venv/
 !/tools/60_train_scene_sensor.py
 !/tools/70_run_strict_3plus1.py
 !/tools/80_export_tensorrt_engines.py
+!/tools/90_ascend_preflight.py
+!/tools/91_smoke_ascend_contract.py
 
 /configs/*
 !/configs/incremental/
@@ -74,4 +76,5 @@ venv/
 # Local competition notes are not part of the public source release.
 /*.md
 !/README.md
-/docs/
+/docs/*
+!/docs/ascend-310b-deployment.md

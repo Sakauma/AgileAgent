@@ -22,6 +22,7 @@ inference = [
 ]
 tensorrt = ["tensorrt-cu12>=10.8,<11"]
 export = ["onnx>=1.17", "onnxslim>=0.1.71"]
+ascend-preflight = ["onnx>=1.17", "onnxslim>=0.1.71", "onnxruntime-gpu>=1.20,<2"]
 remote = ["pexpect"]
 dev = ["pytest>=8.0", "httpx2>=2.5"]
 
