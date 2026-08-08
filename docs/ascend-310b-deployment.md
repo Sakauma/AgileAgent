@@ -335,6 +335,8 @@ python tools/90_ascend_preflight.py optimize \
 
 仓库已经新增独立 Ascend 契约目录，没有把现有 TensorRT/CUDA `native/` 代码改造成条件分支堆叠：
 
+310B 构建不得链接 TensorRT、CUDA 或加载 `.engine`；模型产物只能是 ATC 从已验收 ONNX 编译得到的 OM，运行时只能通过 CANN/AscendCL 和对应媒体处理接口执行。
+
 ```text
 native_ascend/
 ├── CMakeLists.txt

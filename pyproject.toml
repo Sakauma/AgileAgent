@@ -20,6 +20,7 @@ inference = [
   "opencv-python>=4.8",
   "ultralytics>=8.3.0",
 ]
+# Historical x86/NVIDIA compatibility extra; never installed for Ascend 310B.
 tensorrt = ["tensorrt-cu12>=10.8,<11"]
 export = ["onnx>=1.17", "onnxslim>=0.1.71"]
 ascend-preflight = ["onnx>=1.17", "onnxslim>=0.1.71", "onnxruntime-gpu>=1.20,<2"]

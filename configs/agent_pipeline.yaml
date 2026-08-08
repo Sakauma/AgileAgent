@@ -175,6 +175,7 @@ incremental_guardian:
     FALSE_ACTIVATION_RISK: [recalibrate_per_class_thresholds, strengthen_conflict_arbitration]
     LATENCY_OPTIMIZATION_REQUIRED: [reduce_specialist_budget, enable_batch_inference, evaluate_quantization]
 
+# 历史 x86/NVIDIA 兼容配置。310B 不读取本段，不加载 .engine；正式板端只使用 native_ascend + OM。
 native_backend:
   library: build/native/libagile_agent_tensorrt.so
   base_engine: runs/engines/local/three_class_base_detector.engine
@@ -190,6 +191,7 @@ native_backend:
   require_exact_gpu: true
   validated: false
 
+# 历史 x86/NVIDIA 兼容配置。TensorRT 不属于 Ascend 310B 部署、精度验收或性能证据。
 tensorrt_backend:
   expected_version: null
   expected_compute_capability: null

@@ -2,7 +2,7 @@
 
 面向 IR/SAR 时变场景目标检测的快速学习智能体。系统以场景与传感器认知为上下文，自动协调冻结基础检测器和增量检测器，并提供增量数据审计、快速训练、模型复核、代际切换与回滚能力。
 
-项目同时提供面向检测用户的 Web 工作台和面向开发、运维及未来端侧集成的 CLI。当前发布版运行于 x86-64 WSL/Linux 与 NVIDIA GPU；Ascend 310B 已完成固定 ONNX、数值/指标对齐、golden 与原生 ABI 的板前验证，OM 和真实性能将在硬件到位后完成。
+项目同时提供面向检测用户的 Web 工作台和面向开发、运维及端侧集成的 CLI。本机开发、训练与板前代理验证运行于 x86-64 WSL/Linux 和 NVIDIA GPU；竞赛正式部署目标固定为华为 Ascend 310B，目前已完成固定 ONNX、数值/指标对齐、golden 与原生 ABI 的板前验证，OM 和真实性能将在硬件到位后完成。TensorRT 不属于 310B 部署链路。
 
 ## 核心能力
 
@@ -10,7 +10,7 @@
 - **增量目标检测**：支持类别增量和目标增量；训练、验证、早停和调参只读取本批增量数据。
 - **双前端操作**：Web 提供单图、批量检测和增量数据工作台；CLI 提供完整决策轨迹、配置、实验、日志及代际管理。
 - **可审计与可回滚**：离线增量训练记录数据隔离、配置、权重、阈值和评测证据；候选模型通过门禁后才能切换 production，失败时保留原代际。在线无标签检测不计算图像摘要，也不依据训练集或测试集身份路由。
-- **配置驱动**：GPU、推理、路由、融合、上传、缓存、训练及验收参数统一由 YAML 管理，并支持 CLI 临时覆盖或持久修改。
+- **配置驱动**：本机 GPU、推理、路由、融合、上传、缓存、训练及验收参数统一由 YAML 管理，并支持 CLI 临时覆盖或持久修改；Ascend 设备参数在独立板端配置中冻结。
 
 ## 系统架构
 
@@ -38,7 +38,7 @@ flowchart LR
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| x86 NVIDIA GPU 推理 | 可用 | 默认 PyTorch CUDA 加载模型权重，不提供 CPU 回退 |
+| x86 NVIDIA GPU 开发与验证 | 可用 | 默认 PyTorch CUDA 加载模型权重，仅用于训练、本机功能验证和板前代理，不是竞赛部署后端 |
 | Web / CLI | 可用 | 支持检测、决策展示、增量数据管理和结构化日志 |
 | 舰船 3+1 类别增量 | 当前750张模拟测试满分档且通过部署门禁 | 基础 mAP50 `0.81414` / New-mAP50 `0.63869` / KRR `1.00000` / 新类 precision `0.92453` / 老图误激活 `1/70`；尚不代表官方隐藏测试成绩 |
 | 后续官方增量数据 | 模板就绪 | 替换类别与清单后重新训练，增量阶段仍只读取当轮新增类数据 |
@@ -49,7 +49,7 @@ flowchart LR
 
 ## 阅读导航
 
-- [快速开始](#快速开始)：环境、首次配置、一键启动和可选 TensorRT 加速。
+- [快速开始](#快速开始)：本机开发环境、Ascend 部署边界、首次配置和一键启动。
 - [使用方式](#使用方式)：Web 与 CLI 检测入口。
 - [增量学习工作台](#增量学习工作台)：上传、训练、校准、复核与上线流程。
 - [配置管理](#配置管理)：YAML 参数和 CLI 覆盖。
@@ -59,45 +59,28 @@ flowchart LR
 
 ## 快速开始
 
-### 运行环境
+### 本机开发环境
 
 - x86-64 WSL 2 或 Linux
 - NVIDIA GPU 及可用的 `nvidia-smi`
 - Python `3.10-3.12`
 - 建议至少 `10 GB` 可用空间
 
-仓库只发布可移植的模型权重，不分发与 GPU 架构、TensorRT 版本绑定的 `.engine` 文件。默认配置直接使用 CUDA 版 PyTorch 和 Ultralytics 加载 `.pt` 权重；需要 TensorRT 加速时，在目标设备本地导出并保存在 `runs/engines/`。
+该环境负责训练、功能测试、ONNX 导出、数值对齐和板前性能代理。默认配置使用 CUDA 版 PyTorch 和 Ultralytics 加载 `.pt` 权重；本机 CUDA/ONNX Runtime 结果不得作为 310B 性能证据。
 
-版本库只同步源代码、公共配置、文档、训练权重，以及复核模型身份和指标所必需的校准、指标与 manifest。以下可重建产物始终留在本地：数据视图、运行报告、预测结果、设备专用配置、TensorRT/ONNX/OM 文件、原生构建目录和运行缓存。
+版本库只同步源代码、公共配置、文档、训练权重，以及复核模型身份和指标所必需的校准、指标与 manifest。以下可重建产物始终留在本地：数据视图、运行报告、预测结果、设备专用配置、ONNX/OM 文件、原生构建目录和运行缓存。
 
-### 可选 TensorRT 加速
+### 正式部署后端边界
 
-默认 CUDA 后端无需模型转换即可运行。需要 TensorRT 加速时，在部署设备完成以下操作：
+310B 正式链路固定为：
 
-```bash
-AGENT_PYTHON=/path/to/env/bin/python
-"$AGENT_PYTHON" -m pip install -e ".[workbench,inference,tensorrt,export]"
+- 固定 shape ONNX 作为 ATC 输入。
+- ATC 编译生成设备专用 OM。
+- AscendCL 负责模型加载、固定缓冲、stream/event 和推理执行。
+- DVPP/VPC/AIPP 负责可用的图像解码、缩放、补边、颜色转换与归一化。
+- 原生后处理完成 YOLO 解码、NMS、框级融合和场景软门禁。
 
-PROFILE="configs/agent_pipeline.local.yaml"
-cp configs/agent_pipeline.yaml "$PROFILE"
-```
-
-在 `$PROFILE` 中填写 GPU 编号、TensorRT 版本和计算能力，导出阶段保持 `inference.backend: ultralytics_cuda`，然后运行：
-
-```bash
-./scripts/export_tensorrt_engines.sh "$PROFILE"
-"$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" tensorrt validate --activate
-```
-
-脚本会完成环境核对、模型导出、SHA256 登记和完整性校验；第二条命令会完成 CUDA/TensorRT 精度对齐与 API 性能门禁，全部通过后才原子启用。生成文件保存在 `runs/engines/`，不会进入版本控制。
-
-需要 INT8 PTQ 时，在设备配置中设置 `tensorrt_backend.precision: int8`，然后使用一条命令完成代表样本选择、校准、导出和门禁：
-
-```bash
-"$AGENT_PYTHON" -m fair_agent.cli --config "$PROFILE" tensorrt calibrate --activate
-```
-
-Agent 会保证基础模型与增量专家使用各自合规的数据来源；后续新专家仅使用本轮增量 train/dev 自动校准，封存 lock 不参与量化。本机实验验证过的可选混合精度策略为模块 `0-1` 使用 INT8、模块 `2-23` 使用 FP16，对应 YAML 中的 `mixed_precision.fp16_layer_patterns`；公开默认后端仍为 CUDA，每台设备都需在本地重新导出并验收 engine。
+TensorRT 是 NVIDIA 专用推理运行时，华为 Ascend 310B 不使用 `.engine`、TensorRT builder 或 CUDA 原生后端。仓库中已有的 TensorRT 文件只保留为历史 x86 兼容实现，不参与竞赛部署、板端编译、精度验收或性能结论。310B 的完整操作与验收步骤以 [Ascend 310B 稳定加速设计](docs/ascend-310b-deployment.md) 为唯一部署依据。
 
 ### 首次配置
 
@@ -116,7 +99,7 @@ AGILE_AGENT_PYTHON=/path/to/env/bin/python ./scripts/bootstrap_x86.sh
 
 兼容的第三方依赖会直接复用，不会重复安装。配置脚本还会单独确认 `agile-agent` 命令入口属于当前检出的仓库；仅当入口缺失或指向其他目录时，才以 `--no-deps` 方式重新注册当前项目。
 
-已验证的参考组合为 Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124` 和 Ultralytics `8.4.92`。项目允许使用满足约束且通过 `doctor` 的兼容版本，不要求环境名称或安装路径一致。TensorRT 仅在设备本地导出时安装。
+已验证的参考组合为 Python `3.10.19`、PyTorch `2.5.1+cu124`、TorchVision `0.20.1+cu124` 和 Ultralytics `8.4.92`。项目允许使用满足约束且通过 `doctor` 的兼容版本，不要求环境名称或安装路径一致。
 
 ### 一键启动
 
@@ -380,15 +363,15 @@ python tools/90_ascend_preflight.py optimize \
 
 ```text
 fair_agent/
-├── backends/       # CUDA/TensorRT 推理后端
+├── backends/       # 本机开发推理与后端适配器
 ├── core/           # 配置、黑板、manifest 和审计日志
 ├── modules/        # 数据、推理、增量实验和代际管理
 ├── policies/       # 动作选择与路由策略
 ├── executors/      # 受控动作执行器
 ├── web/            # Starlette Web 服务与静态前端
 └── ui/             # 终端工作台
-native/             # TensorRT 原生后端
-native_ascend/      # Ascend 整体管线 C ABI 与无 CANN contract stub
+native/             # 历史 x86/CUDA 兼容后端，不参与310B部署
+native_ascend/      # 310B正式管线 C ABI 与无 CANN contract stub
 configs/            # 运行和实验 YAML
 models/             # 冻结权重、注册表和指标
 splits/             # 唯一活动的全量750张严格 3+1 划分
@@ -398,12 +381,11 @@ tools/              # 数据处理、训练和导出入口
 tests/              # 自动化测试
 ```
 
-竞赛图像、标签、运行报告、预测结果、设备部署产物、构建缓存和本地凭据均被 Git 忽略。固定数据划分清单由 Git 跟踪，用于在各设备上复现同一 train/dev/lock 边界。TensorRT 导出与校验代码保留在仓库中，生成的 engine 不进入版本控制。
+竞赛图像、标签、运行报告、预测结果、设备部署产物、构建缓存和本地凭据均被 Git 忽略。固定数据划分清单由 Git 跟踪，用于在各设备上复现同一 train/dev/lock 边界。历史 x86 加速兼容代码不会进入310B构建；ONNX、OM 和板端运行产物均不进入版本控制。
 
 ## 已知限制
 
 - 尚未完成 Ascend 310B 的 OM 转换、AscendCL 集成和真实板端 FPS 验证。
 - 当前750张模拟只验证了3个基础类别 + 1个新增类别；真实未知类别和多轮官方增量数据到达后必须按同一模板重新训练并复核。
 - Web 与 CLI 均会从训练继续执行到逐类校准、lock复核和受控上线；任一门禁失败时保持原production。
-- TensorRT engine 不随仓库发布；启用该后端前必须在目标设备本地导出并重新完成精度与性能验收。
 - 仓库不包含竞赛数据集、官方测试集或正式提交格式。
