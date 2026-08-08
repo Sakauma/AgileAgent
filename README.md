@@ -42,7 +42,7 @@ flowchart LR
 | Web / CLI | 可用 | 支持检测、决策展示、增量数据管理和结构化日志 |
 | 舰船 3+1 类别增量 | 当前750张模拟测试满分档且通过部署门禁 | 基础 mAP50 `0.81414` / New-mAP50 `0.63869` / KRR `1.00000` / 新类 precision `0.92453` / 老图误激活 `1/70`；尚不代表官方隐藏测试成绩 |
 | 后续官方增量数据 | 模板就绪 | 替换类别与清单后重新训练，增量阶段仍只读取当轮新增类数据 |
-| Ascend 310B | 板前验证完成，待硬件验证 | 固定矩形 ONNX 五项门禁通过；尚无 OM、AscendCL 实现和真实板端 FPS |
+| Ascend 310B | 板前验证完成，待硬件验证 | FP32 与混合 FP16 固定矩形 ONNX 均通过五项门禁；FP16 CUDA 代理无稳定加速且最快优化会改变 `1/89` 张结果，因此板前默认仍为 FP32；尚无 OM、AscendCL 实现和真实板端 FPS |
 | 官方隐藏测试提交 | 待赛题信息 | 测试目录和提交格式确认前保持阻塞 |
 
 当前唯一活动划分是覆盖全部750张图的固定3+1协议；不再施加赛题未要求的连续帧边界间距。历史划分只保存在 `archive/`，不参与配置、训练、选模或验收。
@@ -146,7 +146,7 @@ datasets_r1_base_train/
 └── ...
 ```
 
-`classes.txt` 按行写入：
+数据集根目录中名为 classes.txt 的类别文件按行写入：
 
 ```text
 soldier
@@ -177,7 +177,7 @@ KRR 是相对保持率，不代表旧类的绝对精度。即使增量前后的�
 
 官方 KRR 按旧类别 AP 计算，新类别框即使错误出现在旧类图上，也不会改变旧类别 AP，因此可能出现“KRR 为1但最终输出有错误新增框”。仓库不篡改官方定义，而是另设 production 部署门禁：新增类 precision 必须 `>= 0.90`，70张旧类图上的新增类误激活率必须 `<= 0.05`。两项不增加赛题分数，但任一失败都会令 `deployment_accepted=false` 并禁止上线。
 
-混合测试的单张图像没有“调用基础模型”或“调用新增类模型”的先验标签。计分链路必须对全部89张混合图像执行冻结基础检测器和全部活动增量专家，且输入 stem 集合完全一致。权重、阈值和融合规则冻结后，先保存并哈希原始预测和融合预测，随后评分器才读取 `base_test.txt` 和测试标签：基础 mAP50 在70张旧类子集上计算，New-mAP50 与 KRR 在完整89张混合集上计算。`base_test.txt` 只用于评分，禁止用于图片级模型路由。场景识别始终是已知场景识别，不得硬绑定目标类别。
+混合测试的单张图像没有“调用基础模型”或“调用新增类模型”的先验标签。计分链路必须对全部89张混合图像执行冻结基础检测器和全部活动增量专家，且输入 stem 集合完全一致。权重、阈值和融合规则冻结后，先保存并哈希原始预测和融合预测，随后评分器才读取 `splits/strict_3plus1/base_test.txt` 和测试标签：基础 mAP50 在70张旧类子集上计算，New-mAP50 与 KRR 在完整89张混合集上计算。`splits/strict_3plus1/base_test.txt` 只用于评分，禁止用于图片级模型路由。场景识别始终是已知场景识别，不得硬绑定目标类别。
 
 这里的“冻结”是训练期参数约束，不是图片级开关：进入增量训练前，基础 owner 的参数被排除出优化器并保持权重哈希不变；进入推理后本来就没有反向传播，因此系统既不需要也不允许判断某张图属于新类还是旧类。每张未知图片始终进入全部基础推理 pass 和增量 owner，最后只按各 owner 的全局类别所有权做框级合并。
 
@@ -339,8 +339,40 @@ python scripts/smoke_models.py --load-only
 ```
 
 - `pytest` 验证配置、路径门禁、路由融合、增量数据、日志和代际操作。
-- `verify_release.py` 校验配置、模型权重和公开证据哈希。
-- `smoke_models.py --load-only` 在 GPU 上校验并加载三种功能模型，不导入或启动 Web 服务；仅在需要额外验证 Web 自动编排链路时才省略 `--load-only`。
+- `scripts/verify_release.py` 校验配置、模型权重和公开证据哈希。
+- `scripts/smoke_models.py --load-only` 在 GPU 上校验并加载三种功能模型，不导入或启动 Web 服务；仅在需要额外验证 Web 自动编排链路时才省略 `--load-only`。
+
+不启动 Web 的 Ascend 板前复核入口如下；ONNX、golden 和性能报告均写入 Git 忽略的 `runs/ascend310b/`：
+
+```bash
+python tools/90_ascend_preflight.py export --shape-mode rect --device 0
+python tools/90_ascend_preflight.py raw-align --shape-mode rect --device 0 --samples 6
+python tools/90_ascend_preflight.py metric-align --shape-mode rect --device 0
+python tools/90_ascend_preflight.py golden --shape-mode rect --device 0 --samples 6
+python tools/90_ascend_preflight.py benchmark --shape-mode rect --device 0 \
+  --samples 6 --warmup 20 --rounds 100
+python tools/90_ascend_preflight.py optimize --shape-mode rect --device 0 \
+  --samples 6 --warmup 20 --rounds 100
+```
+
+`optimize` 对每轮全部候选使用同一张性能样本，并额外在完整89张混合集上做不读取标签的逐层等价性检查；基础、增量和场景三个 owner 对每张图都会执行。本机稳定候选组合为 OpenCV PNG 解码、固定地址 CUDA Graph 代理、NMS 候选预筛选和新增类最低阈值前移，实测平均 `30.337 ms`、P95 `31.918 ms`、按平均值折算 `32.96 FPS`。它只存在于板前基准路径，production 运行链路尚未切换；CUDA 代理结果也不能替代 310B 的 OM、ACL、DVPP、多 stream 和稳定性验收。
+
+混合 FP16 可以在板卡到达前先做代理测试。以下命令从已验证的 FP32 ONNX 生成“内部 FP16、输入输出 FP32”的独立候选目录，不覆盖 FP32 基线：
+
+```bash
+python tools/90_ascend_preflight.py convert-fp16 \
+  --source-root runs/ascend310b \
+  --output-root runs/ascend310b_mixed_fp16 \
+  --shape-mode rect --overwrite
+python tools/90_ascend_preflight.py metric-align \
+  --output-root runs/ascend310b_mixed_fp16 \
+  --shape-mode rect --device 0 --provider cuda
+python tools/90_ascend_preflight.py optimize \
+  --output-root runs/ascend310b_mixed_fp16 \
+  --shape-mode rect --device 0 --provider cuda --warmup 30 --rounds 100
+```
+
+当前混合 FP16 代理的基础 mAP50 `0.81954`、New-mAP50 `0.63869`、KRR `1.00000`、新类 precision `0.92453`、老图误激活率 `0.01429`，五项门槛均通过；但严格输出一致候选为 `26.97 FPS`，未优于同配置 FP32 的 `27.63 FPS`。启用新增类最低阈值前移后虽可达 `31.81 FPS`，却改变 `1/89` 张最终结果，因此不纳入默认方案，也不允许根据测试集重新调阈值。到板后仍需用 ATC `mixed_float16` 重新编译和验收；CUDA 代理不能代表 310B。
 
 当前精简后代码基线为 `188 passed`，另有一条来自 Starlette `TestClient` 与 httpx 兼容层的上游弃用警告，不影响测试结果。修改模型、推理后端或依赖后，必须重新执行三项验收。
 

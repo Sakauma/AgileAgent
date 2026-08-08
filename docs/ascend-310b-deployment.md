@@ -222,6 +222,37 @@ Ascend 的并发收益受 AI Core、内存带宽、DVPP 和 stream 调度影响�
 
 建议同时记录相对 PyTorch 基线的总体 mAP50 差值与逐类 AP 差值；任何指标即使只下降少量，只要跨过上述硬门槛就必须拒绝上线。
 
+板卡到达前可以先做 ONNX Runtime CUDA 代理验证，但它只回答“当前权重和 Agent 对 FP16 是否敏感”，不能代替 ATC `mixed_float16` 的算子选精度和 OM 性能。可复现命令为：
+
+```bash
+python tools/90_ascend_preflight.py convert-fp16 \
+  --source-root runs/ascend310b \
+  --output-root runs/ascend310b_mixed_fp16 \
+  --shape-mode rect --overwrite
+python tools/90_ascend_preflight.py metric-align \
+  --output-root runs/ascend310b_mixed_fp16 \
+  --shape-mode rect --device 0 --provider cuda
+python tools/90_ascend_preflight.py optimize \
+  --output-root runs/ascend310b_mixed_fp16 \
+  --shape-mode rect --device 0 --provider cuda --warmup 30 --rounds 100
+```
+
+该转换把内部权重与主要计算转为 FP16，同时保持输入输出 FP32、固定 Batch=1、固定 shape 和图外 NMS。两个检测 ONNX 分别由约 `38.03/37.89 MB` 降至 `19.07/19.00 MB`，Scene-SensorNet 由 `0.77 MB` 降至 `0.39 MB`。2026-08-08 的完整89张冻结评测结果为：
+
+| 本机混合 FP16 代理指标 | 结果 | 门槛 | 判定 |
+| --- | ---: | ---: | --- |
+| 基础 mAP50 | `0.81954` | `≥0.80` | 通过 |
+| New-mAP50 | `0.63869` | `≥0.60` | 通过 |
+| KRR | `1.00000` | `≥0.95` | 通过 |
+| 新类 precision | `0.92453` | `≥0.90` | 通过 |
+| 老图误激活率 | `0.01429` | `≤0.05` | 通过 |
+
+五项硬门槛全部通过；相对同次 PyTorch FP32 的最大指标绝对差为 `0.00544`，来自基础 mAP50 的小幅上浮，因此没有通过工具中更严格的“近似逐指标等价”阈值。原始张量余弦相似度最低值分别为基础检测器 `0.99999897`、增量检测器 `0.99999877`、Scene-SensorNet `0.99953009`；Scene 对 FP16 更敏感，但当前门禁未改变。另测“两个检测器 FP16、Scene 保持 FP32”，五项指标与全 FP16 方案相同。
+
+性能方面，本机 CUDA 代理没有得到可重复的 FP16 优势。完全保持89张最终输出一致的候选，全 FP16 为平均 `37.081 ms` / P95 `51.085 ms` / `26.97 FPS`，Scene 保持 FP32 为 `36.640 ms` / `50.145 ms` / `27.29 FPS`，同配置 FP32 为 `36.191 ms` / `49.286 ms` / `27.63 FPS`。FP16 的最快候选虽达到平均 `31.439 ms`，却因冻结的新增类早筛阈值出现 `1/89` 张最终检测差异，必须拒绝，且不得根据测试集重新调阈值。
+
+因此板前默认仍保留 FP32；到板后的第一候选仍是 ATC `mixed_float16`。若真实 OM 对齐显示 Scene 输出敏感，则回退为检测器混合 FP16、Scene FP32；若五项门禁或逐图正确性失败，则整体回退 FP32。是否采用由真实 310B 的完整89张精度检查和端到端 P95 决定，不能根据本机 CUDA 结果预判。
+
 ### 8.2 第二阶段：受控 PTQ，仅在性能不足时启用
 
 若 FP16 原生链路仍无法达到性能目标，使用 msModelSlim 对 ONNX 做真实样本 PTQ：
@@ -231,7 +262,7 @@ Ascend 的并发收益受 AI Core、内存带宽、DVPP 和 stream 调度影响�
 - 增量检测器校准只读取 `splits/strict_3plus1/increment_train.txt`。
 - Scene-SensorNet 校准只读取 `splits/strict_3plus1/scene_train.txt`。
 - 新类部署阈值只允许用 `splits/strict_3plus1/increment_dev.txt` 重新校准。
-- 禁止用 `base_test.txt`、`mixed_test.txt`、lock 标签或官方测试数据做校准、选层或调阈值。
+- 禁止用 `splits/strict_3plus1/base_test.txt`、`splits/strict_3plus1/mixed_test.txt`、lock 标签或官方测试数据做校准、选层或调阈值。
 
 量化顺序：
 
@@ -247,11 +278,11 @@ Ascend 的并发收益受 AI Core、内存带宽、DVPP 和 stream 调度影响�
 板端评测必须保持仓库当前的无标签语义：
 
 1. 先冻结 OM、阈值、预处理和融合规则。
-2. 基础与增量 owner 对完整 89 张 `mixed_test` 执行同一条无标签链路。
-3. 推理完成并保存全部原始与融合预测后，评分器才能读取 `base_test.txt` 和测试标签。
+2. 基础与增量 owner 对 `splits/strict_3plus1/mixed_test.txt` 中完整 89 张图执行同一条无标签链路。
+3. 推理完成并保存全部原始与融合预测后，评分器才能读取 `splits/strict_3plus1/base_test.txt` 和测试标签。
 4. 基础 mAP50 只在 70 张纯旧类图像上计分。
 5. New-mAP50 与 KRR 在完整 89 张旧类加新类混合集上计算。
-6. 对比输入 stem 集合，确认两个检测 owner 都等于完整 `mixed_test`。
+6. 对比输入 stem 集合，确认两个检测 owner 都等于完整 `splits/strict_3plus1/mixed_test.txt`。
 7. 检查日志，确认没有文件名路由、标签路由或场景硬路由。
 
 后续官方增量数据到达时，只替换新增类别映射、训练清单、增量权重和由增量 train/dev 得到的软先验与阈值；上述推理和验收语义保持不变。
@@ -329,7 +360,9 @@ python tools/90_ascend_preflight.py raw-align --shape-mode rect --device 0 --sam
 python tools/90_ascend_preflight.py metric-align --shape-mode rect --device 0
 python tools/90_ascend_preflight.py golden --shape-mode rect --device 0 --samples 6
 python tools/90_ascend_preflight.py benchmark --shape-mode rect --device 0 \
-  --samples 6 --warmup 20 --rounds 30
+  --samples 6 --warmup 20 --rounds 100
+python tools/90_ascend_preflight.py optimize --shape-mode rect --device 0 \
+  --samples 6 --warmup 20 --rounds 100
 ```
 
 三个 ONNX 均为固定 Batch=1、无动态维度、无图内 NMS。dev 样本覆盖基础类与新增类；原始输出归一化最大误差小于 `10⁻³`。完整89张混合集在所有 owner 无标签推理并冻结融合结果后才读取标签，结果如下：
@@ -344,15 +377,35 @@ python tools/90_ascend_preflight.py benchmark --shape-mode rect --device 0 \
 
 最大指标绝对差为 `9.8×10⁻⁵`，五项门禁全部通过。golden bundle 位于 `runs/ascend310b/golden/rect/`，包含3张无标签代表图、三路输入张量和 ONNX 原始输出，供板端逐元素对齐；该目录被 Git 忽略。
 
-RTX 4060 的 ONNX Runtime 代理性能仅用于验证计时框架，不能代表310B：
+RTX 4060 的 ONNX Runtime CUDA 代理性能仅用于验证计时框架，不能代表310B。更新后的标准调度基准已包含类别映射、NMS、框级融合和场景软门控：
 
 | 调度 | 平均总延迟 | P95 | 按平均值折算 FPS |
 | --- | ---: | ---: | ---: |
-| 串行 | `51.04 ms` | `57.20 ms` | `19.59` |
-| 两检测器并行 | `49.85 ms` | `58.73 ms` | `20.06` |
-| 三模型并行 | `44.79 ms` | `48.69 ms` | `22.33` |
+| 串行 | `43.795 ms` | `57.448 ms` | `22.83` |
+| 两检测器并行 | `45.123 ms` | `57.634 ms` | `22.16` |
+| 三模型并行 | `45.713 ms` | `58.168 ms` | `21.88` |
 
-三模型并行的平均分段约为预处理 `20.04 ms`、模型 `18.68 ms`、后处理 `6.07 ms`。这说明板端必须通过 VPC/AIPP、缓冲区复用和原生后处理压缩主机开销；它不证明310B能或不能达到30 FPS。
+本次100轮中串行 P95 最低，并行没有收益。这只说明调度必须在目标设备上实测，不能把 CUDA、线程池或“多 stream 必然更快”写成固定结论。
+
+在相同6张轮换性能样本上进一步测试了板端可迁移优化候选；每轮所有候选处理同一张图，并用完整89张混合集另做无标签正确性检查：
+
+| CUDA 代理候选 | 平均总延迟 | P95 | 按平均值折算 FPS | 决策 |
+| --- | ---: | ---: | ---: | --- |
+| Pillow + 普通 ORT 参考 | `40.985 ms` | `53.065 ms` | `24.40` | 参考 |
+| OpenCV PNG 解码 | `37.573 ms` | `50.477 ms` | `26.61` | 保留 |
+| OpenCV + 固定地址 CUDA Graph 串行 | `36.769 ms` | `50.055 ms` | `27.20` | 保留为固定缓冲代理证据 |
+| 再加 NMS 候选预筛选 | `35.948 ms` | `48.917 ms` | `27.82` | 保留 |
+| 再加新增类最低阈值前移 | `30.337 ms` | `31.918 ms` | `32.96` | 本机稳定候选 |
+| 再并行 Python 预处理 | `29.477 ms` | `35.709 ms` | `33.92` | P95 恶化，拒绝 |
+| 再并行 Python 后处理 | `32.167 ms` | `33.819 ms` | `31.09` | 平均值与 P95 均恶化，拒绝 |
+
+稳定候选的平均分段为预处理 `12.773 ms`、三模型 `14.820 ms`、完整后处理 `2.744 ms`。它在本机代理上超过平均30 FPS且 P95 低于33.33 ms，但还没有达到内部 `≥36 FPS` 余量目标。
+
+正确性检查不读取标签，基础、增量和场景三个 owner 均处理全部89张图。Pillow/OpenCV 输入最大差、普通 ORT/CUDA Graph 原始输出最大差均为 `0`；候选预筛选、新增类门禁前移和最终检测的不一致图像数均为 `0`。最低阈值前移只把当前 profile 的新增类激活下限 `0.63` 提前到 NMS 前，场景软门控仍可把最终阈值提高最多 `0.05`；它不会跳过 owner、不会依据图像类别路由，也不能单独激活新增类。
+
+ONNX Runtime 的 CUDA Graph 会话在本机默认流上不能安全地并发捕获。代理实现因此先串行完成固定地址分配和两次预热/捕获，再以串行图执行参与基准；这不是 AscendCL 的实现约束。310B 仍需分别实测 ACL 串行、双 stream 和三 stream，并以端到端 P95 冻结调度。
+
+上述优化目前只实现于 `tools/90_ascend_preflight.py` 的板前基准路径，不能描述为现有 production 已切换。到板后应迁移的是 OpenCV/libpng 或 DVPP 解码、VPC/AIPP、固定缓冲区、候选预筛选和安全的阈值前移原则，而不是照搬 ORT CUDA Graph 或 Python 线程池。
 
 原生 C ABI contract stub 也已在 WSL 用 GCC 9.4/CMake 3.16 构建并通过 smoke：ABI版本1、Ready=false、warmup/predict明确失败、无CPU回退。真实 AscendCL 实现必须保持该 ABI。
 
@@ -371,8 +424,11 @@ RTX 4060 的 ONNX Runtime 代理性能仅用于验证计时框架，不能代表
 - [ ] 已取得五条硬件/软件识别命令输出。
 - [ ] 已按厂商兼容矩阵冻结固件、驱动和 CANN。
 - [x] 三个 ONNX 均为固定 shape、batch=1、原始输出且无图内 NMS。
+- [x] 本机混合 FP16 ONNX 代理五项门禁通过；未将 CUDA 代理误写为板端证据。
 - [ ] 三个混合 FP16 OM 编译无算子回退和未解释警告。
 - [x] 本机参考预处理、PyTorch 与 ONNX Runtime 原始输出已对齐。
+- [x] 本机89张无标签逐层优化等价性检查通过。
+- [x] 本机CUDA代理已筛出平均 `32.96 FPS`、P95 `31.918 ms` 的稳定候选；不作为310B证据。
 - [ ] 板端 DVPP/VPC/AIPP 输出与 golden bundle 逐张对齐。
 - [ ] 三个 OM 常驻内存，峰值低于安全水位。
 - [ ] 已实测三种调度方式并冻结 P95 最优方案。

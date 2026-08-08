@@ -6,8 +6,12 @@ import pytest
 from PIL import Image
 
 from fair_agent.modules.ascend_preflight import (
+    LetterboxInfo,
     _latency_summary,
+    _postprocess_yolo,
+    _topologically_sort_onnx_graph,
     context_tensor,
+    decode_png_rgb,
     detector_tensor,
     fixed_rect_shape,
     production_onnx_plan,
@@ -82,8 +86,83 @@ def test_context_preprocessing_matches_pytorch_evaluation_transform() -> None:
     assert np.max(np.abs(actual - expected)) <= 1e-6
 
 
+def test_opencv_png_decode_matches_pillow_exactly(tmp_path: Path) -> None:
+    pytest.importorskip("cv2")
+    import numpy as np
+
+    array = np.arange(48 * 64 * 3, dtype=np.uint8).reshape(48, 64, 3)
+    path = tmp_path / "sample.png"
+    Image.fromarray(array, mode="RGB").save(path)
+    pillow = decode_png_rgb(path, backend="pillow")
+    opencv = decode_png_rgb(path, backend="opencv")
+    assert pillow.flags.c_contiguous
+    assert opencv.flags.c_contiguous
+    assert np.array_equal(pillow, opencv)
+
+
+def test_yolo_candidate_prefilter_is_exact_and_does_not_mutate_raw() -> None:
+    pytest.importorskip("ultralytics")
+    import numpy as np
+
+    raw = np.zeros((1, 6, 7), dtype=np.float32)
+    raw[0, :4, :] = np.asarray(
+        [
+            [10.0, 10.5, 40.0, 70.0, 30.0, 50.0, 5.0],
+            [10.0, 10.5, 40.0, 70.0, 20.0, 50.0, 5.0],
+            [4.0, 4.0, 8.0, 6.0, 5.0, 5.0, 2.0],
+            [4.0, 4.0, 8.0, 6.0, 5.0, 5.0, 2.0],
+        ]
+    )
+    raw[0, 4:, :] = np.asarray(
+        [
+            [0.90, 0.80, 0.05, 0.001, 0.70, 0.60, 0.001],
+            [0.10, 0.20, 0.85, 0.50, 0.20, 0.30, 0.001],
+        ]
+    )
+    original = raw.copy()
+    info = LetterboxInfo(80, 80, 80, 80, 1.0, 0, 0, 0, 0)
+    baseline = _postprocess_yolo(
+        raw,
+        info,
+        confidence=0.01,
+        iou=0.5,
+        max_det=20,
+        candidate_prefilter=False,
+    )
+    optimized = _postprocess_yolo(
+        raw,
+        info,
+        confidence=0.01,
+        iou=0.5,
+        max_det=20,
+        candidate_prefilter=True,
+    )
+    assert optimized == baseline
+    assert np.array_equal(raw, original)
+
+
 def test_latency_summary_reports_fps_and_percentiles() -> None:
     result = _latency_summary([20.0, 25.0, 30.0, 35.0])
     assert result["mean_ms"] == pytest.approx(27.5)
     assert result["fps_from_mean"] == pytest.approx(1000.0 / 27.5)
     assert result["p95_ms"] >= result["p50_ms"]
+
+
+def test_onnx_topological_sort_repairs_out_of_order_cast_style_graph() -> None:
+    onnx = pytest.importorskip("onnx")
+    from onnx import TensorProto, helper
+
+    graph = helper.make_graph(
+        [
+            helper.make_node("Add", ["relu_output", "bias"], ["result"], name="add"),
+            helper.make_node("Relu", ["images"], ["relu_output"], name="relu"),
+        ],
+        "out_of_order",
+        [helper.make_tensor_value_info("images", TensorProto.FLOAT, [1])],
+        [helper.make_tensor_value_info("result", TensorProto.FLOAT, [1])],
+        [helper.make_tensor("bias", TensorProto.FLOAT, [1], [1.0])],
+    )
+    _topologically_sort_onnx_graph(graph)
+    model = helper.make_model(graph)
+    onnx.checker.check_model(model)
+    assert [node.name for node in graph.node] == ["relu", "add"]

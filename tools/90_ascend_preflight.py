@@ -15,9 +15,11 @@ if str(ROOT) not in sys.path:
 
 from fair_agent.core.config import resolve_path
 from fair_agent.modules.ascend_preflight import (
+    benchmark_local_optimization_candidates,
     benchmark_onnx_pipeline,
     compare_fixed_agent_metrics,
     compare_raw_outputs,
+    convert_fixed_onnx_assets_to_mixed_fp16,
     export_fixed_onnx_assets,
     production_onnx_plan,
     write_golden_bundle,
@@ -67,9 +69,23 @@ def main() -> int:
     )
     parser.add_argument(
         "action",
-        choices=["export", "raw-align", "metric-align", "golden", "benchmark", "all"],
+        choices=[
+            "export",
+            "convert-fp16",
+            "raw-align",
+            "metric-align",
+            "golden",
+            "benchmark",
+            "optimize",
+            "all",
+        ],
     )
     parser.add_argument("--output-root", default="runs/ascend310b")
+    parser.add_argument(
+        "--source-root",
+        default="runs/ascend310b",
+        help="convert-fp16所读取的固定FP32 ONNX根目录",
+    )
     parser.add_argument("--shape-mode", choices=["rect", "square"], default="rect")
     parser.add_argument("--device", default="0")
     parser.add_argument("--provider", choices=["cuda", "cpu"], default="cuda")
@@ -78,6 +94,11 @@ def main() -> int:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--rounds", type=int, default=30)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--context-fp32",
+        action="store_true",
+        help="convert-fp16时只转换两个检测器，Scene-SensorNet保持FP32",
+    )
     args = parser.parse_args()
 
     output_root = resolve_path(args.output_root)
@@ -106,9 +127,22 @@ def main() -> int:
             overwrite=args.overwrite,
         )
 
-    assets = production_onnx_plan(output_root, shape_mode=args.shape_mode)
-    samples = _dev_samples(args.samples)
+    if args.action == "convert-fp16":
+        result["mixed_fp16"] = convert_fixed_onnx_assets_to_mixed_fp16(
+            args.source_root,
+            output_root,
+            shape_mode=args.shape_mode,
+            keep_context_fp32=args.context_fp32,
+            overwrite=args.overwrite,
+        )
+
+    samples = (
+        _dev_samples(args.samples)
+        if args.action in {"raw-align", "golden", "benchmark", "all"}
+        else []
+    )
     if args.action in {"raw-align", "all"}:
+        assets = production_onnx_plan(output_root, shape_mode=args.shape_mode)
         raw = compare_raw_outputs(
             assets, samples, device=args.device, provider=args.provider
         )
@@ -146,12 +180,26 @@ def main() -> int:
             rounds=args.rounds,
         )
 
+    if args.action in {"optimize", "all"}:
+        mixed_test = read_split(resolve_path("splits/strict_3plus1/mixed_test.txt"))
+        result["local_optimization"] = benchmark_local_optimization_candidates(
+            output_root,
+            shape_mode=args.shape_mode,
+            image_paths=samples,
+            correctness_paths=mixed_test,
+            device=args.device,
+            warmup=args.warmup,
+            rounds=args.rounds,
+        )
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
     passed = []
     if "raw_alignment" in result:
         passed.append(bool(result["raw_alignment"]["passed"]))
     if "metric_alignment" in result:
         passed.append(bool(result["metric_alignment"]["passed"]))
+    if "local_optimization" in result:
+        passed.append(bool(result["local_optimization"]["passed"]))
     return 0 if all(passed) else 1
 
 
