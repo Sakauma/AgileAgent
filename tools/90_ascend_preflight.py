@@ -63,6 +63,10 @@ def _write_report(root: str | Path, name: str, payload: Any) -> Path:
     return path
 
 
+def _action_needs_dev_samples(action: str) -> bool:
+    return action in {"raw-align", "golden", "benchmark", "optimize", "all"}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="在无Ascend板卡时导出并验证固定shape ONNX与Agent预处理。"
@@ -138,7 +142,7 @@ def main() -> int:
 
     samples = (
         _dev_samples(args.samples)
-        if args.action in {"raw-align", "golden", "benchmark", "all"}
+        if _action_needs_dev_samples(args.action)
         else []
     )
     if args.action in {"raw-align", "all"}:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -166,3 +167,13 @@ def test_onnx_topological_sort_repairs_out_of_order_cast_style_graph() -> None:
     model = helper.make_model(graph)
     onnx.checker.check_model(model)
     assert [node.name for node in graph.node] == ["relu", "add"]
+
+
+def test_optimize_cli_action_loads_performance_samples() -> None:
+    script = Path(__file__).resolve().parents[1] / "tools" / "90_ascend_preflight.py"
+    spec = importlib.util.spec_from_file_location("ascend_preflight_cli", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module._action_needs_dev_samples("optimize") is True
+    assert module._action_needs_dev_samples("convert-fp16") is False
