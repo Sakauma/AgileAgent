@@ -1,8 +1,8 @@
-# Ascend 310B 稳定加速设计
+# AgileAgent Ascend 310B 到板部署、优化与验证指南
 
-本文固定 AgileAgent 在 12 GB 内存、标称 20 TOPS 的 Ascend 310B 设备上的首选部署方案、精度边界和验收方法。它是后续实现与板端联调的设计基线，不表示仓库当前已经具备 Ascend 推理能力。
+本文固定 AgileAgent 在 12 GB 内存、标称 20 TOPS 的 Ascend 310B 设备上的首选部署方案、精度边界和验收方法，并给出板卡到货后可按阶段执行的运行手册。它既是后续实现与板端联调的设计基线，也是验收记录模板；文中会明确区分仓库已经具备的能力、需要在目标板上执行的命令模板，以及仍待实现的 AscendCL 代码，不能把 contract stub 当成真实推理后端。
 
-> 状态：设计与板前 ONNX 验证已完成，硬件型号、OM 与板端性能待验证
+> 状态：设计与板前 ONNX 验证已完成；硬件验收、OM 编译、AscendCL 实现与板端性能待执行
 > 基线日期：2026-08-08
 > 适用范围：当前 3+1 模拟增量模型，以及后续采用相同输入、标注和 Agent 协议重新训练的官方增量模型
 
@@ -439,3 +439,823 @@ ONNX Runtime 的 CUDA Graph 会话在本机默认流上不能安全地并发捕�
 - [x] 板前无标签全量推理和无泄露审计通过。
 - [ ] OM 完整 Agent 的五项门禁与无泄露审计通过。
 - [ ] 1 小时稳定性、温度和回滚测试通过。
+
+---
+
+## 16. 到板运行手册的使用规则
+
+后续章节使用三种状态标记，执行时必须先看标记：
+
+- **【仓库已实现】**：命令或接口目前存在，可直接从仓库根目录运行。
+- **【板端命令模板】**：命令结构有效，但 CANN 版本、安装路径、SoC 名称或工具参数必须以目标板实际输出为准。
+- **【待实现】**：仓库当前只有接口契约或设计，命令在真实实现完成前不能成功。不得把 stub 的构建成功写成 Ascend 推理成功。
+
+整个到板过程分为六个门，必须按顺序通过：
+
+| 门 | 目标 | 允许进入下一门的条件 |
+| --- | --- | --- |
+| G0 硬件与环境 | 确认设备、驱动、固件、CANN 和散热稳定 | NPU 可见、无健康告警、软件版本兼容 |
+| G1 模型转换 | 三个固定 ONNX 成功转换为目标 SoC 的 OM | shape、输出、算子与编译日志可解释 |
+| G2 单模型对齐 | 相同输入下 ONNX 与 OM 原始输出可对齐 | 三个模型的输出数量、shape、数值趋势正确 |
+| G3 Agent 对齐 | PNG 到最终检测的整条链路正确 | golden 逐层通过，所有 owner 每图执行 |
+| G4 精度与合规 | 完整混合集无标签推理后评分 | 五项质量门槛和无泄露检查全部通过 |
+| G5 性能与稳定性 | 达到单图实时性并可长期运行 | 平均 `≥36 FPS`、P95 `≤33.33 ms`、1小时稳定 |
+
+如果 G1 至 G4 任一失败，先修正确性，不能通过加大阈值、删模型、按图片路由或缩小测试集来换速度。只有 G4 通过后才能冻结一个性能候选。
+
+## 17. 建议的板端目录和资产边界
+
+以下路径只是模板。若板子的系统盘空间较小，把 `AGILE_ROOT` 放在数据盘，不要放在只读系统分区：
+
+```bash
+export AGILE_ROOT=/data/agileagent
+export AGILE_REPO="$AGILE_ROOT/app/AgileAgent"
+export AGILE_ASSETS="$AGILE_ROOT/assets"
+export AGILE_RUNS="$AGILE_ROOT/runs"
+export AGILE_LOGS="$AGILE_ROOT/logs"
+
+mkdir -p "$AGILE_ROOT/app" "$AGILE_ASSETS" "$AGILE_RUNS" "$AGILE_LOGS"
+```
+
+推荐目录如下：
+
+```text
+/data/agileagent/
+├── app/
+│   └── AgileAgent/                 # 唯一 Git 工作树
+├── assets/
+│   ├── onnx/rect/                  # 板前验收过的固定 ONNX
+│   ├── golden/rect/                # 无标签 golden 输入与参考输出
+│   └── om/<soc>/<cann>/<candidate>/# 目标设备可重建 OM
+├── eval/
+│   ├── images/                     # 评测进程可读
+│   └── labels/                     # 仅评分进程可读
+├── runs/                            # 预测、profile、benchmark、soak 记录
+└── logs/                            # 服务与 CANN 日志
+```
+
+必须遵守以下边界：
+
+- 代码只保留一个 Git 工作树，不复制出多个 `AgileAgent_*` 目录。
+- ONNX、OM、golden 真图、数据集、板端日志和 benchmark 结果都不提交 Git。
+- Git 中的 `models/production/incremental_detection/profile.json`、配置和代码是运行语义来源；OM 是由它们派生的设备资产。
+- 测试标签与推理进程物理或权限隔离。ATC、AIPP、PTQ、阈值校准和调度选择都不能读取测试标签。
+- 不安装或调用 TensorRT、CUDA 原生后端，也不生成、复制或加载 `.engine`。
+
+## 18. G0：到货当天的硬件验收
+
+### 18.1 先确认产品形态
+
+先确定这是带系统的边缘设备、开发套件，还是安装到宿主机的 PCIe 推理卡。三种形态的驱动安装位置、电源和网络不同，但后续 OM/ACL 契约相同。包装、板卡丝印和管理工具输出至少记录：
+
+- 完整产品型号与 SoC 名称；
+- 标称 12 GB 内存是否与 `npu-smi` 可见容量一致；
+- 序列号、固件版本、驱动版本；
+- 电源规格、风扇/散热器状态；
+- 宿主 CPU 架构与操作系统版本。
+
+### 18.2 保存只读环境快照
+
+**【板端命令模板】** 在板端或 PCIe 卡宿主机执行，并把输出保存在同一次验收目录：
+
+```bash
+export ACCEPTANCE_DIR="$AGILE_RUNS/board_acceptance/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$ACCEPTANCE_DIR"
+
+date -Ins | tee "$ACCEPTANCE_DIR/time.txt"
+cat /etc/os-release | tee "$ACCEPTANCE_DIR/os-release.txt"
+uname -a | tee "$ACCEPTANCE_DIR/uname.txt"
+uname -m | tee "$ACCEPTANCE_DIR/architecture.txt"
+lscpu | tee "$ACCEPTANCE_DIR/lscpu.txt"
+free -h | tee "$ACCEPTANCE_DIR/memory.txt"
+df -h | tee "$ACCEPTANCE_DIR/disk.txt"
+npu-smi info | tee "$ACCEPTANCE_DIR/npu-smi-info.txt"
+```
+
+若该版本支持，再单独执行并保存 `npu-smi info -m`；若不支持，不要把参数错误解释为设备故障。`npu-smi info` 至少需要确认：设备数量正确、Health 正常、无 ECC/驱动告警、内存容量符合采购规格、温度和功耗读数合理。
+
+### 18.3 空闲稳定性检查
+
+在加载模型前连续观察 10 至 15 分钟：
+
+```bash
+watch -n 1 npu-smi info
+```
+
+通过条件：设备不反复掉线，空闲温度不持续上升，内存占用稳定，没有驱动复位或健康状态变化。若此阶段不稳定，先处理供电、散热、固件或驱动，不能继续做模型问题定位。
+
+## 19. G0：驱动、固件与 CANN 环境
+
+### 19.1 版本原则
+
+驱动、固件、Toolkit 和 Runtime 必须来自设备厂商支持的同一兼容矩阵。不要因为另一台 310B 能运行，就复制其 OM 或混装其 CANN。建议冻结一张环境表：
+
+| 项目 | 实际值 | 来源 |
+| --- | --- | --- |
+| 产品/SoC | 待填 | `npu-smi info` 与产品资料 |
+| OS/架构 | 待填 | `/etc/os-release`、`uname -m` |
+| 固件 | 待填 | 设备管理工具 |
+| 驱动 | 待填 | `npu-smi info` |
+| CANN Toolkit | 待填 | `atc --version`、`version.cfg` |
+| CANN Runtime | 待填 | 板端安装信息 |
+| 编译器/CMake | 待填 | `g++ --version`、`cmake --version` |
+
+OM 可以在独立转换机上编译，但转换机的 Toolkit 必须与板端 Runtime 兼容。若板端只有 Runtime，没有 ATC，就在兼容的 x86/aarch64 转换环境生成 OM，再传到板端。
+
+### 19.2 激活环境
+
+**【板端命令模板】** CANN 安装布局因镜像而异，先检查实际存在的脚本，只 source 一个正确入口：
+
+```bash
+export ASCEND_HOME=/usr/local/Ascend/ascend-toolkit/latest
+source "$ASCEND_HOME/set_env.sh"
+
+which atc
+atc --version
+cmake --version
+g++ --version
+python3 --version
+```
+
+如果不存在上述路径，常见替代位置是 `/usr/local/Ascend/ascend-toolkit/set_env.sh` 或 Runtime 的 `set_env.sh`。必须以已安装版本为准，不要通过创建伪造的 `latest` 软链接掩盖版本差异。
+
+### 19.3 确定 `soc_version`
+
+1. 保存 `npu-smi info` 报告的芯片/产品名称。
+2. 执行 `atc --help`，并查当前 CANN 版本的 `--soc_version` 官方表。
+3. 把确认后的值写入本次转换记录，例如 `SOC_VERSION=<已确认值>`。
+4. 不允许仅凭“310B”三个字符猜成 `Ascend310B1`、`Ascend310B4` 或其他变体。
+
+如果 ATC 报 SoC 不支持，应先解决 Toolkit/SoC 组合，不要删除 `--soc_version` 或用其他芯片名称强行生成 OM。
+
+## 20. G1：准备并复核固定 ONNX
+
+### 20.1 在有完整 Python 环境的机器生成
+
+**【仓库已实现】** 从仓库根目录执行：
+
+```bash
+python tools/90_ascend_preflight.py export \
+  --output-root runs/ascend310b \
+  --shape-mode rect \
+  --device 0 \
+  --opset 17
+
+python tools/90_ascend_preflight.py raw-align \
+  --output-root runs/ascend310b \
+  --shape-mode rect \
+  --device 0 \
+  --provider cuda \
+  --samples 6
+
+python tools/90_ascend_preflight.py metric-align \
+  --output-root runs/ascend310b \
+  --shape-mode rect \
+  --device 0 \
+  --provider cuda
+
+python tools/90_ascend_preflight.py golden \
+  --output-root runs/ascend310b \
+  --shape-mode rect \
+  --device 0 \
+  --provider cuda \
+  --samples 6
+```
+
+若目标机没有 CUDA，需同时使用 `--device cpu --provider cpu` 做 ONNX 契约和数值检查；这只会更慢，不改变契约。`metric-align` 已经实现“两个检测 owner 先对完整混合集无标签推理并落盘，随后才打开标签”的评分顺序。重复执行时优先使用新的 `--output-root` 保留上一轮证据；只有明确要重建同一目录时才加 `--overwrite`。
+
+### 20.2 ONNX 必须满足的契约
+
+`runs/ascend310b/onnx/rect/manifest.json` 中应出现：
+
+| 模型 | 输入名 | 输入 shape | 输出 shape |
+| --- | --- | --- | --- |
+| Base | `images` | `1,3,736,896` | `1,7,13524` |
+| Incremental | `images` | `1,3,512,640` | `1,5,6720` |
+| Scene | `images` | `1,3,160,160` | 两个固定 logits 输出 |
+
+同时必须满足：固定 `batch=1`、无动态维度、无 `NonMaxSuppression` 节点、FP32 输入输出、图外 NMS。若重新训练导致类别数或输出 shape 改变，先更新并重跑 ONNX 契约，不能沿用旧 OM 的输出解析。
+
+### 20.3 传输到转换机/板端
+
+推荐通过 Git 获取代码，再只复制忽略目录中的中间资产：
+
+```bash
+git clone <AgileAgent远程仓库地址> "$AGILE_REPO"
+cd "$AGILE_REPO"
+
+mkdir -p "$AGILE_ASSETS/onnx" "$AGILE_ASSETS/golden"
+# 从板前机器复制 runs/ascend310b/onnx/rect/ 到 assets/onnx/rect/
+# 从板前机器复制 runs/ascend310b/golden/rect/ 到 assets/golden/rect/
+```
+
+传输后以 ONNX `manifest.json` 和 Git 提交号确认来源即可。不要把测试标签与 ONNX/ATC 校准资产打包在一起。
+
+## 21. G1：使用 ATC 编译三个 OM
+
+### 21.1 首选混合 FP16 候选
+
+**【板端命令模板】** 以下示例假设输入名为 `images`，并且当前 CANN 支持 `--precision_mode_v2`：
+
+```bash
+export SOC_VERSION=<通过npu-smi和ATC文档确认的值>
+export ONNX_DIR="$AGILE_ASSETS/onnx/rect"
+export OM_DIR="$AGILE_ASSETS/om/$SOC_VERSION/mixed_float16"
+export ATC_LOG_DIR="$AGILE_LOGS/atc/$SOC_VERSION/mixed_float16"
+mkdir -p "$OM_DIR" "$ATC_LOG_DIR"
+
+atc \
+  --model="$ONNX_DIR/base_detector.onnx" \
+  --framework=5 \
+  --output="$OM_DIR/base_detector" \
+  --input_format=NCHW \
+  --input_shape="images:1,3,736,896" \
+  --soc_version="$SOC_VERSION" \
+  --precision_mode_v2=mixed_float16 \
+  2>&1 | tee "$ATC_LOG_DIR/base_detector.log"
+
+atc \
+  --model="$ONNX_DIR/incremental_detector.onnx" \
+  --framework=5 \
+  --output="$OM_DIR/incremental_detector" \
+  --input_format=NCHW \
+  --input_shape="images:1,3,512,640" \
+  --soc_version="$SOC_VERSION" \
+  --precision_mode_v2=mixed_float16 \
+  2>&1 | tee "$ATC_LOG_DIR/incremental_detector.log"
+
+atc \
+  --model="$ONNX_DIR/scene_sensor_net.onnx" \
+  --framework=5 \
+  --output="$OM_DIR/scene_sensor_net" \
+  --input_format=NCHW \
+  --input_shape="images:1,3,160,160" \
+  --soc_version="$SOC_VERSION" \
+  --precision_mode_v2=mixed_float16 \
+  2>&1 | tee "$ATC_LOG_DIR/scene_sensor_net.log"
+```
+
+旧版 CANN 若只支持 `--precision_mode=allow_fp32_to_fp16`，用该参数替换 `--precision_mode_v2`，不能同时传两个精度参数。若 Scene 对齐失败，优先单独生成 Scene 的保守精度 OM；具体“保持原始精度”参数和算子精度配置文件语法必须以当前 `atc --help` 与官方文档为准，不能从其他 CANN 版本照抄。
+
+### 21.2 编译日志验收
+
+每个 OM 必须同时满足：
+
+- ATC 返回码为 0，`.om` 文件非空；
+- 输入名和固定 shape 与 ONNX manifest 一致；
+- 没有未解决的 unsupported op；
+- 没有未知 Host fallback、动态 shape 或精度降级；
+- 所有 warning 都被逐条解释，不能只因为生成了 OM 就视为通过；
+- OM、ATC 版本、SoC 值和完整命令被写入同一候选目录。
+
+失败处理顺序：先核对 ONNX 契约和 CANN/SoC，再定位具体算子，最后才考虑修改导出图。不要一开始就改模型结构或开启全 INT8。
+
+## 22. G2：单模型 OM 冒烟与原始输出对齐
+
+### 22.1 用 msIT 先隔离模型问题
+
+**【板端命令模板】** 先执行 `msit benchmark --help` 确认当前版本参数，再对三个 OM 分别运行。典型结构如下：
+
+```bash
+msit benchmark \
+  --model "$OM_DIR/base_detector.om" \
+  --input "$AGILE_ASSETS/golden/rect/<case>/base_detector_input.npy" \
+  --device 0 \
+  --warmup_count 20 \
+  --loop 100 \
+  --output "$AGILE_RUNS/msit/base"
+```
+
+对增量和 Scene 模型替换 OM 与 `.npy` 输入。部分 msIT 版本要求原始 `.bin` 而不是 `.npy`；应根据 `--help` 做无数值变化的格式转换，不得重新做 resize/归一化。msIT 只证明单个 OM 能运行和给出纯模型耗时，不证明 Agent 正确或达到 30 FPS。
+
+### 22.2 对齐顺序
+
+每个 golden case 按以下层级检查：
+
+1. OM 输入元素数量、dtype 和 shape 与 `.npy` 完全一致。
+2. 输出数量和 shape 与 ONNX manifest 完全一致。
+3. 将 OM 原始输出转成 `.npy`，与 golden ONNX 输出比较。
+4. 使用仓库相同的 YOLO 解码和 Scene softmax，检查候选框、类别和 logits 排序。
+
+仓库板前 `raw-align` 使用的诊断目标是：归一化最大绝对误差 `≤1e-3`、相对 L2 `≤1e-3`、余弦相似度 `≥0.99999`。OM 混合 FP16 如果未达到该诊断线，不能直接判死，但必须继续定位到具体模型/输出，并通过完整 89 张指标决定是否可接受；任何跨过五项硬门槛的变化都必须拒绝。
+
+## 23. G3：实现真实 AscendCL 后端
+
+### 23.1 当前状态
+
+`native_ascend/` 当前只构建 `libagile_agent_ascend_contract_stub.so`。它会固定返回 Not Ready，证明 ABI、错误传播和禁止 CPU fallback；它不会加载 OM、调用 CANN 或给出 FPS。
+
+**【仓库已实现】** 可用下列命令确认 stub 契约没有被破坏：
+
+```bash
+cmake -S native_ascend -B build/native_ascend_stub -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native_ascend_stub --config Release -j
+python tools/91_smoke_ascend_contract.py \
+  build/native_ascend_stub/libagile_agent_ascend_contract_stub.so
+```
+
+**【待实现】** 板端工作是在保持 `native_ascend/include/agile_agent_ascend_backend.h` ABI v1 不变的前提下，新增真实共享库目标。真实构建完成前，不应把 `-DASCEND_HOME=...` 的构建模板写成已可运行命令。
+
+### 23.2 生命周期必须按以下顺序实现
+
+```mermaid
+flowchart TD
+    A["create: 解析配置"] --> B["aclInit / 设置设备与Context"]
+    B --> C["创建DVPP通道、streams与events"]
+    C --> D["加载三个OM并检查输入输出契约"]
+    D --> E["分配固定输入输出与环形缓冲"]
+    E --> F["warmup: 真实PNG完整链路"]
+    F --> G["Ready"]
+    G --> H["predict: 每图运行全部owner"]
+    H --> G
+    G --> I["destroy: 逆序释放资源"]
+```
+
+ABI 函数的板端语义固定为：
+
+| 函数 | 必须完成的工作 |
+| --- | --- |
+| `agile_agent_ascend_create` | 解析配置，初始化 ACL/DVPP，加载全部 OM，创建 dataset/stream/event/缓冲；任一失败保持 Not Ready |
+| `agile_agent_ascend_warmup` | 用真实编码 PNG 完成至少 20 次完整路径预热；建议默认 30 次，成功后才允许 Ready |
+| `agile_agent_ascend_predict` | 接收图像字节，不接收真实类别；执行三 owner、融合并返回含分段耗时的 UTF-8 JSON |
+| `agile_agent_ascend_ready` | 仅当模型、缓冲、预处理、预热和自检都成功时返回 1 |
+| `agile_agent_ascend_last_error` | 返回最近一次 CANN/模型/契约错误，不能只返回通用“失败” |
+| `agile_agent_ascend_destroy` | 等待在途任务后按逆序释放模型、dataset、内存、stream、DVPP、context 和 device |
+
+### 23.3 ACL 资源原则
+
+- 启动期一次性完成 `aclInit`、device/context、模型加载与资源分配。
+- 用模型描述检查实际输入输出数量、shape、dtype 和字节数；不匹配时拒绝 Ready。
+- 通过模型查询接口记录每个 OM 的权重/工作内存，再决定 2 槽还是 3 槽环形缓冲。
+- 首版从 2 槽开始。只有 P95 确有收益且峰值内存安全，才增为 3 槽。
+- 输入输出 dataset 和 device/host pinned buffer 固定地址复用；请求关键路径不得反复 `malloc/free` 或创建/销毁 dataset。
+- 每个模型可有独立 stream，但先实现正确的串行版本，再比较双 stream 与三 stream。
+- 异步调用后用 event 建立精确依赖，不在每个小阶段做全设备同步。
+- 任一 ACL/DVPP 错误立即令请求失败并记录错误码；禁止静默切换 PyTorch、ONNX Runtime 或 CPU 模型。
+- 12 GB 设备建议让稳定运行峰值不超过可用显存约 80%，为 CANN workspace、DVPP 和热切换保留余量；这是一条工程安全线，不是赛题指标。
+
+### 23.4 建议的配置语义
+
+以下 JSON 表示真实后端应支持的配置意图，当前 stub 不解析这些字段：
+
+```json
+{
+  "device_id": 0,
+  "models": {
+    "base": {"om": ".../base_detector.om", "shape": [1, 3, 736, 896]},
+    "incremental": [
+      {"om": ".../incremental_detector.om", "shape": [1, 3, 512, 640]}
+    ],
+    "scene": {"om": ".../scene_sensor_net.om", "shape": [1, 3, 160, 160]}
+  },
+  "schedule": "serial",
+  "ring_slots": 2,
+  "profile": "models/production/incremental_detection/profile.json",
+  "strict_no_cpu_fallback": true
+}
+```
+
+正式实现应对未知字段报错或明确忽略策略，不能因为路径缺失而偷偷使用仓库中的 `.pt`。
+
+## 24. G3：复现三路预处理
+
+预处理是最容易造成“OM 能跑但 mAP 掉很多”的环节。建议先实现软件解码加 CPU 参考预处理，逐层对齐后再替换为 DVPP/VPC/AIPP。
+
+### 24.1 解码与颜色
+
+1. 输入是编码 PNG 字节。
+2. 解码得到 `HWC uint8 RGB`，原图当前为 `640×512`。
+3. 若 OpenCV 解码得到 BGR，必须只转换一次到 RGB。
+4. VPC/AIPP 使用的颜色格式、通道顺序和 stride 必须显式记录。
+5. 归一化只能发生一次；若 AIPP 已完成，不得在 ACL 输入前再次除以 255。
+
+先实测目标 CANN/设备是否支持 PNG 硬解码。不支持时采用 libpng/OpenCV 解码是正常回退，但模型推理不能回退到 CPU。
+
+### 24.2 Base 输入
+
+当前 `640×512` 图像到 Base 固定输入的参考过程为：
+
+1. 双线性等比例缩放至 `896×717`。
+2. 左右 padding 为 0。
+3. 上 padding 9、下 padding 10，填充值 `114`。
+4. 结果为 `736×896×3` RGB。
+5. 转为 `1×3×736×896` FP32，数值范围 `[0,1]`。
+
+奇数 padding 的 9/10 不能改成 10/9，也不能先补成方形再裁剪。
+
+### 24.3 Incremental 输入
+
+当前原图已经是 `640×512`，因此：
+
+1. 不缩放、不补边。
+2. RGB HWC 转 NCHW。
+3. 转为 `1×3×512×640` FP32，数值范围 `[0,1]`。
+
+即使几何尺寸不变，也要检查图像行 stride，不能把带对齐 padding 的 DVPP buffer 当作紧密 HWC 数据。
+
+### 24.4 Scene 输入
+
+1. RGB 图直接 resize 为 `176×176`，不保持长宽比。
+2. 中心裁剪 `[8:168, 8:168]` 得到 `160×160`。
+3. 转为 NCHW 浮点。
+4. 每通道执行 `(x/255 - 0.5) / 0.25`。
+
+### 24.5 DVPP/VPC/AIPP 引入顺序
+
+| 候选 | 目的 | 保留条件 |
+| --- | --- | --- |
+| 软件解码 + CPU 参考预处理 | 建立正确性基线 | golden 和完整指标通过 |
+| 软件解码 + VPC + AIPP | 减少 resize/normalize 开销 | 输入、原始输出、最终指标通过且 P95 改善 |
+| 设备支持的硬件解码 + VPC + AIPP | 进一步减少解码开销 | 对 PNG 全集稳定，不能只测 JPEG |
+
+如果 DVPP 插值与参考实现不能做到逐元素一致，必须继续比较恢复框、最终逐图检测和完整指标。不能只看预处理图像“肉眼差不多”。
+
+## 25. G3：YOLO 后处理、类别映射与 Agent 融合
+
+板端 C++ 必须复现仓库当前语义：
+
+| 项目 | 冻结值 |
+| --- | --- |
+| 原始候选下限 | `conf=0.01` |
+| owner 内 NMS IoU | `0.70` |
+| `max_det` | `300` |
+| Base 本地到全局 | `0→0, 1→1, 2→3` |
+| 当前增量本地到全局 | `0→2` |
+| owner 间融合 NMS IoU | `0.60` |
+| 跨类冲突 IoU | `0.50` |
+| 受保护 Base 置信度 | `0.50` |
+| 增量胜出 margin | `0.15` |
+| 新类基础激活阈值 | `0.63`，来自 increment dev |
+| 场景软惩罚 | 最多把新类阈值增加 `0.05` |
+
+执行顺序固定为：
+
+1. 分别解析 Base 与 Incremental 原始输出。
+2. 在各 owner 内执行 class-aware/multi-label NMS。
+3. 恢复到原图坐标并做本地到全局类别映射。
+4. 执行 owner 间同类融合和跨类框冲突仲裁。
+5. 使用已知场景软证据调整新增框激活阈值。
+6. 输出最终框、类别、置信度、owner 来源和分段耗时。
+
+所有 owner 必须处理每一张图。即使 Base 已找到高置信度旧类框，也不能跳过新增 owner；即使 Scene 认为是 `sea`，也不能直接宣布图中有舰船。
+
+### 25.1 允许的候选预筛选
+
+NMS 前可以删除“所有类别分数都不高于当前原始候选下限”的 anchor，但 C++ 的比较符号、浮点类型和多标签语义必须与 `fair_agent/modules/ascend_preflight.py` 一致。
+
+当前混合 FP16 本机最快方案在把新增类阈值前移后改变了 `1/89` 张最终结果，因此“新增类 `0.63` 阈值提前到 NMS 前”默认关闭。只有在目标 OM 上完成完整 89 张逐图等价验证且 P95 确有收益，才能作为该 OM 候选的一部分冻结；不得根据测试标签重新调阈值。
+
+## 26. G3：golden 逐层对齐流程
+
+golden bundle 位于 `runs/ascend310b/golden/rect/`，不含标签。每个 case 含原 PNG、三路输入 `.npy`、三模型原始输出 `.npy` 和预处理参数。
+
+建议板端对每个 case 生成以下中间产物：
+
+```text
+case_xx/
+├── decoded_rgb.bin
+├── base_input.npy
+├── incremental_input.npy
+├── scene_input.npy
+├── base_raw.npy
+├── incremental_raw.npy
+├── scene_sensor_logits.npy
+├── scene_scene_logits.npy
+├── base_after_nms.jsonl
+├── incremental_after_nms.jsonl
+├── fusion_decisions.jsonl
+└── final_detections.jsonl
+```
+
+按“最早出现差异的位置”定位：
+
+| 首个差异 | 优先排查 |
+| --- | --- |
+| decoded RGB | PNG 解码、BGR/RGB、行 stride |
+| 输入张量 | resize、padding、crop、AIPP、重复归一化 |
+| 原始输出 | ATC 精度、算子实现、输入 dtype/布局 |
+| NMS 后 | BCN/BNC 解析、xywh/xyxy、阈值比较、multi-label |
+| 坐标恢复 | scale 与 9/10 padding、截断/rounding |
+| 融合后 | 全局映射、IoU、margin、owner 保护 |
+| 最终门禁 | `0.63` 阈值、Scene softmax、最多 `+0.05` 惩罚 |
+
+golden 通过并不等于完整精度通过；它只用于快速确定实现层级。最终仍以完整混合集五项指标为准。
+
+## 27. G4：完整 89 张精度与无泄露验证
+
+### 27.1 当前仓库能力边界
+
+`tools/90_ascend_preflight.py metric-align` 当前只支持 PyTorch 与 ONNX Runtime，不会加载 OM。真实后端完成后，需要给 `fair_agent.modules.ascend_preflight.evaluate_fixed_agent` 接入一个 Ascend `RawRunner`，或写一个产生相同预测文件格式的板端 runner。在该适配器完成前，不能宣称 OM 已通过赛题指标。
+
+### 27.2 两阶段进程隔离
+
+推荐把推理与评分拆成两个进程/账号：
+
+1. `infer` 进程只能读 89 张图片、OM、profile 和无标签配置，不能读 label 目录。
+2. 它按清单顺序对每张图运行 Base、全部 Incremental owner 和 Scene，保存原始预测、上下文、融合决策与最终预测。
+3. 预测目录用临时目录写完后原子重命名为 `predictions_frozen/`，随后不再修改。
+4. `score` 进程才读取测试标签和 `base_test.txt`，只对冻结预测评分。
+
+图像 stem 可用于把预测与标签关联，但不能进入模型选择、阈值、类别映射或 Scene 路由逻辑。最安全的板端 ABI 只接收图像字节；stem 由外层评分器管理。
+
+### 27.3 必须输出的完整性证据
+
+- mixed test 图像数为 89；当前 base test 图像数为 70。
+- Base、Incremental、Scene 三个输入 stem 集合都与完整 mixed test 完全一致。
+- `all_owners_every_image=true`。
+- 推理阶段日志显示 `labels_read=false`。
+- `label_aware_routing=false`、`filename_class_routing=false`、`scene_hard_routing=false`。
+- 不存在由 Scene 结果直接跳过 owner 或激活类别的分支。
+- 评分只读取冻结后的结果，不重新推理。
+
+### 27.4 五项验收门槛
+
+| 指标 | 评分范围 | 门槛 | 当前 PyTorch production 参考 |
+| --- | --- | ---: | ---: |
+| Base-mAP50 | 70张纯旧类基础测试，旧类 `0/1/3` | `≥0.80` | `0.81414` |
+| New-mAP50 | 完整89张混合集，只评新类 `2` | `≥0.60` | `0.63869` |
+| KRR | 完整89张混合集，旧类 after/before | `≥0.95` | `1.00000` |
+| 新类 precision | 完整混合集，冻结阈值 | `≥0.90` | `0.92453` |
+| 旧类图新增误激活率 | 70张旧类图 | `≤0.05` | `0.01429` |
+
+`full_map50` 只报告诊断，不能替代 New-mAP。KRR 为 1 也不能替代 Base-mAP50；新类误框不会自动降低旧类 KRR，因此 precision 和误激活门禁必须独立检查。
+
+候选保留规则：五项全部通过、无泄露审计通过、每图 owner 语义正确。任一失败都回到 G2/G3 定位，不能在 mixed test 标签上搜索新阈值。
+
+## 28. G5：端到端性能测试协议
+
+### 28.1 必须报告两种时间
+
+- **模型时间**：三个 OM 的 ACL event 时间，用于定位 AI Core/调度。
+- **端到端时间**：真实编码 PNG 到最终 JSON，包括解码、三路预处理、必要传输、三个 OM、NMS、融合、Scene 软门禁和序列化。
+
+正式验收看端到端时间，不能用 msIT 单模型时间或批量吞吐代替。当前离线比赛入口还应单独报告磁盘读取到最终结果的 file-to-result 时间，避免缓存造成误判。
+
+### 28.2 固定测试条件
+
+1. 单图 `batch=1`。
+2. 三个 OM 常驻内存。
+3. 用真实 PNG 完整预热默认 30 次，最低不得少于 20 次。
+4. 以 89 张混合集轮换，至少采集 1000 次稳态请求；不把预热样本计入统计。
+5. 同时记录 mean、P50、P95、P99、max、总墙钟吞吐和失败数。
+6. 每次候选只改变一个变量，并记录温度、频率、功耗、NPU 内存和利用率。
+7. 串行、双检测器并发、三模型并发用完全相同的图像顺序分别测量。
+
+### 28.3 分段计时
+
+每次响应的 JSON 至少包含：
+
+```json
+{
+  "timings_ms": {
+    "decode": 0.0,
+    "preprocess_base": 0.0,
+    "preprocess_incremental": 0.0,
+    "preprocess_scene": 0.0,
+    "base_model": 0.0,
+    "incremental_model": 0.0,
+    "scene_model": 0.0,
+    "postprocess": 0.0,
+    "serialize": 0.0,
+    "total": 0.0
+  }
+}
+```
+
+并发模式下各阶段时间可以重叠，所以 `total` 必须用请求墙钟测量，不能把所有分段简单相加。
+
+### 28.4 判定
+
+| 项目 | 通过线 |
+| --- | ---: |
+| 官方最低吞吐 | `≥30 FPS` |
+| 内部平均吞吐 | `≥36 FPS` |
+| 端到端 P95 | `≤33.33 ms` |
+| 请求错误 | 0 |
+| 输出正确性 | G4 五项与合规门全部通过 |
+
+若平均值通过但 P95 不通过，优先检查动态分配、全局同步、CPU NMS、PNG 解码抖动和热降频，而不是只提高并发数。
+
+## 29. 优化顺序与保留规则
+
+必须按下表顺序逐项推进。每一步都以“上一候选”为基线，只有完整正确性不退化且 P95 改善才保留。
+
+| 顺序 | 优化 | 主要目标 | 验证要求 |
+| ---: | --- | --- | --- |
+| 0 | 正确的串行 ACL 基线 | 建立可解释结果 | golden + 五项门槛 |
+| 1 | 模型常驻、固定 dataset/buffer | 消除分配和装载抖动 | 内存稳定、P95 改善 |
+| 2 | 2槽环形缓冲与 pinned host memory | 重叠传输/执行 | 逐图输出不变 |
+| 3 | VPC/AIPP | 降低预处理开销 | 输入/框/指标通过 |
+| 4 | C++ NMS、融合与安全候选预筛选 | 降低当前后处理长尾 | 89张逐图等价 |
+| 5 | 串行/双 stream/三 stream 矩阵 | 找到目标板最优调度 | 按 P95 选择，不凭平均值 |
+| 6 | ATC `mixed_float16` | 降模型延迟/内存 | 五项门槛全部通过 |
+| 7 | 3槽缓冲 | 仅在流水线受益时扩大 | 内存安全且 P95 继续改善 |
+| 8 | 受控 PTQ | FP16 仍不足时再用 | 每扩一层量化都全量复核 |
+
+以下做法默认拒绝：
+
+- 为了 FPS 跳过 Scene、Base 或 Incremental owner；
+- 根据输入文件名、目录、Scene 结果或先验类别选择模型；
+- 用 `batch>1` 的吞吐声称单图达到 30 FPS；
+- 只测一个模型、只测 kernel 或排除 NMS/融合；
+- 用测试集标签搜索阈值、量化层、AIPP 参数或调度方式；
+- 在 89 张逐图输出改变后仍把旧的精度报告附到新候选；
+- 把 CUDA Graph、TensorRT 或本机 NVIDIA 数字写成 310B 证据。
+
+## 30. 受控混合精度与 PTQ
+
+### 30.1 混合 FP16 决策树
+
+1. 三个模型都用 `mixed_float16` 编译并跑 golden。
+2. 若三模型和五项门槛通过，进入性能测试。
+3. 若只在 Scene logits/软门禁出现差异，尝试“两个检测器 mixed FP16、Scene 保守精度”。
+4. 若检测器导致跨阈值变化，先用 ATC 精度配置保护敏感输出/算子；仍失败则回退该检测器的保守候选。
+5. 只有精度候选确定后，才比较 FPS 与 P95。
+
+本机 ONNX FP16 只能指出 Scene 和阈值边界可能敏感，不能代替上述 OM 决策。
+
+### 30.2 PTQ 数据边界
+
+只有原生 ACL、固定缓冲、VPC/AIPP、C++ 后处理、调度矩阵和 mixed FP16 都完成后仍未达到性能线，才启用 msModelSlim PTQ。
+
+- Base 校准：仅 `splits/strict_3plus1/base_train.txt`。
+- Incremental 校准：仅 `splits/strict_3plus1/increment_train.txt`。
+- Scene 校准：仅 `splits/strict_3plus1/scene_train.txt`。
+- 新类阈值：仅 `splits/strict_3plus1/increment_dev.txt`。
+- 禁止：`base_test.txt`、`mixed_test.txt`、`scene_test.txt`、测试标签或官方隐藏数据。
+
+量化从 backbone 卷积开始，signed INT8、per-channel；Detect head、DFL、Softmax、Sigmoid 和输出优先保留 FP16。每扩大一次量化范围，都生成独立候选目录并重新执行 G2 至 G5。msModelSlim 的具体 CLI 随 CANN 版本变化，应使用板端安装版本的官方示例，不在本文硬编码可能失效的参数。
+
+## 31. 后续官方增量数据到达时的无类别模板
+
+本指南不能把“新增类=舰船、全局ID=2”写死为算法前提。官方新增数据到达后按以下模板迁移：
+
+1. 从数据标注中建立 `base_local_to_global`、`new_local_to_global` 和类别名称表。
+2. 基础阶段只使用基础类别 train/dev；基础测试只含基础类别。
+3. 每轮增量训练只读取该轮新增数据 train/dev，不能混入旧类图像或旧类标签。
+4. 基础 owner 在增量阶段冻结；每个新增 owner 只负责其已注册的新类别。
+5. 阈值、上下文先验和必要的 PTQ 校准只从相应增量 train/dev 获得。
+6. Scene 类别若仍是已知集合，Scene 模型继续作为软证据，不参与目标类别硬路由；增量阶段不因目标新类而擅自重训 Scene。
+7. 最终测试对每张未知图执行基础 owner、所有活动增量 owner 和 Scene，再统一融合。
+8. 重新导出受影响 owner 的固定 ONNX，重新编译 OM，并从 G1 开始完整验收。
+
+若官方基础数据或基础标注本身更新，先重新跑完整基础训练并冻结新的 Base；否则不因新增数据到达而修改 Base 权重。随着增量轮次增加，owner 数和延迟会增长，必须重新做 12 GB 内存与 P95 预算，不能继续沿用当前三模型的性能结论。
+
+## 32. 服务化、上线与回滚
+
+### 32.1 发布目录
+
+每个候选使用不可变目录，`current` 只指向一个已验收版本：
+
+```text
+releases/
+├── 202608xx-fp16-a/
+│   ├── bin/
+│   ├── config/
+│   └── om/
+├── 202608xx-fp16-b/
+├── current -> 202608xx-fp16-b
+└── previous -> 202608xx-fp16-a
+```
+
+切换流程：后台加载候选 → 完整预热 → golden 自检 → 一张或多张 shadow 输入对比 → Ready → 原子切换。任何一步失败都不改 `current`。
+
+### 32.2 systemd 模板
+
+**【待实现】** 真实板端可执行文件完成后，可按以下思路配置服务；`agile-agent-ascend` 只是占位名：
+
+```ini
+[Unit]
+Description=AgileAgent Ascend 310B inference
+After=network-online.target
+
+[Service]
+Type=simple
+User=agileagent
+WorkingDirectory=/data/agileagent/releases/current
+EnvironmentFile=/etc/agileagent/ascend.env
+ExecStart=/data/agileagent/releases/current/bin/agile-agent-ascend --config /etc/agileagent/backend.json
+Restart=on-failure
+RestartSec=2
+TimeoutStartSec=180
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+服务启动必须在完整预热和自检前保持 Not Ready。运行日志不得记录输入图片字节、标签或请求体，只记录模型代次、候选 ID、错误码、分段耗时和设备状态。
+
+### 32.3 自动回滚条件
+
+满足任一条件立即停止新流量并恢复 `previous`：
+
+- OM 加载、预热或 golden 自检失败；
+- 连续出现 ACL/DVPP 错误或设备复位；
+- P95 持续超过验收线；
+- 发现内存持续增长或热降频；
+- shadow 对比出现未解释的类别/框差异；
+- 五项质量门槛或无泄露审计不再通过。
+
+## 33. 一小时稳定性测试
+
+在最终候选上执行真实 PNG、`batch=1`、完整 Agent 循环至少 1 小时。测试期间每隔固定间隔记录：
+
+- 请求总数、成功数、失败数；
+- 最近窗口 mean/P95/P99；
+- device/host 内存；
+- 温度、功耗、频率、NPU 利用率；
+- ACL/DVPP 错误计数；
+- 三个 owner 实际执行计数。
+
+通过条件：零请求错误、三个 owner 计数相等、没有持续内存增长、没有设备复位或长期降频、最后 10 分钟性能未明显劣于最初稳态窗口。完成后再次跑 golden 与五项指标，防止长时间运行或热切换改变状态。
+
+## 34. 常见故障定位表
+
+| 现象 | 最可能原因 | 首要动作 |
+| --- | --- | --- |
+| `npu-smi` 看不到设备 | 驱动、固件、PCIe、电源 | 停止模型工作，先修 G0 |
+| ATC 不接受 SoC | `soc_version` 猜错或 Toolkit 不支持 | 用设备输出和当前官方表重新确认 |
+| ATC unsupported op | ONNX 算子/opset 与 CANN 不兼容 | 定位节点，优先调整导出而非换芯片名 |
+| OM 加载失败 | Runtime/Toolkit 不兼容或文件损坏 | 核对版本组合并在目标组合重编译 |
+| `aclrtMalloc` 失败 | workspace、缓冲槽或热切换占用过高 | 查询模型内存，降到2槽并串行加载 |
+| Base mAP 明显下降 | Base letterbox、RGB、归一化错误 | 比较 `base_input.npy` 和 9/10 padding |
+| New-mAP/precision 下降 | 新类映射、阈值或 Scene 惩罚错误 | 检查 `0→new_global_id`、`0.63` 与 `+0.05` |
+| KRR 不是1 | Base 输出或跨类融合改变旧类框 | 比较 base raw/NMS 与 owner保护逻辑 |
+| 旧类图新类误激活高 | 新类门禁/冲突仲裁遗漏 | 检查融合顺序，禁止按标签修阈值 |
+| 平均快但 P95 高 | 动态分配、同步、CPU NMS、解码抖动 | 看分段 P95，逐项移出关键路径 |
+| 多 stream 更慢 | AI Core/带宽争用或同步错误 | 回退串行，以目标板 P95 决策 |
+| DVPP PNG 失败 | 当前型号/版本不支持该格式 | 固定 libpng/OpenCV 解码后进入 VPC |
+| Ready 但首帧很慢 | 预热只跑了 OM 或未覆盖真实路径 | 用真实 PNG 预热完整链路 |
+| Scene 结果跳变 | resize/crop/归一化或 FP16 敏感 | 保持 Scene 保守精度并重新对齐 |
+
+## 35. 验收产物与签字清单
+
+每次最终候选在 Git 忽略的板端目录保存：
+
+```text
+runs/ascend310b_board/<candidate>/
+├── environment/          # G0 环境快照
+├── atc/                  # 三条命令与日志
+├── contracts/            # ONNX/OM 输入输出契约
+├── golden/               # 逐层差异报告
+├── predictions_frozen/   # 无标签冻结预测
+├── metrics/              # 五项指标与完整性证据
+├── benchmarks/           # 串行/双流/三流与分段耗时
+├── soak/                 # 1小时温度、内存、错误与延迟
+└── decision.md           # 保留/拒绝理由与回滚版本
+```
+
+最终签字项：
+
+- [ ] 已确认准确 SoC、12 GB 内存、固件、驱动和 CANN 兼容组合。
+- [ ] 三个 ONNX 契约与 production profile 一致。
+- [ ] 三个 OM 在目标软件/硬件组合重新编译，日志无未解释问题。
+- [ ] 真实 AscendCL 库进入 Ready，stub 不在正式进程中。
+- [ ] PNG、三路预处理、原始输出、NMS、坐标和融合完成 golden 对齐。
+- [ ] 89张图全部 owner 执行，预测冻结前评分进程未读取标签。
+- [ ] Base-mAP50、New-mAP50、KRR、precision、误激活率五项通过。
+- [ ] 单图 `batch=1` 平均 `≥36 FPS`、P95 `≤33.33 ms`。
+- [ ] 1小时无错误、无持续内存增长和热降频。
+- [ ] 上一候选可原子回滚，失败时没有 CPU/ONNX/TensorRT 静默回退。
+- [ ] ONNX、OM、数据、标签、golden 和设备日志未提交 Git。
+
+## 36. 一页式建议日程
+
+### Day 0：只做环境
+
+1. 确认产品形态、电源和散热。
+2. 保存 G0 环境快照。
+3. 冻结驱动、固件、CANN 与 `soc_version`。
+4. 空闲观察 10 至 15 分钟。
+
+### Day 1：模型能跑且数值正确
+
+1. 从板前机器准备固定 ONNX 与 golden。
+2. ATC 编译三个 mixed FP16 OM。
+3. 用 msIT 做单模型 smoke。
+4. 比较三个 OM 的原始输出；Scene 敏感时单独回退保守精度。
+
+### Day 2：完成真实 Agent
+
+1. 实现并构建 AscendCL ABI v1 动态库。
+2. 先用软件预处理、串行执行建立正确基线。
+3. 完成 golden 全链路对齐。
+4. 接入无标签板端 runner。
+
+### Day 3：完整精度和合规
+
+1. 对89张混合集运行全部 owner 并冻结预测。
+2. 冻结后再开放标签评分。
+3. 五项门槛与无泄露检查全部通过。
+
+### Day 4 起：只做可回退优化
+
+1. 固定缓冲与2槽流水线。
+2. VPC/AIPP。
+3. C++ 后处理与安全候选预筛选。
+4. 串行/双流/三流矩阵。
+5. 仍不足时才做受控 PTQ。
+6. 最终候选完成1000次性能采样、1小时稳定性和回滚演练。
+
+完成上述全部步骤后，才能把文档顶部状态更新为“Ascend 310B 板端验收通过”，并填写真实 SoC、CANN、OM 候选、五项指标、平均 FPS、P95 和稳定性结果。
