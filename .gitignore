@@ -61,11 +61,18 @@ venv/
 !/tools/80_export_tensorrt_engines.py
 !/tools/90_ascend_preflight.py
 !/tools/91_smoke_ascend_contract.py
+!/tools/92_run_ascend_om.py
+!/tools/93_compare_ascend_golden.py
+!/tools/94_score_ascend_agent.py
+!/scripts/start_agent_ascend310b.sh
+!/scripts/stop_agent_ascend310b.sh
 
 /configs/*
 !/configs/incremental/
 !/configs/incremental/warship_3plus1.yaml
 !/configs/agent_pipeline.yaml
+!/configs/agent_pipeline_ascend310b.yaml
+!/configs/requirements-ascend310b.txt
 !/configs/submission_infer_base_3class.yaml
 !/configs/local_infer_gpu.yaml
 !/configs/scene_sensor_model.yaml

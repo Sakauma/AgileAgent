@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import io
 import json
 import zipfile
@@ -8,6 +9,7 @@ from pathlib import Path
 from PIL import Image
 from starlette.testclient import TestClient
 
+from fair_agent.core.config import load_config
 from fair_agent.modules.web_inference import image_png_bytes
 from fair_agent.web.app import BatchResultStore, build_web_settings, create_app
 
@@ -165,6 +167,19 @@ def test_health_reports_model_initialization_failure() -> None:
     assert response.status_code == 503
     assert response.json()["status"] == "error"
     assert "模型服务初始化失败" in response.json()["error"]
+
+
+def test_health_reports_ascend_device_for_ascend_backend() -> None:
+    config = copy.deepcopy(load_config())
+    config["inference"]["backend"] = "ascend_acl"
+    config["ascend_backend"]["validated"] = True
+    for entry in config["ascend_backend"]["models"].values():
+        entry["sha256"] = "0" * 64
+    config["ascend_backend"]["context_model"]["sha256"] = "0" * 64
+    client = TestClient(create_app(engine_provider=lambda: FakeEngine(), config=config))
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["device"] == "ascend:0"
 
 
 def test_single_detection_api_returns_public_json() -> None:

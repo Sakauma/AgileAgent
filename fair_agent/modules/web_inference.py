@@ -34,6 +34,7 @@ class FairInferenceQueue:
         self._waiting = 0
         self._active = False
         self._completed = 0
+        self._closed = False
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agile-agent-gpu")
 
     def status(self) -> Dict[str, int | bool]:
@@ -45,6 +46,8 @@ class FairInferenceQueue:
             }
 
     def run(self, operation: Callable[[], T]) -> tuple[T, float]:
+        if self._closed:
+            raise RuntimeError("推理队列已经关闭")
         queued_at = time.perf_counter()
         with self._condition:
             self._waiting += 1
@@ -63,6 +66,12 @@ class FairInferenceQueue:
                     self._condition.notify_all()
 
         return self._executor.submit(execute).result()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
 
 def decode_image_bytes(
@@ -578,6 +587,7 @@ class WebInferenceEngine:
         native_options: Mapping[str, Any] | None = None,
         unified_class_gates: Mapping[str, Any] | None = None,
     ) -> None:
+        self._closed = False
         from fair_agent.backends.inference import create_backend
         from fair_agent.models.context import (
             load_context_model,
@@ -594,7 +604,14 @@ class WebInferenceEngine:
         self.detector = create_backend(
             self.backend_name, detector_path, self.device_index, self.native_options
         )
-        if self.backend_name == "tensorrt_engine":
+        if self.backend_name == "ascend_acl":
+            from fair_agent.backends.ascend_acl import load_ascend_context_model
+
+            self.context_model, self.context_checkpoint = load_ascend_context_model(
+                self.native_options
+            )
+            self.device = f"ascend:{self.device_index}"
+        elif self.backend_name == "tensorrt_engine":
             self.context_model, self.context_checkpoint = load_tensorrt_context_model(
                 context_path,
                 dict(self.native_options["context_engine"]),
@@ -653,21 +670,31 @@ class WebInferenceEngine:
         self.parallel_context_execution = bool(routing["parallel_context_execution"])
         self.parallel_context_batch_execution = bool(routing["parallel_context_batch_execution"])
         self.max_model_workers = int(routing["max_model_workers"])
-        import torch
-        torch.backends.cudnn.benchmark = bool(options["cudnn_benchmark"])
-        self.context_stream = torch.cuda.Stream(device=int(self.device_index))
+        if self.backend_name == "ascend_acl":
+            self.context_stream = None
+            self.parallel_model_execution = False
+            self.parallel_context_execution = False
+            self.parallel_context_batch_execution = False
+        else:
+            import torch
+
+            torch.backends.cudnn.benchmark = bool(options["cudnn_benchmark"])
+            self.context_stream = torch.cuda.Stream(device=int(self.device_index))
         self._model_executor = ThreadPoolExecutor(max_workers=self.max_model_workers)
         context_size = int(self.context_checkpoint["preprocessing"]["image_size"])
         warmup_image = Image.new("RGB", (self.warmup_width, self.warmup_height))
         context_warmup = Image.new("RGB", (context_size, context_size))
         for _ in range(self.warmup_iterations):
-            predict_context(
-                self.context_model,
-                self.context_checkpoint,
-                context_warmup,
-                self.device,
-                self.context_stream,
-            )
+            if self.backend_name == "ascend_acl":
+                self.context_model.predict(context_warmup)
+            else:
+                predict_context(
+                    self.context_model,
+                    self.context_checkpoint,
+                    context_warmup,
+                    self.device,
+                    self.context_stream,
+                )
             self.detector.predict(
                 warmup_image,
                 imgsz=self.imgsz,
@@ -678,13 +705,16 @@ class WebInferenceEngine:
                 compile=self.compile,
             )
         warmup_batch = [warmup_image] * self.warmup_batch_size
-        predict_context_batch(
-            self.context_model,
-            self.context_checkpoint,
-            [context_warmup] * self.warmup_batch_size,
-            self.device,
-            self.context_stream,
-        )
+        if self.backend_name == "ascend_acl":
+            self.context_model.predict_batch([context_warmup] * self.warmup_batch_size)
+        else:
+            predict_context_batch(
+                self.context_model,
+                self.context_checkpoint,
+                [context_warmup] * self.warmup_batch_size,
+                self.device,
+                self.context_stream,
+            )
         self.detector.predict_batch(
             warmup_batch,
             imgsz=self.imgsz,
@@ -723,6 +753,36 @@ class WebInferenceEngine:
                 )
                 self.specialist_detectors[protocol_id] = backend
         self.queue = FairInferenceQueue()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        queue = getattr(self, "queue", None)
+        if queue is not None:
+            queue.close()
+        executor = getattr(self, "_model_executor", None)
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
+        resources = [
+            *getattr(self, "specialist_detectors", {}).values(),
+            getattr(self, "detector", None),
+            getattr(self, "context_model", None),
+        ]
+        closed: set[int] = set()
+        for resource in resources:
+            if resource is None or id(resource) in closed:
+                continue
+            closed.add(id(resource))
+            close = getattr(resource, "close", None)
+            if callable(close):
+                close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def queue_status(self) -> Dict[str, int | bool]:
         return self.queue.status()
@@ -786,6 +846,8 @@ class WebInferenceEngine:
             protocol_pool = {}
 
         def context_batch_task() -> list[Dict[str, Any]]:
+            if self.backend_name == "ascend_acl":
+                return self.context_model.predict_batch(images)
             return predict_context_batch(
                 self.context_model,
                 self.context_checkpoint,
@@ -1130,13 +1192,16 @@ class WebInferenceEngine:
 
         def context_task() -> tuple[Dict[str, Any], float]:
             started = time.perf_counter()
-            value = predict_context(
-                self.context_model,
-                self.context_checkpoint,
-                rgb_image,
-                self.device,
-                self.context_stream,
-            )
+            if self.backend_name == "ascend_acl":
+                value = self.context_model.predict(rgb_image)
+            else:
+                value = predict_context(
+                    self.context_model,
+                    self.context_checkpoint,
+                    rgb_image,
+                    self.device,
+                    self.context_stream,
+                )
             return value, (time.perf_counter() - started) * 1000
 
         def detector_task(backend: Any, imgsz: int) -> tuple[Any, float]:

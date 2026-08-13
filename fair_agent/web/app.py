@@ -430,7 +430,11 @@ async def health(request: Request) -> JSONResponse:
         return JSONResponse(
             {
                 "status": "ready",
-                "device": f'cuda:{settings["device_index"]}',
+                "device": (
+                    f'ascend:{settings["device_index"]}'
+                    if settings["backend"] == "ascend_acl"
+                    else f'cuda:{settings["device_index"]}'
+                ),
                 "backend": settings["backend"],
                 "queue": queue,
                 "generation_id": settings["generation_id"],

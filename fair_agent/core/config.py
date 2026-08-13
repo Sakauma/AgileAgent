@@ -35,7 +35,7 @@ PROTECTED_PREFIXES = (
 )
 KNOWN_TOP_LEVEL = {
     "schema_version", "seed", "runtime", "web", "inference", "routing", "decoding",
-    "storage", "ui", "performance", "native_backend", "tensorrt_backend", "model", "assets", "automation",
+    "storage", "ui", "performance", "native_backend", "ascend_backend", "tensorrt_backend", "model", "assets", "automation",
     "generation", "submission", "blackboard", "detector", "functional_models", "inputs", "modules",
     "policies", "thresholds", "incremental", "decision",
     "logging", "incremental_workbench", "gates", "incremental_guardian",
@@ -61,6 +61,7 @@ KNOWN_SECTION_KEYS = {
         "auto_start_server", "server_start_timeout_seconds", "request_timeout_seconds",
     },
     "native_backend": {"library", "base_engine", "engines", "context_engine", "precision", "require_exact_gpu", "validated"},
+    "ascend_backend": {"device_id", "soc_version", "cann_version", "precision", "validated", "validation_report", "models", "context_model"},
     "tensorrt_backend": {
         "expected_version", "expected_compute_capability", "require_exact_gpu", "validated",
         "precision", "workspace_gib", "dynamic", "minimum_spatial_size", "engines", "context_engine", "export",
@@ -246,8 +247,8 @@ def validate_config(
     _number(runtime, "server_port", errors, 1, 65535)
 
     inference = _require_mapping(config, "inference", errors)
-    if inference.get("backend") not in {"ultralytics_cuda", "tensorrt_engine", "tensorrt_native"}:
-        errors.append("inference.backend 必须为 ultralytics_cuda、tensorrt_engine 或 tensorrt_native")
+    if inference.get("backend") not in {"ultralytics_cuda", "tensorrt_engine", "tensorrt_native", "ascend_acl"}:
+        errors.append("inference.backend 必须为 ultralytics_cuda、tensorrt_engine、tensorrt_native 或 ascend_acl")
     _number(inference, "imgsz", errors, 32)
     _number(inference, "specialist_imgsz", errors, 32)
     _number(inference, "iou", errors, 0.01, 1.0)
@@ -478,6 +479,42 @@ def validate_config(
         for key in ("library", "base_engine", "context_engine"):
             if not native.get(key):
                 errors.append(f"TensorRT后端缺少 native_backend.{key}")
+
+    ascend = _require_mapping(config, "ascend_backend", errors)
+    if not str(ascend.get("device_id", "")).isdigit():
+        errors.append("ascend_backend.device_id必须是非负设备编号")
+    if ascend.get("soc_version") != "Ascend310B1":
+        errors.append("ascend_backend.soc_version必须为Ascend310B1")
+    if not isinstance(ascend.get("validated"), bool):
+        errors.append("ascend_backend.validated必须为布尔值")
+    if ascend.get("precision") not in {"mixed_float16", "origin"}:
+        errors.append("ascend_backend.precision非法")
+    ascend_models = ascend.get("models")
+    if not isinstance(ascend_models, Mapping) or not ascend_models:
+        errors.append("ascend_backend.models必须是非空映射")
+    else:
+        for source, entry in ascend_models.items():
+            if not isinstance(source, str) or not isinstance(entry, Mapping) or not entry.get("path"):
+                errors.append("ascend_backend.models条目非法")
+                continue
+            unknown = sorted(set(entry) - {"path", "sha256"})
+            if unknown:
+                errors.append(f"ascend_backend.models.{source}包含未知字段：" + ", ".join(unknown))
+            digest = entry.get("sha256")
+            if ascend.get("validated") is True and (
+                not isinstance(digest, str) or len(digest) != 64
+            ):
+                errors.append(f"已验收Ascend OM缺少SHA256：{source}")
+    context_model = ascend.get("context_model")
+    if not isinstance(context_model, Mapping) or not context_model.get("path"):
+        errors.append("ascend_backend.context_model非法")
+    elif ascend.get("validated") is True and (
+        not isinstance(context_model.get("sha256"), str)
+        or len(str(context_model.get("sha256"))) != 64
+    ):
+        errors.append("已验收Ascend context OM缺少SHA256")
+    if inference.get("backend") == "ascend_acl" and ascend.get("validated") is not True:
+        errors.append("Ascend后端必须先完成golden验收")
 
     tensorrt_backend = _require_mapping(config, "tensorrt_backend", errors)
     if tensorrt_backend.get("precision") not in {"fp16", "fp32", "int8"}:
@@ -792,4 +829,6 @@ def configured_python(config: Dict[str, Any]) -> Path:
 def inference_backend_options(config: Mapping[str, Any]) -> Dict[str, Any]:
     if str(config["inference"]["backend"]) == "tensorrt_engine":
         return dict(config["tensorrt_backend"])
+    if str(config["inference"]["backend"]) == "ascend_acl":
+        return dict(config["ascend_backend"])
     return dict(config["native_backend"])

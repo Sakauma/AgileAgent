@@ -1,0 +1,7 @@
+# Web and validation-only additions for the release-local Python 3.9
+# environment on Atlas 200I DK A2.  CANN, PyACL, NumPy, OpenCV, Pillow and
+# PyTorch are supplied by the board environment and are intentionally absent.
+starlette==0.37.2
+uvicorn==0.30.6
+python-multipart==0.0.9
+pytest==8.3.5
