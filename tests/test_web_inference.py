@@ -105,6 +105,22 @@ def test_detection_records_are_public_and_serializable() -> None:
     json.dumps(records)
 
 
+def test_native_result_box_adapter_supports_iteration_contract() -> None:
+    from fair_agent.backends.inference import _NativeResult
+
+    result = _NativeResult(
+        {
+            "detections": [
+                {"class_id": 2, "confidence": 0.91, "xyxy": [1, 2, 30, 40]}
+            ]
+        }
+    )
+    box = result.boxes[0]
+    assert box.cls.item() == 2
+    assert box.conf.item() == 0.91
+    assert box.xyxy[0].tolist() == [1, 2, 30, 40]
+
+
 def test_annotation_draws_boxes_without_label_background() -> None:
     source = Image.new("RGB", (64, 64), "black")
     annotated = annotate_records(

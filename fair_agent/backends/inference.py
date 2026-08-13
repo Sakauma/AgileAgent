@@ -174,12 +174,31 @@ class _NativeScalar:
     def item(self) -> float:
         return self.value
 
+    def detach(self) -> "_NativeScalar":
+        return self
+
+    def cpu(self) -> "_NativeScalar":
+        return self
+
+    def tolist(self) -> float:
+        return self.value
+
 
 class _NativeVector:
-    def __init__(self, values: Sequence[float]) -> None:
+    def __init__(self, values: Sequence[Any], row_wrapped: bool = False) -> None:
         self.values = list(values)
+        self.row_wrapped = row_wrapped
 
-    def __getitem__(self, _index: int) -> "_NativeVector":
+    def __getitem__(self, index: int) -> "_NativeVector":
+        if self.row_wrapped and index == 0:
+            return _NativeVector(self.values)
+        value = self.values[index]
+        return _NativeVector(value if isinstance(value, Sequence) else [value])
+
+    def detach(self) -> "_NativeVector":
+        return self
+
+    def cpu(self) -> "_NativeVector":
         return self
 
     def tolist(self) -> list[float]:
@@ -190,12 +209,26 @@ class _NativeBox:
     def __init__(self, row: Mapping[str, Any]) -> None:
         self.cls = _NativeScalar(float(row["class_id"]))
         self.conf = _NativeScalar(float(row["confidence"]))
-        self.xyxy = _NativeVector(row["xyxy"])
+        self.xyxy = _NativeVector(row["xyxy"], row_wrapped=True)
+
+
+class _NativeBoxes(Sequence[_NativeBox]):
+    def __init__(self, rows: Sequence[Mapping[str, Any]]) -> None:
+        self._items = [_NativeBox(row) for row in rows]
+        self.xyxy = _NativeVector([row["xyxy"] for row in rows])
+        self.conf = _NativeVector([float(row["confidence"]) for row in rows])
+        self.cls = _NativeVector([float(row["class_id"]) for row in rows])
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getitem__(self, index: int) -> _NativeBox:
+        return self._items[index]
 
 
 class _NativeResult:
     def __init__(self, row: Mapping[str, Any]) -> None:
-        self.boxes = [_NativeBox(item) for item in row.get("detections", [])]
+        self.boxes = _NativeBoxes(list(row.get("detections", [])))
         self.speed = dict(row.get("timings") or {})
 
 
@@ -319,4 +352,8 @@ def create_backend(
         return TensorRTEngineBackend(weights, device_index, native_options or {})
     if backend == "tensorrt_native":
         return TensorRTNativeBackend(native_options or {}, weights)
+    if backend == "ascend_acl":
+        from fair_agent.backends.ascend_acl import AscendAclBackend
+
+        return AscendAclBackend(native_options or {}, weights)
     raise ValueError(f"未知推理后端：{backend}")

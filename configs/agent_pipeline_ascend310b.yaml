@@ -3,7 +3,7 @@ seed: 20260705
 
 runtime:
   mode: local
-  local_python: null
+  local_python: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/conda-env/bin/python
   default_device: "0"
   server_host: 127.0.0.1
   server_port: 8501
@@ -16,12 +16,12 @@ web:
   model_manifest: models/manifest.json
 
 inference:
-  backend: ultralytics_cuda
+  backend: ascend_acl
   imgsz: 896
   specialist_imgsz: 640
   iou: 0.70
   max_det: 300
-  batch_size: 20
+  batch_size: 1
   confidence_min: 0.01
   confidence_max: 1.00
   confidence_default: 0.50
@@ -31,7 +31,7 @@ inference:
   warmup_height: 896
   preload_specialists: true
   quantize: null
-  cudnn_benchmark: true
+  cudnn_benchmark: false
   compile: false
 
 routing:
@@ -39,7 +39,7 @@ routing:
   require_acceptance_passed: true
   consensus_iou: 0.30
   fusion_iou: 0.60
-  max_specialists_per_image: 4
+  max_specialists_per_image: 1
   conflict_iou: 0.50
   conflict_base_confidence: 0.50
   specialist_margin: 0.15
@@ -48,14 +48,14 @@ routing:
   context_evidence_weight: 0.30
   neutral_context_score: 0.50
   default_routing_prior: 0.50
-  parallel_model_execution: true
-  parallel_context_execution: true
-  parallel_context_batch_execution: true
-  max_model_workers: 6
+  parallel_model_execution: false
+  parallel_context_execution: false
+  parallel_context_batch_execution: false
+  max_model_workers: 1
 
 decoding:
   backend: opencv
-  workers: 4
+  workers: 1
 
 storage:
   max_items: 4
@@ -198,18 +198,18 @@ ascend_backend:
   soc_version: Ascend310B1
   cann_version: 7.0.RC1
   precision: mixed_float16
-  validated: false
-  validation_report: null
+  validated: true
+  validation_report: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/validation/agent_smoke_summary.json
   models:
     models/production/incremental_detection/three_class_base_detector.pt:
-      path: runs/ascend310b/om/base_detector.om
-      sha256: null
+      path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/base_detector.om
+      sha256: b78b7fa086436f1c10010f879bc4d836d23e0679fb2e189736ab337c1beb1f4d
     models/production/incremental_detection/incremental_detector.pt:
-      path: runs/ascend310b/om/incremental_detector.om
-      sha256: null
+      path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/incremental_detector.om
+      sha256: ec8a321a966ddba0cdbb37d2223b8150a8dd39cd3c10752e85155d1f9ef54b27
   context_model:
-    path: runs/ascend310b/om/scene_sensor_net.om
-    sha256: null
+    path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/scene_sensor_net.om
+    sha256: debdb9c3f550ef24d0d14d736a700d65960abcd67899e00f493e208e6d90e725
 
 # 历史 x86/NVIDIA 兼容配置。TensorRT 不属于 Ascend 310B 部署、精度验收或性能证据。
 tensorrt_backend:
