@@ -56,6 +56,7 @@ routing:
 decoding:
   backend: opencv
   workers: 4
+  opencv_threads: 0
 
 storage:
   max_items: 4
@@ -198,6 +199,7 @@ ascend_backend:
   soc_version: Ascend310B1
   cann_version: 7.0.RC1
   precision: mixed_float16
+  execution_mode: synchronous
   validated: false
   validation_report: null
   models:

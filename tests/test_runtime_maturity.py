@@ -57,7 +57,11 @@ def test_web_ui_has_no_collapsible_sidebar_dependency() -> None:
 
 def test_online_detection_config_only_selects_decoder() -> None:
     config = load_config()
-    assert config["decoding"] == {"backend": "opencv", "workers": 4}
+    assert config["decoding"] == {
+        "backend": "opencv",
+        "workers": 4,
+        "opencv_threads": 0,
+    }
     assert "limits" not in config
     runtime = Path("fair_agent/modules/web_inference.py").read_text(encoding="utf-8")
     assert "max_image_pixels" not in runtime

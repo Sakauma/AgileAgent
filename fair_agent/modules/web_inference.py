@@ -672,8 +672,6 @@ class WebInferenceEngine:
         self.max_model_workers = int(routing["max_model_workers"])
         if self.backend_name == "ascend_acl":
             self.context_stream = None
-            self.parallel_model_execution = False
-            self.parallel_context_execution = False
             self.parallel_context_batch_execution = False
         else:
             import torch
@@ -1179,6 +1177,11 @@ class WebInferenceEngine:
 
         pipeline_started = time.perf_counter()
         rgb_image = image if image.mode == "RGB" else image.convert("RGB")
+        ascend_rgb_array = None
+        if self.backend_name == "ascend_acl":
+            import numpy as np
+
+            ascend_rgb_array = np.ascontiguousarray(np.asarray(rgb_image))
         automatic = incremental_protocol == "auto"
         if automatic:
             protocol_pool = self.incremental_protocols
@@ -1206,15 +1209,17 @@ class WebInferenceEngine:
 
         def detector_task(backend: Any, imgsz: int) -> tuple[Any, float]:
             started = time.perf_counter()
-            value = backend.predict(
-                rgb_image,
-                imgsz=imgsz,
-                conf=float(confidence),
-                iou=self.iou,
-                max_det=self.max_det,
-                quantize=self.quantize,
-                compile=self.compile,
-            )
+            predict_options = {
+                "imgsz": imgsz,
+                "conf": float(confidence),
+                "iou": self.iou,
+                "max_det": self.max_det,
+                "quantize": self.quantize,
+                "compile": self.compile,
+            }
+            if ascend_rgb_array is not None:
+                predict_options["_ascend_rgb_array"] = ascend_rgb_array
+            value = backend.predict(rgb_image, **predict_options)
             return value, (time.perf_counter() - started) * 1000
 
         prefetch_ids = [

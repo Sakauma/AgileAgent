@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from fair_agent.backends.ascend_acl import detector_tensor, yolo_detections
+from fair_agent.backends.ascend_acl import (
+    context_tensor,
+    detector_tensor,
+    yolo_detections,
+)
 
 
 def test_detector_tensor_uses_static_310b_shape() -> None:
@@ -14,6 +18,39 @@ def test_detector_tensor_uses_static_310b_shape() -> None:
     assert tensor.dtype == np.float32
     assert info["pad_left"] == 0
     assert info["pad_top"] == 9
+
+
+def test_detector_tensor_reuses_exact_rgb_array() -> None:
+    image = Image.new("RGB", (640, 512), (15, 127, 240))
+    rgb = np.ascontiguousarray(np.asarray(image))
+    expected, expected_info = detector_tensor(image, 736, 896)
+    actual, actual_info = detector_tensor(image, 736, 896, rgb)
+    assert np.array_equal(actual, expected)
+    assert actual_info == expected_info
+
+
+def test_detector_tensor_emits_contiguous_uint8_nhwc_for_aipp() -> None:
+    image = Image.new("RGB", (640, 512), (15, 127, 240))
+    tensor, info = detector_tensor(
+        image,
+        736,
+        896,
+        input_mode="nhwc_uint8_aipp",
+    )
+    assert tensor.shape == (1, 736, 896, 3)
+    assert tensor.dtype == np.uint8
+    assert tensor.flags.c_contiguous
+    assert tensor[0, 0, 0].tolist() == [114, 114, 114]
+    assert info["pad_top"] == 9
+
+
+def test_context_tensor_emits_contiguous_uint8_nhwc_for_aipp() -> None:
+    image = Image.new("RGB", (200, 160), (15, 127, 240))
+    tensor = context_tensor(image, 160, input_mode="nhwc_uint8_aipp")
+    assert tensor.shape == (1, 160, 160, 3)
+    assert tensor.dtype == np.uint8
+    assert tensor.flags.c_contiguous
+    assert tensor[0, 0, 0].tolist() == [15, 127, 240]
 
 
 def test_yolo_nms_applies_global_max_det_order() -> None:

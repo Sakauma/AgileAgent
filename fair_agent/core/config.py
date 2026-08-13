@@ -52,7 +52,7 @@ KNOWN_SECTION_KEYS = {
         "neutral_context_score", "default_routing_prior",
         "parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution", "max_model_workers",
     },
-    "decoding": {"backend", "workers"},
+    "decoding": {"backend", "workers", "opencv_threads"},
     "storage": {"max_items", "ttl_seconds", "max_bytes"},
     "ui": {"history_limit", "result_cache_limit", "health_poll_ms", "toast_duration_ms", "default_view"},
     "performance": {
@@ -61,7 +61,7 @@ KNOWN_SECTION_KEYS = {
         "auto_start_server", "server_start_timeout_seconds", "request_timeout_seconds",
     },
     "native_backend": {"library", "base_engine", "engines", "context_engine", "precision", "require_exact_gpu", "validated"},
-    "ascend_backend": {"device_id", "soc_version", "cann_version", "precision", "validated", "validation_report", "models", "context_model"},
+    "ascend_backend": {"device_id", "soc_version", "cann_version", "precision", "execution_mode", "validated", "validation_report", "models", "context_model"},
     "tensorrt_backend": {
         "expected_version", "expected_compute_capability", "require_exact_gpu", "validated",
         "precision", "workspace_gib", "dynamic", "minimum_spatial_size", "engines", "context_engine", "export",
@@ -291,6 +291,7 @@ def validate_config(
     if decoding.get("backend") not in {"pillow", "opencv"}:
         errors.append("decoding.backend必须为pillow或opencv")
     _number(decoding, "workers", errors, 1, 32)
+    _number(decoding, "opencv_threads", errors, 0, 32)
     storage = _require_mapping(config, "storage", errors)
     for key in ("max_items", "ttl_seconds", "max_bytes"):
         _number(storage, key, errors, 1)
@@ -489,6 +490,11 @@ def validate_config(
         errors.append("ascend_backend.validated必须为布尔值")
     if ascend.get("precision") not in {"mixed_float16", "origin"}:
         errors.append("ascend_backend.precision非法")
+    if ascend.get("execution_mode", "synchronous") not in {
+        "synchronous",
+        "async_stream",
+    }:
+        errors.append("ascend_backend.execution_mode非法")
     ascend_models = ascend.get("models")
     if not isinstance(ascend_models, Mapping) or not ascend_models:
         errors.append("ascend_backend.models必须是非空映射")

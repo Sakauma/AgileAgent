@@ -138,12 +138,22 @@ class AscendAclRuntime:
 
 
 class AscendAclModel:
-    def __init__(self, runtime: AscendAclRuntime, path: Path) -> None:
+    def __init__(
+        self,
+        runtime: AscendAclRuntime,
+        path: Path,
+        execution_mode: str = "synchronous",
+    ) -> None:
         self.runtime = runtime
         self.path = path
+        self.execution_mode = str(execution_mode)
+        if self.execution_mode not in {"synchronous", "async_stream"}:
+            raise RuntimeError(f"Ascend执行模式非法：{self.execution_mode}")
         self.closed = False
+        self.execution_lock = threading.Lock()
         self.model_id: int | None = None
         self.desc: Any = None
+        self.stream: Any = None
         self.input_dataset: Any = None
         self.output_dataset: Any = None
         self.device_buffers: list[int] = []
@@ -166,6 +176,10 @@ class AscendAclModel:
                     "acl.mdl.get_desc",
                 )
                 self._create_datasets()
+                if self.execution_mode == "async_stream":
+                    self.stream = _value(
+                        runtime.acl.rt.create_stream(), "acl.rt.create_stream"
+                    )
                 runtime.register(self)
             except Exception:
                 self.close()
@@ -233,6 +247,26 @@ class AscendAclModel:
                 }
             )
 
+    def _copy_outputs(self) -> list[np.ndarray]:
+        acl = self.runtime.acl
+        outputs = []
+        for contract in self.output_contracts:
+            host = np.empty(contract["size"], dtype=np.uint8)
+            _require(
+                acl.rt.memcpy(
+                    _numpy_pointer(acl, host),
+                    host.nbytes,
+                    contract["device"],
+                    contract["size"],
+                    ACL_MEMCPY_DEVICE_TO_HOST,
+                ),
+                f"acl.rt.memcpy(output {contract['index']})",
+            )
+            outputs.append(
+                host.view(contract["dtype"]).reshape(contract["shape"]).copy()
+            )
+        return outputs
+
     def execute(self, array: np.ndarray) -> tuple[list[np.ndarray], float]:
         batch = np.ascontiguousarray(array, dtype=self.input_dtype)
         if tuple(batch.shape) != self.input_shape:
@@ -244,7 +278,12 @@ class AscendAclModel:
                 f"{self.path.name}输入字节数错误：{batch.nbytes} != {self.input_size}"
             )
         acl = self.runtime.acl
-        with self.runtime.lock:
+        execution_guard = (
+            self.runtime.lock
+            if self.execution_mode == "synchronous"
+            else self.execution_lock
+        )
+        with execution_guard:
             self.runtime.activate()
             _require(
                 acl.rt.memcpy(
@@ -257,29 +296,29 @@ class AscendAclModel:
                 "acl.rt.memcpy(input)",
             )
             started = time.perf_counter_ns()
-            _require(
-                acl.mdl.execute(self.model_id, self.input_dataset, self.output_dataset),
-                "acl.mdl.execute",
-            )
-            inference_ms = (time.perf_counter_ns() - started) / 1_000_000.0
-            outputs = []
-            for contract in self.output_contracts:
-                host = np.empty(contract["size"], dtype=np.uint8)
+            if self.execution_mode == "async_stream":
                 _require(
-                    acl.rt.memcpy(
-                        _numpy_pointer(acl, host),
-                        host.nbytes,
-                        contract["device"],
-                        contract["size"],
-                        ACL_MEMCPY_DEVICE_TO_HOST,
+                    acl.mdl.execute_async(
+                        self.model_id,
+                        self.input_dataset,
+                        self.output_dataset,
+                        self.stream,
                     ),
-                    f"acl.rt.memcpy(output {contract['index']})",
+                    "acl.mdl.execute_async",
                 )
-                outputs.append(
-                    host.view(contract["dtype"])
-                    .reshape(contract["shape"])
-                    .copy()
+                _require(
+                    acl.rt.synchronize_stream(self.stream),
+                    "acl.rt.synchronize_stream",
                 )
+            else:
+                _require(
+                    acl.mdl.execute(
+                        self.model_id, self.input_dataset, self.output_dataset
+                    ),
+                    "acl.mdl.execute",
+                )
+            inference_ms = (time.perf_counter_ns() - started) / 1_000_000.0
+            outputs = self._copy_outputs()
         return outputs, inference_ms
 
     def close(self) -> None:
@@ -297,6 +336,8 @@ class AscendAclModel:
                 acl.mdl.destroy_dataset(self.input_dataset)
             if self.output_dataset is not None:
                 acl.mdl.destroy_dataset(self.output_dataset)
+            if self.stream is not None:
+                acl.rt.destroy_stream(self.stream)
             for device in reversed(self.device_buffers):
                 acl.rt.free(device)
             if self.desc is not None:
@@ -332,15 +373,31 @@ def _load_model(options: Mapping[str, Any], entry: Mapping[str, Any]) -> AscendA
     if len(digest) != 64 or sha256_file(path) != digest:
         raise RuntimeError(f"Ascend OM哈希缺失或不匹配：{path}")
     runtime = AscendAclRuntime.acquire(int(options.get("device_id", 0)))
-    return AscendAclModel(runtime, path)
+    return AscendAclModel(
+        runtime,
+        path,
+        execution_mode=str(options.get("execution_mode", "synchronous")),
+    )
 
 
 def detector_tensor(
-    image: Image.Image, input_height: int, input_width: int
+    image: Image.Image,
+    input_height: int,
+    input_width: int,
+    rgb_array: np.ndarray | None = None,
+    input_mode: str = "nchw_float32",
 ) -> tuple[np.ndarray, dict[str, float | int]]:
     import cv2
 
-    rgb = np.ascontiguousarray(np.asarray(image.convert("RGB")))
+    if rgb_array is None:
+        rgb_image = image if image.mode == "RGB" else image.convert("RGB")
+        rgb = np.ascontiguousarray(np.asarray(rgb_image))
+    else:
+        rgb = np.ascontiguousarray(rgb_array)
+        if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
+            raise RuntimeError(
+                f"Ascend共享RGB输入格式错误：shape={rgb.shape}, dtype={rgb.dtype}"
+            )
     original_height, original_width = map(int, rgb.shape[:2])
     scale = min(input_width / original_width, input_height / original_height)
     resized_width = max(1, int(round(original_width * scale)))
@@ -365,8 +422,15 @@ def detector_tensor(
         cv2.BORDER_CONSTANT,
         value=(114, 114, 114),
     )
-    tensor = np.ascontiguousarray(canvas.transpose(2, 0, 1), dtype=np.float32) / 255.0
-    return tensor[None, ...], {
+    if input_mode == "nhwc_uint8_aipp":
+        tensor = np.ascontiguousarray(canvas, dtype=np.uint8)[None, ...]
+    elif input_mode == "nchw_float32":
+        tensor = np.ascontiguousarray(canvas.transpose(2, 0, 1), dtype=np.float32)
+        np.divide(tensor, np.float32(255.0), out=tensor)
+        tensor = tensor[None, ...]
+    else:
+        raise RuntimeError(f"Ascend检测输入模式非法：{input_mode}")
+    return tensor, {
         "original_height": original_height,
         "original_width": original_width,
         "scale": float(scale),
@@ -486,14 +550,39 @@ class AscendAclBackend:
             raise RuntimeError("Ascend检测后端缺少模型标识")
         entry = _validated_model_entry(options, weights)
         self.model = _load_model(options, entry)
-        self.expected_height = int(self.model.input_shape[2])
-        self.expected_width = int(self.model.input_shape[3])
+        if (
+            self.model.input_dtype == np.dtype(np.uint8)
+            and len(self.model.input_shape) == 4
+            and self.model.input_shape[0] == 1
+            and self.model.input_shape[3] == 3
+        ):
+            self.input_mode = "nhwc_uint8_aipp"
+            self.expected_height = int(self.model.input_shape[1])
+            self.expected_width = int(self.model.input_shape[2])
+        elif (
+            self.model.input_dtype == np.dtype(np.float32)
+            and len(self.model.input_shape) == 4
+            and self.model.input_shape[0] == 1
+            and self.model.input_shape[1] == 3
+        ):
+            self.input_mode = "nchw_float32"
+            self.expected_height = int(self.model.input_shape[2])
+            self.expected_width = int(self.model.input_shape[3])
+        else:
+            raise RuntimeError(
+                f"Ascend检测OM输入契约不受支持："
+                f"shape={self.model.input_shape}, dtype={self.model.input_dtype}"
+            )
         self._last_timings: dict[str, float] = {}
 
     def predict(self, image: Image.Image, **options: Any) -> AscendResult:
         preprocess_started = time.perf_counter_ns()
         batch, info = detector_tensor(
-            image, self.expected_height, self.expected_width
+            image,
+            self.expected_height,
+            self.expected_width,
+            options.get("_ascend_rgb_array"),
+            self.input_mode,
         )
         preprocess_ms = (time.perf_counter_ns() - preprocess_started) / 1_000_000.0
         outputs, inference_ms = self.model.execute(batch)
@@ -518,7 +607,15 @@ class AscendAclBackend:
     def predict_batch(
         self, images: Sequence[Image.Image], **options: Any
     ) -> Sequence[AscendResult]:
-        return [self.predict(image, **options) for image in images]
+        rgb_arrays = options.pop("_ascend_rgb_arrays", None)
+        if rgb_arrays is None:
+            return [self.predict(image, **options) for image in images]
+        if len(rgb_arrays) != len(images):
+            raise RuntimeError("Ascend批量共享RGB输入数量不匹配")
+        return [
+            self.predict(image, _ascend_rgb_array=rgb, **options)
+            for image, rgb in zip(images, rgb_arrays)
+        ]
 
     def warmup(self, image: Image.Image) -> None:
         self.predict(image)
@@ -530,18 +627,28 @@ class AscendAclBackend:
         self.model.close()
 
 
-def context_tensor(image: Image.Image, image_size: int) -> np.ndarray:
+def context_tensor(
+    image: Image.Image,
+    image_size: int,
+    input_mode: str = "nchw_float32",
+) -> np.ndarray:
     resize_size = int(round(image_size * 1.1))
-    resized = image.convert("RGB").resize(
+    rgb_image = image if image.mode == "RGB" else image.convert("RGB")
+    resized = rgb_image.resize(
         (resize_size, resize_size), Image.Resampling.BILINEAR
     )
     offset = (resize_size - image_size) // 2
     cropped = resized.crop((offset, offset, offset + image_size, offset + image_size))
-    array = np.asarray(cropped, dtype=np.float32) / 255.0
-    array = (array - 0.5) / 0.25
-    return np.ascontiguousarray(array.transpose(2, 0, 1), dtype=np.float32)[
-        None, ...
-    ]
+    cropped_array = np.asarray(cropped)
+    if input_mode == "nhwc_uint8_aipp":
+        return np.ascontiguousarray(cropped_array, dtype=np.uint8)[None, ...]
+    if input_mode == "nchw_float32":
+        array = np.asarray(cropped_array, dtype=np.float32) / 255.0
+        array = (array - 0.5) / 0.25
+        return np.ascontiguousarray(
+            array.transpose(2, 0, 1), dtype=np.float32
+        )[None, ...]
+    raise RuntimeError(f"Ascend上下文输入模式非法：{input_mode}")
 
 
 class AscendAclContextModel:
@@ -550,10 +657,43 @@ class AscendAclContextModel:
         if not isinstance(entry, Mapping):
             raise RuntimeError("Ascend配置缺少context_model")
         self.model = _load_model(options, entry)
-        self.image_size = int(self.model.input_shape[2])
+        if (
+            self.model.input_dtype == np.dtype(np.uint8)
+            and len(self.model.input_shape) == 4
+            and self.model.input_shape[0] == 1
+            and self.model.input_shape[3] == 3
+        ):
+            self.input_mode = "nhwc_uint8_aipp"
+            input_height = int(self.model.input_shape[1])
+            input_width = int(self.model.input_shape[2])
+        elif (
+            self.model.input_dtype == np.dtype(np.float32)
+            and len(self.model.input_shape) == 4
+            and self.model.input_shape[0] == 1
+            and self.model.input_shape[1] == 3
+        ):
+            self.input_mode = "nchw_float32"
+            input_height = int(self.model.input_shape[2])
+            input_width = int(self.model.input_shape[3])
+        else:
+            raise RuntimeError(
+                f"Ascend上下文OM输入契约不受支持："
+                f"shape={self.model.input_shape}, dtype={self.model.input_dtype}"
+            )
+        if input_height != input_width:
+            raise RuntimeError(
+                f"Ascend上下文OM必须使用方形输入：{self.model.input_shape}"
+            )
+        self.image_size = input_height
 
     def predict(self, image: Image.Image) -> dict[str, Any]:
-        outputs, inference_ms = self.model.execute(context_tensor(image, self.image_size))
+        outputs, inference_ms = self.model.execute(
+            context_tensor(
+                image,
+                self.image_size,
+                self.input_mode,
+            )
+        )
         sensor_prob = _softmax(outputs[0])[0]
         scene_prob = _softmax(outputs[1])[0]
         sensor_names = ["ir", "sar"]

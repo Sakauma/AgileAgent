@@ -863,6 +863,11 @@ def create_app(
     runtime_manager: AtomicEngineProvider | None = None,
 ) -> Starlette:
     effective_config = dict(config or load_config())
+    decoding = dict(effective_config["decoding"])
+    if decoding["backend"] == "opencv":
+        import cv2
+
+        cv2.setNumThreads(int(decoding["opencv_threads"]))
     active_runtime = runtime_manager
     if engine_provider is None and active_runtime is None:
         active_runtime = _default_runtime_manager if config is None else AtomicEngineProvider(effective_config)

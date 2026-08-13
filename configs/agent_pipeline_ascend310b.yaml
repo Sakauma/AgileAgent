@@ -48,14 +48,15 @@ routing:
   context_evidence_weight: 0.30
   neutral_context_score: 0.50
   default_routing_prior: 0.50
-  parallel_model_execution: false
-  parallel_context_execution: false
+  parallel_model_execution: true
+  parallel_context_execution: true
   parallel_context_batch_execution: false
-  max_model_workers: 1
+  max_model_workers: 3
 
 decoding:
   backend: opencv
   workers: 1
+  opencv_threads: 1
 
 storage:
   max_items: 4
@@ -198,6 +199,7 @@ ascend_backend:
   soc_version: Ascend310B1
   cann_version: 7.0.RC1
   precision: mixed_float16
+  execution_mode: async_stream
   validated: true
   validation_report: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/validation/agent_smoke_summary.json
   models:
