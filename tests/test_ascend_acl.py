@@ -5,10 +5,48 @@ import pytest
 from PIL import Image
 
 from fair_agent.backends.ascend_acl import (
+    AscendEncodedPreprocessor,
     context_tensor,
     detector_tensor,
     yolo_detections,
 )
+
+
+def fixed_png_header(
+    width: int = 640,
+    height: int = 512,
+    bit_depth: int = 8,
+    color_type: int = 2,
+) -> bytes:
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+        + bytes((bit_depth, color_type))
+    )
+
+
+@pytest.mark.parametrize("color_type", [2, 6])
+def test_encoded_preprocessor_accepts_only_fixed_rgb_png(color_type: int) -> None:
+    assert AscendEncodedPreprocessor.accepts(
+        fixed_png_header(color_type=color_type)
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not-png",
+        fixed_png_header(width=641),
+        fixed_png_header(height=511),
+        fixed_png_header(bit_depth=16),
+        fixed_png_header(color_type=0),
+    ],
+)
+def test_encoded_preprocessor_rejects_other_image_contracts(payload: bytes) -> None:
+    assert not AscendEncodedPreprocessor.accepts(payload)
 
 
 def test_detector_tensor_uses_static_310b_shape() -> None:

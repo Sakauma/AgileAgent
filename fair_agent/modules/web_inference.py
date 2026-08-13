@@ -750,6 +750,39 @@ class WebInferenceEngine:
                     compile=self.compile,
                 )
                 self.specialist_detectors[protocol_id] = backend
+        self.encoded_preprocessor = None
+        if (
+            self.backend_name == "ascend_acl"
+            and self.native_options.get("encoded_preprocessing", "cpu") == "dvpp"
+        ):
+            active_specialists = [
+                self.specialist_detectors[protocol_id]
+                for protocol_id, protocol in self.incremental_protocols.items()
+                if protocol.get("available")
+            ]
+            if len(active_specialists) != 1:
+                raise RuntimeError("Ascend DVPP设备预处理当前要求恰好一个活动增量模型")
+            if protocol_positive_prototypes(self.unified_class_gates) or any(
+                protocol_positive_prototypes(protocol)
+                for protocol in self.incremental_protocols.values()
+                if protocol.get("available")
+            ):
+                raise RuntimeError("Ascend DVPP编码输入不支持启用像素原型门控")
+            from fair_agent.backends.ascend_acl import AscendEncodedPreprocessor
+
+            self.encoded_preprocessor = AscendEncodedPreprocessor(
+                self.detector.model.runtime,
+                self.detector.model,
+                active_specialists[0].model,
+                self.context_model.model,
+            )
+            self._encoded_image_stub = Image.new(
+                "RGB",
+                (
+                    self.encoded_preprocessor.source_width,
+                    self.encoded_preprocessor.source_height,
+                ),
+            )
         self.queue = FairInferenceQueue()
 
     def close(self) -> None:
@@ -763,6 +796,7 @@ class WebInferenceEngine:
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
         resources = [
+            getattr(self, "encoded_preprocessor", None),
             *getattr(self, "specialist_detectors", {}).values(),
             getattr(self, "detector", None),
             getattr(self, "context_model", None),
@@ -800,6 +834,45 @@ class WebInferenceEngine:
         )
         result["queue_wait_ms"] = queue_wait_ms
         return result
+
+    def accepts_encoded(self, data: bytes) -> bool:
+        preprocessor = getattr(self, "encoded_preprocessor", None)
+        return preprocessor is not None and preprocessor.accepts(data)
+
+    def predict_encoded(
+        self,
+        data: bytes,
+        filename: str,
+        confidence: float | None = None,
+        incremental_protocol: str | None = None,
+    ) -> Dict[str, Any]:
+        if not self.accepts_encoded(data):
+            raise ValueError("当前Ascend编码输入不符合DVPP固定生产契约")
+        result, queue_wait_ms = self.queue.run(
+            lambda: self._predict_encoded_unlocked(
+                data,
+                filename,
+                self.default_confidence if confidence is None else confidence,
+                incremental_protocol,
+            )
+        )
+        result["queue_wait_ms"] = queue_wait_ms
+        return result
+
+    def _predict_encoded_unlocked(
+        self,
+        data: bytes,
+        filename: str,
+        confidence: float,
+        incremental_protocol: str | None,
+    ) -> Dict[str, Any]:
+        return self._predict_unlocked(
+            self._encoded_image_stub,
+            filename,
+            confidence,
+            incremental_protocol,
+            encoded_data=data,
+        )
 
     def predict_batch(
         self,
@@ -1172,13 +1245,20 @@ class WebInferenceEngine:
         filename: str,
         confidence: float,
         incremental_protocol: str | None,
+        encoded_data: bytes | None = None,
     ) -> Dict[str, Any]:
         from fair_agent.models.context import predict_context
 
         pipeline_started = time.perf_counter()
         rgb_image = image if image.mode == "RGB" else image.convert("RGB")
         ascend_rgb_array = None
-        if self.backend_name == "ascend_acl":
+        dvpp_preprocess_ms = 0.0
+        encoded_preloaded = encoded_data is not None
+        if encoded_preloaded:
+            if self.encoded_preprocessor is None:
+                raise RuntimeError("Ascend DVPP编码预处理器尚未初始化")
+            dvpp_preprocess_ms = self.encoded_preprocessor.prepare(encoded_data)
+        elif self.backend_name == "ascend_acl":
             import numpy as np
 
             ascend_rgb_array = np.ascontiguousarray(np.asarray(rgb_image))
@@ -1196,7 +1276,13 @@ class WebInferenceEngine:
         def context_task() -> tuple[Dict[str, Any], float]:
             started = time.perf_counter()
             if self.backend_name == "ascend_acl":
-                value = self.context_model.predict(rgb_image)
+                value = (
+                    self.context_model.predict_preloaded(
+                        self.encoded_preprocessor.context_ready_event
+                    )
+                    if encoded_preloaded
+                    else self.context_model.predict(rgb_image)
+                )
             else:
                 value = predict_context(
                     self.context_model,
@@ -1217,6 +1303,34 @@ class WebInferenceEngine:
                 "quantize": self.quantize,
                 "compile": self.compile,
             }
+            if encoded_preloaded:
+                if (backend.expected_height, backend.expected_width) == (736, 896):
+                    ready_event = self.encoded_preprocessor.base_ready_event
+                    info = {
+                        "original_height": 512,
+                        "original_width": 640,
+                        "scale": 1.4,
+                        "pad_left": 0,
+                        "pad_top": 9,
+                    }
+                elif (backend.expected_height, backend.expected_width) == (512, 640):
+                    ready_event = self.encoded_preprocessor.specialist_ready_event
+                    info = {
+                        "original_height": 512,
+                        "original_width": 640,
+                        "scale": 1.0,
+                        "pad_left": 0,
+                        "pad_top": 0,
+                    }
+                else:
+                    raise RuntimeError(
+                        "Ascend DVPP检测输入契约不受支持："
+                        f"{backend.expected_height}x{backend.expected_width}"
+                    )
+                value = backend.predict_preloaded(
+                    info, ready_event=ready_event, **predict_options
+                )
+                return value, (time.perf_counter() - started) * 1000
             if ascend_rgb_array is not None:
                 predict_options["_ascend_rgb_array"] = ascend_rgb_array
             value = backend.predict(rgb_image, **predict_options)
@@ -1470,6 +1584,7 @@ class WebInferenceEngine:
             "confidence_threshold": round(float(confidence), 2),
             "inference_ms": round(inference_ms, 1),
             "timings": {
+                "dvpp_enqueue_ms": round(dvpp_preprocess_ms, 3),
                 "context_total_ms": round(context_total_ms, 3),
                 "context_inference_ms": round(context_inference_ms, 3),
                 "detector_total_ms": round(detector_total_ms, 3),

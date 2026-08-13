@@ -18,6 +18,10 @@ ACL_SUCCESS = 0
 ACL_MEM_MALLOC_HUGE_FIRST = 0
 ACL_MEMCPY_HOST_TO_DEVICE = 1
 ACL_MEMCPY_DEVICE_TO_HOST = 2
+ACL_MEMCPY_DEVICE_TO_DEVICE = 3
+DVPP_PIXEL_FORMAT_RGB888 = 12
+DVPP_CHANNEL_MODE_VPC = 1
+DVPP_CHANNEL_MODE_PNGD = 8
 
 ACL_DTYPES = {
     0: np.dtype(np.float32),
@@ -84,6 +88,9 @@ class AscendAclRuntime:
         self.device_id = int(device_id)
         self.lock = threading.RLock()
         self.models: weakref.WeakSet[AscendAclModel] = weakref.WeakSet()
+        self.preprocessors: weakref.WeakSet[AscendEncodedPreprocessor] = (
+            weakref.WeakSet()
+        )
         self.closed = False
         _require(acl.init(), "acl.init")
         try:
@@ -118,6 +125,12 @@ class AscendAclRuntime:
     def unregister(self, model: "AscendAclModel") -> None:
         self.models.discard(model)
 
+    def register_preprocessor(self, preprocessor: "AscendEncodedPreprocessor") -> None:
+        self.preprocessors.add(preprocessor)
+
+    def unregister_preprocessor(self, preprocessor: "AscendEncodedPreprocessor") -> None:
+        self.preprocessors.discard(preprocessor)
+
     def close(self) -> None:
         with self.lock:
             if self.closed:
@@ -125,6 +138,8 @@ class AscendAclRuntime:
             # Models own datasets, buffers and model descriptors tied to this
             # context.  Release them before destroying the shared context even
             # when shutdown is initiated by the Runtime atexit callback.
+            for preprocessor in list(self.preprocessors):
+                preprocessor.close()
             for model in list(self.models):
                 model.close()
             self.closed = True
@@ -154,11 +169,15 @@ class AscendAclModel:
         self.model_id: int | None = None
         self.desc: Any = None
         self.stream: Any = None
+        self.timing_start_event: Any = None
+        self.timing_end_event: Any = None
+        self.preloaded_runs = 0
         self.input_dataset: Any = None
         self.output_dataset: Any = None
         self.device_buffers: list[int] = []
         self.data_buffers: list[Any] = []
         self.output_contracts: list[dict[str, Any]] = []
+        self.output_hosts: list[np.ndarray] = []
         with runtime.lock:
             runtime.activate()
             try:
@@ -179,6 +198,12 @@ class AscendAclModel:
                 if self.execution_mode == "async_stream":
                     self.stream = _value(
                         runtime.acl.rt.create_stream(), "acl.rt.create_stream"
+                    )
+                    self.timing_start_event = _value(
+                        runtime.acl.rt.create_event(), "acl.rt.create_event(start)"
+                    )
+                    self.timing_end_event = _value(
+                        runtime.acl.rt.create_event(), "acl.rt.create_event(end)"
                     )
                 runtime.register(self)
             except Exception:
@@ -203,6 +228,7 @@ class AscendAclModel:
             )
         )
         self.device_buffers.append(input_device)
+        self.input_device = input_device
         input_buffer = acl.create_data_buffer(input_device, self.input_size)
         if input_buffer is None:
             raise RuntimeError("acl.create_data_buffer(input)返回空")
@@ -246,12 +272,16 @@ class AscendAclModel:
                     "device": device,
                 }
             )
+            # The web engine serializes requests and each backend consumes its
+            # raw output before the next invocation.  Reusing one host buffer
+            # per output avoids allocating a byte array and copying it again
+            # for every image while retaining the exact output dtype/shape.
+            self.output_hosts.append(np.empty(size, dtype=np.uint8))
 
     def _copy_outputs(self) -> list[np.ndarray]:
         acl = self.runtime.acl
         outputs = []
-        for contract in self.output_contracts:
-            host = np.empty(contract["size"], dtype=np.uint8)
+        for contract, host in zip(self.output_contracts, self.output_hosts):
             _require(
                 acl.rt.memcpy(
                     _numpy_pointer(acl, host),
@@ -263,7 +293,7 @@ class AscendAclModel:
                 f"acl.rt.memcpy(output {contract['index']})",
             )
             outputs.append(
-                host.view(contract["dtype"]).reshape(contract["shape"]).copy()
+                host.view(contract["dtype"]).reshape(contract["shape"])
             )
         return outputs
 
@@ -321,6 +351,58 @@ class AscendAclModel:
             outputs = self._copy_outputs()
         return outputs, inference_ms
 
+    def execute_preloaded(self, ready_event: Any) -> tuple[list[np.ndarray], float]:
+        if self.execution_mode != "async_stream" or self.stream is None:
+            raise RuntimeError("Ascend设备预处理输入要求async_stream执行模式")
+        acl = self.runtime.acl
+        with self.execution_lock:
+            self.runtime.activate()
+            if self.preloaded_runs:
+                _require(
+                    acl.rt.reset_event(self.timing_start_event, self.stream),
+                    "acl.rt.reset_event(start)",
+                )
+                _require(
+                    acl.rt.reset_event(self.timing_end_event, self.stream),
+                    "acl.rt.reset_event(end)",
+                )
+            _require(
+                acl.rt.stream_wait_event(self.stream, ready_event),
+                "acl.rt.stream_wait_event(input)",
+            )
+            _require(
+                acl.rt.record_event(self.timing_start_event, self.stream),
+                "acl.rt.record_event(start)",
+            )
+            _require(
+                acl.mdl.execute_async(
+                    self.model_id,
+                    self.input_dataset,
+                    self.output_dataset,
+                    self.stream,
+                ),
+                "acl.mdl.execute_async(preloaded)",
+            )
+            _require(
+                acl.rt.record_event(self.timing_end_event, self.stream),
+                "acl.rt.record_event(end)",
+            )
+            self.preloaded_runs += 1
+            _require(
+                acl.rt.synchronize_stream(self.stream),
+                "acl.rt.synchronize_stream(preloaded)",
+            )
+            inference_ms = float(
+                _value(
+                    acl.rt.event_elapsed_time(
+                        self.timing_start_event, self.timing_end_event
+                    ),
+                    "acl.rt.event_elapsed_time(model)",
+                )
+            )
+            outputs = self._copy_outputs()
+        return outputs, inference_ms
+
     def close(self) -> None:
         if self.closed:
             return
@@ -336,6 +418,10 @@ class AscendAclModel:
                 acl.mdl.destroy_dataset(self.input_dataset)
             if self.output_dataset is not None:
                 acl.mdl.destroy_dataset(self.output_dataset)
+            if self.timing_end_event is not None:
+                acl.rt.destroy_event(self.timing_end_event)
+            if self.timing_start_event is not None:
+                acl.rt.destroy_event(self.timing_start_event)
             if self.stream is not None:
                 acl.rt.destroy_stream(self.stream)
             for device in reversed(self.device_buffers):
@@ -378,6 +464,355 @@ def _load_model(options: Mapping[str, Any], entry: Mapping[str, Any]) -> AscendA
         path,
         execution_mode=str(options.get("execution_mode", "synchronous")),
     )
+
+
+def _align(value: int, alignment: int) -> int:
+    return (int(value) + int(alignment) - 1) // int(alignment) * int(alignment)
+
+
+class AscendEncodedPreprocessor:
+    """Decode one fixed production PNG into the three resident AIPP inputs."""
+
+    source_width = 640
+    source_height = 512
+
+    def __init__(
+        self,
+        runtime: AscendAclRuntime,
+        base_model: AscendAclModel,
+        specialist_model: AscendAclModel,
+        context_model: AscendAclModel,
+    ) -> None:
+        contracts = (
+            (base_model, (1, 736, 896, 3), "base"),
+            (specialist_model, (1, 512, 640, 3), "specialist"),
+            (context_model, (1, 160, 160, 3), "context"),
+        )
+        for model, shape, name in contracts:
+            if model.runtime is not runtime:
+                raise RuntimeError(f"Ascend {name}模型没有共享同一ACL Runtime")
+            if model.execution_mode != "async_stream":
+                raise RuntimeError(f"Ascend {name}设备预处理要求async_stream")
+            if model.input_dtype != np.dtype(np.uint8) or model.input_shape != shape:
+                raise RuntimeError(
+                    f"Ascend {name}设备预处理输入契约错误："
+                    f"shape={model.input_shape}, dtype={model.input_dtype}"
+                )
+        self.runtime = runtime
+        self.base_model = base_model
+        self.specialist_model = specialist_model
+        self.context_model = context_model
+        self.lock = threading.Lock()
+        self.closed = False
+        self.stream: Any = None
+        self.base_ready_event: Any = None
+        self.specialist_ready_event: Any = None
+        self.context_ready_event: Any = None
+        self.prepared_runs = 0
+        self.channel: Any = None
+        self.descriptors: list[Any] = []
+        self.resize_configs: list[Any] = []
+        self.roi: Any = None
+        self.dvpp_buffers: list[int] = []
+        with runtime.lock:
+            runtime.activate()
+            try:
+                self._create()
+                runtime.register_preprocessor(self)
+            except Exception:
+                self.close()
+                raise
+
+    @staticmethod
+    def accepts(data: bytes) -> bool:
+        if len(data) < 26 or data[:8] != b"\x89PNG\r\n\x1a\n":
+            return False
+        if data[12:16] != b"IHDR":
+            return False
+        width = int.from_bytes(data[16:20], "big")
+        height = int.from_bytes(data[20:24], "big")
+        bit_depth = int(data[24])
+        color_type = int(data[25])
+        return (
+            width == AscendEncodedPreprocessor.source_width
+            and height == AscendEncodedPreprocessor.source_height
+            and bit_depth == 8
+            and color_type in {2, 6}
+        )
+
+    def _picture_desc(
+        self, pointer: int, width: int, height: int
+    ) -> tuple[Any, int, int, int]:
+        acl = self.runtime.acl
+        width_stride = _align(width, 16) * 3
+        height_stride = _align(height, 2)
+        size = width_stride * height_stride
+        desc = acl.media.dvpp_create_pic_desc()
+        if desc is None:
+            raise RuntimeError("acl.media.dvpp_create_pic_desc返回空")
+        self.descriptors.append(desc)
+        for result, operation in (
+            (acl.media.dvpp_set_pic_desc_data(desc, pointer), "set data"),
+            (acl.media.dvpp_set_pic_desc_size(desc, size), "set size"),
+            (
+                acl.media.dvpp_set_pic_desc_format(
+                    desc, DVPP_PIXEL_FORMAT_RGB888
+                ),
+                "set format",
+            ),
+            (acl.media.dvpp_set_pic_desc_width(desc, width), "set width"),
+            (acl.media.dvpp_set_pic_desc_height(desc, height), "set height"),
+            (
+                acl.media.dvpp_set_pic_desc_width_stride(desc, width_stride),
+                "set width stride",
+            ),
+            (
+                acl.media.dvpp_set_pic_desc_height_stride(desc, height_stride),
+                "set height stride",
+            ),
+        ):
+            _require(result, f"acl.media.dvpp_set_pic_desc_{operation}")
+        return desc, width_stride, height_stride, size
+
+    def _dvpp_buffer(self, size: int, operation: str) -> int:
+        pointer = int(
+            _value(self.runtime.acl.media.dvpp_malloc(size), operation)
+        )
+        self.dvpp_buffers.append(pointer)
+        return pointer
+
+    def _resize_config(self) -> Any:
+        acl = self.runtime.acl
+        config = acl.media.dvpp_create_resize_config()
+        if config is None:
+            raise RuntimeError("acl.media.dvpp_create_resize_config返回空")
+        self.resize_configs.append(config)
+        _require(
+            acl.media.dvpp_set_resize_config_interpolation(config, 0),
+            "acl.media.dvpp_set_resize_config_interpolation",
+        )
+        return config
+
+    def _create(self) -> None:
+        acl = self.runtime.acl
+        self.stream = _value(acl.rt.create_stream(), "acl.rt.create_stream(DVPP)")
+        self.base_ready_event = _value(
+            acl.rt.create_event(), "acl.rt.create_event(base input)"
+        )
+        self.specialist_ready_event = _value(
+            acl.rt.create_event(), "acl.rt.create_event(specialist input)"
+        )
+        self.context_ready_event = _value(
+            acl.rt.create_event(), "acl.rt.create_event(context input)"
+        )
+        self.channel = acl.media.dvpp_create_channel_desc()
+        if self.channel is None:
+            raise RuntimeError("acl.media.dvpp_create_channel_desc返回空")
+        _require(
+            acl.media.dvpp_set_channel_desc_mode(
+                self.channel, DVPP_CHANNEL_MODE_VPC | DVPP_CHANNEL_MODE_PNGD
+            ),
+            "acl.media.dvpp_set_channel_desc_mode",
+        )
+        _require(
+            acl.media.dvpp_create_channel(self.channel),
+            "acl.media.dvpp_create_channel",
+        )
+
+        self.decoded_desc, self.decoded_width_stride, _, decoded_size = (
+            self._picture_desc(
+                self.specialist_model.input_device,
+                self.source_width,
+                self.source_height,
+            )
+        )
+        if decoded_size != self.specialist_model.input_size:
+            raise RuntimeError("Ascend增量OM输入大小与RGB888 PNGD输出不一致")
+
+        base_resize_size = _align(896, 16) * 3 * _align(717, 2)
+        self.base_resize_pointer = self._dvpp_buffer(
+            base_resize_size, "acl.media.dvpp_malloc(base resize)"
+        )
+        self.base_resize_desc, self.base_width_stride, _, _ = self._picture_desc(
+            self.base_resize_pointer, 896, 717
+        )
+        self.base_desc, base_width_stride, _, base_size = self._picture_desc(
+            self.base_model.input_device, 896, 736
+        )
+        if base_size != self.base_model.input_size:
+            raise RuntimeError("Ascend基础OM输入大小与RGB888 VPC输出不一致")
+        if base_width_stride != self.base_width_stride:
+            raise RuntimeError("Ascend基础resize与letterbox stride不一致")
+        _require(
+            acl.rt.memset(
+                self.base_model.input_device,
+                self.base_model.input_size,
+                114,
+                self.base_model.input_size,
+            ),
+            "acl.rt.memset(base letterbox)",
+        )
+
+        scene_resize_size = _align(176, 16) * 3 * _align(176, 2)
+        self.scene_resize_pointer = self._dvpp_buffer(
+            scene_resize_size, "acl.media.dvpp_malloc(scene resize)"
+        )
+        self.scene_resize_desc, _, _, _ = self._picture_desc(
+            self.scene_resize_pointer, 176, 176
+        )
+        self.scene_desc, _, _, scene_size = self._picture_desc(
+            self.context_model.input_device, 160, 160
+        )
+        if scene_size != self.context_model.input_size:
+            raise RuntimeError("Ascend场景OM输入大小与RGB888 VPC输出不一致")
+
+        self.base_resize_config = self._resize_config()
+        self.scene_resize_config = self._resize_config()
+        self.roi = acl.media.dvpp_create_roi_config(8, 167, 8, 167)
+        if self.roi is None:
+            raise RuntimeError("acl.media.dvpp_create_roi_config返回空")
+
+    def prepare(self, data: bytes) -> float:
+        if not self.accepts(data):
+            raise ValueError("Ascend DVPP仅接受固定640x512的8位RGB/RGBA PNG")
+        acl = self.runtime.acl
+        encoded = np.frombuffer(data, dtype=np.uint8)
+        encoded_pointer = _numpy_pointer(acl, encoded)
+        with self.lock:
+            self.runtime.activate()
+            width, height, _components = _value(
+                acl.media.dvpp_png_get_image_info(
+                    encoded_pointer, encoded.nbytes
+                ),
+                "acl.media.dvpp_png_get_image_info",
+            )
+            if (int(width), int(height)) != (self.source_width, self.source_height):
+                raise ValueError("Ascend DVPP PNG尺寸与固定生产契约不一致")
+            predicted_size = int(
+                _value(
+                    acl.media.dvpp_png_predict_dec_size(
+                        encoded_pointer,
+                        encoded.nbytes,
+                        DVPP_PIXEL_FORMAT_RGB888,
+                    ),
+                    "acl.media.dvpp_png_predict_dec_size",
+                )
+            )
+            if predicted_size != self.specialist_model.input_size:
+                raise ValueError("Ascend DVPP PNG解码大小与增量OM输入不一致")
+            started = time.perf_counter_ns()
+            if self.prepared_runs:
+                for event, name in (
+                    (self.base_ready_event, "base"),
+                    (self.specialist_ready_event, "specialist"),
+                    (self.context_ready_event, "context"),
+                ):
+                    _require(
+                        acl.rt.reset_event(event, self.stream),
+                        f"acl.rt.reset_event({name})",
+                    )
+            _require(
+                acl.media.dvpp_png_decode_async(
+                    self.channel,
+                    encoded_pointer,
+                    encoded.nbytes,
+                    self.decoded_desc,
+                    self.stream,
+                ),
+                "acl.media.dvpp_png_decode_async",
+            )
+            _require(
+                acl.rt.record_event(self.specialist_ready_event, self.stream),
+                "acl.rt.record_event(specialist input)",
+            )
+            _require(
+                acl.media.dvpp_vpc_resize_async(
+                    self.channel,
+                    self.decoded_desc,
+                    self.base_resize_desc,
+                    self.base_resize_config,
+                    self.stream,
+                ),
+                "acl.media.dvpp_vpc_resize_async(base)",
+            )
+            _require(
+                acl.rt.memcpy_async(
+                    self.base_model.input_device + 9 * self.base_width_stride,
+                    self.base_width_stride * 717,
+                    self.base_resize_pointer,
+                    self.base_width_stride * 717,
+                    ACL_MEMCPY_DEVICE_TO_DEVICE,
+                    self.stream,
+                ),
+                "acl.rt.memcpy_async(base letterbox)",
+            )
+            _require(
+                acl.rt.record_event(self.base_ready_event, self.stream),
+                "acl.rt.record_event(base input)",
+            )
+            _require(
+                acl.media.dvpp_vpc_resize_async(
+                    self.channel,
+                    self.decoded_desc,
+                    self.scene_resize_desc,
+                    self.scene_resize_config,
+                    self.stream,
+                ),
+                "acl.media.dvpp_vpc_resize_async(scene)",
+            )
+            _require(
+                acl.media.dvpp_vpc_crop_async(
+                    self.channel,
+                    self.scene_resize_desc,
+                    self.scene_desc,
+                    self.roi,
+                    self.stream,
+                ),
+                "acl.media.dvpp_vpc_crop_async(scene)",
+            )
+            _require(
+                acl.rt.record_event(self.context_ready_event, self.stream),
+                "acl.rt.record_event(context input)",
+            )
+            self.prepared_runs += 1
+            return (time.perf_counter_ns() - started) / 1_000_000.0
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        acl = self.runtime.acl
+        with self.runtime.lock:
+            if self.runtime.closed:
+                return
+            self.runtime.activate()
+            if self.roi is not None:
+                acl.media.dvpp_destroy_roi_config(self.roi)
+            for config in reversed(self.resize_configs):
+                acl.media.dvpp_destroy_resize_config(config)
+            for desc in reversed(self.descriptors):
+                acl.media.dvpp_destroy_pic_desc(desc)
+            for pointer in reversed(self.dvpp_buffers):
+                acl.media.dvpp_free(pointer)
+            if self.channel is not None:
+                acl.media.dvpp_destroy_channel(self.channel)
+                acl.media.dvpp_destroy_channel_desc(self.channel)
+            for event in (
+                self.context_ready_event,
+                self.specialist_ready_event,
+                self.base_ready_event,
+            ):
+                if event is not None:
+                    acl.rt.destroy_event(event)
+            if self.stream is not None:
+                acl.rt.destroy_stream(self.stream)
+            self.runtime.unregister_preprocessor(self)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 def detector_tensor(
@@ -604,6 +1039,31 @@ class AscendAclBackend:
         }
         return AscendResult(rows, self._last_timings)
 
+    def predict_preloaded(
+        self,
+        info: Mapping[str, float | int],
+        ready_event: Any,
+        **options: Any,
+    ) -> AscendResult:
+        outputs, inference_ms = self.model.execute_preloaded(ready_event)
+        postprocess_started = time.perf_counter_ns()
+        rows = yolo_detections(
+            outputs[0],
+            info,
+            float(options.get("conf", 0.5)),
+            float(options.get("iou", 0.7)),
+            int(options.get("max_det", 300)),
+        )
+        postprocess_ms = (
+            time.perf_counter_ns() - postprocess_started
+        ) / 1_000_000.0
+        self._last_timings = {
+            "preprocess": 0.0,
+            "inference": inference_ms,
+            "postprocess": postprocess_ms,
+        }
+        return AscendResult(rows, self._last_timings)
+
     def predict_batch(
         self, images: Sequence[Image.Image], **options: Any
     ) -> Sequence[AscendResult]:
@@ -694,6 +1154,14 @@ class AscendAclContextModel:
                 self.input_mode,
             )
         )
+        return self._result(outputs, inference_ms)
+
+    def predict_preloaded(self, ready_event: Any) -> dict[str, Any]:
+        outputs, inference_ms = self.model.execute_preloaded(ready_event)
+        return self._result(outputs, inference_ms)
+
+    @staticmethod
+    def _result(outputs: Sequence[np.ndarray], inference_ms: float) -> dict[str, Any]:
         sensor_prob = _softmax(outputs[0])[0]
         scene_prob = _softmax(outputs[1])[0]
         sensor_names = ["ir", "sar"]

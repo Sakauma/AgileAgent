@@ -533,19 +533,32 @@ async def detect(request: Request) -> JSONResponse:
                 raise ValueError("请选择一张图像。")
             data = await upload.read()
             upload_ms = (time.perf_counter() - upload_started) * 1000
-            decode_started = time.perf_counter()
-            image = decode_image_bytes(data, upload.filename or "image", str(decoding["backend"]))
-            decode_ms = (time.perf_counter() - decode_started) * 1000
             confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
-        result = await run_in_threadpool(
-            engine.predict,
-            image,
-            upload.filename or "image",
-            confidence,
-            "auto",
-        )
+        accepts_encoded = getattr(engine, "accepts_encoded", None)
+        if callable(accepts_encoded) and accepts_encoded(data):
+            decode_ms = 0.0
+            result = await run_in_threadpool(
+                engine.predict_encoded,
+                data,
+                upload.filename or "image",
+                confidence,
+                "auto",
+            )
+        else:
+            decode_started = time.perf_counter()
+            image = decode_image_bytes(
+                data, upload.filename or "image", str(decoding["backend"])
+            )
+            decode_ms = (time.perf_counter() - decode_started) * 1000
+            result = await run_in_threadpool(
+                engine.predict,
+                image,
+                upload.filename or "image",
+                confidence,
+                "auto",
+            )
         payload = public_result(result)
         payload.setdefault("timings", {}).update({
             "upload_parse_ms": round(upload_ms, 3),

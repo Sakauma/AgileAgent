@@ -200,6 +200,7 @@ ascend_backend:
   cann_version: 7.0.RC1
   precision: mixed_float16
   execution_mode: async_stream
+  encoded_preprocessing: cpu
   validated: true
   validation_report: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/validation/agent_smoke_summary.json
   models:

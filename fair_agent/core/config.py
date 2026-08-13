@@ -61,7 +61,7 @@ KNOWN_SECTION_KEYS = {
         "auto_start_server", "server_start_timeout_seconds", "request_timeout_seconds",
     },
     "native_backend": {"library", "base_engine", "engines", "context_engine", "precision", "require_exact_gpu", "validated"},
-    "ascend_backend": {"device_id", "soc_version", "cann_version", "precision", "execution_mode", "validated", "validation_report", "models", "context_model"},
+    "ascend_backend": {"device_id", "soc_version", "cann_version", "precision", "execution_mode", "encoded_preprocessing", "validated", "validation_report", "models", "context_model"},
     "tensorrt_backend": {
         "expected_version", "expected_compute_capability", "require_exact_gpu", "validated",
         "precision", "workspace_gib", "dynamic", "minimum_spatial_size", "engines", "context_engine", "export",
@@ -495,6 +495,8 @@ def validate_config(
         "async_stream",
     }:
         errors.append("ascend_backend.execution_mode非法")
+    if ascend.get("encoded_preprocessing", "cpu") not in {"cpu", "dvpp"}:
+        errors.append("ascend_backend.encoded_preprocessing非法")
     ascend_models = ascend.get("models")
     if not isinstance(ascend_models, Mapping) or not ascend_models:
         errors.append("ascend_backend.models必须是非空映射")

@@ -200,6 +200,7 @@ ascend_backend:
   cann_version: 7.0.RC1
   precision: mixed_float16
   execution_mode: synchronous
+  encoded_preprocessing: cpu
   validated: false
   validation_report: null
   models:

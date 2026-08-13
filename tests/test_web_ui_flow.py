@@ -67,6 +67,28 @@ class FakeEngine:
         ]
 
 
+class EncodedFakeEngine(FakeEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.encoded_calls = []
+
+    def accepts_encoded(self, data: bytes) -> bool:
+        return data.startswith(b"encoded-test")
+
+    def predict_encoded(
+        self, data, filename, confidence=0.50, incremental_protocol=None
+    ):
+        self.encoded_calls.append(
+            (data, filename, confidence, incremental_protocol)
+        )
+        return self.predict(
+            Image.new("RGB", (640, 512)),
+            filename,
+            confidence,
+            incremental_protocol,
+        )
+
+
 def client_with_engine() -> tuple[TestClient, FakeEngine]:
     engine = FakeEngine()
     return TestClient(create_app(
@@ -205,6 +227,38 @@ def test_single_detection_api_returns_public_json() -> None:
     assert engine.calls == [("sample.png", 0.21, "auto")]
     assert payload["agent"]["decision"]["input_mode"] == "unlabeled_image"
     assert payload["agent"]["decision"]["inference_scope"] == "production"
+
+
+def test_single_detection_uses_encoded_backend_without_cpu_decode(monkeypatch) -> None:
+    engine = EncodedFakeEngine()
+    client = TestClient(create_app(engine_provider=lambda: engine))
+
+    def fail_decode(*_args, **_kwargs):
+        raise AssertionError("CPU decoder must not run for accepted encoded input")
+
+    monkeypatch.setattr("fair_agent.web.app.decode_image_bytes", fail_decode)
+    payload = b"encoded-test-png"
+    response = client.post(
+        "/api/detect",
+        files={"file": ("sample.bin", payload, "application/octet-stream")},
+        data={"confidence": "0.31"},
+    )
+    assert response.status_code == 200
+    assert engine.encoded_calls == [(payload, "sample.bin", 0.31, "auto")]
+    assert response.json()["image_width"] == 640
+    assert response.json()["timings"]["decode_ms"] == 0.0
+
+
+def test_single_detection_falls_back_when_encoded_backend_rejects_input() -> None:
+    engine = EncodedFakeEngine()
+    client = TestClient(create_app(engine_provider=lambda: engine))
+    response = client.post(
+        "/api/detect",
+        files={"file": ("sample.png", png(), "image/png")},
+    )
+    assert response.status_code == 200
+    assert engine.encoded_calls == []
+    assert engine.calls == [("sample.png", 0.50, "auto")]
 
 
 def test_single_detection_does_not_filter_filename_extension_or_mime() -> None:
