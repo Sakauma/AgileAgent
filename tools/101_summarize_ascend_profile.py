@@ -131,6 +131,16 @@ def runtime_summary(profiler_dir: Path) -> Dict[str, Any]:
                 """
             )
         )
+        memcpy_info_rows = list(
+            connection.execute(
+                """
+                SELECT memcpy_direction, COUNT(*), SUM(data_size)
+                FROM MemcpyInfo
+                GROUP BY memcpy_direction
+                ORDER BY memcpy_direction
+                """
+            )
+        )
     by_api = [
         {
             "name": str(name),
@@ -145,7 +155,7 @@ def runtime_summary(profiler_dir: Path) -> Dict[str, Any]:
     predicates = {
         "stream_wait_and_synchronize": lambda name: "Synchronize" in name or "Wait" in name,
         "model_execute_enqueue": lambda name: "ModelExecute" in name,
-        "memcpy": lambda name: "Memcpy" in name,
+        "memcpy": lambda name: "memcpy" in name.lower() or "memcopy" in name.lower(),
         "event": lambda name: "Event" in name,
     }
     for category, predicate in predicates.items():
@@ -162,6 +172,17 @@ def runtime_summary(profiler_dir: Path) -> Dict[str, Any]:
             "bytes": int(size or 0),
             "host_api_total_us": float(total_us or 0.0),
         }
+    for direction, count, size in memcpy_info_rows:
+        numeric_direction = int(direction or 0)
+        name = MEMCPY_DIRECTIONS.get(
+            numeric_direction, f"direction_{numeric_direction}"
+        )
+        entry = memcpy.setdefault(
+            name,
+            {"count": 0, "bytes": 0, "host_api_total_us": 0.0},
+        )
+        entry["profiled_transfer_count"] = int(count)
+        entry["profiled_transfer_bytes"] = int(size or 0)
     return {"categories": categories, "memcpy_by_direction": memcpy, "top_apis": by_api[:20]}
 
 
