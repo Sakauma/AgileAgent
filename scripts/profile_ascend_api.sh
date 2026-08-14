@@ -39,12 +39,18 @@ application=(
 )
 printf -v application_command '%q ' "${application[@]}"
 printf '%s\n' "$application_command" > "$output_root/application-command.txt"
+{
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nexec'
+  printf ' %q' "${application[@]}"
+  printf '\n'
+} > "$output_root/application.sh"
+chmod 700 "$output_root/application.sh"
 
 export AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION=1
 cd "$repo"
 msprof \
   --output="$output_root/raw" \
-  --application="$application_command" \
+  --application="$output_root/application.sh" \
   --model-execution=on \
   --runtime-api=on \
   --task-time=on \
