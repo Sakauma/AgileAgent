@@ -59,9 +59,8 @@ msprof \
   --dvpp-profiling=on \
   --sys-profiling=on \
   --sys-pid-profiling=on \
-  --sys-hardware-mem=on \
-  --export=on \
-  --summary-format=csv 2>&1 | tee "$output_root/msprof.log"
+  --sys-hardware-mem=on 2>&1 | tee "$output_root/msprof.log"
 
 sha256sum "$output_root/application-report.json"
-find "$output_root/raw" -type f -printf '%P\n' | sort
+printf 'raw_file_count='; find "$output_root/raw" -type f | wc -l
+du -sh "$output_root/raw"
