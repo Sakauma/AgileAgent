@@ -249,6 +249,25 @@ def test_single_detection_uses_encoded_backend_without_cpu_decode(monkeypatch) -
     assert response.json()["timings"]["decode_ms"] == 0.0
 
 
+def test_single_detection_keeps_contract_sized_upload_in_memory(monkeypatch) -> None:
+    engine = EncodedFakeEngine()
+    client = TestClient(create_app(engine_provider=lambda: engine))
+
+    def fail_spooled_file_io(*_args, **_kwargs):
+        raise AssertionError("contract-sized detection upload used disk-backed I/O")
+
+    monkeypatch.setattr("starlette.datastructures.run_in_threadpool", fail_spooled_file_io)
+    payload = b"encoded-test" + b"x" * (1024 * 1024 + 4096)
+    response = client.post(
+        "/api/detect",
+        files={"file": ("large.png", payload, "image/png")},
+        data={"confidence": "0.31"},
+    )
+
+    assert response.status_code == 200
+    assert engine.encoded_calls == [(payload, "large.png", 0.31, "auto")]
+
+
 def test_single_detection_falls_back_when_encoded_backend_rejects_input() -> None:
     engine = EncodedFakeEngine()
     client = TestClient(create_app(engine_provider=lambda: engine))

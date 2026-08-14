@@ -15,6 +15,7 @@ from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException
+from starlette.formparsers import MultiPartException, MultiPartParser, parse_options_header
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -36,6 +37,8 @@ from fair_agent.modules.incremental_workbench import IncrementalBatchStore, Trai
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 EngineProvider = Callable[[], WebInferenceEngine]
+DETECTION_UPLOAD_SPOOL_MAX_BYTES = 2 * 1024 * 1024
+DETECTION_FAST_MULTIPART_MAX_BYTES = DETECTION_UPLOAD_SPOOL_MAX_BYTES + 64 * 1024
 
 
 class BatchResultStore:
@@ -334,6 +337,104 @@ def parse_confidence(value: Any, settings: Mapping[str, Any] | None = None) -> f
     return confidence
 
 
+async def parse_detection_form(request: Request):
+    """Parse a detection upload while keeping contract-sized PNGs in memory."""
+    parser = MultiPartParser(
+        request.headers,
+        request.stream(),
+        max_files=float("inf"),
+        max_fields=float("inf"),
+    )
+    # Starlette <=0.37 uses max_file_size; newer releases renamed the spool limit.
+    parser.max_file_size = DETECTION_UPLOAD_SPOOL_MAX_BYTES
+    parser.spool_max_size = DETECTION_UPLOAD_SPOOL_MAX_BYTES
+    try:
+        return await parser.parse()
+    except MultiPartException as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def parse_small_multipart(body: bytes, content_type: str) -> tuple[bytes, str, Any]:
+    """Extract the single detection file and confidence from a bounded body."""
+    _disposition, parameters = parse_options_header(content_type)
+    boundary = parameters.get(b"boundary")
+    if not isinstance(boundary, bytes) or not boundary or len(boundary) > 200:
+        raise ValueError("Multipart请求缺少有效boundary。")
+    delimiter = b"--" + boundary
+    if not body.startswith(delimiter + b"\r\n"):
+        raise ValueError("Multipart请求起始boundary无效。")
+
+    cursor = len(delimiter) + 2
+    file_data: bytes | None = None
+    filename = "image"
+    confidence: Any = None
+    while True:
+        marker = body.find(b"\r\n" + delimiter, cursor)
+        if marker < 0:
+            raise ValueError("Multipart请求缺少结束boundary。")
+        part = body[cursor:marker]
+        header_block, separator, content = part.partition(b"\r\n\r\n")
+        if not separator or len(header_block) > 16 * 1024:
+            raise ValueError("Multipart分段头无效。")
+        headers: dict[bytes, bytes] = {}
+        for line in header_block.split(b"\r\n"):
+            key, colon, value = line.partition(b":")
+            if not colon:
+                raise ValueError("Multipart分段头格式无效。")
+            headers[key.strip().lower()] = value.strip()
+        disposition, options = parse_options_header(headers.get(b"content-disposition", b""))
+        if disposition != b"form-data" or b"name" not in options:
+            raise ValueError("Multipart分段缺少Content-Disposition name。")
+        field_name = options[b"name"].decode("utf-8", "replace")
+        if b"filename" in options and field_name == "file" and file_data is None:
+            file_data = content
+            filename = options[b"filename"].decode("utf-8", "replace") or "image"
+        elif field_name == "confidence":
+            confidence = content.decode("ascii", "strict")
+
+        boundary_end = marker + 2 + len(delimiter)
+        suffix = body[boundary_end:boundary_end + 2]
+        if suffix == b"--":
+            trailing = body[boundary_end + 2:]
+            if trailing not in (b"", b"\r\n"):
+                raise ValueError("Multipart结束boundary后存在多余数据。")
+            break
+        if suffix != b"\r\n":
+            raise ValueError("Multipart分段boundary无效。")
+        cursor = boundary_end + 2
+
+    if file_data is None:
+        raise ValueError("请选择一张图像。")
+    return file_data, filename, confidence
+
+
+async def parse_detection_upload(request: Request) -> tuple[bytes, str, Any]:
+    content_length = request.headers.get("content-length")
+    content_type = request.headers.get("content-type", "")
+    try:
+        body_size = int(content_length) if content_length is not None else -1
+    except ValueError:
+        body_size = -1
+    if (
+        content_type.lower().startswith("multipart/form-data;")
+        and 0 <= body_size <= DETECTION_FAST_MULTIPART_MAX_BYTES
+    ):
+        return parse_small_multipart(await request.body(), content_type)
+
+    form = await parse_detection_form(request)
+    try:
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise ValueError("请选择一张图像。")
+        return (
+            await upload.read(),
+            upload.filename or "image",
+            form.get("confidence"),
+        )
+    finally:
+        await form.close()
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         started = time.perf_counter()
@@ -481,13 +582,12 @@ async def detect(request: Request) -> JSONResponse:
     decoding = settings["decoding"]
     upload_started = time.perf_counter()
     try:
-        async with request.form(max_files=float("inf"), max_fields=float("inf")) as form:
-            upload = form.get("file")
-            if not isinstance(upload, UploadFile):
-                raise ValueError("请选择一张图像。")
-            data = await upload.read()
-            upload_ms = (time.perf_counter() - upload_started) * 1000
-            confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
+        data, filename, confidence_value = await parse_detection_upload(request)
+        upload_ms = (time.perf_counter() - upload_started) * 1000
+        confidence = parse_confidence(
+            confidence_value if confidence_value is not None else settings["confidence"]["default"],
+            settings,
+        )
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         accepts_encoded = getattr(engine, "accepts_encoded", None)
@@ -496,20 +596,20 @@ async def detect(request: Request) -> JSONResponse:
             result = await run_in_threadpool(
                 engine.predict_encoded,
                 data,
-                upload.filename or "image",
+                filename,
                 confidence,
                 "auto",
             )
         else:
             decode_started = time.perf_counter()
             image = decode_image_bytes(
-                data, upload.filename or "image", str(decoding["backend"])
+                data, filename, str(decoding["backend"])
             )
             decode_ms = (time.perf_counter() - decode_started) * 1000
             result = await run_in_threadpool(
                 engine.predict,
                 image,
-                upload.filename or "image",
+                filename,
                 confidence,
                 "auto",
             )
@@ -525,7 +625,7 @@ async def detect(request: Request) -> JSONResponse:
             generation_id=result.get("agent", {}).get("decision", {}).get("generation_id", settings["generation_id"]),
             duration_ms=payload["system_total_ms"],
             details={
-                "filename": upload.filename or "image", "detection_count": payload.get("detection_count", 0),
+                "filename": filename, "detection_count": payload.get("detection_count", 0),
                 "inference_ms": payload.get("inference_ms"), "context": payload.get("context"),
                 "models_used": payload.get("agent", {}).get("models_used", []),
                 "routing_decision": payload.get("agent", {}).get("decision", {}),
@@ -533,7 +633,7 @@ async def detect(request: Request) -> JSONResponse:
         )
         return JSONResponse(payload)
     except HTTPException as exc:
-        return JSONResponse({"error": multipart_error(exc)}, status_code=400)
+        return JSONResponse({"error": str(exc.detail)}, status_code=400)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except (RuntimeError, OSError) as exc:
