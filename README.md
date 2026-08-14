@@ -2,7 +2,7 @@
 
 面向 IR/SAR 时变场景目标检测的快速学习智能体。系统以场景与传感器认知为上下文，自动协调冻结基础检测器和增量检测器，并提供增量数据审计、快速训练、模型复核、代际切换与回滚能力。
 
-项目同时提供面向检测用户的 Web 工作台和面向开发、运维及端侧集成的 CLI。本机开发、训练与板前代理验证运行于 x86-64 WSL/Linux 和 NVIDIA GPU；竞赛正式部署目标固定为华为 Ascend 310B，目前已完成固定 ONNX、数值/指标对齐、golden 与原生 ABI 的板前验证，OM 和真实性能将在硬件到位后完成。TensorRT 不属于 310B 部署链路。
+项目同时提供面向检测用户的 Web 工作台和面向开发、运维及端侧集成的 CLI。本机开发、训练与板前代理验证运行于 x86-64 WSL/Linux 和 NVIDIA GPU；竞赛正式部署目标固定为华为 Ascend 310B。当前仓库已实现基于 PyACL 的三模型 OM 后端和可选 DVPP 编码图像预处理；据本轮 SSH 只读复核，开发板上的正式 release 已能提供真实 PNG 推理。正式 release 的89图记录为平均引擎 `57.849 ms`、墙钟 `71.491 ms`；当前最完整的端到端 API 证据来自 AIPP staging 候选，为 `19.53 FPS`。两者均未达到端到端 `30 FPS`，且 staging 结果不代表正式服务。TensorRT 不属于 310B 部署链路。
 
 ## 核心能力
 
@@ -42,7 +42,7 @@ flowchart LR
 | Web / CLI | 可用 | 支持检测、决策展示、增量数据管理和结构化日志 |
 | 舰船 3+1 类别增量 | 当前750张模拟测试满分档且通过部署门禁 | 基础 mAP50 `0.81414` / New-mAP50 `0.63869` / KRR `1.00000` / 新类 precision `0.92453` / 老图误激活 `1/70`；尚不代表官方隐藏测试成绩 |
 | 后续官方增量数据 | 模板就绪 | 替换类别与清单后重新训练，增量阶段仍只读取当轮新增类数据 |
-| Ascend 310B | 板前验证完成，待硬件验证 | FP32 与混合 FP16 固定矩形 ONNX 均通过五项门禁；FP16 CUDA 代理无稳定加速且最快优化会改变 `1/89` 张结果，因此板前默认仍为 FP32；尚无 OM、AscendCL 实现和真实板端 FPS |
+| Ascend 310B | 板端推理可用，端到端性能未达标 | 据本轮 SSH 只读复核，正式 release 健康状态为 `ready`；89图平均引擎 `57.849 ms` / 墙钟 `71.491 ms`，该批次不是 HTTP 压测。AIPP staging 候选的真实 multipart PNG API 为平均 `51.203 ms` / P95 `63.9 ms` / `19.53 FPS`。只有已解码 Agent 核心候选达到 `31.11 FPS`，不等同于端到端达标 |
 | 官方隐藏测试提交 | 待赛题信息 | 测试目录和提交格式确认前保持阻塞 |
 
 当前唯一活动划分是覆盖全部750张图的固定3+1协议；不再施加赛题未要求的连续帧边界间距。历史划分只保存在 `archive/`，不参与配置、训练、选模或验收。
@@ -50,11 +50,15 @@ flowchart LR
 ## 阅读导航
 
 - [快速开始](#快速开始)：本机开发环境、Ascend 部署边界、首次配置和一键启动。
+- [系统架构](docs/ARCHITECTURE.md)：主要组件、在线推理、增量生命周期和关键抽象。
+- [配置参考](docs/CONFIGURATION.md)：完整 YAML、环境变量、覆盖顺序和保护边界。
+- [开发指南](docs/DEVELOPMENT.md) 与 [测试指南](docs/TESTING.md)：开发环境、常用命令、CI 和测试范围。
 - [使用方式](#使用方式)：Web 与 CLI 检测入口。
 - [增量学习工作台](#增量学习工作台)：上传、训练、校准、复核与上线流程。
 - [配置管理](#配置管理)：YAML 参数和 CLI 覆盖。
 - [可复现实验](#可复现实验)：唯一舰船3+1训练与复核入口。
 - [Ascend 310B 稳定加速设计](docs/ascend-310b-deployment.md)：固定形状 OM、AscendCL、预处理、量化边界与板端验收。
+- [Ascend 310B 当前工程评估](docs/ascend-310b-current-status.md)：正式部署、精度、性能、实验候选、风险与后续优先级。
 - [开发与验收](#开发与验收)：测试、发布检查和 GPU 冒烟命令。
 
 ## 快速开始
@@ -68,7 +72,7 @@ flowchart LR
 
 该环境负责训练、功能测试、ONNX 导出、数值对齐和板前性能代理。默认配置使用 CUDA 版 PyTorch 和 Ultralytics 加载 `.pt` 权重；本机 CUDA/ONNX Runtime 结果不得作为 310B 性能证据。
 
-版本库只同步源代码、公共配置、文档、训练权重，以及复核模型身份和指标所必需的校准、指标与 manifest。以下可重建产物始终留在本地：数据视图、运行报告、预测结果、设备专用配置、ONNX/OM 文件、原生构建目录和运行缓存。
+版本库只同步源代码、公共配置、文档、训练权重，以及复核模型身份和指标所必需的校准、指标与 manifest。公开的 Ascend 部署配置模板 [`configs/agent_pipeline_ascend310b.yaml`](configs/agent_pipeline_ascend310b.yaml) 也由 Git 跟踪；设备本地覆盖、凭据、运行生成配置、数据视图、运行报告、预测结果、ONNX/OM 文件、原生构建目录和运行缓存留在本地。
 
 ### 正式部署后端边界
 
@@ -76,9 +80,9 @@ flowchart LR
 
 - 固定 shape ONNX 作为 ATC 输入。
 - ATC 编译生成设备专用 OM。
-- AscendCL 负责模型加载、固定缓冲、stream/event 和推理执行。
-- DVPP/VPC/AIPP 负责可用的图像解码、缩放、补边、颜色转换与归一化。
-- 原生后处理完成 YOLO 解码、NMS、框级融合和场景软门禁。
+- `fair_agent/backends/ascend_acl.py` 通过 PyACL/AscendCL 负责 OM 加载、固定缓冲和推理执行。
+- 正式 release 的 `encoded_preprocessing` 固定为 `cpu`；仓库中的 DVPP/VPC 编码输入路径为默认关闭的实验能力，未完成完整89张精度门禁前不得切换。
+- Python/NumPy 后处理完成 YOLO 解码、NMS、框级融合和场景软门禁；每张图都必须执行 Base、Incremental 和 Scene。
 
 TensorRT 是 NVIDIA 专用推理运行时，华为 Ascend 310B 不使用 `.engine`、TensorRT builder 或 CUDA 原生后端。仓库中已有的 TensorRT 文件只保留为历史 x86 兼容实现，不参与竞赛部署、板端编译、精度验收或性能结论。310B 的完整操作与验收步骤以 [Ascend 310B 稳定加速设计](docs/ascend-310b-deployment.md) 为唯一部署依据。
 
@@ -287,7 +291,7 @@ Web 与 CLI 使用同一状态机和配置，批次状态、任务日志及最�
 
 ## 配置管理
 
-[`configs/agent_pipeline.yaml`](configs/agent_pipeline.yaml) 是运行参数的唯一持久事实源。CLI 的 `--set` 只覆盖当前进程；`config set` 会校验并原子写回 YAML：
+[`configs/agent_pipeline.yaml`](configs/agent_pipeline.yaml) 是 x86/NVIDIA 本机运行的默认持久事实源；Ascend 正式部署使用独立的 [`configs/agent_pipeline_ascend310b.yaml`](configs/agent_pipeline_ascend310b.yaml)。CLI 的 `--set` 只覆盖当前进程；`config set` 会校验并原子写回所选 YAML：
 
 ```bash
 agile-agent config validate --config configs/agent_pipeline.yaml
@@ -340,7 +344,7 @@ python tools/90_ascend_preflight.py optimize --shape-mode rect --device 0 \
 
 `optimize` 对每轮全部候选使用同一张性能样本，并额外在完整89张混合集上做不读取标签的逐层等价性检查；基础、增量和场景三个 owner 对每张图都会执行。本机稳定候选组合为 OpenCV PNG 解码、固定地址 CUDA Graph 代理、NMS 候选预筛选和新增类最低阈值前移，实测平均 `30.337 ms`、P95 `31.918 ms`、按平均值折算 `32.96 FPS`。它只存在于板前基准路径，production 运行链路尚未切换；CUDA 代理结果也不能替代 310B 的 OM、ACL、DVPP、多 stream 和稳定性验收。
 
-混合 FP16 可以在板卡到达前先做代理测试。以下命令从已验证的 FP32 ONNX 生成“内部 FP16、输入输出 FP32”的独立候选目录，不覆盖 FP32 基线：
+历史板前阶段曾使用混合 FP16 CUDA 代理暴露精度敏感点。以下命令从已验证的 FP32 ONNX 生成“内部 FP16、输入输出 FP32”的独立候选目录，不覆盖 FP32 基线；它们仍可用于复现历史板前实验，但不能替代当前板端结果：
 
 ```bash
 python tools/90_ascend_preflight.py convert-fp16 \
@@ -355,9 +359,9 @@ python tools/90_ascend_preflight.py optimize \
   --shape-mode rect --device 0 --provider cuda --warmup 30 --rounds 100
 ```
 
-当前混合 FP16 代理的基础 mAP50 `0.81954`、New-mAP50 `0.63869`、KRR `1.00000`、新类 precision `0.92453`、老图误激活率 `0.01429`，五项门槛均通过；但严格输出一致候选为 `26.97 FPS`，未优于同配置 FP32 的 `27.63 FPS`。启用新增类最低阈值前移后虽可达 `31.81 FPS`，却改变 `1/89` 张最终结果，因此不纳入默认方案，也不允许根据测试集重新调阈值。到板后仍需用 ATC `mixed_float16` 重新编译和验收；CUDA 代理不能代表 310B。
+历史混合 FP16 CUDA 代理的基础 mAP50 `0.81954`、New-mAP50 `0.63869`、KRR `1.00000`、新类 precision `0.92453`、老图误激活率 `0.01429`，五项门槛均通过；但严格输出一致候选为 `26.97 FPS`，未优于同配置 FP32 的 `27.63 FPS`。启用新增类最低阈值前移后虽可达 `31.81 FPS`，却改变 `1/89` 张最终结果，因此已拒绝。开发板现已完成独立 ATC/OM 和板端验收，当前结论以 [Ascend 310B 当前工程评估](docs/ascend-310b-current-status.md) 为准；CUDA 代理仍不能代表310B。
 
-当前精简后代码基线为 `188 passed`，另有一条来自 Starlette `TestClient` 与 httpx 兼容层的上游弃用警告，不影响测试结果。修改模型、推理后端或依赖后，必须重新执行三项验收。
+本轮共收集到 `221` 个 pytest 用例，并按板端范围执行了 Ascend 后端、Web 契约和静态发布校验相关的 `33` 项，结果为 `33 passed, 1 warning`；`python scripts/verify_release.py` 也已通过。该脚本通过只表示默认 x86 配置、资产和公开证据一致；当前 `configs/functional_models.yaml` 仍把三个功能模型的 `ascend_310b` 标为 `false`，因此静态状态仍报告 `ascend_310b_not_ready`，尚不能用它证明板端 release 已验收。部分测试和训练能力只适用于 x86 环境，未在本轮全部执行。修改模型、推理后端或依赖后，必须重新执行对应验收。
 
 ## 项目结构
 
@@ -371,7 +375,7 @@ fair_agent/
 ├── web/            # Starlette Web 服务与静态前端
 └── ui/             # 终端工作台
 native/             # 历史 x86/CUDA 兼容后端，不参与310B部署
-native_ascend/      # 310B正式管线 C ABI 与无 CANN contract stub
+native_ascend/      # 可选 C++ C ABI 与无 CANN contract stub；当前正式板端后端位于 fair_agent/backends/ascend_acl.py
 configs/            # 运行和实验 YAML
 models/             # 冻结权重、注册表和指标
 splits/             # 唯一活动的全量750张严格 3+1 划分
@@ -385,7 +389,9 @@ tests/              # 自动化测试
 
 ## 已知限制
 
-- 尚未完成 Ascend 310B 的 OM 转换、AscendCL 集成和真实板端 FPS 验证。
+- Ascend 310B 已完成 OM、PyACL/AscendCL 集成和真实板端测试，但正式 release 的89图记录不是 HTTP 压测；AIPP staging 候选的真实 PNG API 仅为平均 `19.53 FPS`，尚未达到 `30 FPS`。一小时稳定性和 DVPP 完整89张精度门禁也尚未完成。
+- 静态功能模型注册表仍保留板前状态 `ascend_310b: false`，导致发布校验继续报告 `ascend_310b_not_ready`；板端部署记录与仓库级发布元数据尚未形成同一套可复现证据。
+- 两份运行配置中的 `policies.end_device` 仍是旧值 `paused_until_ascend_board_ready`；Ascend 配置的 `refresh_blackboard.required_artifacts` 也仍指向默认 x86 配置。这些元数据不决定 PyACL 服务能否启动，但会污染决策展示和证据追踪，后续应随 release manifest 一并修正。
 - 当前750张模拟只验证了3个基础类别 + 1个新增类别；真实未知类别和多轮官方增量数据到达后必须按同一模板重新训练并复核。
 - Web 与 CLI 均会从训练继续执行到逐类校准、lock复核和受控上线；任一门禁失败时保持原production。
 - 仓库不包含竞赛数据集、官方测试集或正式提交格式。

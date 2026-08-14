@@ -176,7 +176,7 @@ incremental_guardian:
     FALSE_ACTIVATION_RISK: [recalibrate_per_class_thresholds, strengthen_conflict_arbitration]
     LATENCY_OPTIMIZATION_REQUIRED: [reduce_specialist_budget, enable_batch_inference, evaluate_quantization]
 
-# 历史 x86/NVIDIA 兼容配置。310B 不读取本段，不加载 .engine；正式板端只使用 native_ascend + OM。
+# 历史 x86/NVIDIA 兼容配置。310B 不读取本段、不加载 .engine；当前正式板端通过 fair_agent/backends/ascend_acl.py 使用 PyACL/AscendCL 加载 OM，native_ascend/ 仍是可选 C++ contract stub。
 native_backend:
   library: build/native/libagile_agent_tensorrt.so
   base_engine: runs/engines/local/three_class_base_detector.engine

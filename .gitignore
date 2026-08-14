@@ -85,3 +85,9 @@ venv/
 !/README.md
 /docs/*
 !/docs/ascend-310b-deployment.md
+!/docs/ascend-310b-current-status.md
+!/docs/ARCHITECTURE.md
+!/docs/CONFIGURATION.md
+!/docs/DEVELOPMENT.md
+!/docs/GETTING-STARTED.md
+!/docs/TESTING.md

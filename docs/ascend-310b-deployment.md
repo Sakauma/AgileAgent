@@ -1,24 +1,28 @@
 # AgileAgent Ascend 310B 到板部署、优化与验证指南
 
-本文固定 AgileAgent 在 12 GB 内存、标称 20 TOPS 的 Ascend 310B 设备上的首选部署方案、精度边界和验收方法，并给出板卡到货后可按阶段执行的运行手册。它既是后续实现与板端联调的设计基线，也是验收记录模板；文中会明确区分仓库已经具备的能力、需要在目标板上执行的命令模板，以及仍待实现的 AscendCL 代码，不能把 contract stub 当成真实推理后端。
+本文固定 AgileAgent 在 12 GB 内存、标称 20 TOPS 的 Ascend 310B 设备上的部署方案、精度边界和验收方法。板卡已经完成首次部署，因此本文同时保留可复用的分阶段运行手册，并以本页顶部的当前状态为准解释后续历史计划；`native_ascend/` 的 C++ contract stub 不是当前正式推理后端，当前可运行实现位于 `fair_agent/backends/ascend_acl.py`。
 
-> 状态：设计与板前 ONNX 验证已完成；硬件验收、OM 编译、AscendCL 实现与板端性能待执行
-> 基线日期：2026-08-08
+> 状态：三模型 OM、PyACL/AscendCL 后端、89图精度与真实 PNG 推理均已跑通；端到端30 FPS和1小时稳定性尚未通过
+> 状态日期：2026-08-14
 > 适用范围：当前 3+1 模拟增量模型，以及后续采用相同输入、标注和 Agent 协议重新训练的官方增量模型
+
+当前正式 release 为 `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2`，服务绑定 `127.0.0.1:8501`，本轮 SSH 只读复核时健康状态为 `ready`。正式配置保持 `encoded_preprocessing: cpu`，没有升级 CANN、驱动或固件，也没有切换正式 OM。仓库 `main` 已包含异步/AIPP 和默认关闭的 DVPP 候选代码；这些 staging 候选不等同于正式部署。原始板端日志尚未随仓库归档，因此 checkout 只能验证实现与配置，不能单独证明实时设备状态；精确边界见 [Ascend 310B 当前工程评估](ascend-310b-current-status.md)。
+
+仓库级发布元数据尚未跟上板端事实：`configs/functional_models.yaml` 仍把三个功能模型的 `ascend_310b` 标为 `false`，所以 `python scripts/verify_release.py` 虽能通过资产一致性检查，输出仍包含 `ascend_310b_not_ready`。在正式 release 的 source/OM/config/报告清单及哈希归档完成前，应保留这一 fail-closed 状态，不能只凭服务可运行就把注册表改为 ready。
 
 ## 1. 结论
 
 首选方案如下：
 
 1. 三个模型分别导出为固定形状、`batch=1`、输出原始张量且不在图内执行 NMS 的 ONNX，再用 ATC 编译为 OM。当前已验证输入为基础 `736×896`、增量 `512×640`、场景 `160×160`。
-2. 推理关键路径使用原生 C++ AscendCL，不用 Python 或训练框架承载板端在线推理。
+2. 当前实现由 Python 编排 PyACL/AscendCL，在线推理不加载 PyTorch、ONNX Runtime、CUDA 或 TensorRT 模型；未来若迁移 C++，必须重新通过相同门禁。
 3. 基础检测器、增量检测器和 Scene-SensorNet 全部常驻设备内存；任何未知输入图像都运行两个检测 owner，场景模型只提供软证据。
-4. PNG 解码后使用 DVPP/VPC 完成缩放与补边，AIPP 只负责颜色与归一化；若目标硬件或 CANN 版本不支持 PNG 硬解码，则使用 libpng/OpenCV 解码后进入 VPC。
-5. 为三个模型分配独立 stream/model ID，配合 2 至 3 槽环形缓冲区和异步事件同步。必须实测串行、双路并发和三路并发，冻结该设备上 P95 最优的调度方式。
+4. 正式 release 使用 CPU 解码/预处理；AIPP staging 候选已通过完整89图五项精度门禁，DVPP/VPC 仍只通过12图 preflight，默认关闭。
+5. 仓库实现支持异步 stream 和固定缓冲；是否进入正式配置只能由完整精度、真实 multipart PNG API P95/FPS 与稳定性共同决定。
 6. 首版使用混合 FP16。只有当原生 FP16 端到端性能仍不达标时，才进入受控 PTQ；不得为了峰值 TOPS 直接全模型 INT8。
 7. 单图 `batch=1` 必须独立达到性能要求，不能依靠 `batch=20` 的吞吐掩盖单图延迟。
 
-赛题最低目标是 30 FPS。本方案把工程验收目标固定为端到端平均吞吐不低于 36 FPS、P95 不高于 33.33 ms，以覆盖解码、预处理、模型执行、NMS、融合和调度开销，并给温度波动与长期运行留出余量。
+赛题最低目标是 30 FPS。本方案仍把内部工程目标固定为端到端平均吞吐不低于 36 FPS、P95 不高于 33.33 ms。当前 AIPP staging 的真实 multipart PNG API 为平均 `51.203 ms`、P95 `63.9 ms`、`19.53 FPS`；只有已解码 Agent 核心达到 `31.11 FPS`，不能据此宣称端到端达标。
 
 ## 2. 当前基线与风险边界
 
@@ -26,13 +30,13 @@
 
 | 模型 | 作用 | 输入 | PT 权重大小 | 当前精度证据 |
 | --- | --- | --- | ---: | --- |
-| YOLO11s 基础检测器 | 冻结旧类别 owner | `1×3×736×896` | 18.33 MiB | 基础 mAP50 `0.814142` |
-| YOLO11s 增量检测器 | 新类别 owner | `1×3×512×640` | 18.28 MiB | New-mAP50 `0.638688` |
+| YOLO11s 基础检测器 | 冻结旧类别 owner | `1×3×736×896` | 18.33 MiB | 正式 OM 基础 mAP50 `0.819407` |
+| YOLO11s 增量检测器 | 新类别 owner | `1×3×512×640` | 18.28 MiB | 正式 OM New-mAP50 `0.728761` |
 | Scene-SensorNet | IR/SAR 与已知场景软证据 | `1×3×160×160` | 0.75 MiB | 独立上下文模型，不能用于硬路由 |
 
-增量后 KRR 为 `1.000000`，当前部署门禁还包括新类 precision `0.924528` 和 70 张旧类图上的误激活率 `0.014286`。这些结果来自当前 750 张图的固定模拟划分，不代表官方隐藏测试成绩。
+正式 OM 的 KRR 为 `1.000000`，当前部署门禁还包括新类 precision `0.933333` 和70张旧类图上的误激活率 `0.014286`。这些结果来自当前750张图的固定模拟划分，不代表官方隐藏测试成绩。AIPP staging 候选对应结果为基础 mAP50 `0.819415`，其余四项相同；该候选没有切换正式 release。
 
-两个正式精度指标的余量较小：基础 mAP50 仅高出满分线约 `0.0141`，New-mAP50 仅高出满分线约 `0.0387`。因此部署顺序必须是“先做数值等价的 FP16 迁移，再按真实性能决定是否量化”。
+正式板端结果相对门槛的余量分别为：基础 mAP50 约 `0.0194`、New-mAP50 约 `0.1288`。任何候选仍必须先通过五项门禁和无泄露检查，再比较真实性能；不能用平均指标余量容忍逐图检测数变化。
 
 三个 PT 权重合计约 37.36 MiB，12 GB 内存足以容纳权重，但 PT 文件大小不能代表 OM 的真实内存占用。上线前必须用 `aclmdlQuerySize` 查询每个 OM 的权重与工作内存，并结合 `npu-smi` 记录三模型常驻、缓冲区和 DVPP 内存的峰值。
 
@@ -222,7 +226,7 @@ Ascend 的并发收益受 AI Core、内存带宽、DVPP 和 stream 调度影响�
 
 建议同时记录相对 PyTorch 基线的总体 mAP50 差值与逐类 AP 差值；任何指标即使只下降少量，只要跨过上述硬门槛就必须拒绝上线。
 
-板卡到达前可以先做 ONNX Runtime CUDA 代理验证，但它只回答“当前权重和 Agent 对 FP16 是否敏感”，不能代替 ATC `mixed_float16` 的算子选精度和 OM 性能。可复现命令为：
+历史板前阶段曾使用 ONNX Runtime CUDA 代理验证，它只回答“当前权重和 Agent 对 FP16 是否敏感”，不能代替 ATC `mixed_float16` 的算子选精度和 OM 性能。该实验仍可按以下命令复现：
 
 ```bash
 python tools/90_ascend_preflight.py convert-fp16 \
@@ -251,7 +255,7 @@ python tools/90_ascend_preflight.py optimize \
 
 性能方面，本机 CUDA 代理没有得到可重复的 FP16 优势。完全保持89张最终输出一致的候选，全 FP16 为平均 `37.081 ms` / P95 `51.085 ms` / `26.97 FPS`，Scene 保持 FP32 为 `36.640 ms` / `50.145 ms` / `27.29 FPS`，同配置 FP32 为 `36.191 ms` / `49.286 ms` / `27.63 FPS`。FP16 的最快候选虽达到平均 `31.439 ms`，却因冻结的新增类早筛阈值出现 `1/89` 张最终检测差异，必须拒绝，且不得根据测试集重新调阈值。
 
-因此板前默认仍保留 FP32；到板后的第一候选仍是 ATC `mixed_float16`。若真实 OM 对齐显示 Scene 输出敏感，则回退为检测器混合 FP16、Scene FP32；若五项门禁或逐图正确性失败，则整体回退 FP32。是否采用由真实 310B 的完整89张精度检查和端到端 P95 决定，不能根据本机 CUDA 结果预判。
+这段板前实验最终只用于选择到板候选。目标板已经以 ATC `mixed_float16` 编译并验证正式 OM；后续 AIPP/ATC/DVPP 候选仍必须由真实310B的完整89张精度和端到端 P95 决定，不能根据本机 CUDA 结果预判或覆盖板端记录。
 
 ### 8.2 第二阶段：受控 PTQ，仅在性能不足时启用
 
@@ -319,7 +323,7 @@ python tools/90_ascend_preflight.py optimize \
 - 记录峰值内存、温度、频率与是否出现热降频。
 - 验证模型热切换失败时能原子回滚，且不存在静默 CPU fallback。
 
-只有阶段 A 至 D 全部通过，Ascend 310B 状态才能从“待硬件验证”改为“可用”。
+阶段 A 至 D 已通过，因此当前状态是“板端推理可用且精度门禁通过”；阶段 G5 尚未通过，所以不能写成“端到端性能验收通过”。
 
 ## 11. 性能仍不达标时的结构级备选
 
@@ -341,7 +345,7 @@ python tools/90_ascend_preflight.py optimize \
 native_ascend/
 ├── CMakeLists.txt
 ├── include/              # 已冻结的整体管线 C ABI
-└── src/                  # 当前为无CANN contract stub；到板后替换为ACL实现
+└── src/                  # C++ contract stub；当前真实 PyACL 后端位于 fair_agent/backends/ascend_acl.py
 
 runs/ascend310b/
 ├── onnx/                 # 可重建，不入 Git
@@ -407,9 +411,9 @@ RTX 4060 的 ONNX Runtime CUDA 代理性能仅用于验证计时框架，不能�
 
 ONNX Runtime 的 CUDA Graph 会话在本机默认流上不能安全地并发捕获。代理实现因此先串行完成固定地址分配和两次预热/捕获，再以串行图执行参与基准；这不是 AscendCL 的实现约束。310B 仍需分别实测 ACL 串行、双 stream 和三 stream，并以端到端 P95 冻结调度。
 
-上述优化目前只实现于 `tools/90_ascend_preflight.py` 的板前基准路径，不能描述为现有 production 已切换。到板后应迁移的是 OpenCV/libpng 或 DVPP 解码、VPC/AIPP、固定缓冲区、候选预筛选和安全的阈值前移原则，而不是照搬 ORT CUDA Graph 或 Python 线程池。
+上述历史 CUDA 优化只存在于 `tools/90_ascend_preflight.py` 的板前基准路径。仓库现已实现 PyACL 异步/AIPP 与可选 DVPP 路径，但正式 production 未切换 staging 候选；ORT CUDA Graph 结果仍不可写成板端证据。
 
-原生 C ABI contract stub 也已在 WSL 用 GCC 9.4/CMake 3.16 构建并通过 smoke：ABI版本1、Ready=false、warmup/predict明确失败、无CPU回退。真实 AscendCL 实现必须保持该 ABI。
+原生 C ABI contract stub 也已在 WSL 用 GCC 9.4/CMake 3.16 构建并通过 smoke：ABI版本1、Ready=false、warmup/predict明确失败、无CPU回退。当前 production 使用独立 PyACL 实现；只有未来 C++ 迁移才必须保持该 ABI。
 
 ## 14. 官方参考资料
 
@@ -423,21 +427,23 @@ ONNX Runtime 的 CUDA Graph 会话在本机默认流上不能安全地并发捕�
 
 ## 15. 实施前检查单
 
-- [ ] 已取得五条硬件/软件识别命令输出。
-- [ ] 已按厂商兼容矩阵冻结固件、驱动和 CANN。
+下列 `[x]` 同时包含仓库可复核项和本轮板端只读观测；涉及 NPU、OM、温度、精度或服务状态的勾选不能由 checkout 单独证明，交付时必须由同一 release manifest 和原始报告重新签字。
+
+- [x] 已取得硬件/软件识别输出：Atlas 200I DK A2 / Ascend310B1，NPU 健康状态为 OK。
+- [x] 已冻结现有固件、驱动和 CANN 7.0.RC1；本轮未升级或混装。
 - [x] 三个 ONNX 均为固定 shape、batch=1、原始输出且无图内 NMS。
 - [x] 本机混合 FP16 ONNX 代理五项门禁通过；未将 CUDA 代理误写为板端证据。
-- [ ] 三个混合 FP16 OM 编译无算子回退和未解释警告。
+- [x] 三个 mixed-float16 OM 已在目标板编译并可由 PyACL 加载执行。
 - [x] 本机参考预处理、PyTorch 与 ONNX Runtime 原始输出已对齐。
 - [x] 本机89张无标签逐层优化等价性检查通过。
 - [x] 本机CUDA代理已筛出平均 `32.96 FPS`、P95 `31.918 ms` 的稳定候选；不作为310B证据。
-- [ ] 板端 DVPP/VPC/AIPP 输出与 golden bundle 逐张对齐。
-- [ ] 三个 OM 常驻内存，峰值低于安全水位。
-- [ ] 已实测三种调度方式并冻结 P95 最优方案。
+- [ ] DVPP/VPC 仅完成12图 preflight；AIPP 候选完成89图五项门禁，但两者均未切换正式 release。
+- [x] 正式服务三个 OM 常驻且健康；空闲观测 NPU 内存为 `6905 / 11577 MB`、温度 `63°C`。
+- [x] 已完成同步/异步与 AIPP 组合候选测试；正式 release 仍保持原配置。
 - [ ] 完整 Agent 达到 `≥36 FPS` 且 P95 `≤33.33 ms`。
 - [x] PyTorch/ONNX 五项精度与部署质量门禁全部通过。
 - [x] 板前无标签全量推理和无泄露审计通过。
-- [ ] OM 完整 Agent 的五项门禁与无泄露审计通过。
+- [x] OM 完整 Agent 的五项门禁与无泄露审计通过。
 - [ ] 1 小时稳定性、温度和回滚测试通过。
 
 ---
@@ -448,7 +454,7 @@ ONNX Runtime 的 CUDA Graph 会话在本机默认流上不能安全地并发捕�
 
 - **【仓库已实现】**：命令或接口目前存在，可直接从仓库根目录运行。
 - **【板端命令模板】**：命令结构有效，但 CANN 版本、安装路径、SoC 名称或工具参数必须以目标板实际输出为准。
-- **【待实现】**：仓库当前只有接口契约或设计，命令在真实实现完成前不能成功。不得把 stub 的构建成功写成 Ascend 推理成功。
+- **【待实现】**：仍未实现的可选 C++ ABI、稳定性或优化项；不得把 stub 的构建成功写成 Ascend 推理成功，也不得把 staging 候选写成正式 release。
 
 整个到板过程分为六个门，必须按顺序通过：
 
@@ -743,7 +749,9 @@ msit benchmark \
 
 ### 23.1 当前状态
 
-`native_ascend/` 当前只构建 `libagile_agent_ascend_contract_stub.so`。它会固定返回 Not Ready，证明 ABI、错误传播和禁止 CPU fallback；它不会加载 OM、调用 CANN 或给出 FPS。
+真实板端后端已经实现于 `fair_agent/backends/ascend_acl.py`：它通过 PyACL/AscendCL 初始化设备、校验并加载三个 OM、复用输入输出缓冲、执行 YOLO/Scene 后处理，并在 OM、哈希、shape 或运行时契约不符时直接失败。`tools/92_run_ascend_om.py` 提供单模型/原始输出执行入口，`tools/94_score_ascend_agent.py` 提供冻结预测后的板端评分入口。正式服务健康状态为 `ready`，每张图都执行 Base、Incremental 和 Scene，且无 CPU/CUDA/PyTorch 模型推理回退。
+
+`native_ascend/` 目录本身仍只构建 `libagile_agent_ascend_contract_stub.so`。它会固定返回 Not Ready，用于证明可选 C++ ABI、错误传播和禁止 CPU fallback；它不会加载 OM、调用 CANN 或给出 FPS。两条路径不能混写：当前 production 是 PyACL，C++ 目录是回归夹具和未来迁移边界。
 
 **【仓库已实现】** 可用下列命令确认 stub 契约没有被破坏：
 
@@ -754,9 +762,11 @@ python tools/91_smoke_ascend_contract.py \
   build/native_ascend_stub/libagile_agent_ascend_contract_stub.so
 ```
 
-**【待实现】** 板端工作是在保持 `native_ascend/include/agile_agent_ascend_backend.h` ABI v1 不变的前提下，新增真实共享库目标。真实构建完成前，不应把 `-DASCEND_HOME=...` 的构建模板写成已可运行命令。
+**【可选待实现】** 若后续需要从 PyACL 迁移到 C++，应在保持 `native_ascend/include/agile_agent_ascend_backend.h` ABI v1 不变的前提下新增真实共享库目标。它不是当前推理可用性的阻塞项，但迁移候选必须重新通过89图精度、API 性能和稳定性门禁。
 
-### 23.2 生命周期必须按以下顺序实现
+### 23.2 生命周期契约
+
+当前 PyACL 类与未来 C++ handle 都必须遵守以下资源顺序；下方 ABI 函数表只约束未来 C++ 实现，不代表正式服务当前通过该动态库运行。
 
 ```mermaid
 flowchart TD
@@ -870,9 +880,11 @@ ABI 函数的板端语义固定为：
 
 如果 DVPP 插值与参考实现不能做到逐元素一致，必须继续比较恢复框、最终逐图检测和完整指标。不能只看预处理图像“肉眼差不多”。
 
+当前 DVPP 候选在12张图上保持了 `12/12` 的检测数量、类别序列和 context 标签，但因 VPC 插值造成概率/坐标变化，`0/12` 达到最终结果逐元素完全一致；完整89图五项门禁尚未执行。其240样本性能为平均 `37.124 ms`、P95 `38.154 ms`、`26.94 FPS`，因此继续保持 `encoded_preprocessing: cpu`，不得上线 DVPP。
+
 ## 25. G3：YOLO 后处理、类别映射与 Agent 融合
 
-板端 C++ 必须复现仓库当前语义：
+当前 PyACL 后端与任何未来 C++ 后端都必须复现仓库当前语义：
 
 | 项目 | 冻结值 |
 | --- | --- |
@@ -901,7 +913,7 @@ ABI 函数的板端语义固定为：
 
 ### 25.1 允许的候选预筛选
 
-NMS 前可以删除“所有类别分数都不高于当前原始候选下限”的 anchor，但 C++ 的比较符号、浮点类型和多标签语义必须与 `fair_agent/modules/ascend_preflight.py` 一致。
+NMS 前可以删除“所有类别分数都不高于当前原始候选下限”的 anchor，但后端的比较符号、浮点类型和多标签语义必须与 `fair_agent/modules/ascend_preflight.py` 一致。
 
 当前混合 FP16 本机最快方案在把新增类阈值前移后改变了 `1/89` 张最终结果，因此“新增类 `0.63` 阈值提前到 NMS 前”默认关闭。只有在目标 OM 上完成完整 89 张逐图等价验证且 P95 确有收益，才能作为该 OM 候选的一部分冻结；不得根据测试标签重新调阈值。
 
@@ -945,7 +957,7 @@ golden 通过并不等于完整精度通过；它只用于快速确定实现层�
 
 ### 27.1 当前仓库能力边界
 
-`tools/90_ascend_preflight.py metric-align` 当前只支持 PyTorch 与 ONNX Runtime，不会加载 OM。真实后端完成后，需要给 `fair_agent.modules.ascend_preflight.evaluate_fixed_agent` 接入一个 Ascend `RawRunner`，或写一个产生相同预测文件格式的板端 runner。在该适配器完成前，不能宣称 OM 已通过赛题指标。
+`tools/90_ascend_preflight.py metric-align` 仍负责 PyTorch/ONNX Runtime 板前对齐；真实 OM 执行已由 `fair_agent/backends/ascend_acl.py`、`tools/92_run_ascend_om.py` 和正式 Web 推理链路实现，`tools/94_score_ascend_agent.py` 可在预测冻结后评分。正式 release 已在89张混合集上完成无标签推理、冻结预测和五项评分，因此“OM 尚不能评测”的旧限制已经解除。任何新 OM/AIPP/DVPP 候选仍必须重新执行同一两阶段流程。
 
 ### 27.2 两阶段进程隔离
 
@@ -970,13 +982,15 @@ golden 通过并不等于完整精度通过；它只用于快速确定实现层�
 
 ### 27.4 五项验收门槛
 
-| 指标 | 评分范围 | 门槛 | 当前 PyTorch production 参考 |
-| --- | --- | ---: | ---: |
-| Base-mAP50 | 70张纯旧类基础测试，旧类 `0/1/3` | `≥0.80` | `0.81414` |
-| New-mAP50 | 完整89张混合集，只评新类 `2` | `≥0.60` | `0.63869` |
-| KRR | 完整89张混合集，旧类 after/before | `≥0.95` | `1.00000` |
-| 新类 precision | 完整混合集，冻结阈值 | `≥0.90` | `0.92453` |
-| 旧类图新增误激活率 | 70张旧类图 | `≤0.05` | `0.01429` |
+| 指标 | 评分范围 | 门槛 | 正式 release | AIPP staging 候选 |
+| --- | --- | ---: | ---: | ---: |
+| Base-mAP50 | 70张纯旧类基础测试，旧类 `0/1/3` | `≥0.80` | `0.819407` | `0.819415` |
+| New-mAP50 | 完整89张混合集，只评新类 `2` | `≥0.60` | `0.728761` | `0.728761` |
+| KRR | 完整89张混合集，旧类 after/before | `≥0.95` | `1.000000` | `1.000000` |
+| 新类 precision | 完整混合集，冻结阈值 | `≥0.90` | `0.933333` | `0.933333` |
+| 旧类图新增误激活率 | 70张旧类图 | `≤0.05` | `0.014286` | `0.014286` |
+
+AIPP 候选五项通过只代表精度可接受；由于真实 API 性能仍未达到30 FPS且正式 release 没有切换，不能把右列描述为 production 数字。
 
 `full_map50` 只报告诊断，不能替代 New-mAP。KRR 为 1 也不能替代 Base-mAP50；新类误框不会自动降低旧类 KRR，因此 precision 和误激活门禁必须独立检查。
 
@@ -1000,6 +1014,17 @@ golden 通过并不等于完整精度通过；它只用于快速确定实现层�
 5. 同时记录 mean、P50、P95、P99、max、总墙钟吞吐和失败数。
 6. 每次候选只改变一个变量，并记录温度、频率、功耗、NPU 内存和利用率。
 7. 串行、双检测器并发、三模型并发用完全相同的图像顺序分别测量。
+
+截至2026-08-14的板端实测如下：
+
+| 测量边界 | 样本 | Mean | P95 | FPS | 结论 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 正式 release 完整89图 | 89 | 引擎 `57.849 ms`；墙钟 `71.491 ms` | 未记录 | 引擎约 `17.29`；墙钟约 `13.99` | 能正确运行，不是 HTTP 压测，性能未达标 |
+| AIPP staging 已解码 Agent 核心 | 200 | `32.148 ms` | `33.193 ms` | `31.11` | 仅核心路径超过30 FPS |
+| DVPP staging 候选 | 240 | `37.124 ms` | `38.154 ms` | `26.94` | 12图 preflight，默认关闭 |
+| AIPP staging 真实 multipart PNG API | 1068 | `51.203 ms` | `63.9 ms` | `19.53` | 当前最完整的候选 API 证据，未达30 FPS |
+
+真实 API 报告还记录客户端墙钟平均 `83.510 ms`、P95 `133.083 ms`，以及平均 multipart 解析 `7.329 ms`、PNG 解码 `9.669 ms`、Agent 引擎 `32.513 ms`。这些分段说明仅优化模型执行不足以关闭端到端差距。
 
 ### 28.3 分段计时
 
@@ -1074,9 +1099,11 @@ golden 通过并不等于完整精度通过；它只用于快速确定实现层�
 
 本机 ONNX FP16 只能指出 Scene 和阈值边界可能敏感，不能代替上述 OM 决策。
 
+已测试的 Base ATC `op_precision_mode` 候选只把单模型 P95 从 `20.000 ms` 降到 `19.766 ms`，改善约 `0.234 ms`（约 `1.17%`），却在低阈值89图对齐中改变2张图的检测数量，已经拒绝且未集成。后续不得复用该候选的性能数字搭配正式 OM 的精度报告。
+
 ### 30.2 PTQ 数据边界
 
-只有原生 ACL、固定缓冲、VPC/AIPP、C++ 后处理、调度矩阵和 mixed FP16 都完成后仍未达到性能线，才启用 msModelSlim PTQ。
+只有 ACL、固定缓冲、受验证的 VPC/AIPP、后处理、调度矩阵和 mixed FP16 都完成后仍未达到性能线，才启用 msModelSlim PTQ。
 
 - Base 校准：仅 `splits/strict_3plus1/base_train.txt`。
 - Incremental 校准：仅 `splits/strict_3plus1/increment_train.txt`。
@@ -1105,7 +1132,17 @@ golden 通过并不等于完整精度通过；它只用于快速确定实现层�
 
 ### 32.1 发布目录
 
-每个候选使用不可变目录，`current` 只指向一个已验收版本：
+当前正式目录为：
+
+```text
+/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/
+├── conda-env/          # release 隔离 Python 环境
+├── om/                 # 正式三个 OM
+├── src/                # 正式服务源码与配置
+└── validation/         # smoke、89图预测与评分记录
+```
+
+正式进程使用该绝对路径启动，服务仅监听 `127.0.0.1:8501`。仓库 `main`、正式 release 与 `staging/perf-async-c3223b6` 是三个不同边界；staging 的 AIPP/DVPP/ATC 结果不得覆盖正式目录。后续每个候选仍应使用不可变目录，并让 `current` 只指向一个已验收版本：
 
 ```text
 releases/
@@ -1120,9 +1157,11 @@ releases/
 
 切换流程：后台加载候选 → 完整预热 → golden 自检 → 一张或多张 shadow 输入对比 → Ready → 原子切换。任何一步失败都不改 `current`。
 
-### 32.2 systemd 模板
+### 32.2 当前启动方式与 systemd 模板
 
-**【待实现】** 真实板端可执行文件完成后，可按以下思路配置服务；`agile-agent-ascend` 只是占位名：
+当前服务由 `scripts/start_agent_ascend310b.sh` 使用 release 内 `conda-env/bin/python -m uvicorn` 启动，并由 `scripts/stop_agent_ascend310b.sh` 校验 PID 命令行后停止；脚本明确不会安装或升级 CANN、驱动和固件。当前没有把下方 systemd 占位模板部署为正式服务。
+
+**【可选待实现】** 若未来新增 C++ 可执行文件和 systemd 管理，可按以下思路配置服务；`agile-agent-ascend` 只是占位名：
 
 ```ini
 [Unit]
@@ -1208,17 +1247,19 @@ runs/ascend310b_board/<candidate>/
 
 最终签字项：
 
-- [ ] 已确认准确 SoC、12 GB 内存、固件、驱动和 CANN 兼容组合。
-- [ ] 三个 ONNX 契约与 production profile 一致。
-- [ ] 三个 OM 在目标软件/硬件组合重新编译，日志无未解释问题。
-- [ ] 真实 AscendCL 库进入 Ready，stub 不在正式进程中。
-- [ ] PNG、三路预处理、原始输出、NMS、坐标和融合完成 golden 对齐。
-- [ ] 89张图全部 owner 执行，预测冻结前评分进程未读取标签。
-- [ ] Base-mAP50、New-mAP50、KRR、precision、误激活率五项通过。
+这里的“已完成”记录当前正式板端部署，不等于证据已随 Git 归档。正式交付前应先把环境、源码、配置、OM 和报告哈希绑定到同一不可变 manifest，再复核所有 `[x]`；当前性能、稳定性和回滚项仍未签字。
+
+- [x] 已确认 Ascend310B1、`11577 MB` NPU 内存和 CANN 7.0.RC1；固件、驱动和 CANN 保持原版未升级。
+- [x] 三个 ONNX 契约与 production profile 一致。
+- [x] 三个 OM 已在目标软件/硬件组合编译并由正式服务加载。
+- [x] PyACL/AscendCL 后端进入 Ready，C++ contract stub 不在正式进程中。
+- [ ] 三个代表 case 已完成模型/Agent smoke，但逐元素 golden 全量对齐仍应随任何新候选复跑。
+- [x] 89张图全部 owner 执行，预测冻结前评分进程未读取标签。
+- [x] Base-mAP50、New-mAP50、KRR、precision、误激活率五项通过。
 - [ ] 单图 `batch=1` 平均 `≥36 FPS`、P95 `≤33.33 ms`。
 - [ ] 1小时无错误、无持续内存增长和热降频。
 - [ ] 上一候选可原子回滚，失败时没有 CPU/ONNX/TensorRT 静默回退。
-- [ ] ONNX、OM、数据、标签、golden 和设备日志未提交 Git。
+- [x] ONNX、OM、数据、标签、golden 和设备日志未提交 Git。
 
 ## 36. 一页式建议日程
 
@@ -1238,7 +1279,7 @@ runs/ascend310b_board/<candidate>/
 
 ### Day 2：完成真实 Agent
 
-1. 实现并构建 AscendCL ABI v1 动态库。
+1. 实现并部署 PyACL/AscendCL 后端；C++ ABI v1 动态库保留为可选后续迁移。
 2. 先用软件预处理、串行执行建立正确基线。
 3. 完成 golden 全链路对齐。
 4. 接入无标签板端 runner。
@@ -1253,9 +1294,9 @@ runs/ascend310b_board/<candidate>/
 
 1. 固定缓冲与2槽流水线。
 2. VPC/AIPP。
-3. C++ 后处理与安全候选预筛选。
+3. 后处理与安全候选预筛选。
 4. 串行/双流/三流矩阵。
 5. 仍不足时才做受控 PTQ。
 6. 最终候选完成1000次性能采样、1小时稳定性和回滚演练。
 
-完成上述全部步骤后，才能把文档顶部状态更新为“Ascend 310B 板端验收通过”，并填写真实 SoC、CANN、OM 候选、五项指标、平均 FPS、P95 和稳定性结果。
+当前 G0 至 G4 的关键闭环已经完成，状态可写为“Ascend 310B 板端推理可用且精度门禁通过”；G5 仍未关闭，因此不能写成“性能验收通过”或“端到端达到30 FPS”。只有真实 PNG API、1小时稳定性和回滚演练通过后，才能完成最终性能签字。
