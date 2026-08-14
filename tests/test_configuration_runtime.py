@@ -46,6 +46,19 @@ def test_effective_config_rejects_unknown_runtime_field() -> None:
         validate_config(config)
 
 
+def test_ascend_dvpp_scene_resize_stages_require_even_bounded_shapes() -> None:
+    config = clean_config()
+    config["ascend_backend"]["dvpp_scene_resize_stages"] = [
+        [208, 192],
+        [288, 230],
+    ]
+    validate_config(config)
+
+    config["ascend_backend"]["dvpp_scene_resize_stages"] = [[207, 192]]
+    with pytest.raises(ValueError, match="偶数宽高"):
+        validate_config(config)
+
+
 def test_cli_overrides_are_typed_and_process_local() -> None:
     config = clean_config()
     effective = apply_overrides(config, ["inference.confidence_default=0.61", "ui.history_limit=7"])

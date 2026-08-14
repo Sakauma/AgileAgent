@@ -450,8 +450,9 @@ def _validated_model_entry(
 
 
 def _load_model(options: Mapping[str, Any], entry: Mapping[str, Any]) -> AscendAclModel:
-    if options.get("validated") is not True:
-        raise RuntimeError("Ascend后端尚未通过golden验收，禁止加载OM。")
+    from fair_agent.modules.ascend_release import require_ascend_runtime_artifacts
+
+    require_ascend_runtime_artifacts(options)
     path = resolve_path(entry["path"])
     if not path.is_file():
         raise RuntimeError(f"Ascend OM不存在：{path}")
@@ -470,6 +471,31 @@ def _align(value: int, alignment: int) -> int:
     return (int(value) + int(alignment) - 1) // int(alignment) * int(alignment)
 
 
+def validate_dvpp_scene_resize_stages(value: Any) -> tuple[tuple[int, int], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)) or len(value) > 4:
+        raise ValueError("Ascend Scene DVPP多级resize必须是最多4级的尺寸列表")
+    stages = []
+    for index, stage in enumerate(value):
+        if not isinstance(stage, (list, tuple)) or len(stage) != 2:
+            raise ValueError(f"Ascend Scene DVPP resize第{index}级必须包含宽和高")
+        width, height = stage
+        if any(
+            isinstance(item, bool)
+            or not isinstance(item, int)
+            or item < 16
+            or item > 4096
+            or item % 2
+            for item in (width, height)
+        ):
+            raise ValueError(
+                f"Ascend Scene DVPP resize第{index}级宽高必须是16-4096范围内的偶数"
+            )
+        stages.append((int(width), int(height)))
+    return tuple(stages)
+
+
 class AscendEncodedPreprocessor:
     """Decode one fixed production PNG into the three resident AIPP inputs."""
 
@@ -482,6 +508,7 @@ class AscendEncodedPreprocessor:
         base_model: AscendAclModel,
         specialist_model: AscendAclModel,
         context_model: AscendAclModel,
+        scene_resize_stages: Any = None,
     ) -> None:
         contracts = (
             (base_model, (1, 736, 896, 3), "base"),
@@ -502,6 +529,9 @@ class AscendEncodedPreprocessor:
         self.base_model = base_model
         self.specialist_model = specialist_model
         self.context_model = context_model
+        self.scene_resize_stages = validate_dvpp_scene_resize_stages(
+            scene_resize_stages
+        )
         self.lock = threading.Lock()
         self.closed = False
         self.stream: Any = None
@@ -512,6 +542,7 @@ class AscendEncodedPreprocessor:
         self.channel: Any = None
         self.descriptors: list[Any] = []
         self.resize_configs: list[Any] = []
+        self.scene_intermediate_descs: list[Any] = []
         self.roi: Any = None
         self.dvpp_buffers: list[int] = []
         with runtime.lock:
@@ -653,6 +684,17 @@ class AscendEncodedPreprocessor:
             "acl.rt.memset(base letterbox)",
         )
 
+        for index, (width, height) in enumerate(self.scene_resize_stages):
+            intermediate_size = _align(width, 16) * 3 * _align(height, 2)
+            intermediate_pointer = self._dvpp_buffer(
+                intermediate_size,
+                f"acl.media.dvpp_malloc(scene intermediate {index})",
+            )
+            intermediate_desc, _, _, _ = self._picture_desc(
+                intermediate_pointer, width, height
+            )
+            self.scene_intermediate_descs.append(intermediate_desc)
+
         scene_resize_size = _align(176, 16) * 3 * _align(176, 2)
         self.scene_resize_pointer = self._dvpp_buffer(
             scene_resize_size, "acl.media.dvpp_malloc(scene resize)"
@@ -750,15 +792,30 @@ class AscendEncodedPreprocessor:
                 acl.rt.record_event(self.base_ready_event, self.stream),
                 "acl.rt.record_event(base input)",
             )
+            scene_source = self.decoded_desc
+            for index, intermediate_desc in enumerate(
+                self.scene_intermediate_descs
+            ):
+                _require(
+                    acl.media.dvpp_vpc_resize_async(
+                        self.channel,
+                        scene_source,
+                        intermediate_desc,
+                        self.scene_resize_config,
+                        self.stream,
+                    ),
+                    f"acl.media.dvpp_vpc_resize_async(scene intermediate {index})",
+                )
+                scene_source = intermediate_desc
             _require(
                 acl.media.dvpp_vpc_resize_async(
                     self.channel,
-                    self.decoded_desc,
+                    scene_source,
                     self.scene_resize_desc,
                     self.scene_resize_config,
                     self.stream,
                 ),
-                "acl.media.dvpp_vpc_resize_async(scene)",
+                "acl.media.dvpp_vpc_resize_async(scene final)",
             )
             _require(
                 acl.media.dvpp_vpc_crop_async(

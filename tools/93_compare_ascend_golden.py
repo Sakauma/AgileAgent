@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from fair_agent.modules.ascend_alignment import match_detections as match_detection_rows
 from fair_agent.modules.ascend_preflight import LetterboxInfo, _postprocess_yolo, _softmax
 
 
@@ -64,50 +65,16 @@ def detector_rows(
 def match_detections(
     reference: list[dict[str, Any]], candidate: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    def sorted_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return sorted(
-            rows,
-            key=lambda row: (
-                int(row["local_class_id"]),
-                -float(row["confidence"]),
-                *(round(float(value), 5) for value in row["xyxy"]),
-            ),
-        )
-
-    expected = sorted_rows(reference)
-    actual = sorted_rows(candidate)
-    if len(expected) != len(actual):
-        return {
-            "reference_count": len(expected),
-            "candidate_count": len(actual),
-            "class_ids_equal": False,
-            "max_box_abs": None,
-            "max_confidence_abs": None,
-            "passed": False,
-        }
-    class_ids_equal = all(
-        int(first["local_class_id"]) == int(second["local_class_id"])
-        for first, second in zip(expected, actual)
-    )
-    if not expected:
-        max_box_abs = max_confidence_abs = 0.0
-    else:
-        max_box_abs = max(
-            abs(float(left) - float(right))
-            for first, second in zip(expected, actual)
-            for left, right in zip(first["xyxy"], second["xyxy"])
-        )
-        max_confidence_abs = max(
-            abs(float(first["confidence"]) - float(second["confidence"]))
-            for first, second in zip(expected, actual)
-        )
+    matched = match_detection_rows(reference, candidate, class_key="local_class_id")
     return {
-        "reference_count": len(expected),
-        "candidate_count": len(actual),
-        "class_ids_equal": class_ids_equal,
-        "max_box_abs": float(max_box_abs),
-        "max_confidence_abs": float(max_confidence_abs),
-        "passed": bool(class_ids_equal and max_box_abs <= 1.0 and max_confidence_abs <= 0.02),
+        **matched,
+        "class_ids_equal": matched["class_counts_equal"],
+        "passed": bool(
+            matched["count_equal"]
+            and matched["class_counts_equal"]
+            and matched["max_box_abs"] <= 1.0
+            and matched["max_confidence_abs"] <= 0.02
+        ),
     }
 
 

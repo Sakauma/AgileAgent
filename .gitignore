@@ -56,6 +56,11 @@ venv/
 !/tools/92_run_ascend_om.py
 !/tools/93_compare_ascend_golden.py
 !/tools/94_score_ascend_agent.py
+!/tools/95_verify_ascend_release.py
+!/tools/96_compare_ascend_api.py
+!/tools/97_benchmark_ascend_api.py
+!/tools/98_freeze_ascend_predictions.py
+!/tools/99_validate_ascend_dvpp_inputs.py
 !/scripts/start_agent_ascend310b.sh
 !/scripts/stop_agent_ascend310b.sh
 
@@ -71,6 +76,8 @@ venv/
 !/configs/functional_models.yaml
 !/configs/incremental_detection_policy.yaml
 !/configs/strict_class_incremental_3plus1.yaml
+!/configs/ascend310b/
+!/configs/ascend310b/**
 
 # Local competition notes are not part of the public source release.
 /*.md

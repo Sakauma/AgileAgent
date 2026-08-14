@@ -2,7 +2,7 @@
 set -euo pipefail
 
 RELEASE_ROOT="${AGILE_AGENT_ASCEND_RELEASE:-/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2}"
-PID_FILE="${RELEASE_ROOT}/agent-web.pid"
+PID_FILE="${AGILE_AGENT_ASCEND_PID_FILE:-${RELEASE_ROOT}/agent-web.pid}"
 
 if [[ ! -f "${PID_FILE}" ]]; then
   printf '服务未登记PID：%s\n' "${PID_FILE}"

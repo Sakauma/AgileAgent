@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import statistics
 import subprocess
 import sys
@@ -18,6 +19,16 @@ from fair_agent.core.config import config_sha256, rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
 
 
+ROUTING_TIMING_KEYS = (
+    "routing_fusion_ms",
+    "routing_conversion_ms",
+    "routing_gate_ms",
+    "routing_conflict_ms",
+    "routing_nms_ms",
+    "routing_decision_ms",
+)
+
+
 def _percentile(values: list[float], percentile: float) -> float:
     if not values:
         return 0.0
@@ -27,6 +38,117 @@ def _percentile(values: list[float], percentile: float) -> float:
     upper = min(lower + 1, len(ordered) - 1)
     fraction = index - lower
     return ordered[lower] * (1 - fraction) + ordered[upper] * fraction
+
+
+def _distribution(values: list[float]) -> Dict[str, float | int]:
+    if not values:
+        return {
+            "count": 0,
+            "mean_ms": 0.0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "p99_ms": 0.0,
+            "max_ms": 0.0,
+            "fps_from_mean": 0.0,
+        }
+    mean_ms = statistics.fmean(values)
+    return {
+        "count": len(values),
+        "mean_ms": mean_ms,
+        "p50_ms": _percentile(values, 0.50),
+        "p95_ms": _percentile(values, 0.95),
+        "p99_ms": _percentile(values, 0.99),
+        "max_ms": max(values),
+        "fps_from_mean": 1000.0 / mean_ms if mean_ms > 0 else 0.0,
+    }
+
+
+def _command_snapshot(command: list[str]) -> Dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(resolve_path(".")),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"command": command, "available": False, "error": str(exc)}
+    return {
+        "command": command,
+        "available": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout.strip()[:8000],
+        "stderr": completed.stderr.strip()[:8000],
+    }
+
+
+def _artifact_evidence(entry: Any) -> Dict[str, Any]:
+    if not isinstance(entry, Mapping) or not entry.get("path"):
+        return {"configured": False}
+    path = resolve_path(str(entry["path"]))
+    return {
+        "configured": True,
+        "path": str(path),
+        "exists": path.is_file(),
+        "configured_sha256": entry.get("sha256"),
+        "actual_sha256": sha256_file(path) if path.is_file() else None,
+    }
+
+
+def _runtime_evidence(config: Mapping[str, Any], health: Mapping[str, Any]) -> Dict[str, Any]:
+    ascend = config.get("ascend_backend") or {}
+    manifest_path = resolve_path(str(ascend.get("build_manifest") or ""))
+    manifest: Dict[str, Any] = {}
+    if manifest_path.is_file():
+        try:
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = loaded if isinstance(loaded, dict) else {}
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            manifest = {}
+    git_sha = str(manifest.get("git_sha") or "")
+    if not git_sha:
+        git_result = _command_snapshot(["git", "rev-parse", "HEAD"])
+        git_sha = str(git_result.get("stdout") or "unknown")
+    model_entries = {
+        str(source): _artifact_evidence(entry)
+        for source, entry in dict(ascend.get("models") or {}).items()
+    }
+    return {
+        "git_sha": git_sha,
+        "python": sys.version,
+        "platform": platform.platform(),
+        "health": dict(health),
+        "ascend": {
+            "device_id": ascend.get("device_id"),
+            "soc_version": ascend.get("soc_version"),
+            "cann_version": ascend.get("cann_version"),
+            "precision": ascend.get("precision"),
+            "execution_mode": ascend.get("execution_mode"),
+            "encoded_preprocessing": ascend.get("encoded_preprocessing"),
+            "memory_mode": ascend.get("memory_mode", "pageable"),
+            "dvpp_scene_resize_stages": list(
+                ascend.get("dvpp_scene_resize_stages") or []
+            ),
+            "models": model_entries,
+            "context_model": _artifact_evidence(ascend.get("context_model")),
+            "build_manifest": _artifact_evidence({
+                "path": ascend.get("build_manifest"),
+                "sha256": ascend.get("build_manifest_sha256"),
+            }),
+            "validation_report": _artifact_evidence({
+                "path": ascend.get("validation_report"),
+                "sha256": ascend.get("validation_report_sha256"),
+            }),
+        },
+        "commands": {
+            "npu_smi": _command_snapshot(["npu-smi", "info"]),
+            "atc": _command_snapshot(["atc", "--help"]),
+            "msprof": _command_snapshot(["msprof", "--help"]),
+            "aoe": _command_snapshot(["aoe", "-h"]),
+        },
+    }
 
 
 def _performance_assessment(
@@ -60,7 +182,7 @@ def _post_one_with_client(client: httpx.Client, path: Path, confidence: float) -
     if "annotated_base64" in payload:
         raise RuntimeError("检测API仍同步返回标注图，性能口径无效。")
     timings = payload.get("timings") or {}
-    return {
+    row = {
         "server_ms": float(payload["system_total_ms"]),
         "inference_ms": float(payload["inference_ms"]),
         "wall_ms": wall_ms,
@@ -68,8 +190,9 @@ def _post_one_with_client(client: httpx.Client, path: Path, confidence: float) -
         "decode_ms": float(timings.get("decode_ms", 0.0)),
         "queue_wait_ms": float(timings.get("queue_wait_ms", 0.0)),
         "engine_total_ms": float(timings.get("engine_total_ms", 0.0)),
-        "routing_fusion_ms": float(timings.get("routing_fusion_ms", 0.0)),
     }
+    row.update({key: float(timings.get(key, 0.0)) for key in ROUTING_TIMING_KEYS})
+    return row
 
 
 def _post_one(base_url: str, path: Path, confidence: float, timeout: float) -> Dict[str, float]:
@@ -152,7 +275,8 @@ def _benchmark_running_server(
     with httpx.Client(base_url=base_url, timeout=timeout, trust_env=False) as client:
         health = client.get("/api/health")
         health.raise_for_status()
-        generation_id = health.json()["generation_id"]
+        health_payload = health.json()
+        generation_id = health_payload["generation_id"]
     for index in range(int(performance["warmup_requests"])):
         _post_one(base_url, paths[index % len(paths)], confidence, timeout)
 
@@ -164,7 +288,8 @@ def _benchmark_running_server(
     all_decode: list[float] = []
     all_queue: list[float] = []
     all_engine: list[float] = []
-    all_routing: list[float] = []
+    routing_values = {key: [] for key in ROUTING_TIMING_KEYS}
+    request_rows: list[Dict[str, Any]] = []
     for round_index in range(int(performance["benchmark_rounds"])):
         round_rows = [_post_one(base_url, path, confidence, timeout) for path in paths]
         server = [row["server_ms"] for row in round_rows]
@@ -177,7 +302,16 @@ def _benchmark_running_server(
         all_decode.extend(row["decode_ms"] for row in round_rows)
         all_queue.extend(row["queue_wait_ms"] for row in round_rows)
         all_engine.extend(row["engine_total_ms"] for row in round_rows)
-        all_routing.extend(row["routing_fusion_ms"] for row in round_rows)
+        for key in ROUTING_TIMING_KEYS:
+            routing_values[key].extend(row[key] for row in round_rows)
+        request_rows.extend(
+            {
+                "round": round_index + 1,
+                "image": rel_path(path),
+                **row,
+            }
+            for path, row in zip(paths, round_rows)
+        )
         rounds.append({
             "round": round_index + 1,
             "mean_server_ms": statistics.fmean(server),
@@ -241,7 +375,12 @@ def _benchmark_running_server(
         "all_mean_decode_ms": statistics.fmean(all_decode),
         "all_mean_queue_wait_ms": statistics.fmean(all_queue),
         "all_mean_engine_total_ms": statistics.fmean(all_engine),
-        "all_mean_routing_fusion_ms": statistics.fmean(all_routing),
+        "all_mean_routing_fusion_ms": statistics.fmean(routing_values["routing_fusion_ms"]),
+        "server_distribution": _distribution(all_server),
+        "client_wall_distribution": _distribution(all_wall),
+        "routing_distributions": {
+            key: _distribution(values) for key, values in routing_values.items()
+        },
         "batch_image_count": len(batch_paths),
         "batch_system_total_ms": float(median_batch["system_total_ms"]),
         "batch_fps": float(median_batch["fps"]),
@@ -251,6 +390,7 @@ def _benchmark_running_server(
         "concurrent_success_count": len(concurrent_rows),
         "concurrent_p95_wall_ms": _percentile([row["wall_ms"] for row in concurrent_rows], 0.95),
         "concurrent_p95_server_ms": _percentile([row["server_ms"] for row in concurrent_rows], 0.95),
+        "request_failure_count": 0,
     }
     competition_gates, diagnostic_checks = _performance_assessment(
         summary, performance, concurrency
@@ -259,8 +399,18 @@ def _benchmark_running_server(
     output = resolve_path(performance["report_root"]) / run_id
     output.mkdir(parents=True, exist_ok=False)
     clean_config = {key: value for key, value in config.items() if not str(key).startswith("_")}
+    p0_gates = {
+        "mean_server_ms": float(summary["server_distribution"]["mean_ms"]) <= 40.0,
+        "p95_server_ms": float(summary["server_distribution"]["p95_ms"]) <= 42.0,
+        "request_failures": int(summary["request_failure_count"]) == 0,
+    }
+    final_gates = {
+        "mean_server_ms": float(summary["server_distribution"]["mean_ms"]) <= 33.33,
+        "p95_server_ms": float(summary["server_distribution"]["p95_ms"]) <= 35.0,
+        "request_failures": int(summary["request_failure_count"]) == 0,
+    }
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "base_url": base_url,
         "server_mode": server_mode,
@@ -269,10 +419,16 @@ def _benchmark_running_server(
         "split_sha256": sha256_file(split),
         "summary": summary,
         "rounds": rounds,
+        "requests": request_rows,
+        "environment": _runtime_evidence(config, health_payload),
         "competition_gates": competition_gates,
+        "ascend_p0_gates": p0_gates,
+        "ascend_final_gates": final_gates,
         "diagnostic_checks": diagnostic_checks,
         "warnings": [name for name, passed in diagnostic_checks.items() if not passed],
         "accepted": all(competition_gates.values()),
+        "ascend_p0_accepted": all(p0_gates.values()),
+        "ascend_final_accepted": all(final_gates.values()),
     }
     manifest = output / "benchmark.json"
     manifest.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
