@@ -37,7 +37,7 @@ runtime:
 | `NCCL_IB_DISABLE` | `1` | 禁用 NCCL InfiniBand 传输。 |
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` | 减少长训练中的 CUDA 保留段碎片。 |
 
-Ascend 启动脚本还会读取目标机的 `/usr/local/Ascend/ascend-toolkit/set_env.sh`。该外部脚本不在仓库中，因此它额外导出的 CANN 环境变量无法从本项目枚举。
+Ascend 启动脚本还会读取目标机外部路径 /usr/local/Ascend/ascend-toolkit/set_env.sh。该外部脚本不在仓库中，因此它额外导出的 CANN 环境变量无法从本项目枚举。
 
 <!-- VERIFY: 目标 Ascend 板上的 /usr/local/Ascend/ascend-toolkit/set_env.sh 存在，并提供当前 CANN 运行时所需的环境变量 -->
 
@@ -59,7 +59,7 @@ Ascend 启动脚本还会读取目标机的 `/usr/local/Ascend/ascend-toolkit/se
 | [`configs/local_infer_gpu.yaml`](../configs/local_infer_gpu.yaml) | 本地 GPU 基础检测与模型冒烟检查参数。 | `model`、`source`、`predict`、`output`、`names`。 |
 | [`configs/submission_infer_base_3class.yaml`](../configs/submission_infer_base_3class.yaml) | 三类基础检测器的提交推理与导出参数。 | `model`、`source`、`predict`、`output`、`names`。 |
 
-运行时生成的 `dataset.yaml`、`batch.yaml`、`training_adapter.yaml` 和实验快照属于可审计产物，不是全局配置入口，通常不应手工编辑。
+例如，运行时生成的 `dataset.yaml`、`batch.yaml`、`training_adapter.yaml` 和实验快照属于可审计产物，不是仓库中预置的全局配置入口，通常不应手工编辑。
 
 ### 主运行配置结构
 
@@ -87,7 +87,7 @@ agile-agent config validate --config "$PROFILE"
 agile-agent config show --config "$PROFILE" --effective
 ```
 
-`configs/agent_pipeline.local.yaml` 符合仓库现有的 `/configs/*` 忽略规则，不会被默认纳入版本控制。`config set` 会先解析 YAML 标量、校验完整配置、备份旧文件，再以临时文件原子替换目标配置。
+例如，以上命令创建的 `configs/agent_pipeline.local.yaml` 符合仓库现有的 `/configs/*` 忽略规则，不会被默认纳入版本控制。`config set` 会先解析 YAML 标量、校验完整配置、备份旧文件，再以临时文件原子替换目标配置。
 
 ## 必需与可选设置
 
@@ -139,9 +139,22 @@ agile-agent config show --config "$PROFILE" --effective
 | 增量工作台 | 根目录 `data/incremental_batches`；上传上限 2 GiB；解压上限 5 GiB/20000 文件；最少 2 张图；验证集与锁定集比例均为 `0.20`；轮询间隔 `2000` 毫秒。 |
 | 增量训练 | 当前解释器；设备 `0`；`imgsz: 640`；批量 `32`；`80` epochs；AdamW；`lr0: 0.001`；确定性和 AMP 均开启。 |
 | UI | 历史 `20` 条；完整结果缓存 `10` 份；健康轮询 `15000` 毫秒；提示持续 `4200` 毫秒；默认视图 `detect`。 |
-| 性能 | API 目标 `30` FPS、P95 `50` 毫秒；允许自动启动服务；启动/请求超时均为 `180` 秒；基准轮数 `3`。 |
+| 性能 | `target_api_fps: 30` 的数值与官方效率10分满分线一致，但这里只是 API 基准目标，不是评分器；P95 `50` 毫秒是仓库 x86/API 基线。允许自动启动服务；启动/请求超时均为 `180` 秒；基准轮数 `3`。 |
 | 代际 | production 通道；候选 `incremental_detection_generation`；校准阈值 `0.63`；`auto_promote: true`；冒烟图像数 `1`。 |
 | 后端状态 | 原生 TensorRT、Ascend 和 TensorRT engine 均 `validated: false`；默认实际后端仍为 `ultralytics_cuda`。 |
+
+### 官方60分口径与配置边界
+
+竞赛性能指标由四项组成。赛题原文使用 `mAP`；仓库当前精度字段和评分实现为 `mAP@0.5`（`mAP50`），最终应以官方评分程序的 IoU 口径为准。
+
+| 官方指标 | 分值 | 完整评分档位 |
+| --- | ---: | --- |
+| 基础目标检测 mAP | 30 | `≥0.80:30`；`≥0.70:25`；`≥0.65:20`；`≥0.60:15`；`≥0.50:10`；`≥0.40:5`；`<0.40:0` |
+| New-mAP | 10 | `≥0.60:10`；`≥0.50:7`；`≥0.40:4`；`<0.40:0` |
+| KRR | 10 | `≥0.95:10`；`≥0.90:7`；`≥0.80:4`；`<0.80:0` |
+| Ascend 310B 端到端 FPS | 10 | `≥30:10`；`≥20:7`；`≥10:4`；`<10:0` |
+
+主配置的 `gates.official_hard` 与增量实验的 `acceptance` 章节只保存前三项的满分线，用于决定候选是否可晋升；它们没有编码较低得分档，也不负责第四项FPS计分。`performance.target_api_fps: 30` 同样只是目标值：低于30 FPS仍可能落入7分、4分或0分档。第四项必须在310B上以 `batch=1` 完整处理单帧多模态数据测得；`target_p95_ms`、precision、误激活率、稳定性和回滚要求均为工程门禁，不增加官方分数。
 
 ## 按环境覆盖
 
