@@ -83,8 +83,10 @@ class DynamicResult:
 class FakeDetector:
     def __init__(self, result):
         self.result = result
+        self.calls = []
 
-    def predict(self, _image, **_kwargs):
+    def predict(self, _image, **kwargs):
+        self.calls.append(kwargs)
         return self.result
 
     def predict_batch(self, images, **_kwargs):
@@ -102,6 +104,26 @@ def test_detection_records_are_public_and_serializable() -> None:
     assert summarize_records(records) == {"soldier": 1, "tank": 1}
     assert yolo_inference_ms(FakeResult()) == 7.35
     json.dumps(records)
+
+
+def test_detection_records_prefer_native_mappings_without_box_conversion() -> None:
+    class NativeResult:
+        records = (
+            {"class_id": 2, "confidence": 0.91234567, "xyxy": [1.234, 2.345, 30.456, 40.567]},
+        )
+
+        @property
+        def boxes(self):
+            raise AssertionError("native records must bypass the boxes adapter")
+
+    assert result_records(NativeResult()) == [
+        {
+            "class_id": 2,
+            "class_name": "warship",
+            "confidence": 0.912346,
+            "xyxy": [1.23, 2.35, 30.46, 40.57],
+        }
+    ]
 
 
 def test_native_result_box_adapter_supports_iteration_contract() -> None:
@@ -357,6 +379,25 @@ def test_fusion_does_not_renms_a_frozen_base_only_owner_stream() -> None:
     assert summary == {"input_count": 2, "output_count": 2, "suppressed_count": 0}
 
 
+def test_vectorized_fusion_preserves_stable_ties_and_input_audit() -> None:
+    rows = [
+        {
+            "class_id": 4,
+            "confidence": 0.9 if index < 2 else 0.8 - index / 100,
+            "xyxy": [index * 30, 0, index * 30 + 20, 20],
+            "source": "incremental_model" if index != 1 else "frozen_base_model",
+            "protocol_id": f"p{index}",
+        }
+        for index in range(8)
+    ]
+    rows[1]["xyxy"] = [1, 1, 19, 19]
+
+    fused, summary = class_aware_nms(rows, 0.60)
+
+    assert [row["protocol_id"] for row in fused] == ["p0", "p2", "p3", "p4", "p5", "p6", "p7"]
+    assert summary == {"input_count": 8, "output_count": 7, "suppressed_count": 1}
+
+
 def test_dynamic_new_class_mapping_and_neutral_context() -> None:
     remapped = remap_specialist_records(
         [{"class_id": 0, "confidence": 0.9, "xyxy": [1, 1, 2, 2]}],
@@ -465,7 +506,14 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
         "target.pt": DynamicResult([([1, 1, 19, 19], 0.95, 0)]),
         "new.pt": DynamicResult([([70, 70, 90, 90], 0.88, 0)]),
     }
-    engine._create_backend = lambda _backend, path, _device, _native: FakeDetector(specialist_results[str(path)])
+    created_specialists = {}
+
+    def create_specialist(_backend, path, _device, _native):
+        detector = FakeDetector(specialist_results[str(path)])
+        created_specialists[str(path)] = detector
+        return detector
+
+    engine._create_backend = create_specialist
     engine.backend_name = "ultralytics_cuda"
     engine.native_options = {}
     engine.specialist_detectors = {}
@@ -475,7 +523,7 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
             "incremental_mode": "class_incremental",
             "global_class_id": 4,
             "class_name": "new_vehicle",
-            "activation_threshold": 0.5,
+            "activation_threshold": 0.63,
             "calibration_source": "incremental_val/calibration.json",
             "routing_prior": 0.8,
             "context_prior": {},
@@ -503,3 +551,4 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     assert result["agent"]["decision"]["executed_protocols"] == ["p05_new_vehicle", "p02_warship"]
     assert result["agent"]["decision"]["fusion_summary"]["suppressed_count"] == 1
     assert all("fusion_status" in item for item in result["detections"])
+    assert created_specialists["new.pt"].calls[0]["conf"] == 0.5

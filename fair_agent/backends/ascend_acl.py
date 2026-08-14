@@ -1028,7 +1028,11 @@ class AscendBoxes:
 
 class AscendResult:
     def __init__(self, rows: Sequence[Mapping[str, Any]], timings: Mapping[str, float]) -> None:
-        self.boxes = AscendBoxes(rows)
+        # Keep the postprocessed mappings available to the Agent layer.  The
+        # boxes adapter remains for Ultralytics compatibility, but routing no
+        # longer has to rebuild these rows through three temporary lists.
+        self.records = tuple(rows)
+        self.boxes = AscendBoxes(self.records)
         self.speed = dict(timings)
 
 
