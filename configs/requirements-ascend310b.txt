@@ -1,7 +1,9 @@
-# Web and validation-only additions for the release-local Python 3.9
-# environment on Atlas 200I DK A2.  CANN, PyACL, NumPy, OpenCV, Pillow and
-# PyTorch are supplied by the board environment and are intentionally absent.
+# Web and validation-only additions for the named Python 3.9 environment
+# /usr/local/miniconda3/envs/agileagent on Atlas 200I DK A2.  CANN, PyACL,
+# NumPy, OpenCV, Pillow and PyTorch are supplied by the board environment and
+# are intentionally absent.
 starlette==0.37.2
 uvicorn==0.30.6
 python-multipart==0.0.9
+pluggy==1.6.0
 pytest==8.3.5

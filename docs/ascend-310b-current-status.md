@@ -8,7 +8,7 @@
 | 层级 | 当前结论 |
 |---|---|
 | 仓库实现 | 已具备 AscendCL/OM 后端、三模型编排、Web API、启动脚本、资产哈希校验和可选 DVPP 编码预处理。 |
-| 正式板端部署 | 正式 release 为 `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2`，服务绑定 `127.0.0.1:8501`；部署记录显示 release verification 已通过，`/api/health` 为 `ready`。 |
+| 正式板端部署 | 正式 release 为 `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2`，正式解释器已迁移到 `/usr/local/miniconda3/envs/agileagent/bin/python3.9`，服务绑定 `127.0.0.1:8501`；`/api/health` 为 `ready`。 |
 | 正式执行语义 | 每张无标签图像都执行 Base、Incremental 和 Scene；不按标签、文件名或测试清单分流，也没有 CPU、CUDA 或 PyTorch 模型推理回退。 |
 | 正式 release 精度 | Base mAP50 `0.819407`、New mAP50 `0.728761`、KRR `1.0`，前三项官方精度为 `50/50`；新类 precision `0.933333`、误激活率 `0.014286` 两项内部门禁也通过。 |
 | AIPP staging 候选精度 | Base mAP50 `0.819415`、New mAP50 `0.728761`、KRR `1.0`，前三项官方精度为 `50/50`；两项内部门禁也通过，但没有切换正式 release。 |
@@ -20,7 +20,7 @@
 
 本轮审查开始前已执行 `git fetch --prune origin`：本机 `main` 与 `origin/main` 均为 `7d3d10911b59a22ef7a348edf7efd55a08007dfc`，ahead/behind 为 `0/0`，因此审查基线与远端完全同步。正式 release 目录名是仓库中的旧提交 `212705a26d4414eff4e00604ce37c54d2ae729b2`，但板端 release 源码与该审查基线并非逐文件一致；目录名本身也不能证明板端文件与任一 checkout 完全相同。
 
-板端精度、性能和实时健康状态来自本轮 SSH 只读复核及既有部署报告。原始板端日志尚未纳入仓库，不能仅靠当前 checkout 复现。审查时另执行了一次真实 PNG smoke：返回4个检测，Base、Incremental、Scene 三模型均执行，引擎 `62.985 ms`、系统 `78.3 ms`，随后 health 仍为 `ready`；该单次值只证明链路可运行，不作为性能结论。
+板端精度、性能和实时健康状态来自本轮 SSH 复核及既有部署报告。原始板端日志尚未纳入仓库，不能仅靠当前 checkout 复现。审查时曾执行一次真实 PNG smoke：返回4个检测，Base、Incremental、Scene 三模型均执行，引擎 `62.985 ms`、系统 `78.3 ms`。2026-08-14 命名环境迁移又使用固定 PNG 做切换前后对照：两边均返回6个检测，去除耗时字段后的响应语义完全一致；切换后单次引擎 `29.9 ms`、系统 `79.4 ms`，随后 health 仍为 `ready`。这些单次值只证明链路可运行，不作为性能结论。
 
 <!-- VERIFY: 交付或复验时应在目标板重新确认 /api/health 仍为 ready，并归档对应板端日志；仓库 checkout 无法证明实时运行态。 -->
 
@@ -45,7 +45,8 @@
 | 芯片 | Ascend310B1，NPU Health `OK` |
 | 操作系统 | Ubuntu 22.04 LTS，Linux `5.10.0+` |
 | CANN | `7.0.RC1`；本轮未升级、替换或混装 CANN、驱动和固件 |
-| NPU 内存 / 温度 | 空闲观测为 `6905 / 11577 MB`、`63°C`；这是单次快照，不是峰值或稳定性报告 |
+| Python 环境 | Miniconda `23.5.0`；命名环境 `agileagent` 位于 `/usr/local/miniconda3/envs/agileagent`，Python `3.9.2`；`auto_activate_base: false`；旧 prefix 与迁移备份已删除 |
+| NPU 内存 / 温度 | 命名环境迁移后、完成真实 PNG 烟测的服务驻留观测为 `9479 / 11577 MB`、`61°C`；这是单次快照，不是峰值或稳定性报告 |
 | 正式服务 | `127.0.0.1:8501`，health `ready` |
 
 ## 仓库实现与关键模块
@@ -54,7 +55,7 @@
 - [`fair_agent/backends/ascend_acl.py`](../fair_agent/backends/ascend_acl.py) 负责 PyACL/AscendCL 运行时、OM 加载、静态输入契约、异步 stream、后处理和实验性 DVPP/VPC 路径；OM 缺失、哈希不匹配或契约不符时直接失败。
 - [`fair_agent/modules/web_inference.py`](../fair_agent/modules/web_inference.py) 并行编排 Scene、Base 和 class-incremental specialist。当前增量模型是每图必跑的类别所有者；Scene 只影响软阈值，不进行场景硬路由。
 - [`fair_agent/web/app.py`](../fair_agent/web/app.py) 提供 `GET /api/health`、`POST /api/detect` 和 `POST /api/batch`。检测 API 始终传入 `auto`，不会接受客户端字段来切换正式增量链路。
-- [`scripts/start_agent_ascend310b.sh`](../scripts/start_agent_ascend310b.sh) 从正式 release 的隔离环境启动 Uvicorn，并固定监听 `127.0.0.1:8501`。
+- [`scripts/start_agent_ascend310b.sh`](../scripts/start_agent_ascend310b.sh) 从 Miniconda 命名环境 `agileagent` 启动 Uvicorn，并固定监听 `127.0.0.1:8501`。
 
 最小运行态检查示例：
 
@@ -136,6 +137,8 @@ python -m pytest -q \
 - DVPP 仅通过 12 图 preflight，尚缺 89 图完整精度门禁和正式 API 级复测。
 - ATC 候选已出现逐图输出变化；后续任何 OM、AIPP、ATC 参数或 CANN 版本变更都必须重新执行完整精度验收。
 - 正式 release 路径与当前仓库 HEAD 不同，若不归档 source/OM/config 哈希清单，容易产生代码与测量结果错配。
+- 正式旧 release 的配置 schema 不接受当前 main 新增的 `opencv_threads`、`encoded_preprocessing` 和 `execution_mode`；迁移时整份覆盖曾触发启动失败并自动回滚。当前板端配置只在原 release YAML 上修改 `runtime.local_python`，后续仍须按 release schema 预检。
+- 旧 prefix 和板端迁移备份已在新环境验收后删除；当前没有就地环境回滚副本。若正式环境损坏，需要从已审核依赖重新构建候选并复验，不能依赖旧路径快速恢复。
 
 ## 下一步优先级
 

@@ -3,7 +3,7 @@ seed: 20260705
 
 runtime:
   mode: local
-  local_python: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/conda-env/bin/python
+  local_python: /usr/local/miniconda3/envs/agileagent/bin/python
   default_device: "0"
   server_host: 127.0.0.1
   server_port: 8501

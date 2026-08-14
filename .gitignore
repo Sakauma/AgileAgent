@@ -86,6 +86,7 @@ venv/
 /docs/*
 !/docs/ascend-310b-deployment.md
 !/docs/ascend-310b-current-status.md
+!/docs/ascend-310b-ssh-environment.md
 !/docs/ARCHITECTURE.md
 !/docs/CONFIGURATION.md
 !/docs/DEVELOPMENT.md

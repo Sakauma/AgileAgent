@@ -1149,13 +1149,15 @@ golden 通过并不等于完整精度通过；它只用于快速确定实现层�
 
 ```text
 /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/
-├── conda-env/          # release 隔离 Python 环境
 ├── om/                 # 正式三个 OM
 ├── src/                # 正式服务源码与配置
 └── validation/         # smoke、89图预测与评分记录
+
+/usr/local/miniconda3/envs/agileagent/
+└── bin/python          # 正式服务与人工运维共同使用的命名 Python 3.9 环境
 ```
 
-正式进程使用该绝对路径启动，服务仅监听 `127.0.0.1:8501`。仓库 `main`、正式 release 与 `staging/perf-async-c3223b6` 是三个不同边界；staging 的 AIPP/DVPP/ATC 结果不得覆盖正式目录。后续每个候选仍应使用不可变目录，并让 `current` 只指向一个已验收版本：
+正式进程从命名环境 `agileagent` 的绝对解释器路径启动，源码、OM 和验证记录仍来自该 release；服务仅监听 `127.0.0.1:8501`。2026-08-14 的环境迁移对既有 release 的启动脚本和 `runtime.local_python` 做了两处受控运维修改，因此不能再把目录名直接等同于原提交的逐文件快照。新环境验收后，旧 release-prefix 环境与 `/home/HwHiAiUser/agileagent/migration-backup` 已按设备所有者要求删除且不可恢复；当前没有板上环境回滚副本。仓库 `main`、正式 release 与 `staging/perf-async-c3223b6` 是三个不同边界；staging 的 AIPP/DVPP/ATC 结果不得覆盖正式目录。后续每个候选仍应使用新的不可变目录，并让 `current` 只指向一个已验收版本：
 
 ```text
 releases/
@@ -1172,7 +1174,11 @@ releases/
 
 ### 32.2 当前启动方式与 systemd 模板
 
-当前服务由 `scripts/start_agent_ascend310b.sh` 使用 release 内 `conda-env/bin/python -m uvicorn` 启动，并由 `scripts/stop_agent_ascend310b.sh` 校验 PID 命令行后停止；脚本明确不会安装或升级 CANN、驱动和固件。当前没有把下方 systemd 占位模板部署为正式服务。
+当前服务由 `scripts/start_agent_ascend310b.sh` 使用 `/usr/local/miniconda3/envs/agileagent/bin/python -m uvicorn` 启动，并由 `scripts/stop_agent_ascend310b.sh` 校验 PID 命令行后停止；人工登录后可执行 `conda activate agileagent` 进入同一环境。脚本明确不会创建环境，也不会安装或升级 Python 包、CANN、驱动和固件。当前没有把下方 systemd 占位模板部署为正式服务。
+
+迁移验收对新旧环境的 181 个 Conda 记录、176 个 pip 条目和 28,180 个非缓存 `site-packages` 文件做了比对。由于旧 prefix 的 `pluggy` 曾由 pip 从 Conda 记录的1.0.0覆盖为实际1.6.0，单靠 `conda --clone` 一度产生“1.0.0代码 + 1.6.0元数据”；恢复旧 prefix 的实际文件后，全量哈希和 `pytest 8.3.5` 导入通过。服务切换后 health 为 `ready`，固定真实 PNG 的6个检测与旧服务语义一致，三份 OM 哈希未变化。该单次烟测的 `29.9 ms` 引擎耗时和 `79.4 ms` 系统耗时不构成 FPS 声明。
+
+板端正式 release 使用的配置 schema 早于当前 main；它不接受 main 中的 `decoding.opencv_threads`、`ascend_backend.encoded_preprocessing` 和 `ascend_backend.execution_mode`。旧 release 迁移时只能基于其原 YAML 修改受支持字段，并先调用该 release 的 `load_config()`；不得整份覆盖当前仓库配置。
 
 **【可选待实现】** 若未来新增 C++ 可执行文件和 systemd 管理，可按以下思路配置服务；`agile-agent-ascend` 只是占位名：
 

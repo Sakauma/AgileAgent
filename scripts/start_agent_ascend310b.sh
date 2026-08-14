@@ -3,12 +3,17 @@ set -euo pipefail
 
 RELEASE_ROOT="${AGILE_AGENT_ASCEND_RELEASE:-/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2}"
 SOURCE_ROOT="${RELEASE_ROOT}/src"
-PYTHON="${RELEASE_ROOT}/conda-env/bin/python"
+CONDA_ENV="${AGILE_AGENT_ASCEND_ENV:-/usr/local/miniconda3/envs/agileagent}"
+PYTHON="${CONDA_ENV}/bin/python"
 CONFIG="${SOURCE_ROOT}/configs/agent_pipeline_ascend310b.yaml"
 PID_FILE="${RELEASE_ROOT}/agent-web.pid"
 
 if [[ ! -x "${PYTHON}" ]]; then
-  printf 'Ascend隔离环境不存在：%s\n' "${PYTHON}" >&2
+  printf 'Ascend命名环境不存在或Python不可执行：%s\n' "${PYTHON}" >&2
+  exit 1
+fi
+if [[ ! -f "${CONDA_ENV}/conda-meta/history" ]]; then
+  printf 'Ascend路径不是有效Conda环境：%s\n' "${CONDA_ENV}" >&2
   exit 1
 fi
 if [[ ! -f "${CONFIG}" ]]; then

@@ -18,7 +18,8 @@ AgileAgent 使用 YAML 文件保存运行、推理、增量学习和后端参数
 | `PYTORCH_INDEX_URL` | 否 | `https://download.pytorch.org/whl/cu124` | x86 引导脚本安装 PyTorch/CUDA 组合时使用的包索引。 |
 | `TORCH_VERSION` | 否 | `2.5.1+cu124` | x86 引导脚本安装的 PyTorch 版本。 |
 | `TORCHVISION_VERSION` | 否 | `0.20.1+cu124` | x86 引导脚本安装的 torchvision 版本。 |
-| `AGILE_AGENT_ASCEND_RELEASE` | 否 | `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2` | `start_agent_ascend310b.sh` 与 `stop_agent_ascend310b.sh` 使用的板端发布根目录。启动脚本要求其中存在 `src/`、`conda-env/bin/python` 和发布配置；停止脚本只用该根目录定位 `agent-web.pid`。 |
+| `AGILE_AGENT_ASCEND_ENV` | 否 | `/usr/local/miniconda3/envs/agileagent` | `start_agent_ascend310b.sh` 使用的板端命名 Conda 环境。脚本要求其中同时存在可执行的 `bin/python` 和 `conda-meta/history`，不会自动创建、安装或升级该环境。 |
+| `AGILE_AGENT_ASCEND_RELEASE` | 否 | `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2` | `start_agent_ascend310b.sh` 与 `stop_agent_ascend310b.sh` 使用的板端发布根目录。启动脚本要求其中存在 `src/` 和发布配置；停止脚本只用该根目录定位 `agent-web.pid`。Python 来自独立的命名环境 `agileagent`。 |
 
 任何 YAML 字符串都可以使用一个完整值占位符，例如：
 

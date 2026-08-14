@@ -47,19 +47,23 @@ flowchart LR
 
 当前唯一活动划分是覆盖全部750张图的固定3+1协议；不再施加赛题未要求的连续帧边界间距。历史划分只保存在 `archive/`，不参与配置、训练、选模或验收。
 
-## 阅读导航
+## 文档分布与作用
 
-- [快速开始](#快速开始)：本机开发环境、Ascend 部署边界、首次配置和一键启动。
-- [系统架构](docs/ARCHITECTURE.md)：主要组件、在线推理、增量生命周期和关键抽象。
-- [配置参考](docs/CONFIGURATION.md)：完整 YAML、环境变量、覆盖顺序和保护边界。
-- [开发指南](docs/DEVELOPMENT.md) 与 [测试指南](docs/TESTING.md)：开发环境、常用命令、CI 和测试范围。
-- [使用方式](#使用方式)：Web 与 CLI 检测入口。
-- [增量学习工作台](#增量学习工作台)：上传、训练、校准、复核与上线流程。
-- [配置管理](#配置管理)：YAML 参数和 CLI 覆盖。
-- [可复现实验](#可复现实验)：唯一舰船3+1训练与复核入口。
-- [Ascend 310B 稳定加速设计](docs/ascend-310b-deployment.md)：固定形状 OM、AscendCL、预处理、量化边界与板端验收。
-- [Ascend 310B 当前工程评估](docs/ascend-310b-current-status.md)：正式部署、精度、性能、实验候选、风险与后续优先级。
-- [开发与验收](#开发与验收)：测试、发布检查和 GPU 冒烟命令。
+项目文档分为两层：仓库根目录的 `README.md` 是项目总览和统一入口；`docs/` 保存按任务拆分的操作指南、参考资料与板端状态。板端实时状态会随部署和测试变化，因此操作方法以部署文档为准，具体版本与性能结论以带日期的当前状态文档为准。
+
+| 位置 | 主要作用 | 适合何时阅读 |
+|---|---|---|
+| [`README.md`](README.md) | 项目能力、当前状态、评分口径、常用入口与文档导航 | 第一次了解工程，或需要快速找到命令和专项文档时 |
+| [`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md) | 配置 x86-64 Linux / WSL 2 开发环境并首次启动 Web 或 CLI | 第一次在本机安装和运行项目时；不作为 310B 部署指南 |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 说明组件边界、在线推理数据流、增量学习生命周期和关键抽象 | 修改系统结构、推理编排或代际管理前 |
+| [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | 解释 YAML、环境变量、覆盖顺序、默认值和受保护配置 | 修改本机或 Ascend 配置、排查配置来源时 |
+| [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 本地开发环境、常用开发命令、代码风格、分支与 PR 约定 | 开发功能或准备提交代码时 |
+| [`docs/TESTING.md`](docs/TESTING.md) | 测试环境、测试范围、运行命令、覆盖率与 CI | 修改代码后选择验证范围，或排查测试失败时 |
+| [`docs/ascend-310b-ssh-environment.md`](docs/ascend-310b-ssh-environment.md) | Windows 直连网线、MobaXterm/OpenSSH 登录、官方默认账户、端口转发、`agileagent` 环境及板端只读诊断 | 首次连接开发板、人工运维或核查板端基础环境时 |
+| [`docs/ascend-310b-deployment.md`](docs/ascend-310b-deployment.md) | 固定形状 ONNX/OM、ATC、PyACL/AscendCL、预处理、精度与性能验收、发布和回滚 | 执行或复现 Ascend 310B 部署与优化时 |
+| [`docs/ascend-310b-current-status.md`](docs/ascend-310b-current-status.md) | 汇总当前正式 release、四项指标、性能证据、候选方案、风险和下一步 | 判断工程当前达到什么水平、哪些结论仍需复验时 |
+
+推荐阅读顺序：本机开发从“快速开始 → 配置参考 → 开发指南 → 测试指南”进入；310B 运维从“SSH 与板端环境 → 到板部署与验收 → 当前工程状态”进入。README 内还可直接跳转到[使用方式](#使用方式)、[增量学习工作台](#增量学习工作台)、[配置管理](#配置管理)、[可复现实验](#可复现实验)和[开发与验收](#开发与验收)。
 
 ## 快速开始
 
