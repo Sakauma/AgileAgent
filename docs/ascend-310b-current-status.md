@@ -222,6 +222,61 @@ P2 结论为：**profiling 已完成，拒绝 tuned OM**。不存在满足“模
 | `p2-aoe-compatibility-d496945.json` | `e247b08261f8b2b7e1da1cc180b058b281ed3e1e36b294db2dfdc5e981dd94c5` |
 | `p2-no-tuned-7e62647-890-characterization.json` | `a4e10d829f3b223a03dd618bf0384e6b02029e31028d593799b91678067a4d6c` |
 
+## P3 锁页内存、异步拷贝与统一等待（2026-08-15）
+
+P3 实现提交为 `b8a9b2db2efdcbc2d8d654d272737ace98a3ce61`，板端 DVPP 时间戳可见性修复提交为 `43795ebec88804dd5506de6d2ca61ea16688db37`。两次提交均已推送；板端 clean Git 工作副本通过带 prerequisite 和 SHA256 校验的增量 bundle 依次 `--ff-only` 快进至 `43795eb`。开始 P3 修改时，板端已经位于当时最新的代码提交 `d496945`，仅缺随后推送的纯文档提交 `eaf4795`，因此 P3 没有基于过期代码开发。正式 `8501` 在同步、启动候选、测量和停止候选期间始终保持 `ready`。
+
+### 目标能力探针与实现
+
+目标 PyACL `7.0.RC1` 已确认存在 `malloc_host`、`free_host`、`memcpy_async`、stream/event 创建、等待、同步和耗时查询 API。能力探针还发现：直接用 `acl.util.ptr_to_numpy` 映射 `malloc_host` 地址后再调用 `free_host`，进程退出时会触发 glibc `double free or corruption`。P3 因此禁止该 API，统一使用：
+
+```python
+owner = (ctypes.c_uint8 * size).from_address(pointer)
+array = np.ctypeslib.as_array(owner)
+```
+
+该非 owning 视图在板端完成了锁页 H2D→D2H 异步 roundtrip，NumPy data pointer 与 ACL host pointer 完全相同，逐字节结果一致且可正常释放。实现内容包括：
+
+- `memory_mode` 从配置传入每个 `AscendAclModel`；`pinned` 只允许与 `async_stream` 组合；
+- 每个模型常驻一个锁页输入 staging 和每个输出的锁页缓冲，encoded PNG 使用受 `2 MiB` 上限约束、按需增长的可复用锁页 staging；
+- `submit(array)` 入队 H2D→model→D2H，`submit_preloaded(event)` 入队 event wait→model→D2H；句柄 `result()` 对模型 completion event 只执行一次最终等待并缓存结果；
+- 每模型限制一个 in-flight，enqueue 或最终 event 等待失败时先排空 stream，再传播原始错误；关闭时先拒绝新提交并收敛 outstanding handle，随后按 event/stream、dataset/device、host、model 的顺序释放；
+- encoded 单图路径按 Scene→Base→Specialist 的顺序先完成三个 submit，再按相同顺序 collect，不再在每个 `execute_async` 后立即同步；
+- API 向后兼容增加 `dvpp_device_ms`、`ascend_submit_ms`、`ascend_wait_ms`、`ascend_input_copy_max_ms` 和 `ascend_output_copy_max_ms`；原字段未删除或改名；
+- 板端首次真实请求暴露 CANN `107006`：下游 model completion 已完成仍不足以直接读取上游 DVPP event 时间戳。`43795eb` 在读取时间戳前显式确认 producing event 完成；此时三个模型句柄均已完成，不延长设备关键路径。修复后 920 个真实请求全部成功。
+
+本机只使用仓库既有 WSL `.venv`，没有创建环境、安装依赖或下载 CPU PyTorch。全量回归为 `231 passed, 1 skipped`；新增 fake ACL 覆盖异步调用顺序、唯一最终等待、单 in-flight、preloaded 无 H2D、enqueue 失败恢复、最终等待失败恢复和锁页缓冲释放顺序。按照操作者要求，板端没有运行 Web pytest，只执行真实端到端时长。
+
+### 独立候选与端到端结果
+
+P3 使用独立 `8502` 候选配置 `p3-candidate-pinned.yaml`，相对 P2/P0 多级配置的唯一差异是 `memory_mode: pageable → pinned`；配置 SHA256 为 `5950fb2b4b39d5ae8c094ad83bf6e7a2d3bf5612abd181fe1132cb267c97b827`。三个 OM 和构建清单均未改变。基准严格使用 30 次预热、10×89 请求、板端回环 HTTP keep-alive、单并发和 `confidence=0.5`：
+
+| 指标 | P2 基线 | P3 pinned | 相对变化 | P3 门禁 |
+| --- | ---: | ---: | ---: | --- |
+| 服务端均值 | `42.043 ms` | `45.916 ms` | 恶化 `9.21%` | 要求改善 `≥3%` 且 `≤33.33 ms`，失败 |
+| 服务端 P95 | `47.955 ms` | `51.700 ms` | 恶化 `7.81%` | 要求 `≤35 ms`，失败 |
+| 服务端 P99 | `49.400 ms` | `53.800 ms` | 恶化 `8.91%` | 允许恶化不超过 `2%`，失败 |
+| Engine 均值 | `38.723 ms` | `42.551 ms` | 恶化 `9.88%` | 无独立晋级门禁 |
+
+P3 的 890 请求细分均值为：DVPP enqueue `1.040 ms`、DVPP device `9.128 ms`、Ascend submit `0.735 ms`、统一 collect 等待 `36.635 ms`、最大输入复制 `0.000 ms`（三个输入均由 DVPP 预加载）、最大输出复制 `2.981 ms`、路由融合 `0.374 ms`。全部请求成功；一次 `144.1 ms` 服务端离群点只约增加总体均值 `0.11 ms`，移除它也不可能接近任何最终门禁，因此没有重复测量或用筛选样本掩盖结论。
+
+P3 结论为：**实现与异常安全门禁完成，但 pinned 候选拒绝晋级**。锁页输出复制和统一异步编排没有在当前 CANN/OM/310B 组合上产生收益，完整 API 反而稳定慢于 P2。候选保持 `validated: false`，未替换正式配置；`8502` 已停止，正式 `8501` 保持 `ready`。
+
+| 报告 | SHA256 |
+| --- | --- |
+| `p3-pinned-43795eb-890-e2e.json` | `9d7e4511215a2a8189880db9a52675248792ffd977f2367e9862573be24575da` |
+
+## P0–P3 最终结论
+
+| 阶段 | 最终服务端均值 | P95 | P99 | 阶段结论 |
+| --- | ---: | ---: | ---: | --- |
+| P0 | `41.439 ms` | `47.200 ms` | `48.411 ms` | multipart 热点已优化，但精度边界、provenance 和 `40/42 ms` 失败，拒绝晋级 |
+| P1 | `41.302 ms` | `47.355 ms` | `48.311 ms` | 路由约 `0.37 ms`，语义差分通过；完整 API 仍失败，不晋级 |
+| P2 | `42.043 ms` | `47.955 ms` | `49.400 ms` | profiling 完成；AOE 不兼容固定 precision，拒绝 tuned OM |
+| P3 | `45.916 ms` | `51.700 ms` | `53.800 ms` | pinned/异步实现完成但性能回退，拒绝晋级 |
+
+最终结论为：**本轮 P0–P3 已全部执行并留下可复核报告，但工程未达到最终 `≤33.33 ms` 均值和 `≤35 ms` P95 目标。** 没有任何候选同时满足性能、精度和发布门禁，因此正式 release、正式 OM 和 `8501` 均保持原状。P0 的有界 multipart、P1 的 records/路由优化和 P2/P3 的诊断工具保留为后续工作的代码基础，但不得据此宣称 Ascend 310B 端到端指标已经达标。
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
@@ -242,7 +297,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `226 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1 候选因上述门禁失败保持未验收。P1 板端验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `231 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
 
 ## 运行态检查
 
