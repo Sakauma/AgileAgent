@@ -96,6 +96,24 @@ def command_snapshot(command: list[str]) -> Dict[str, Any]:
     }
 
 
+def git_evidence(root: Path) -> Dict[str, Any]:
+    def value(*arguments: str) -> str | None:
+        snapshot = command_snapshot(["git", "-C", str(root), *arguments])
+        if not snapshot.get("available"):
+            return None
+        return str(snapshot.get("stdout") or "").strip()
+
+    status = value("status", "--porcelain=v1")
+    return {
+        "root": str(root.resolve()),
+        "head": value("rev-parse", "HEAD"),
+        "branch": value("branch", "--show-current"),
+        "origin": value("remote", "get-url", "origin"),
+        "status_porcelain": status,
+        "clean": status == "" if status is not None else None,
+    }
+
+
 def validate_png(path: Path) -> Dict[str, Any]:
     with path.open("rb") as handle:
         header = handle.read(33)
@@ -322,6 +340,7 @@ def main() -> int:
         "environment": {
             "python": sys.version,
             "platform": platform.platform(),
+            "git": git_evidence(Path(__file__).resolve().parents[1]),
             "config": artifact_evidence(args.config),
             "build_manifest": artifact_evidence(args.build_manifest),
             "commands": {
