@@ -196,8 +196,14 @@ ascend_backend:
   precision: mixed_float16
   execution_mode: async_stream
   encoded_preprocessing: cpu
+  memory_mode: pageable
+  dvpp_scene_resize_stages: []
   validated: true
+  validation_candidate: false
   validation_report: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/validation/agent_smoke_summary.json
+  validation_report_sha256: null
+  build_manifest: null
+  build_manifest_sha256: null
   models:
     models/production/incremental_detection/three_class_base_detector.pt:
       path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/base_detector.om

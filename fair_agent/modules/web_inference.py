@@ -756,6 +756,9 @@ class WebInferenceEngine:
                 self.detector.model,
                 active_specialists[0].model,
                 self.context_model.model,
+                scene_resize_stages=self.native_options.get(
+                    "dvpp_scene_resize_stages", []
+                ),
             )
             self._encoded_image_stub = Image.new(
                 "RGB",
@@ -1356,17 +1359,21 @@ class WebInferenceEngine:
         context_inference_ms = float(context.pop("_inference_ms", 0.0))
         detector_timings = yolo_timings(prediction)
         inference_ms = context_inference_ms + detector_timings["inference_ms"]
+        conversion_started = time.perf_counter()
         raw_base_records = remap_base_records(
             result_records(prediction, self.base_local_names),
             self.base_local_to_global,
             self.class_names,
         )
+        routing_conversion_ms = (time.perf_counter() - conversion_started) * 1000
+        gate_started = time.perf_counter()
         base_records, unified_gate_rejections = apply_unified_class_gates(
             rgb_image,
             raw_base_records,
             getattr(self, "unified_class_gates", {}),
             context,
         )
+        routing_gate_ms = (time.perf_counter() - gate_started) * 1000
         eligible_routes, executed_routes, skipped_protocols = plan_specialist_routes(
             protocol_pool,
             base_records,
@@ -1385,6 +1392,9 @@ class WebInferenceEngine:
         specialist_preprocess_ms = 0.0
         specialist_inference_ms = 0.0
         specialist_postprocess_ms = 0.0
+        routing_conflict_ms = 0.0
+        routing_nms_ms = 0.0
+        routing_decision_ms = 0.0
         conflict_rejections: List[Dict[str, Any]] = list(unified_gate_rejections)
         for route in executed_routes:
             protocol_id = str(route["id"])
@@ -1411,11 +1421,14 @@ class WebInferenceEngine:
             local_to_global = protocol.get("local_to_global")
             if not isinstance(local_to_global, Mapping):
                 local_to_global = {0: class_ids[0]}
-            effective_thresholds, context_score = protocol_effective_thresholds(
-                protocol, context, float(confidence)
-            )
+            conversion_started = time.perf_counter()
             raw_candidates = remap_specialist_records_dynamic(
                 result_records(specialist_prediction), local_to_global, self.class_names, protocol_id
+            )
+            routing_conversion_ms += (time.perf_counter() - conversion_started) * 1000
+            gate_started = time.perf_counter()
+            effective_thresholds, context_score = protocol_effective_thresholds(
+                protocol, context, float(confidence)
             )
             threshold_candidates, threshold_rejections = apply_protocol_thresholds(
                 raw_candidates, effective_thresholds, context_score
@@ -1451,6 +1464,8 @@ class WebInferenceEngine:
                     "通过冻结专家链独立置信度门限"
                     if independent_ids else "通过基础同类目标与空间一致性检查"
                 )
+            routing_gate_ms += (time.perf_counter() - gate_started) * 1000
+            conflict_started = time.perf_counter()
             base_records, candidates, conflict_decisions = arbitrate_cross_class_conflicts(
                 base_records,
                 candidates,
@@ -1461,6 +1476,7 @@ class WebInferenceEngine:
                 self.preserve_base_class_owners,
                 self.conflict_incremental_coverage,
             )
+            routing_conflict_ms += (time.perf_counter() - conflict_started) * 1000
             rejected = [
                 row for row in conflict_decisions if row["action"] == "reject_specialist"
             ]
@@ -1471,6 +1487,7 @@ class WebInferenceEngine:
             activated_class_names = sorted({str(item["class_name"]) for item in candidates})
             if activated:
                 specialist_records.extend(candidates)
+            decision_started = time.perf_counter()
             protocol_results.append({
                 "id": protocol_id,
                 "class_name": protocol["class_name"],
@@ -1503,17 +1520,21 @@ class WebInferenceEngine:
                 "routing_score": route["routing_score"],
                 "activation_reason": activation_reason if activated else "未产生通过门限的候选框",
             })
+            routing_decision_ms += (time.perf_counter() - decision_started) * 1000
 
         base_with_source = [
             {**item, "source": "frozen_base_model", "protocol_id": None}
             for item in base_records
         ]
+        nms_started = time.perf_counter()
         records, fusion_summary = class_aware_nms(
             base_with_source + specialist_records,
             self.fusion_iou,
         )
+        routing_nms_ms = (time.perf_counter() - nms_started) * 1000
         fusion_summary["conflict_suppressed_count"] = len(conflict_rejections)
         routing_fusion_ms = (time.perf_counter() - routing_started) * 1000
+        decision_started = time.perf_counter()
         base_model_id = self.base_model_id
         generation_id = self.generation_id
         models_used = ["scene_sensor_net_v1", base_model_id]
@@ -1554,6 +1575,7 @@ class WebInferenceEngine:
                 str(key): value for key, value in getattr(self, "class_owners", {}).items()
             },
         }
+        routing_decision_ms += (time.perf_counter() - decision_started) * 1000
         result = {
             "filename": filename,
             "image_width": int(rgb_image.width),
@@ -1576,6 +1598,11 @@ class WebInferenceEngine:
                 "specialist_inference_ms": round(specialist_inference_ms, 3),
                 "specialist_postprocess_ms": round(specialist_postprocess_ms, 3),
                 "routing_fusion_ms": round(routing_fusion_ms, 3),
+                "routing_conversion_ms": round(routing_conversion_ms, 3),
+                "routing_gate_ms": round(routing_gate_ms, 3),
+                "routing_conflict_ms": round(routing_conflict_ms, 3),
+                "routing_nms_ms": round(routing_nms_ms, 3),
+                "routing_decision_ms": round(routing_decision_ms, 3),
             },
             "agent": {
                 "mode": "automatic_orchestration" if automatic else "standard_detection",

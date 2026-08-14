@@ -8,6 +8,7 @@ from fair_agent.backends.ascend_acl import (
     AscendEncodedPreprocessor,
     context_tensor,
     detector_tensor,
+    validate_dvpp_scene_resize_stages,
     yolo_detections,
 )
 
@@ -89,6 +90,17 @@ def test_context_tensor_emits_contiguous_uint8_nhwc_for_aipp() -> None:
     assert tensor.dtype == np.uint8
     assert tensor.flags.c_contiguous
     assert tensor[0, 0, 0].tolist() == [15, 127, 240]
+
+
+def test_dvpp_scene_resize_stages_require_bounded_even_dimensions() -> None:
+    assert validate_dvpp_scene_resize_stages([[208, 192], [288, 230]]) == (
+        (208, 192),
+        (288, 230),
+    )
+    with pytest.raises(ValueError, match="偶数"):
+        validate_dvpp_scene_resize_stages([[207, 192]])
+    with pytest.raises(ValueError, match="最多4级"):
+        validate_dvpp_scene_resize_stages([[32, 32]] * 5)
 
 
 def test_yolo_nms_applies_global_max_det_order() -> None:

@@ -32,6 +32,12 @@ PROTECTED_PREFIXES = (
     "tensorrt_backend.validation_report",
     "tensorrt_backend.expected_version",
     "tensorrt_backend.expected_compute_capability",
+    "ascend_backend.build_manifest",
+    "ascend_backend.build_manifest_sha256",
+    "ascend_backend.validation_report",
+    "ascend_backend.validation_report_sha256",
+    "ascend_backend.validated",
+    "ascend_backend.validation_candidate",
 )
 KNOWN_TOP_LEVEL = {
     "schema_version", "runtime", "web", "inference", "routing", "decoding",
@@ -61,7 +67,12 @@ KNOWN_SECTION_KEYS = {
         "auto_start_server", "server_start_timeout_seconds", "request_timeout_seconds",
     },
     "native_backend": {"library", "base_engine", "engines", "context_engine", "precision", "require_exact_gpu", "validated"},
-    "ascend_backend": {"device_id", "soc_version", "cann_version", "precision", "execution_mode", "encoded_preprocessing", "validated", "validation_report", "models", "context_model"},
+    "ascend_backend": {
+        "device_id", "soc_version", "cann_version", "precision", "execution_mode",
+        "encoded_preprocessing", "memory_mode", "validated", "validation_candidate", "validation_report",
+        "validation_report_sha256", "build_manifest", "build_manifest_sha256",
+        "models", "context_model", "dvpp_scene_resize_stages",
+    },
     "tensorrt_backend": {
         "expected_version", "expected_compute_capability", "require_exact_gpu", "validated",
         "precision", "workspace_gib", "dynamic", "minimum_spatial_size", "engines", "context_engine", "export",
@@ -483,6 +494,8 @@ def validate_config(
         errors.append("ascend_backend.soc_version必须为Ascend310B1")
     if not isinstance(ascend.get("validated"), bool):
         errors.append("ascend_backend.validated必须为布尔值")
+    if not isinstance(ascend.get("validation_candidate", False), bool):
+        errors.append("ascend_backend.validation_candidate必须为布尔值")
     if ascend.get("precision") not in {"mixed_float16", "origin"}:
         errors.append("ascend_backend.precision非法")
     if ascend.get("execution_mode", "synchronous") not in {
@@ -492,6 +505,62 @@ def validate_config(
         errors.append("ascend_backend.execution_mode非法")
     if ascend.get("encoded_preprocessing", "cpu") not in {"cpu", "dvpp"}:
         errors.append("ascend_backend.encoded_preprocessing非法")
+    if ascend.get("memory_mode", "pageable") not in {"pageable", "pinned"}:
+        errors.append("ascend_backend.memory_mode非法")
+    scene_resize_stages = ascend.get("dvpp_scene_resize_stages", [])
+    if not isinstance(scene_resize_stages, list) or len(scene_resize_stages) > 4:
+        errors.append("ascend_backend.dvpp_scene_resize_stages必须是最多4级的尺寸列表")
+    else:
+        for index, stage in enumerate(scene_resize_stages):
+            if (
+                not isinstance(stage, list)
+                or len(stage) != 2
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or value < 16
+                    or value > 4096
+                    or value % 2
+                    for value in stage
+                )
+            ):
+                errors.append(
+                    f"ascend_backend.dvpp_scene_resize_stages[{index}]必须是16-4096范围内的偶数宽高"
+                )
+    if (
+        ascend.get("memory_mode", "pageable") == "pinned"
+        and ascend.get("execution_mode", "synchronous") != "async_stream"
+    ):
+        errors.append("Ascend锁页内存要求async_stream执行模式")
+    build_manifest = ascend.get("build_manifest")
+    build_manifest_sha256 = ascend.get("build_manifest_sha256")
+    validation_report = ascend.get("validation_report")
+    validation_report_sha256 = ascend.get("validation_report_sha256")
+    if bool(build_manifest) != bool(build_manifest_sha256):
+        errors.append("ascend_backend.build_manifest与SHA256必须同时配置")
+    if build_manifest_sha256 and (
+        not isinstance(build_manifest_sha256, str) or len(build_manifest_sha256) != 64
+    ):
+        errors.append("ascend_backend.build_manifest_sha256非法")
+    if validation_report_sha256 and not validation_report:
+        errors.append("ascend_backend.validation_report_sha256缺少对应报告")
+    if validation_report_sha256 and (
+        not isinstance(validation_report_sha256, str)
+        or len(validation_report_sha256) != 64
+    ):
+        errors.append("ascend_backend.validation_report_sha256非法")
+    if ascend.get("validated") is True and ascend.get("encoded_preprocessing") == "dvpp":
+        if not build_manifest or not build_manifest_sha256:
+            errors.append("已验收Ascend DVPP配置缺少构建清单及SHA256")
+        if not validation_report or not validation_report_sha256:
+            errors.append("已验收Ascend DVPP配置缺少验证报告及SHA256")
+    if ascend.get("validation_candidate") is True:
+        if ascend.get("validated") is not False:
+            errors.append("Ascend候选验证模式要求validated=false")
+        if ascend.get("encoded_preprocessing") != "dvpp":
+            errors.append("Ascend候选验证模式仅用于DVPP候选")
+        if not build_manifest or not build_manifest_sha256:
+            errors.append("Ascend候选验证模式缺少构建清单及SHA256")
     ascend_models = ascend.get("models")
     if not isinstance(ascend_models, Mapping) or not ascend_models:
         errors.append("ascend_backend.models必须是非空映射")
@@ -504,19 +573,23 @@ def validate_config(
             if unknown:
                 errors.append(f"ascend_backend.models.{source}包含未知字段：" + ", ".join(unknown))
             digest = entry.get("sha256")
-            if ascend.get("validated") is True and (
+            if (ascend.get("validated") is True or ascend.get("validation_candidate") is True) and (
                 not isinstance(digest, str) or len(digest) != 64
             ):
                 errors.append(f"已验收Ascend OM缺少SHA256：{source}")
     context_model = ascend.get("context_model")
     if not isinstance(context_model, Mapping) or not context_model.get("path"):
         errors.append("ascend_backend.context_model非法")
-    elif ascend.get("validated") is True and (
+    elif (ascend.get("validated") is True or ascend.get("validation_candidate") is True) and (
         not isinstance(context_model.get("sha256"), str)
         or len(str(context_model.get("sha256"))) != 64
     ):
         errors.append("已验收Ascend context OM缺少SHA256")
-    if inference.get("backend") == "ascend_acl" and ascend.get("validated") is not True:
+    if (
+        inference.get("backend") == "ascend_acl"
+        and ascend.get("validated") is not True
+        and ascend.get("validation_candidate") is not True
+    ):
         errors.append("Ascend后端必须先完成golden验收")
 
     tensorrt_backend = _require_mapping(config, "tensorrt_backend", errors)

@@ -1,6 +1,6 @@
 # Ascend 310B 工程记录
 
-本文记录截至 2026-08-14 已完成的 Ascend 310B 实现、部署、精度复核和性能测量。
+本文记录截至 2026-08-15 已完成的 Ascend 310B 实现、部署、精度复核和性能测量。
 
 ## 板端环境
 
@@ -60,6 +60,72 @@
 
 这些记录分别覆盖完整 89 图运行、已解码核心、真实 multipart PNG API 和编码输入路径。
 
+## Wave 0 / P0 执行记录（2026-08-15）
+
+本轮按照 `ascend-310b-p0-p3-improvement-plan.md` 建立了独立候选，不覆盖正式 release，也未修改 `8501` 服务。候选目录为：
+
+```text
+/home/HwHiAiUser/agileagent/candidates/20260814-wave0-p0-7c61f2b
+```
+
+### 受控构建与门禁
+
+- 三份 AIPP 配置已纳入 `configs/ascend310b/aipp/`；
+- `scripts/build_ascend_aipp_oms.sh` 固定 ONNX、SoC、precision、输入 shape，拒绝覆盖，并记录 ATC 命令、日志和全部 SHA256；
+- 完整 P0-r3 构建清单 SHA256 为 `a62131586d33ade4090dbf925fb1adca3ad9a852049d1780fe4b990097c3d1d4`；
+- Base、Specialist、Scene OM SHA256 分别为：
+  - `2bc60b224ba3702232f6e35363199ae2b2f3b7382498340a719bf093f80a8851`；
+  - `69957129b060295736e9812b459588147f7f0dee7d35b1e600196d077a431b7a`；
+  - `c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a`；
+- PyACL 输入契约已复核为 Base `[1,736,896,3] uint8`、Specialist `[1,512,640,3] uint8`、Scene `[1,160,160,3] uint8`；
+- 未验收候选必须同时设置 `validation_candidate: true` 和进程级 `AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION=1`，正式 `validated: true` 仍要求构建清单及 golden、精度、性能报告哈希全部闭环。
+
+### 89 图数值与语义结论
+
+旧比较逻辑按响应顺序配对框，曾把最大坐标差误报为 `120.67 px`。新工具先按类别和 IoU 稳定匹配，再计算数值差。原始 P0-r3 在生产阈值 `0.5` 下的真实结果为：
+
+| 项目 | 原始单级 Scene DVPP | 多级 Scene DVPP |
+| --- | ---: | ---: |
+| 逐图检测数量/类别不一致 | `1` | `1` |
+| Scene 标签不一致 | `18` | `0` |
+| Sensor 标签不一致 | `6` | `0` |
+| 最大坐标绝对差 | `0.54 px` | `0.54 px` |
+| 最大 confidence 绝对差 | `0.003418` | `0.003418` |
+
+设备输入回读证明 Specialist PNGD 输出和 Base resize/letterbox 与 CPU 契约逐字节一致。Scene 单次 `640×512 → 176×176` 双线性缩小缺少 Pillow 下采样抗锯齿：代表性 SAR 图平均像素差 `11.19`、最大差 `88`，从而翻转场景标签。候选增加以下 DVPP 多级缩放后，89 图 Scene/Sensor 标签全部恢复一致：
+
+```text
+640×512 → 208×192 → 288×230 → 176×176 → center crop 160×160
+```
+
+旧 Scene AIPP V1 归一化在 89 图上造成 `55` 个 Scene 和 `16` 个 Sensor 标签变化，已明确拒绝。Base AIPP 将 `1/255` 下调一个 FP16 ULP 的实验又造成 `15` 张图检测数量变化、最大 confidence 差 `0.061584`，同样明确拒绝。
+
+当前唯一剩余的生产阈值差异是 `ir_r1_base_urban_000149.png`：正式 Base 的 tank confidence 为 `0.500000`，AIPP 为 `0.501465`，导致 `2 → 3` 个框。不得通过修改阈值或后处理容差掩盖该差异。
+
+### 同口径 890 请求性能
+
+两次候选均按 30 次预热、10 轮固定 89 图、单并发、板端回环 HTTP keep-alive 和 `confidence=0.5` 执行：
+
+| 候选 | 服务端均值 | P95 | Engine 均值 | Multipart 解析均值 | P0 `40/42 ms` |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 原始单级 Scene DVPP | `48.76 ms` | `65.90 ms` | `38.00 ms` | `9.31 ms` | 未通过 |
+| 多级 Scene DVPP | `49.27 ms` | `66.71 ms` | `38.13 ms` | `9.69 ms` | 未通过 |
+
+细分计时显示 `routing_fusion_ms` 均值约 `0.36 ms`，旧记录中的 `16.64 ms` 已不再是当前候选热点。现阶段外层主要开销是 Multipart 上传解析，Engine P95 也已接近 `42 ms` 门槛。
+
+### 晋级结论
+
+P0 当前状态为 **拒绝晋级**：多级 Scene DVPP 修复保留为候选实现，但 Base 阈值边界和完整 API 性能门禁仍未通过。候选配置保持 `validated: false`，`8502` 已停止，正式 `8501` 保持 `ready`。P1/P2/P3 不得基于该未验收候选继续晋级。
+
+关键板端证据均保存在候选的 `validation/` 目录：
+
+| 报告 | SHA256 |
+| --- | --- |
+| `p0-0.5-iou-alignment.json` | `e30fcd2180c47b0a6c79922fb8fdc9f51034b49038ad24b09070810c8e537319` |
+| `p0-dvpp-input-alignment-multistage.json` | `545eebe7c91550b426fc3ab8987de5a0f12a9fcdf7fb731ded7cfff01d28b89d` |
+| `p0-multistage-0.5-alignment.json` | `7b12b0ded32a6d3940cef04723f2700563aab24521881c9a3dd9375552497ec7` |
+| `p0-multistage-890-characterization.json` | `18ec053814007ecea59297f1a3c2b31f3087511365f670529d8aa62a6fd03e61` |
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
@@ -80,7 +146,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前完整回归确认 `214` 项通过，发布校验状态为 `passed`。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `223 passed, 1 skipped`；板端 Ascend、对齐和发布门禁定向回归为 `20 passed`。正式 release 的既有发布校验状态仍为 `passed`，P0 候选因上述门禁失败保持未验收。
 
 ## 运行态检查
 

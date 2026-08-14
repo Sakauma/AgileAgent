@@ -387,6 +387,9 @@ async def health(request: Request) -> JSONResponse:
                     else f'cuda:{settings["device_index"]}'
                 ),
                 "backend": settings["backend"],
+                "validation_candidate": bool(
+                    settings.get("native_backend", {}).get("validation_candidate", False)
+                ),
                 "queue": queue,
                 "generation_id": settings["generation_id"],
                 "generation_name": settings["generation_name"],
