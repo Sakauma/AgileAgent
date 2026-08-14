@@ -1175,6 +1175,16 @@ class AscendEncodedPreprocessor:
             return 0.0
         with self.runtime.lock:
             self.runtime.activate()
+            # CANN 7.0.RC1 does not make a cross-stream dependency sufficient
+            # for event_elapsed_time(): the producing event must be explicitly
+            # synchronized on the host first, even after a dependent model
+            # completion event has finished. At this point all model handles
+            # have already completed, so this confirms timestamp visibility
+            # without extending the device critical path.
+            _require(
+                self.runtime.acl.rt.synchronize_event(self.context_ready_event),
+                "acl.rt.synchronize_event(DVPP completion)",
+            )
             return float(
                 _value(
                     self.runtime.acl.rt.event_elapsed_time(
