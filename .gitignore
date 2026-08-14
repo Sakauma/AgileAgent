@@ -61,6 +61,7 @@ venv/
 !/tools/97_benchmark_ascend_api.py
 !/tools/98_freeze_ascend_predictions.py
 !/tools/99_validate_ascend_dvpp_inputs.py
+!/tools/100_profile_ascend_request.py
 !/scripts/start_agent_ascend310b.sh
 !/scripts/stop_agent_ascend310b.sh
 
