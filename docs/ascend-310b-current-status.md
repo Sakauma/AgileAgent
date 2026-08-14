@@ -175,6 +175,53 @@ P1 结论为：**路由目标通过，保留实现作为后续 P2/P3 候选起�
 | `p1-native-records-5ee0f08-890-characterization.json` | `83ba1bc0b6c57581fb771a14420b4ea2d75c3ac8feec1c9cb812f4514226fe73` |
 | `p1-native-records-5ee0f08-repeat-890-characterization.json` | `3fb42739904191a9736acdcd69745650575539494206c238eafc3e49abeec5f8` |
 
+## P2 msprof 定位与 AOE 调优（2026-08-15）
+
+P2 在 clean 板端 Git 工作副本中建立了受控采集入口 `scripts/profile_ascend_api.sh`、固定 encoded 请求应用 `tools/100_profile_ascend_request.py`、机器摘要器 `tools/101_summarize_ascend_profile.py` 和 AOE 契约门禁 `tools/102_check_ascend_aoe.py`。最终门禁提交为 `d496945a9b7313544355fa9cefae7cb945629232`。所有实现提交均已推送，板端通过增量 bundle 校验后 `--ff-only` 同步；正式 `8501` 始终保持 `ready`。
+
+### msprof 原始采集
+
+使用板端 CANN `7.0.RC1` 官方 `msprof` 启用了 Runtime API、model execution、task time、AI Core、DVPP、CPU/内存和 DDR/LLC 数据。采集应用从同一候选配置加载三个原 OM，执行无标签 encoded PNG 生产路径；没有运行 Web pytest。
+
+| 采集 | 请求数 | 原始文件 | 原始逻辑字节 | 关键设备迭代 |
+| --- | ---: | ---: | ---: | --- |
+| `p2-single-0f610a3` | 1 | `2019` | `8,551,049` | Base `21.138 ms`、Specialist `26.263 ms`、Scene `3.007 ms` |
+| `p2-fixed-0f610a3` | 89 | `2017` | `25,412,042` | Base 均值 `25.292 ms`、Specialist `13.384 ms`、Scene `17.145 ms` |
+
+固定请求集在 profiling 插桩下三条 stream 并行竞争，不能拿设备迭代均值替代未插桩 API 基准；其用途是定位相对关键路径。single trace 的最长模型占插桩 Engine `71.4%`，固定集 Base 占插桩 Engine `65.0%`，而 `routing_fusion_ms` 仅约 `0.40-0.46 ms`，因此模型执行明确高于 Host 路由，满足进入 AOE 兼容评估的前提。
+
+固定采集的全进程 Runtime 数据（包含模型加载和两次引擎 warmup）记录：
+
+- stream wait/synchronize `632` 次、累计 `6,991.549 ms`；三个模型并发，因此累计等待不能与单请求墙钟相加；
+- model execute enqueue `273` 次、Host API 累计 `14.368 ms`；
+- 各类复制 API `767` 次、Host API 累计 `34.887 ms`；
+- `MemcpyInfo` 记录 H2D `310` 次/`45,184,872` 字节、D2H `364` 次/`46,691,736` 字节、D2D `89` 次/`171,529,344` 字节；其中 D2D 是 encoded DVPP staging 到 Base 输入的生产关键路径。
+
+该 CANN 的 DVPP 汇总 CSV 只枚举 VDEC/VENC，PNGD/VPC 不出现在该表；摘要明确保留这一限制，并以应用 `dvpp_enqueue_ms` 和原始 trace 为准，不把零值误写成无 DVPP 开销。
+
+### AOE 契约结论
+
+P0 固定构建使用 `--precision_mode_v2=mixed_float16`。目标板 `aoe` 支持 `--insert_op_conf` 和 `job_type=1/2`，但命令：
+
+```text
+aoe --precision_mode_v2=mixed_float16 -h
+```
+
+返回码为 `2`，明确报告 `--precision_mode_v2` 不受支持；它只公开旧的 `--precision_mode=allow_mix_precision`。P2 计划要求 ONNX、AIPP、SoC、precision 和输入 shape 全部与 P0 一致，因此禁止把 `allow_mix_precision` 当作近似替代。AOE 门禁报告已重新校验三个 ONNX/AIPP 的实际 SHA256，并记录 AOE 二进制哈希、完整 help 和失败探针。未执行 `job_type=1/2`，未创建 tuning repository、`aoe_result_opat` 或候选 OM。
+
+### 未换 OM 的端到端结束口径
+
+P2 结束时用未修改的 P1/P0 OM 再执行 30 次预热 + 10×89 真实 API 请求：服务端均值/P95/P99 为 `42.043/47.955/49.400 ms`，Engine 均值 `38.723 ms`，客户端墙钟均值/P95/P99 为 `54.024/60.137/61.707 ms`，路由融合均值 `0.375 ms`，无请求失败。该轮没有 tuned OM 或运行时代码变化，且比 P1 两轮稍慢，不能声称 P2 性能收益。
+
+P2 结论为：**profiling 已完成，拒绝 tuned OM**。不存在满足“模型均值下降至少 `5%`、完整 API 均值下降至少 `1%`、P95/P99 不恶化”的候选；P3 从未修改的 P1/P0 OM 链路继续。`8502` 已停止，正式 `8501` 保持 `ready`。
+
+| 报告 | SHA256 |
+| --- | --- |
+| `p2-single-0f610a3/summary-7e62647.json` | `1e0bcf185141aa385f6a993b391bdf98905b3e4a0f142b4f50317acb59d0865c` |
+| `p2-fixed-0f610a3/summary-7e62647.json` | `85eee35061d941e603aa8a674ad3328850852fe788a911b3fd1dc87f2058cc0b` |
+| `p2-aoe-compatibility-d496945.json` | `e247b08261f8b2b7e1da1cc180b058b281ed3e1e36b294db2dfdc5e981dd94c5` |
+| `p2-no-tuned-7e62647-890-characterization.json` | `a4e10d829f3b223a03dd618bf0384e6b02029e31028d593799b91678067a4d6c` |
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
