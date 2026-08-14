@@ -141,6 +141,40 @@ P0 当前状态为 **拒绝晋级**：多级 Scene DVPP 和 multipart 快速解�
 | `p0-multistage-890-characterization.json` | `18ec053814007ecea59297f1a3c2b31f3087511365f670529d8aa62a6fd03e61` |
 | `p0-fast-multipart-eac65cc-890-characterization.json` | `756a537c54576bf0e665cad46de8b00b164cf6e7871fef76709126034bd247c0` |
 
+## P1 Python 后处理、路由与融合（2026-08-15）
+
+P1 提交为 `5ee0f0884745f724f4e3373b11cbfda1bd937fd6`。板端 clean Git 工作副本已通过带 prerequisite 和 SHA256 校验的增量 bundle 从 `eac65cc` 快进到该提交，正式 `8501` 服务在同步和测量前后均保持 `ready`。本轮只在隔离的 `8502` 候选执行真实 API 端到端测量；按操作者要求，板端未运行 Web pytest。
+
+本轮实现包括：
+
+- `AscendResult` 直接暴露后处理 records，Agent 路由不再通过 `boxes.xyxy/conf/cls` 生成三份中间 list 后反向重建记录；
+- 阈值过滤、跨类冲突矩阵和 class-aware NMS 在候选规模足以抵消建表开销时使用 NumPy `float64` 批量计算，小集合保留原标量顺序；
+- 继续使用 Python 稳定排序，保留同置信度的 Specialist 优先 tie-break、输入顺序、完整 rejected/conflict 审计和 fusion summary；
+- 明确拒绝 `early_incremental_threshold`：请求阈值 `0.5` 继续传给 Specialist 后端，正式激活阈值 `0.63` 只在 Specialist NMS 后执行。回归测试固定了该约束。
+
+本机 WSL 既有 `.venv` 全量回归为 `226 passed, 1 skipped`。此外，用固定随机种子生成 1,000 组 NMS 和 1,000 组跨类冲突输入，与 `f06968d` 的旧实现逐字段差分，`2,000/2,000` 完全一致。两次板端 890 请求中，每张图、每一轮的检测数量签名也与 P0 报告一致；遵循只测板端端到端时长的要求，没有另跑板端业务回归套件。
+
+### 同口径端到端结果
+
+两轮均使用 30 次预热、10×89 请求、板端回环 HTTP keep-alive、单并发和 `confidence=0.5`：
+
+| 版本 | 服务端均值 | 服务端 P95 | 服务端 P99 | Engine 均值 | 路由融合均值 | 转换均值 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| P0 `eac65cc` | `41.439 ms` | `47.200 ms` | `48.411 ms` | `38.371 ms` | `0.464 ms` | `0.149 ms` |
+| P1 `5ee0f08` 首轮 | `41.214 ms` | `47.055 ms` | `48.200 ms` | `38.129 ms` | `0.371 ms` | `0.136 ms` |
+| P1 `5ee0f08` 复轮 | `41.302 ms` | `47.355 ms` | `48.311 ms` | `38.178 ms` | `0.368 ms` | `0.138 ms` |
+
+首轮相对 P0 的服务端均值/P95/P99 分别改善约 `0.54%/0.31%/0.44%`，Engine 均值改善约 `0.63%`，转换均值改善约 `8.47%`。复轮重复了相同量级。`routing_fusion_ms` 稳定在约 `0.37 ms`，显著低于 P1 `≤8 ms` 门禁；P0 的均值包含一次 `88.835 ms` 系统离群点，因此不能把路由融合均值的全部变化归因于代码。
+
+客户端墙钟受与服务端耗时不对应的连接/调度抖动影响：首轮 P95/P99 为 `99.915/113.037 ms`，复轮为 `58.840/101.486 ms`，而对应服务端 P95/P99 保持约 `47.1/48.3 ms`。门禁继续采用报告中受控的完整服务端 API 口径，不用客户端离群点宣称代码回退或收益。
+
+P1 结论为：**路由目标通过，保留实现作为后续 P2/P3 候选起点，但不晋级正式服务**。它没有让服务端 P95/P99 劣于 P0，且两轮均无请求失败；但完整 API 仍未达到 `40/42 ms`，P0 的数值和 provenance 阻断也未消失。`8502` 已停止，`8501` 保持 `ready`。
+
+| 报告 | SHA256 |
+| --- | --- |
+| `p1-native-records-5ee0f08-890-characterization.json` | `83ba1bc0b6c57581fb771a14420b4ea2d75c3ac8feec1c9cb812f4514226fe73` |
+| `p1-native-records-5ee0f08-repeat-890-characterization.json` | `3fb42739904191a9736acdcd69745650575539494206c238eafc3e49abeec5f8` |
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
@@ -161,7 +195,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `223 passed, 1 skipped`；板端 Ascend、对齐和发布门禁定向回归为 `20 passed`。正式 release 的既有发布校验状态仍为 `passed`，P0 候选因上述门禁失败保持未验收。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `226 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1 候选因上述门禁失败保持未验收。P1 板端验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
 
 ## 运行态检查
 
