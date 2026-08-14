@@ -21,6 +21,10 @@ fi
 test -f "$config"
 test -d "$image_root"
 test -x "$python"
+
+set +u
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+set -u
 command -v msprof >/dev/null
 
 mkdir -p "$output_root"
@@ -36,9 +40,6 @@ application=(
 printf -v application_command '%q ' "${application[@]}"
 printf '%s\n' "$application_command" > "$output_root/application-command.txt"
 
-set +u
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-set -u
 export AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION=1
 cd "$repo"
 msprof \
