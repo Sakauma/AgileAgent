@@ -1,22 +1,36 @@
-# Ascend 310B SSH 与运行环境
+# Ascend 310B SSH 连接、账户与运行环境
 
-本文记录 Atlas 200I DK A2 的当前连接方式、Python 环境、CANN、release 路径和服务操作。
+本文记录如何从 Windows 笔记本连接 Atlas 200I DK A2，以及板端官方系统账户、Miniconda、命名环境 `agileagent`、CANN、正式 release 和服务操作。文中的账户密码是华为官方系统镜像的出厂默认值；若设备已经改密，应以实际密码为准，不得把改密后的密码写入仓库。
 
 ## 环境快照
 
 | 项目 | 当前值 |
 | --- | --- |
 | SSH 地址 | `192.168.137.100:22` |
-| 日常账户 | `HwHiAiUser` |
+| 官方系统账户 | `root`、`HwHiAiUser` |
+| 官方出厂默认密码 | 两个账户均为 `Mind@123` |
 | 设备 | Atlas 200I DK A2，`aarch64` |
 | SoC | Ascend310B1 |
 | 操作系统 | Ubuntu 22.04 LTS，Linux `5.10.0+` |
 | CANN | `7.0.RC1` |
-| Conda | Miniconda `23.5.0` |
-| Python 环境 | `/usr/local/miniconda3/envs/agileagent` |
+| Miniconda 安装根目录 / base | `/usr/local/miniconda3`，Conda `23.5.0` |
+| 正式命名环境 | 名称 `agileagent`，路径 `/usr/local/miniconda3/envs/agileagent` |
+| 正式 Python 解释器 | `/usr/local/miniconda3/envs/agileagent/bin/python` |
 | Python 版本 | `3.9.2` |
+| 已删除的旧环境 | `<release>/conda-env`；不得继续使用或写入配置 |
 | 正式 release | `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2` |
 | 服务 | `127.0.0.1:8501` |
+
+## 官方系统账户
+
+官方系统镜像具有以下两个账户，出厂默认密码相同：
+
+| 账户 | 出厂默认密码 | 用途 |
+| --- | --- | --- |
+| `HwHiAiUser` | `Mind@123` | 日常 SSH 登录、项目部署、推理服务和普通运维 |
+| `root` | `Mind@123` | 仅用于必须修改系统目录、权限或系统配置的管理操作 |
+
+也就是：*root* / `Mind@123`，*HwHiAiUser* / `Mind@123`；两个账户的出厂默认密码相同。日常操作优先使用 `HwHiAiUser`，不要因为密码相同而长期使用 `root`。设备部署稳定后应分别修改两个账户的密码，也不要把修改后的密码保存到 Git、脚本、MobaXterm 宏或命令行参数中。
 
 ## Windows 连接
 
@@ -33,7 +47,13 @@ ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=3 `
   HwHiAiUser@192.168.137.100
 ```
 
-MobaXterm 使用相同地址、端口和账户建立 SSH 会话，并通过 SFTP 浏览 release 文件。
+需要执行受控系统管理操作时才使用：
+
+```powershell
+ssh root@192.168.137.100
+```
+
+MobaXterm 中选择 **Session → SSH**，`Remote host` 填写 `192.168.137.100`，端口保持 `22`，日常会话的 `Specify username` 填写 `HwHiAiUser`。按提示交互输入对应账户密码；MobaXterm 左侧 SFTP 浏览器可以查看该账户有权限访问的 release 文件。不要把密码写进会话名称、宏或脚本。
 
 ## 本地端口转发
 
@@ -47,7 +67,30 @@ ssh -N -L 8501:127.0.0.1:8501 HwHiAiUser@192.168.137.100
 Invoke-RestMethod http://127.0.0.1:8501/api/health
 ```
 
-## Python 环境
+## Miniconda 与命名环境 `agileagent`
+
+必须区分以下三个路径，它们不是一回事：
+
+| 含义 | 正确值 |
+| --- | --- |
+| 板端 Miniconda 安装根目录，也是 base 环境 | `/usr/local/miniconda3` |
+| AgileAgent 正式命名环境的 Conda prefix | `/usr/local/miniconda3/envs/agileagent` |
+| 正式服务实际调用的 Python | `/usr/local/miniconda3/envs/agileagent/bin/python` |
+
+原 release-local 环境 `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/conda-env` 已在命名环境迁移验收后删除。配置、脚本和人工命令都不得再引用该旧路径。
+
+登录板端后先核对 Miniconda 和环境注册信息：
+
+```bash
+/usr/local/miniconda3/bin/conda --version
+/usr/local/miniconda3/bin/conda info --base
+/usr/local/miniconda3/bin/conda env list
+test -x /usr/local/miniconda3/envs/agileagent/bin/python
+```
+
+预期 `conda info --base` 返回 `/usr/local/miniconda3`，环境列表中存在名为 `agileagent` 的 `/usr/local/miniconda3/envs/agileagent`。
+
+不依赖 shell 激活也可以直接调用正式解释器：
 
 ```bash
 /usr/local/miniconda3/envs/agileagent/bin/python --version
@@ -62,14 +105,20 @@ Invoke-RestMethod http://127.0.0.1:8501/api/health
 ```bash
 source /usr/local/miniconda3/etc/profile.d/conda.sh
 conda activate agileagent
+printf 'CONDA_DEFAULT_ENV=%s\nCONDA_PREFIX=%s\n' \
+  "$CONDA_DEFAULT_ENV" "$CONDA_PREFIX"
+readlink -f "$(command -v python)"
 ```
+
+预期 `CONDA_DEFAULT_ENV=agileagent`、`CONDA_PREFIX=/usr/local/miniconda3/envs/agileagent`，Python 的真实路径位于该 prefix 下。正式启动脚本使用绝对解释器路径，因此不依赖交互式 `conda activate`，也不会使用 base 环境。
 
 ## CANN 与设备状态
 
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 npu-smi info
-python -c "import acl; print(acl.__file__)"
+/usr/local/miniconda3/envs/agileagent/bin/python -c \
+  "import acl; print(acl.__file__)"
 ```
 
 环境迁移后的服务驻留快照为 NPU 内存 `9479 / 11577 MB`、温度 `61°C`、Health `OK`。
@@ -100,10 +149,11 @@ python -c "import acl; print(acl.__file__)"
 
 ```bash
 cd /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/src
-./scripts/start_agent_ascend310b.sh
+AGILE_AGENT_ASCEND_ENV=/usr/local/miniconda3/envs/agileagent \
+  ./scripts/start_agent_ascend310b.sh
 ```
 
-脚本加载 CANN 环境，使用命名环境 Python 启动 Uvicorn，并将 PID 写入 `<release>/agent-web.pid`。
+`AGILE_AGENT_ASCEND_ENV` 可以省略，因为脚本默认值就是 `/usr/local/miniconda3/envs/agileagent`；这里显式写出是为了让人工复核时没有路径歧义。脚本加载 CANN 环境，使用命名环境 Python 启动 Uvicorn，并将 PID 写入 `<release>/agent-web.pid`。
 
 ## 运行状态
 
