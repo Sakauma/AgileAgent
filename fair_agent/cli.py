@@ -612,7 +612,6 @@ def cmd_experiment(args: argparse.Namespace) -> int:
 def cmd_config(args: argparse.Namespace) -> int:
     from fair_agent.modules.configuration import (
         config_diff,
-        migrate_config,
         render_effective_config,
         set_persistent_value,
         unset_persistent_value,
@@ -642,9 +641,6 @@ def cmd_config(args: argparse.Namespace) -> int:
             print(json.dumps({"updated": rel_path(path), "key": args.key, "restart_required": True}, ensure_ascii=False))
         elif args.config_action == "diff":
             print(json.dumps(config_diff(args.config, overrides), ensure_ascii=False, indent=2))
-        else:
-            path = migrate_config(args.input, args.output)
-            print(json.dumps({"migrated": rel_path(path), "restart_required": True}, ensure_ascii=False))
     except (FileExistsError, KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"配置操作失败：{exc}")
         return 1
@@ -843,11 +839,6 @@ def build_parser() -> argparse.ArgumentParser:
         elif name == "set":
             action.add_argument("key")
             action.add_argument("value")
-    migrate = config_sub.add_parser("migrate")
-    migrate.add_argument("--input", required=True)
-    migrate.add_argument("--output", required=True)
-    migrate.set_defaults(func=cmd_config)
-
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--quiet", action="store_true", help="成功时不输出完整诊断信息。")
     doctor.set_defaults(func=cmd_doctor)

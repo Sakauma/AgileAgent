@@ -269,13 +269,9 @@ class IncrementalBatchStore:
         records: list[Dict[str, Any]] = []
         class_counts: Counter[int] = Counter()
         object_count = 0
-        label_formats: set[str] = set()
-        allowed_label_formats = {
-            str(value) for value in self.settings["allowed_label_formats"]
-        }
         for image in images:
             label = self._label_for(image, labels_by_stem)
-            if label is None and bool(self.settings["require_labels"]):
+            if label is None:
                 raise ValueError(f"缺少与 {image.name} 对应的YOLO标签。")
             try:
                 with Image.open(image) as opened:
@@ -286,44 +282,32 @@ class IncrementalBatchStore:
             if width * height > int(self.settings["max_image_pixels"]):
                 raise ValueError(f"图像像素数超过限制：{image.name}")
             classes: list[int] = []
-            if label is not None:
-                for line_number, line in enumerate(label.read_text(encoding="utf-8").splitlines(), 1):
-                    if not line.strip():
-                        continue
-                    fields = line.split()
-                    if len(fields) not in {4, 5}:
-                        raise ValueError(f"{label.name}:{line_number} 不是4列或5列YOLO标签。")
-                    try:
-                        if len(fields) == 5:
-                            class_id = int(fields[0])
-                            coordinates = [float(value) for value in fields[1:]]
-                            label_format = "class_id_bbox"
-                        else:
-                            class_id = 0
-                            coordinates = [float(value) for value in fields]
-                            label_format = "bbox_only"
-                    except ValueError as exc:
-                        raise ValueError(f"{label.name}:{line_number} 含非法数值。") from exc
-                    if label_format not in allowed_label_formats:
-                        if label_format == "bbox_only":
-                            raise ValueError(
-                                f"{label.name}:{line_number} 缺少类别ID，且当前配置未启用四列兼容模式。"
-                            )
-                        raise ValueError(f"{label.name}:{line_number} 的标签格式未被当前配置允许。")
-                    label_formats.add(label_format)
-                    x_center, y_center, box_width, box_height = coordinates
-                    outside = (
-                        x_center - box_width / 2 < 0 or x_center + box_width / 2 > 1
-                        or y_center - box_height / 2 < 0 or y_center + box_height / 2 > 1
+            for line_number, line in enumerate(label.read_text(encoding="utf-8").splitlines(), 1):
+                if not line.strip():
+                    continue
+                fields = line.split()
+                if len(fields) != 5:
+                    raise ValueError(
+                        f"{label.name}:{line_number} 必须使用5列YOLO标签：class x_center y_center width height。"
                     )
-                    if (
-                        class_id < 0 or any(value < 0.0 or value > 1.0 for value in coordinates)
-                        or box_width <= 0 or box_height <= 0 or outside
-                    ):
-                        raise ValueError(f"{label.name}:{line_number} 类别或坐标越界。")
-                    classes.append(class_id)
-                    class_counts[class_id] += 1
-                    object_count += 1
+                try:
+                    class_id = int(fields[0])
+                    coordinates = [float(value) for value in fields[1:]]
+                except ValueError as exc:
+                    raise ValueError(f"{label.name}:{line_number} 含非法数值。") from exc
+                x_center, y_center, box_width, box_height = coordinates
+                outside = (
+                    x_center - box_width / 2 < 0 or x_center + box_width / 2 > 1
+                    or y_center - box_height / 2 < 0 or y_center + box_height / 2 > 1
+                )
+                if (
+                    class_id < 0 or any(value < 0.0 or value > 1.0 for value in coordinates)
+                    or box_width <= 0 or box_height <= 0 or outside
+                ):
+                    raise ValueError(f"{label.name}:{line_number} 类别或坐标越界。")
+                classes.append(class_id)
+                class_counts[class_id] += 1
+                object_count += 1
             relative = image.relative_to(extracted).as_posix()
             lower_parts = {part.lower() for part in image.parts}
             if lower_parts & {"lock", "sealed", "holdout"}:
@@ -335,27 +319,18 @@ class IncrementalBatchStore:
             records.append({
                 "index": len(records),
                 "image": relative,
-                "label": label.relative_to(extracted).as_posix() if label else None,
+                "label": label.relative_to(extracted).as_posix(),
                 "width": width,
                 "height": height,
                 "classes": sorted(set(classes)),
                 "object_count": len(classes),
                 "split_hint": split_hint,
                 "image_sha256": _sha256_file(image),
-                "label_sha256": _sha256_file(label) if label else None,
+                "label_sha256": _sha256_file(label),
             })
         all_ids = sorted(class_counts)
         if not all_ids:
             raise ValueError("增量数据集中没有有效目标。")
-        if len(label_formats) > 1:
-            raise ValueError("同一增量数据包不能混用4列无类别标签和5列带类别ID标签。")
-        warnings: list[Dict[str, str]] = []
-        if "bbox_only" in label_formats:
-            warnings.append({
-                "code": "bbox_only_labels_without_class_id",
-                "level": "warning",
-                "message": "检测到四列无类别标签，已按单一待确认类别导入；建议训练前补充类别名称。",
-            })
 
         override_values = _parse_override_names(override_names)
         yaml_names = _class_names_from_yaml(extracted)
@@ -442,12 +417,11 @@ class IncrementalBatchStore:
             "local_to_global": {str(key): value for key, value in local_to_global.items()},
             "class_bindings": bindings,
             "class_counts": {str(key): class_counts[key] for key in all_ids},
-            "label_format": next(iter(label_formats)),
+            "label_format": "class_id_bbox",
             "incremental_mode": mode,
             "generated_class_names": generated,
             "requires_class_confirmation": bool(generated),
             "has_provisional_class_names": bool(generated),
-            "warnings": warnings,
             **compliance,
             "files": records,
         }
@@ -573,16 +547,6 @@ class IncrementalBatchStore:
                 "manifest": rel_path(self._manifest_path(batch_id)),
             },
         )
-        if status == "AUDITED" and manifest["audit"].get("warnings"):
-            self.event_log.append(
-                "incremental.audit.warning",
-                level="warning",
-                component="incremental",
-                trace_id=trace_id,
-                batch_id=batch_id,
-                message="增量数据已通过审计，但存在需要后台确认的标签警告。",
-                details={"warnings": manifest["audit"]["warnings"]},
-            )
         return manifest
 
     def image_path(self, batch_id: str, index: int) -> Path:

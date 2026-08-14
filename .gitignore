@@ -16,16 +16,8 @@ venv/
 # Private competition data and derived artifacts
 /datasets*/
 /datasets_r1_base_train
-/20260701*/
-/分析结果/
-/incremental_protocols/
-/incremental_protocols_no_old/
-/incremental_protocols_no_old_specialist/
-/incremental_strict_3plus1/
 /runs/
 /reports/
-/final_submission_assets/
-/external_repos/
 *.pt
 *.pth
 *.onnx

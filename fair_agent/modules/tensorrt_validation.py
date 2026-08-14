@@ -72,11 +72,20 @@ def _predict(
     if threshold_overrides:
         _apply_protocol_thresholds(settings["protocols"], threshold_overrides)
     engine = WebInferenceEngine(
-        settings["detector_path"], settings["context_path"], settings["device_index"],
-        settings["predict"], settings["protocols"], settings["class_names"],
-        settings["base_class_ids"], settings["base_local_to_global"], settings["routing"],
-        settings["generation_id"], settings["base_model_id"], settings["class_owners"],
-        backend, settings["native_backend"],
+        settings["detector_path"],
+        settings["context_path"],
+        generation_id=settings["generation_id"],
+        base_model_id=settings["base_model_id"],
+        device_index=settings["device_index"],
+        predict_options=settings["predict"],
+        incremental_protocols=settings["protocols"],
+        class_names=settings["class_names"],
+        base_class_ids=settings["base_class_ids"],
+        base_local_to_global=settings["base_local_to_global"],
+        routing_options=settings["routing"],
+        class_owners=settings["class_owners"],
+        backend_name=backend,
+        native_options=settings["native_backend"],
     )
     results = []
     batch_size = int(config["tensorrt_backend"]["validation"]["evaluation_batch_size"])

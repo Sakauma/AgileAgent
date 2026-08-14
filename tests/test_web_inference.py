@@ -24,7 +24,6 @@ from fair_agent.modules.web_inference import (
     remap_specialist_records,
     remap_base_records,
     consensus_specialist_records,
-    suppress_specialist_conflicts,
     arbitrate_cross_class_conflicts,
     yolo_inference_ms,
     decode_batch_images,
@@ -358,17 +357,6 @@ def test_fusion_does_not_renms_a_frozen_base_only_owner_stream() -> None:
     assert summary == {"input_count": 2, "output_count": 2, "suppressed_count": 0}
 
 
-def test_cross_class_conflict_suppression_uses_configured_margin() -> None:
-    base = [{"class_id": 1, "confidence": 0.80, "xyxy": [0, 0, 20, 20]}]
-    candidates = [
-        {"class_id": 2, "confidence": 0.90, "xyxy": [1, 1, 19, 19], "protocol_id": "warship"},
-        {"class_id": 2, "confidence": 0.97, "xyxy": [1, 1, 19, 19], "protocol_id": "warship"},
-    ]
-    kept, rejected = suppress_specialist_conflicts(base, candidates, 0.50, 0.50, 0.15)
-    assert kept == [candidates[1]]
-    assert rejected[0]["reason"] == "cross_class_conflict"
-
-
 def test_dynamic_new_class_mapping_and_neutral_context() -> None:
     remapped = remap_specialist_records(
         [{"class_id": 0, "confidence": 0.9, "xyxy": [1, 1, 2, 2]}],
@@ -441,6 +429,8 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     engine.context_checkpoint = {}
     engine.device = "cuda:0"
     engine.device_index = "0"
+    engine.generation_id = "test_generation"
+    engine.base_model_id = "test_base_model"
     engine.imgsz = 640
     engine.specialist_imgsz = 512
     engine.iou = 0.7

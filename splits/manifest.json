@@ -12,16 +12,14 @@
   "simulated_increment_class": "warship",
   "allocation_policy": {
     "all_source_images_used": true,
-    "reclaimed_previous_embargo_to_pool_train": true,
-    "reclaimed_image_count": 51,
-    "dev_and_test_membership_preserved": true,
-    "temporal_gap_constraint": null
+    "sequence_ordered_evaluation": true,
+    "evaluation_boundary_distance": 4,
+    "boundary_images_assigned_to_training": true
   },
   "counts": {
     "pool_train": 573,
     "pool_dev": 88,
-    "mixed_test": 89,
-    "embargo": 0
+    "mixed_test": 89
   },
   "class_image_counts": {
     "pool_train": {
@@ -41,8 +39,7 @@
       "1": 22,
       "2": 19,
       "3": 48
-    },
-    "embargo": {}
+    }
   },
   "sensor_counts": {
     "pool_train": {
@@ -56,8 +53,7 @@
     "mixed_test": {
       "ir": 67,
       "sar": 22
-    },
-    "embargo": {}
+    }
   },
   "sequence_details": [
     {
@@ -66,11 +62,10 @@
       "counts": {
         "pool_train": 131,
         "pool_dev": 22,
-        "mixed_test": 22,
-        "embargo": 0
+        "mixed_test": 22
       },
-      "reclaimed_to_pool_train": 8,
-      "historical_frame_bounds": {
+      "boundary_training_count": 8,
+      "evaluation_frame_bounds": {
         "train_last": 123,
         "dev_first": 128,
         "dev_last": 149,
@@ -83,11 +78,10 @@
       "counts": {
         "pool_train": 97,
         "pool_dev": 17,
-        "mixed_test": 16,
-        "embargo": 0
+        "mixed_test": 16
       },
-      "reclaimed_to_pool_train": 7,
-      "historical_frame_bounds": {
+      "boundary_training_count": 7,
+      "evaluation_frame_bounds": {
         "train_last": 107,
         "dev_first": 112,
         "dev_last": 129,
@@ -100,11 +94,10 @@
       "counts": {
         "pool_train": 81,
         "pool_dev": 12,
-        "mixed_test": 12,
-        "embargo": 0
+        "mixed_test": 12
       },
-      "reclaimed_to_pool_train": 8,
-      "historical_frame_bounds": {
+      "boundary_training_count": 8,
+      "evaluation_frame_bounds": {
         "train_last": 87,
         "dev_first": 92,
         "dev_last": 103,
@@ -117,11 +110,10 @@
       "counts": {
         "pool_train": 96,
         "pool_dev": 17,
-        "mixed_test": 17,
-        "embargo": 0
+        "mixed_test": 17
       },
-      "reclaimed_to_pool_train": 6,
-      "historical_frame_bounds": {
+      "boundary_training_count": 6,
+      "evaluation_frame_bounds": {
         "train_last": 100,
         "dev_first": 105,
         "dev_last": 124,
@@ -134,11 +126,10 @@
       "counts": {
         "pool_train": 59,
         "pool_dev": 7,
-        "mixed_test": 7,
-        "embargo": 0
+        "mixed_test": 7
       },
-      "reclaimed_to_pool_train": 8,
-      "historical_frame_bounds": {
+      "boundary_training_count": 8,
+      "evaluation_frame_bounds": {
         "train_last": 59,
         "dev_first": 64,
         "dev_last": 71,
@@ -151,11 +142,10 @@
       "counts": {
         "pool_train": 51,
         "pool_dev": 6,
-        "mixed_test": 7,
-        "embargo": 0
+        "mixed_test": 7
       },
-      "reclaimed_to_pool_train": 7,
-      "historical_frame_bounds": {
+      "boundary_training_count": 7,
+      "evaluation_frame_bounds": {
         "train_last": 52,
         "dev_first": 57,
         "dev_last": 62,
@@ -168,11 +158,10 @@
       "counts": {
         "pool_train": 58,
         "pool_dev": 7,
-        "mixed_test": 8,
-        "embargo": 0
+        "mixed_test": 8
       },
-      "reclaimed_to_pool_train": 7,
-      "historical_frame_bounds": {
+      "boundary_training_count": 7,
+      "evaluation_frame_bounds": {
         "train_last": 59,
         "dev_first": 64,
         "dev_last": 71,

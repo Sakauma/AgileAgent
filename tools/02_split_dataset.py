@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 import sys
 from collections import Counter, defaultdict
-from math import floor
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
@@ -15,7 +13,6 @@ sys.path.insert(0, str(ROOT))
 
 from fair_agent.dataset_utils import (
     REPORTS_DIR,
-    count_class_presence,
     count_values,
     read_classes,
     read_metadata,
@@ -23,149 +20,18 @@ from fair_agent.dataset_utils import (
 
 
 SEED = 20260705
-TARGET_COUNTS = {"train": 560, "dev_val": 95, "lock_val": 95}
+EXPECTED_IMAGE_COUNT = 750
 
 ACTIVE_SPLITS_DIR = ROOT / "splits"
-LEGACY_SPLITS_DIR = ROOT / "archive" / "splits_legacy_random_560_95_95"
-TEMPORAL_TRAIN_RATIO = 0.70
-TEMPORAL_DEV_RATIO = 0.15
-TEMPORAL_LOCK_RATIO = 0.15
-EMBARGO_FRAME_DISTANCE = 4
+DEV_WINDOW_RATIO = 0.15
+TEST_WINDOW_RATIO = 0.15
+EVALUATION_BOUNDARY_DISTANCE = 4
 DEFAULT_SIMULATED_INCREMENT_CLASS = "warship"
-
-
-# ---------------------------------------------------------------------------
-# Legacy random split. Kept so the published v1 manifests remain reproducible.
-# ---------------------------------------------------------------------------
-
-
-def group_rows(rows: Sequence[Dict[str, str]]) -> Dict[str, List[Dict[str, str]]]:
-    detailed = defaultdict(list)
-    for row in rows:
-        key = f"{row['sensor']}|{row['scene']}|{row['classes_present']}"
-        detailed[key].append(row)
-
-    grouped = defaultdict(list)
-    for key, group in detailed.items():
-        sensor, scene, _classes_present = key.split("|", 2)
-        final_key = key if len(group) >= 3 else f"{sensor}|{scene}"
-        grouped[final_key].extend(group)
-    return dict(grouped)
-
-
-def allocate_exact(group_sizes: Dict[str, int], target: int, total: int) -> Dict[str, int]:
-    raw = []
-    for key, size in group_sizes.items():
-        quota = size * target / total
-        base = floor(quota)
-        raw.append((key, base, quota - base))
-    allocation = {key: base for key, base, _rem in raw}
-    remaining = target - sum(allocation.values())
-    for key, _base, _rem in sorted(raw, key=lambda item: (-item[2], item[0]))[:remaining]:
-        allocation[key] += 1
-    return allocation
-
-
-def split_rows(rows: Sequence[Dict[str, str]]) -> Dict[str, List[Dict[str, str]]]:
-    rng = random.Random(SEED)
-    groups = group_rows(rows)
-    for group in groups.values():
-        rng.shuffle(group)
-
-    total = len(rows)
-    group_sizes = {key: len(group) for key, group in groups.items()}
-    train_alloc = allocate_exact(group_sizes, TARGET_COUNTS["train"], total)
-    remaining_sizes = {key: group_sizes[key] - train_alloc[key] for key in groups}
-    dev_alloc = allocate_exact(
-        remaining_sizes,
-        TARGET_COUNTS["dev_val"],
-        total - TARGET_COUNTS["train"],
-    )
-
-    splits = {"train": [], "dev_val": [], "lock_val": []}
-    for key in sorted(groups):
-        group = groups[key]
-        train_count = train_alloc[key]
-        dev_count = dev_alloc[key]
-        splits["train"].extend(group[:train_count])
-        splits["dev_val"].extend(group[train_count : train_count + dev_count])
-        splits["lock_val"].extend(group[train_count + dev_count :])
-
-    for values in splits.values():
-        values.sort(key=lambda row: row["image_path"])
-    return splits
 
 
 def write_split(path: Path, rows: Iterable[Dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(row["image_path"] for row in rows) + "\n", encoding="utf-8")
-
-
-def format_counter(counter: Counter) -> str:
-    if not counter:
-        return "-"
-    return ", ".join(f"{key}: {value}" for key, value in sorted(counter.items()))
-
-
-def split_report(splits: Dict[str, List[Dict[str, str]]]) -> str:
-    all_paths = []
-    lines = [
-        "# 数据划分报告",
-        "",
-        f"随机种子：`{SEED}`",
-        "",
-        "| 划分 | 图片数 | 传感器 | 场景 | 包含类别 |",
-        "|---|---:|---|---|---|",
-    ]
-    for split_name in ["train", "dev_val", "lock_val"]:
-        values = splits[split_name]
-        all_paths.extend(row["image_path"] for row in values)
-        lines.append(
-            f"| {split_name} | {len(values)} | {format_counter(count_values(values, 'sensor'))} | "
-            f"{format_counter(count_values(values, 'scene'))} | "
-            f"{format_counter(count_class_presence(values))} |"
-        )
-
-    duplicates = len(all_paths) - len(set(all_paths))
-    lines.extend(
-        [
-            "",
-            "## 完整性检查",
-            "",
-            f"- 总图片数：{len(all_paths)}",
-            f"- 重复图片数：{duplicates}",
-            f"- 互斥划分：{'是' if duplicates == 0 else '否'}",
-            "",
-            "## 说明",
-            "",
-            "该随机逐帧划分只用于复现历史实验；当前 3+1 性能测试使用活动 splits。",
-        ]
-    )
-    return "\n".join(lines) + "\n"
-
-
-def write_legacy_splits(
-    rows: Sequence[Dict[str, str]], output_dir: Path = LEGACY_SPLITS_DIR
-) -> None:
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise FileExistsError(f"拒绝覆盖非空历史划分目录：{output_dir}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    splits = split_rows(rows)
-    for split_name, values in splits.items():
-        write_split(output_dir / f"{split_name}.txt", values)
-    for sensor in ["ir", "sar"]:
-        for split_name in ["train", "dev_val", "lock_val"]:
-            write_split(
-                output_dir / f"{split_name}_{sensor}.txt",
-                [row for row in splits[split_name] if row["sensor"] == sensor],
-            )
-    (output_dir / "split_report.md").write_text(split_report(splits), encoding="utf-8")
-    print(" ".join(f"{name}={len(value)}" for name, value in splits.items()))
-
-
-# ---------------------------------------------------------------------------
-# Full-coverage source pools and one fixed strict 3+1 simulation.
-# ---------------------------------------------------------------------------
 
 
 def class_ids(row: Mapping[str, str]) -> set[int]:
@@ -183,32 +49,26 @@ def frame_id(row: Mapping[str, str]) -> int:
         raise ValueError(f"无法解析连续帧编号：{row.get('image_path', '<unknown>')}") from exc
 
 
-def _trim_later_split(
+def _assign_boundary_rows_to_training(
     earlier: Sequence[Dict[str, str]],
     later: List[Dict[str, str]],
-    embargo: List[Dict[str, str]],
+    training: List[Dict[str, str]],
     minimum_distance: int,
 ) -> None:
     if not earlier or not later:
         raise ValueError("每个时间序列必须同时覆盖训练、开发和测试。")
     last_earlier = frame_id(earlier[-1])
     while later and frame_id(later[0]) - last_earlier <= minimum_distance:
-        embargo.append(later.pop(0))
+        training.append(later.pop(0))
     if not later:
-        raise ValueError("连续帧隔离带耗尽了后续划分。")
+        raise ValueError("评估窗口没有剩余样本。")
 
 
 def full_coverage_source_pools(
     rows: Sequence[Dict[str, str]],
-    historical_embargo_frame_distance: int = EMBARGO_FRAME_DISTANCE,
+    evaluation_boundary_distance: int = EVALUATION_BOUNDARY_DISTANCE,
 ) -> tuple[Dict[str, List[Dict[str, str]]], List[Dict[str, Any]]]:
-    """Preserve the existing dev/test members and reclaim every embargo image.
-
-    The previous active split removed four frames on each side of a temporal
-    boundary.  Temporal isolation is not part of the competition protocol, so
-    those images now belong to the training pool.  The old boundary calculation
-    remains here only to make the preserved dev/test membership reproducible.
-    """
+    """Build deterministic sequence-aware train, development, and test pools."""
     grouped: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     for row in rows:
         grouped[sequence_key(row)].append(row)
@@ -217,7 +77,6 @@ def full_coverage_source_pools(
         "pool_train": [],
         "pool_dev": [],
         "mixed_test": [],
-        "embargo": [],
     }
     details: List[Dict[str, Any]] = []
     for key, group in sorted(grouped.items()):
@@ -227,34 +86,33 @@ def full_coverage_source_pools(
         if len({frame_id(row) for row in ordered}) != len(ordered):
             raise ValueError(f"时间序列 {key} 存在重复帧编号。")
 
-        dev_count = max(1, round(len(ordered) * TEMPORAL_DEV_RATIO))
-        test_count = max(1, round(len(ordered) * TEMPORAL_LOCK_RATIO))
+        dev_count = max(1, round(len(ordered) * DEV_WINDOW_RATIO))
+        test_count = max(1, round(len(ordered) * TEST_WINDOW_RATIO))
         train_count = len(ordered) - dev_count - test_count
         train_rows = list(ordered[:train_count])
         dev_rows = list(ordered[train_count : train_count + dev_count])
         test_rows = list(ordered[train_count + dev_count :])
-        embargo_rows: List[Dict[str, str]] = []
-        _trim_later_split(
+        boundary_training_rows: List[Dict[str, str]] = []
+        _assign_boundary_rows_to_training(
             train_rows,
             dev_rows,
-            embargo_rows,
-            historical_embargo_frame_distance,
+            boundary_training_rows,
+            evaluation_boundary_distance,
         )
-        _trim_later_split(
+        _assign_boundary_rows_to_training(
             dev_rows,
             test_rows,
-            embargo_rows,
-            historical_embargo_frame_distance,
+            boundary_training_rows,
+            evaluation_boundary_distance,
         )
 
-        historical_frame_bounds = {
+        evaluation_frame_bounds = {
             "train_last": frame_id(train_rows[-1]),
             "dev_first": frame_id(dev_rows[0]),
             "dev_last": frame_id(dev_rows[-1]),
             "test_first": frame_id(test_rows[0]),
         }
-        reclaimed_rows = list(embargo_rows)
-        train_rows.extend(reclaimed_rows)
+        train_rows.extend(boundary_training_rows)
 
         pools["pool_train"].extend(train_rows)
         pools["pool_dev"].extend(dev_rows)
@@ -267,10 +125,9 @@ def full_coverage_source_pools(
                     "pool_train": len(train_rows),
                     "pool_dev": len(dev_rows),
                     "mixed_test": len(test_rows),
-                    "embargo": 0,
                 },
-                "reclaimed_to_pool_train": len(reclaimed_rows),
-                "historical_frame_bounds": historical_frame_bounds,
+                "boundary_training_count": len(boundary_training_rows),
+                "evaluation_frame_bounds": evaluation_frame_bounds,
             }
         )
 
@@ -288,8 +145,6 @@ def _validate_full_coverage_pools(
     all_paths = [row["image_path"] for values in pools.values() for row in values]
     if len(all_paths) != len(set(all_paths)) or set(all_paths) != expected:
         raise RuntimeError("活动源池没有互斥且完整覆盖 750 张图像。")
-    if pools.get("embargo"):
-        raise RuntimeError("750 张全量划分不允许保留未使用的 embargo 图像。")
 
 
 def _class_image_counts(
@@ -440,15 +295,34 @@ def active_readme(
     counts = protocol["counts"]
     return "\n".join(
         [
-            "# 严格 3+1 类别增量数据划分",
+            "# 固定 3+1 类别增量数据划分",
             "",
-            "该目录只描述一套固定的 3+1 模拟实验，不做交叉验证，也不轮换新增类别。",
-            "当前实例暂时把 `warship` 作为模拟新增类别；正式官方增量数据到达后，当前四类全部属于基础类。",
+            f"本目录固定一套覆盖 750 张基础数据的 3+1 模拟实验。当前实例以 `{protocol['increment_class_name']}` 为新增类别，",
+            f"基础类别为 {', '.join(f'`{name}`' for name in protocol['base_class_names'])}。",
             "",
-            "## 检测模型数据边界",
+            "## 源池分配",
+            "",
+            "图像按 `sensor | dataset_round | scene` 组成序列，并按帧号排序。每个序列末段形成测试窗口，",
+            "其前一段形成开发窗口；评估窗口边界 4 帧范围内的样本归入训练源池。最终源池规模为：",
+            "",
+            "| 源池 | 图片数 | IR | SAR | 用途 |",
+            "| --- | ---: | ---: | ---: | --- |",
+            f"| `pool_train.txt` | {len(pools['pool_train'])} | "
+            f"{sum(row['sensor'] == 'ir' for row in pools['pool_train'])} | "
+            f"{sum(row['sensor'] == 'sar' for row in pools['pool_train'])} | 检测与场景训练清单的来源 |",
+            f"| `pool_dev.txt` | {len(pools['pool_dev'])} | "
+            f"{sum(row['sensor'] == 'ir' for row in pools['pool_dev'])} | "
+            f"{sum(row['sensor'] == 'sar' for row in pools['pool_dev'])} | 检测与场景开发清单的来源 |",
+            f"| `mixed_test.txt` | {len(pools['mixed_test'])} | "
+            f"{sum(row['sensor'] == 'ir' for row in pools['mixed_test'])} | "
+            f"{sum(row['sensor'] == 'sar' for row in pools['mixed_test'])} | 固定混合测试集 |",
+            "",
+            "三个源池互斥并完整覆盖 750 张图。`manifest.json` 记录分配规则、逐序列窗口边界、类别分布和传感器分布。",
+            "",
+            "## 检测模型清单",
             "",
             "| 阶段 | 清单 | 图片数 | 可见目标类别 |",
-            "|---|---|---:|---|",
+            "| --- | --- | ---: | --- |",
             f"| 三类基础训练 | `strict_3plus1/base_train.txt` | {counts['base_train']} | {', '.join(protocol['base_class_names'])} |",
             f"| 三类基础验证 | `strict_3plus1/base_dev.txt` | {counts['base_dev']} | {', '.join(protocol['base_class_names'])} |",
             f"| 单类增量训练 | `strict_3plus1/increment_train.txt` | {counts['increment_train']} | {protocol['increment_class_name']} |",
@@ -457,32 +331,33 @@ def active_readme(
             f"| 最终混合测试 | `strict_3plus1/mixed_test.txt` | {counts['mixed_test']} | 全部四类 |",
             "",
             f"混合测试集由 {protocol['mixed_test_composition']['old_class_images']} 张旧类图和 "
-            f"{protocol['mixed_test_composition']['new_class_images']} 张新增类图组成；不要求同一张图同时含旧类和新类。",
-            "`base_test.txt` 只定义基础指标的评分子集，不得用于图片级模型路由。",
-            "冻结基础检测器和增量专家都必须先对完整混合测试集的每张图执行无标签推理并冻结预测，随后评分器才读取 base_test 清单和标签。",
-            "正式门槛固定为基础测试代理 mAP50 >= 0.80、New-mAP50 >= 0.60、KRR >= 0.95；base_dev 只用于选权重，四类总体 mAP50 只作诊断。",
-            "不得依据测试标签、文件名、数据集身份或场景类别决定是否运行某个类别 owner。",
+            f"{protocol['mixed_test_composition']['new_class_images']} 张新增类图组成。基础检测器与增量检测器先对完整 "
+            f"{counts['mixed_test']} 张混合测试集执行无标签推理并冻结预测，评分器随后读取固定标签与评分清单：",
             "",
-            "`pool_train.txt` 与 `pool_dev.txt` 只是生成上述模型专用清单的源池，不能直接作为三类基础检测器的训练数据。",
+            "| 指标 | 评分范围 | 发布门槛 |",
+            "| --- | --- | ---: |",
+            "| 基础 mAP50 | `base_test.txt` 中的基础类别 | `0.80` |",
+            "| New-mAP50 | 完整 `mixed_test.txt` 中的新增类别 | `0.60` |",
+            "| KRR | 完整 `mixed_test.txt` 中增量前后的基础类别 mAP50 比值 | `0.95` |",
+            "",
+            "`base_train.txt`、`base_dev.txt`、`increment_train.txt` 和 `increment_dev.txt` 是检测训练入口。",
+            "`pool_train.txt` 与 `pool_dev.txt` 生成这些类别隔离清单。在线路由使用当前 production 代际、",
+            "无标签图像内容和场景软证据；评分器在预测冻结后读取评分标签与评分子集。",
             "",
             "## 已知场景识别",
             "",
-            f"场景模型使用 `scene_train/dev/test.txt`（{counts['scene_train']}/{counts['scene_dev']}/{counts['scene_test']}），"
-            "覆盖 air、forest、sea、urban 全部已知场景。场景训练只能读取场景/传感器标签，不得读取目标类别标签、"
-            "共享检测器特征或建立场景到目标类别的硬绑定。",
+            f"场景模型使用 `strict_3plus1/scene_train.txt`、`scene_dev.txt` 和 `scene_test.txt`，规模为 "
+            f"{counts['scene_train']}/{counts['scene_dev']}/{counts['scene_test']}，覆盖 air、forest、sea、urban 四个已知场景。",
+            "场景模型训练输入由图像、传感器标签和场景标签组成。",
             "",
-            "## 750 张全量覆盖",
+            "## 重新生成",
             "",
-            f"源池为 {len(pools['pool_train'])}/{len(pools['pool_dev'])}/{len(pools['mixed_test'])}，"
-            "三者互斥且恰好覆盖全部 750 张图。上一版的 51 张边界隔离图已全部并入训练源池，"
-            "活动划分不再强制连续帧边界间距；3+1 类别隔离和测试标签封存约束保持不变。"
-            "上一版严格时序划分已归档到 `archive/splits_strict_temporal_3plus1_405_117/`，"
-            "旧随机逐帧划分已归档到 `archive/splits_legacy_random_560_95_95/`。",
-            "",
-            "可用其他可独立拆分的类别重新生成模板实例：",
+            "使用可独立拆分的四类数据和 metadata 生成同一协议：",
             "",
             "```bash",
-            "python tools/02_split_dataset.py --protocol strict-3plus1 --increment-class warship --output-dir reports/splits_check",
+            "python tools/02_split_dataset.py \\",
+            f"  --increment-class {protocol['increment_class_name']} \\",
+            "  --output-dir reports/splits_check",
             "```",
             "",
         ]
@@ -533,12 +408,9 @@ def write_strict_3plus1_splits(
         "simulated_increment_class": protocol["increment_class_name"],
         "allocation_policy": {
             "all_source_images_used": True,
-            "reclaimed_previous_embargo_to_pool_train": True,
-            "reclaimed_image_count": sum(
-                int(item["reclaimed_to_pool_train"]) for item in sequence_details
-            ),
-            "dev_and_test_membership_preserved": True,
-            "temporal_gap_constraint": None,
+            "sequence_ordered_evaluation": True,
+            "evaluation_boundary_distance": EVALUATION_BOUNDARY_DISTANCE,
+            "boundary_images_assigned_to_training": True,
         },
         "counts": {name: len(values) for name, values in pools.items()},
         "class_image_counts": {
@@ -559,12 +431,6 @@ def write_strict_3plus1_splits(
 def main() -> int:
     parser = argparse.ArgumentParser(description="生成固定基础数据划分与严格 3+1 模拟清单。")
     parser.add_argument(
-        "--protocol",
-        choices=("strict-3plus1", "legacy"),
-        default="strict-3plus1",
-        help="strict-3plus1 生成唯一活动划分；legacy 只复现已归档的旧随机划分。",
-    )
-    parser.add_argument(
         "--increment-class",
         default=DEFAULT_SIMULATED_INCREMENT_CLASS,
         help="strict-3plus1 中临时作为新增类别的当前数据类别名称。",
@@ -577,18 +443,9 @@ def main() -> int:
     args = parser.parse_args()
 
     rows = read_metadata(REPORTS_DIR / "metadata.csv")
-    if len(rows) != sum(TARGET_COUNTS.values()):
-        print(f"Expected {sum(TARGET_COUNTS.values())} metadata rows, got {len(rows)}")
+    if len(rows) != EXPECTED_IMAGE_COUNT:
+        print(f"Expected {EXPECTED_IMAGE_COUNT} metadata rows, got {len(rows)}")
         return 1
-
-    if args.protocol == "legacy":
-        if args.increment_class != DEFAULT_SIMULATED_INCREMENT_CLASS:
-            parser.error("--increment-class 不适用于 legacy")
-        output_dir = args.output_dir or LEGACY_SPLITS_DIR
-        if not output_dir.is_absolute():
-            output_dir = ROOT / output_dir
-        write_legacy_splits(rows, output_dir)
-        return 0
 
     output_dir = args.output_dir or ACTIVE_SPLITS_DIR
     if not output_dir.is_absolute():

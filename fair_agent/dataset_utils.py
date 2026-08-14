@@ -16,7 +16,6 @@ CLASSES_FILE = DATASET_DIR / "classes.txt"
 IMAGE_EXT = ".png"
 EXPECTED_SENSORS = {"ir", "sar"}
 EXPECTED_SCENES = {"air", "forest", "sea", "urban"}
-OLD_ANALYSIS_OBJECT_COUNT = 2956
 
 METADATA_FIELDS = [
     "image_path",

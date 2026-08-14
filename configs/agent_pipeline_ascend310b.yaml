@@ -1,5 +1,4 @@
-schema_version: 2
-seed: 20260705
+schema_version: 3
 
 runtime:
   mode: local
@@ -11,9 +10,7 @@ runtime:
 web:
   generation_registry: models/generations.json
   generation_channel: production
-  detector_weights: models/production/incremental_detection/three_class_base_detector.pt
   functional_registry: configs/functional_models.yaml
-  model_manifest: models/manifest.json
 
 inference:
   backend: ascend_acl
@@ -76,8 +73,6 @@ incremental_workbench:
   max_extracted_files: 20000
   max_image_pixels: 25000000
   allowed_image_extensions: [.png, .jpg, .jpeg, .bmp, .tif, .tiff]
-  allowed_label_formats: [class_id_bbox, bbox_only]
-  require_labels: true
   validation_fraction: 0.20
   lock_fraction: 0.20
   split_seed: 20260705
@@ -136,7 +131,7 @@ performance:
 generation:
   registry: models/generations.json
   runtime_registry: data/generation_registry/runtime.json
-  # 代际复核中的旧类基准只读取当前70张基础测试清单；新增类lock由当轮增量批次提供。
+  # 代际复核以当前70张基础测试清单作为旧类基准；新增类lock由当轮增量批次提供。
   recheck_lock_split: splits/strict_3plus1/base_test.txt
   report_root: reports/generation_rechecks
   candidate_id: incremental_detection_generation
@@ -152,7 +147,7 @@ gates:
     old_data_overlap_max: 0
   advisory:
     cumulative_map50_min: 0.80
-    # 仍不属于赛题第四项分数，但这两项必须通过才能切换 production。
+    # precision 与误激活率共同构成 production 质量门禁。
     lock_precision_min: 0.90
     false_activation_rate_max: 0.05
     latency_proxy_ms_max: 33.3
@@ -176,7 +171,7 @@ incremental_guardian:
     FALSE_ACTIVATION_RISK: [recalibrate_per_class_thresholds, strengthen_conflict_arbitration]
     LATENCY_OPTIMIZATION_REQUIRED: [reduce_specialist_budget, enable_batch_inference, evaluate_quantization]
 
-# 历史 x86/NVIDIA 兼容配置。310B 不读取本段、不加载 .engine；当前正式板端通过 fair_agent/backends/ascend_acl.py 使用 PyACL/AscendCL 加载 OM，native_ascend/ 仍是可选 C++ contract stub。
+# x86/NVIDIA 原生 TensorRT 后端，由 inference.backend=tensorrt_native 启用。
 native_backend:
   library: build/native/libagile_agent_tensorrt.so
   base_engine: runs/engines/local/three_class_base_detector.engine
@@ -214,7 +209,7 @@ ascend_backend:
     path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/scene_sensor_net.om
     sha256: debdb9c3f550ef24d0d14d736a700d65960abcd67899e00f493e208e6d90e725
 
-# 历史 x86/NVIDIA 兼容配置。TensorRT 不属于 Ascend 310B 部署、精度验收或性能证据。
+# x86/NVIDIA TensorRT engine 后端，由 inference.backend=tensorrt_engine 启用。
 tensorrt_backend:
   expected_version: null
   expected_compute_capability: null
@@ -341,41 +336,6 @@ inputs:
   data_audit: reports/data_audit_summary.json
   metadata: reports/metadata.csv
 
-modules:
-  - name: data_gate
-    status: ready
-    owner: data
-    inputs: [reports/data_audit_summary.json, reports/metadata.csv]
-    outputs: [reports/data_audit_report.md, reports/metadata.csv]
-  - name: detector
-    status: active_production
-    owner: model
-    inputs: [models/generations.json]
-    outputs: [models/production/incremental_detection]
-  - name: incremental_manager
-    status: active_production
-    owner: incremental
-    inputs: [models/generations.json, configs/incremental_detection_policy.yaml]
-    outputs: [models/production/incremental_detection]
-  - name: report_writer
-    status: ready
-    owner: documentation
-    inputs: [reports]
-    outputs: [reports/agent_blackboard]
-
-policies:
-  primary_model: use_incremental_detection_generation
-  submission_format: pending_official_confirmation
-  incremental_learning: mode_aware_incremental_data_only
-  end_device: paused_until_ascend_board_ready
-
-thresholds:
-  min_base_map50: 0.80
-  min_new_class_map50: 0.60
-  min_krr: 0.95
-  preferred_export_conf: 0.63
-  fallback_export_conf: 0.01
-
 incremental:
   task_type: incremental_object_detection
   primary_mode: class_incremental
@@ -408,5 +368,5 @@ decision:
       handler: refresh_blackboard
       risk_level: low
       timeout_seconds: 60
-      inputs: [configs/agent_pipeline.yaml]
+      inputs: [configs/agent_pipeline_ascend310b.yaml]
       outputs: [reports/agent_blackboard/blackboard_state.json]

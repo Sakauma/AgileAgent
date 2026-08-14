@@ -39,7 +39,7 @@ def build_decision(config: Dict[str, Any], state: Dict[str, Any], context: Dict[
     incremental = state.get("incremental_learning", {})
 
     candidates = [
-        _action(config, "formal_submission", "blocked" if blockers else "ready", "current", "正式推理只提供人工审计命令；当前前置条件尚未全部满足。" if blockers else "正式推理前置条件已满足，但 v1 仍要求人工执行。", 100 if not blockers else 10, sorted(blockers)),
+        _action(config, "formal_submission", "blocked" if blockers else "ready", "current", "正式推理只提供人工审计命令；当前前置条件尚未全部满足。" if blockers else "正式推理前置条件已满足，提交由人工审计后执行。", 100 if not blockers else 10, sorted(blockers)),
         _action(config, "refresh_blackboard", "completed", "current", "本次决策已基于实时重建的黑板。", 15),
     ]
     ranked = sorted(candidates, key=lambda item: item["score"], reverse=True)

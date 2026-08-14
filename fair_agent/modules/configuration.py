@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 from pathlib import Path
 from typing import Any, Dict, Mapping
@@ -8,7 +7,6 @@ from typing import Any, Dict, Mapping
 import yaml
 
 from fair_agent.core.config import (
-    DEFAULT_CONFIG,
     apply_overrides,
     get_key,
     is_protected_key,
@@ -18,7 +16,6 @@ from fair_agent.core.config import (
     resolve_path,
     set_key,
     unset_key,
-    validate_config,
     write_config,
 )
 
@@ -69,31 +66,6 @@ def config_diff(path: str | Path, overrides: list[str]) -> Dict[str, Any]:
         for key in keys
         if before.get(key) != effective.get(key)
     }
-
-
-def _deep_merge(base: Dict[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
-    result = copy.deepcopy(base)
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, Mapping):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = copy.deepcopy(value)
-    return result
-
-
-def migrate_config(input_path: str | Path, output_path: str | Path) -> Path:
-    source = raw_config(input_path)
-    template = raw_config(DEFAULT_CONFIG)
-    source.pop("schema_version", None)
-    migrated = _deep_merge(template, source)
-    migrated["schema_version"] = template["schema_version"]
-    validate_config(migrated)
-    destination = resolve_path(output_path)
-    if destination.exists():
-        raise FileExistsError(f"拒绝覆盖已有迁移目标：{destination}")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(yaml.safe_dump(migrated, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    return destination
 
 
 def render_effective_config(path: str | Path, overrides: list[str], output_format: str) -> str:

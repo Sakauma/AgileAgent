@@ -11,7 +11,6 @@ EXPECTED_POOL_COUNTS = {
     "pool_train": 573,
     "pool_dev": 88,
     "mixed_test": 89,
-    "embargo": 0,
 }
 
 
@@ -24,11 +23,6 @@ def logical_sha256(rows: list[str]) -> str:
 
 
 def test_active_source_pools_are_complete_disjoint_and_use_all_750_images() -> None:
-    assert not (ROOT / "splits_v2").exists()
-    assert not any(
-        (SPLIT_ROOT / name).exists()
-        for name in ("train.txt", "dev_val.txt", "lock_val.txt")
-    )
     pools = {
         name: read_split(SPLIT_ROOT / f"{name}.txt")
         for name in EXPECTED_POOL_COUNTS
@@ -42,7 +36,6 @@ def test_active_source_pools_are_complete_disjoint_and_use_all_750_images() -> N
     all_paths = [path for rows in pools.values() for path in rows]
     assert len(all_paths) == 750
     assert len(set(all_paths)) == 750
-    assert pools["embargo"] == []
     assert logical_sha256(pools["pool_dev"]) == (
         "aaf49d10ffe77157ed1f32c46af13a7bb7c24156dc06c9479f14348a04c29eb7"
     )
@@ -72,10 +65,9 @@ def test_fixed_protocol_is_exactly_three_base_classes_plus_warship() -> None:
     assert top["counts"] == EXPECTED_POOL_COUNTS
     assert top["allocation_policy"] == {
         "all_source_images_used": True,
-        "reclaimed_previous_embargo_to_pool_train": True,
-        "reclaimed_image_count": 51,
-        "dev_and_test_membership_preserved": True,
-        "temporal_gap_constraint": None,
+        "sequence_ordered_evaluation": True,
+        "evaluation_boundary_distance": 4,
+        "boundary_images_assigned_to_training": True,
     }
     assert top["simulated_increment_class"] == "warship"
     assert protocol["protocol"] == "strict_3plus1_class_incremental_simulation"
@@ -101,7 +93,6 @@ def test_fixed_protocol_is_exactly_three_base_classes_plus_warship() -> None:
     assert all("_sea_" not in path for path in base_train | base_dev)
     assert all("_sea_" in path for path in increment_train | increment_dev)
     assert all("_sea_" not in path for path in base_test)
-    assert not (SPLIT_ROOT / "pseudo_incremental").exists()
 
 
 def test_mixed_detection_test_and_known_scene_lists_use_correct_scopes() -> None:

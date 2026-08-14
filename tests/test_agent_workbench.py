@@ -46,7 +46,7 @@ def test_blackboard_uses_verified_production_generation() -> None:
     assert "incremental_compliant_threshold_not_met" not in state["current_blockers"]
 
 
-def test_decision_uses_current_generation_without_legacy_reports() -> None:
+def test_decision_uses_current_generation() -> None:
     config = load_config()
     state = build_blackboard(config)
     decision = build_decision(config, state, {"sensor": "sar", "scene": "urban", "class_focus": "soldier"})
@@ -54,16 +54,6 @@ def test_decision_uses_current_generation_without_legacy_reports() -> None:
     assert state["incremental_learning"]["source"] == "models/generations.json"
     assert state["incremental_learning"]["passed"] is True
     assert {item["action"] for item in decision["candidates"]} == {"formal_submission", "refresh_blackboard"}
-    assert decision["recommended_action"]["action"] == "wait_for_external_input"
-
-
-def test_archived_evidence_is_not_exposed_as_an_action() -> None:
-    config = load_config()
-    state = build_blackboard(config)
-    decision = build_decision(config, state, {"sensor": "sar", "scene": "urban", "class_focus": "soldier"})
-    names = {item["action"] for item in decision["candidates"]}
-    assert "diagnose_sar_soldier" not in names
-    assert "review_incremental_learning" not in names
     assert decision["recommended_action"]["action"] == "wait_for_external_input"
 
 

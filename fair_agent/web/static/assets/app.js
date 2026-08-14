@@ -281,7 +281,7 @@
     const metrics = $("#incrementalMetrics");
     metrics.innerHTML = "";
     const classNames = Object.values(audit.class_map || {}).join("、") || "待确认";
-    const labelFormat = audit.label_format === "bbox_only" ? "四列·类别待确认" : "五列YOLO";
+    const labelFormat = "五列YOLO";
     const training = batch.training || {};
     const calibration = training.calibration || {};
     const recheck = training.recheck || {};

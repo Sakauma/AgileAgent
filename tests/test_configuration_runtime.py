@@ -46,14 +46,6 @@ def test_effective_config_rejects_unknown_runtime_field() -> None:
         validate_config(config)
 
 
-def test_competition_incremental_labels_prefer_class_ids_with_bbox_fallback() -> None:
-    config = clean_config()
-    assert config["incremental_workbench"]["allowed_label_formats"] == ["class_id_bbox", "bbox_only"]
-    config["incremental_workbench"]["allowed_label_formats"] = ["unknown"]
-    with pytest.raises(ValueError, match="allowed_label_formats"):
-        validate_config(config)
-
-
 def test_cli_overrides_are_typed_and_process_local() -> None:
     config = clean_config()
     effective = apply_overrides(config, ["inference.confidence_default=0.61", "ui.history_limit=7"])

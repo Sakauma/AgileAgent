@@ -497,25 +497,6 @@ def class_aware_nms(
     return kept, {"input_count": len(rows), "output_count": len(kept), "suppressed_count": suppressed}
 
 
-def suppress_specialist_conflicts(
-    base_records: Iterable[Dict[str, Any]],
-    specialist_records: Iterable[Dict[str, Any]],
-    conflict_iou: float,
-    base_confidence: float,
-    specialist_margin: float,
-) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Compatibility wrapper for the conservative specialist-only policy."""
-    _base, kept, decisions = arbitrate_cross_class_conflicts(
-        base_records,
-        specialist_records,
-        conflict_iou,
-        base_confidence,
-        specialist_margin,
-        None,
-    )
-    return kept, [row for row in decisions if row["action"] == "reject_specialist"]
-
-
 def annotate_records(image: Image.Image, records: Iterable[Dict[str, Any]]) -> Image.Image:
     canvas = image.convert("RGB").copy()
     draw = ImageDraw.Draw(canvas)
@@ -573,6 +554,8 @@ class WebInferenceEngine:
         self,
         detector_path: Path,
         context_path: Path,
+        generation_id: str,
+        base_model_id: str,
         device_index: str = "0",
         predict_options: Mapping[str, Any] | None = None,
         incremental_protocols: Mapping[str, Mapping[str, Any]] | None = None,
@@ -580,8 +563,6 @@ class WebInferenceEngine:
         base_class_ids: Iterable[int] | None = None,
         base_local_to_global: Mapping[int, int] | None = None,
         routing_options: Mapping[str, Any] | None = None,
-        generation_id: str = "legacy-unified",
-        base_model_id: str = "unified_yolo11s_v1",
         class_owners: Mapping[int, str] | None = None,
         backend_name: str = "ultralytics_cuda",
         native_options: Mapping[str, Any] | None = None,
@@ -1533,8 +1514,8 @@ class WebInferenceEngine:
         )
         fusion_summary["conflict_suppressed_count"] = len(conflict_rejections)
         routing_fusion_ms = (time.perf_counter() - routing_started) * 1000
-        base_model_id = getattr(self, "base_model_id", "unified_yolo11s_v1")
-        generation_id = getattr(self, "generation_id", "legacy-unified")
+        base_model_id = self.base_model_id
+        generation_id = self.generation_id
         models_used = ["scene_sensor_net_v1", base_model_id]
         models_used.extend(str(route["id"]) for route in executed_routes)
         activated_classes = sorted({

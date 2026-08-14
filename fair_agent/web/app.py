@@ -100,118 +100,73 @@ def build_web_settings(
     generation_id: str | None = None,
 ) -> Dict[str, Any]:
     config = dict(config or load_config())
-    web = config.get("web", {})
+    web = config["web"]
     inference = dict(config["inference"])
     routing = dict(config["routing"])
     backend_name = str(inference["backend"])
     backend_options = inference_backend_options(config)
-    registry_path = resolve_path(web.get("functional_registry", "configs/functional_models.yaml"))
+    registry_path = resolve_path(web["functional_registry"])
     registry = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
     context_entry = next(
         item for item in registry["models"] if item.get("function") == "context_perception"
     )
     context_path = resolve_path(context_entry["artifacts"][0]["path"])
-    manifest_path = resolve_path(web.get("model_manifest", "models/manifest.json"))
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    require_passed = bool(routing["require_acceptance_passed"])
-    consensus_iou = float(routing["consensus_iou"])
-    base = manifest.get("base_model", {})
-    raw_class_map = base.get("class_map") or {index: name for index, name in enumerate(base.get("classes", []))}
-    base_class_names = {int(class_id): str(name) for class_id, name in raw_class_map.items()}
-    class_names = dict(base_class_names)
-    protocols: Dict[str, Dict[str, Any]] = {}
-    for item in manifest.get("incremental_models", []):
-        protocol_id = str(item["protocol"])
-        class_name = str(item["class_name"])
-        global_class_id = int(item["global_class_id"])
-        class_names[global_class_id] = class_name
-        mode = str(item["incremental_mode"])
-        accepted = item.get("acceptance") == "passed"
-        available = bool(item.get("available", accepted)) and (accepted or not require_passed)
-        if mode == "class_incremental":
-            available = available and global_class_id not in base_class_names
-            available = available and item.get("activation_threshold") is not None and bool(item.get("calibration_source"))
-        protocols[protocol_id] = {
-            "id": protocol_id,
-            "display_name": str(item.get("display_name") or class_name),
-            "class_name": class_name,
-            "new_class": class_name,
-            "global_class_id": global_class_id,
-            "incremental_mode": mode,
-            "weights": resolve_path(item["path"]) if item.get("path") else None,
-            "new_map50": float(item["new_map50"]),
-            "krr": float(item["krr"]),
-            "available": available,
-            "activation_threshold": item.get("activation_threshold"),
-            "calibration_source": item.get("calibration_source"),
-            "routing_prior": float(item.get("routing_prior", routing["default_routing_prior"])),
-            "context_prior": dict(item.get("context_prior") or {}),
-            "context_gate": dict(item.get("context_gate") or {"enabled": False}),
-            "evidence_level": item.get("evidence_level"),
-            "consensus_iou": consensus_iou,
-        }
-    generation = None
-    if web.get("generation_registry"):
-        from fair_agent.modules.generation_management import active_generation_registry
-        from fair_agent.modules.model_generations import (
-            generation_settings,
-            generation_web_settings,
-            load_generation_registry,
-        )
+    from fair_agent.modules.generation_management import active_generation_registry
+    from fair_agent.modules.model_generations import (
+        generation_settings,
+        generation_web_settings,
+        load_generation_registry,
+    )
 
-        loaded_registry = load_generation_registry(active_generation_registry(config))
-        generation = (
-            generation_settings(loaded_registry, generation_id)
-            if generation_id is not None
-            else generation_web_settings(
-                loaded_registry,
-                generation_channel or str(web.get("generation_channel", "production")),
-            )
+    loaded_registry = load_generation_registry(active_generation_registry(config))
+    generation = (
+        generation_settings(loaded_registry, generation_id)
+        if generation_id is not None
+        else generation_web_settings(
+            loaded_registry,
+            generation_channel or str(web["generation_channel"]),
         )
-        class_names = generation["class_names"]
-        base_class_names = {
-            int(global_id): class_names[int(global_id)]
-            for global_id in generation["base_class_ids"]
+    )
+    class_names = generation["class_names"]
+    base_class_names = {
+        int(global_id): class_names[int(global_id)]
+        for global_id in generation["base_class_ids"]
+    }
+    protocols = generation["protocols"]
+    if backend_name == "tensorrt_engine" and backend_options.get("precision") == "int8":
+        backend_options["engines"] = {
+            **dict(backend_options.get("engines") or {}),
+            **dict(generation.get("engine_deployments") or {}),
         }
-        protocols = generation["protocols"]
-        if backend_name == "tensorrt_engine" and backend_options.get("precision") == "int8":
-            backend_options["engines"] = {
-                **dict(backend_options.get("engines") or {}),
-                **dict(generation.get("engine_deployments") or {}),
+        validation_report = backend_options.get("validation_report")
+        if backend_options.get("validated") is True and validation_report:
+            validation_payload = json.loads(
+                resolve_path(validation_report).read_text(encoding="utf-8")
+            )
+            if validation_payload.get("accepted") is not True:
+                raise ValueError("TensorRT验收报告未通过，不能加载量化阈值。")
+            calibrated_thresholds = {
+                int(key): float(value)
+                for key, value in validation_payload.get("threshold_calibration", {})
+                .get("thresholds", {})
+                .items()
             }
-            validation_report = backend_options.get("validation_report")
-            if backend_options.get("validated") is True and validation_report:
-                validation_payload = json.loads(
-                    resolve_path(validation_report).read_text(encoding="utf-8")
-                )
-                if validation_payload.get("accepted") is not True:
-                    raise ValueError("TensorRT验收报告未通过，不能加载量化阈值。")
-                calibrated_thresholds = {
+            for protocol in protocols.values():
+                owned = [int(value) for value in protocol.get("global_class_ids", [])]
+                thresholds = {
                     int(key): float(value)
-                    for key, value in validation_payload.get("threshold_calibration", {})
-                    .get("thresholds", {})
-                    .items()
+                    for key, value in dict(
+                        protocol.get("activation_thresholds") or {}
+                    ).items()
                 }
-                for protocol in protocols.values():
-                    owned = [int(value) for value in protocol.get("global_class_ids", [])]
-                    thresholds = {
-                        int(key): float(value)
-                        for key, value in dict(
-                            protocol.get("activation_thresholds") or {}
-                        ).items()
-                    }
-                    for class_id in owned:
-                        if class_id in calibrated_thresholds:
-                            thresholds[class_id] = calibrated_thresholds[class_id]
-                    protocol["activation_thresholds"] = thresholds
-                    if len(owned) == 1:
-                        protocol["activation_threshold"] = thresholds[owned[0]]
+                for class_id in owned:
+                    if class_id in calibrated_thresholds:
+                        thresholds[class_id] = calibrated_thresholds[class_id]
+                protocol["activation_thresholds"] = thresholds
+                if len(owned) == 1:
+                    protocol["activation_threshold"] = thresholds[owned[0]]
     return {
-        "detector_path": (
-            generation["detector_path"]
-            if generation
-            else resolve_path(web.get("detector_weights", config["model"]["weights"]))
-        ),
+        "detector_path": generation["detector_path"],
         "context_path": context_path,
         "device_index": str(config.get("runtime", {}).get("default_device", "0")),
         "backend": backend_name,
@@ -233,19 +188,15 @@ def build_web_settings(
         },
         "incremental_enabled": bool(routing["incremental_enabled"]),
         "class_names": class_names,
-        "active_class_ids": (
-            generation.get("active_class_ids") if generation else sorted(class_names)
-        ),
+        "active_class_ids": generation["active_class_ids"],
         "base_class_ids": list(base_class_names),
-        "base_local_to_global": generation.get("base_local_to_global") if generation else None,
-        "generation_id": generation.get("generation_id") if generation else "legacy-unified",
-        "generation_name": generation.get("generation_name") if generation else "四类统一检测",
-        "generation_status": generation.get("generation_status") if generation else "active",
-        "base_model_id": generation.get("base_model_id") if generation else "unified_yolo11s_v1",
-        "base_model_name": generation.get("base_model_name") if generation else "四类统一检测器",
-        "class_owners": generation.get("class_owners") if generation else {
-            class_id: "unified_yolo11s_v1" for class_id in class_names
-        },
+        "base_local_to_global": generation["base_local_to_global"],
+        "generation_id": generation["generation_id"],
+        "generation_name": generation["generation_name"],
+        "generation_status": generation["generation_status"],
+        "base_model_id": generation["base_model_id"],
+        "base_model_name": generation["base_model_name"],
+        "class_owners": generation["class_owners"],
         "routing": routing,
         "decoding": dict(config["decoding"]),
         "storage": dict(config["storage"]),

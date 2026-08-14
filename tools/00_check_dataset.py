@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from fair_agent.dataset_utils import OLD_ANALYSIS_OBJECT_COUNT, REPORTS_DIR, scan_dataset, write_json
+from fair_agent.dataset_utils import REPORTS_DIR, scan_dataset, write_json
 
 
 def markdown_table(title, mapping):
@@ -38,7 +38,7 @@ def main() -> int:
         "",
         "## 统计口径说明",
         "",
-        f"旧分析表记录目标总数为 `{OLD_ANALYSIS_OBJECT_COUNT}`，本脚本直接读取 YOLO 标签得到 `{total_objects}` 个非空标注框。后续实验、报告与划分均以脚本可复核结果为准。",
+        f"脚本直接读取 YOLO 标签，统计得到 `{total_objects}` 个非空标注框。实验、报告与划分统一使用该结果。",
         "",
         markdown_table("传感器分布", distributions["sensor"]),
         "",

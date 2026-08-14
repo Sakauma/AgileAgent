@@ -115,20 +115,6 @@ def test_bootstrap_selects_only_supported_python() -> None:
     assert 'scripts/smoke_models.py --load-only' in content
 
 
-def test_readme_keeps_tensorrt_out_of_ascend_deployment_path() -> None:
-    content = Path("README.md").read_text(encoding="utf-8")
-    assert "TensorRT 不属于 310B 部署链路" in content
-    assert "ATC 编译生成设备专用 OM" in content
-    assert "AscendCL 负责模型加载" in content
-    for retired_command in (
-        "export_tensorrt_engines.sh",
-        "tensorrt validate",
-        "tensorrt calibrate",
-        ".[workbench,inference,tensorrt,export]",
-    ):
-        assert retired_command not in content
-
-
 def test_bootstrap_reuses_compatible_cuda_environment() -> None:
     content = Path("scripts/bootstrap_x86.sh").read_text(encoding="utf-8")
     assert "AGILE_AGENT_PYTHON" in content
@@ -205,7 +191,7 @@ def test_pipeline_execute_advances_until_no_action(monkeypatch, tmp_path: Path) 
     assert [step["name"] for step in plan["steps"]] == executed
 
 
-def test_blackboard_uses_demo_dataset_without_legacy_reports(tmp_path: Path) -> None:
+def test_blackboard_uses_demo_dataset_state(tmp_path: Path) -> None:
     config = deepcopy(load_config())
     missing_root = tmp_path / "missing"
     for key, value in list(config["inputs"].items()):

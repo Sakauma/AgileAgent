@@ -36,10 +36,8 @@ def _configured_registry_path(config: Mapping[str, Any]) -> Path:
         try:
             load_generation_registry(runtime)
         except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
-            # A runtime registry is mutable user state, so a release upgrade may
-            # leave behind an older schema or an expert that no longer passes
-            # the current deployment gates. Never start from that unsafe state;
-            # atomically seed a fresh runtime copy from the verified release.
+            # Runtime state is mutable. Replace an invalid registry atomically
+            # with the release-verified registry before loading the service.
             install_verified_source = True
     if install_verified_source:
         runtime.parent.mkdir(parents=True, exist_ok=True)

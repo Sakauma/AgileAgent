@@ -15,7 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "configs" / "agent_pipeline.yaml"
-CONFIG_SCHEMA_VERSION = 2
+CONFIG_SCHEMA_VERSION = 3
 ENV_PATTERN = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 SECRET_PARTS = {"password", "passwd", "secret", "token", "api_key", "private_key"}
 PROTECTED_PREFIXES = (
@@ -34,15 +34,15 @@ PROTECTED_PREFIXES = (
     "tensorrt_backend.expected_compute_capability",
 )
 KNOWN_TOP_LEVEL = {
-    "schema_version", "seed", "runtime", "web", "inference", "routing", "decoding",
+    "schema_version", "runtime", "web", "inference", "routing", "decoding",
     "storage", "ui", "performance", "native_backend", "ascend_backend", "tensorrt_backend", "model", "assets", "automation",
-    "generation", "submission", "blackboard", "detector", "functional_models", "inputs", "modules",
-    "policies", "thresholds", "incremental", "decision",
+    "generation", "submission", "blackboard", "detector", "functional_models", "inputs",
+    "incremental", "decision",
     "logging", "incremental_workbench", "gates", "incremental_guardian",
 }
 KNOWN_SECTION_KEYS = {
     "runtime": {"mode", "local_python", "default_device", "server_host", "server_port"},
-    "web": {"generation_registry", "generation_channel", "detector_weights", "functional_registry", "model_manifest"},
+    "web": {"generation_registry", "generation_channel", "functional_registry"},
     "inference": {"backend", "imgsz", "specialist_imgsz", "iou", "max_det", "batch_size", "confidence_min", "confidence_max", "confidence_default", "warmup_iterations", "warmup_batch_size", "warmup_width", "warmup_height", "preload_specialists", "quantize", "cudnn_benchmark", "compile"},
     "routing": {
         "incremental_enabled", "require_acceptance_passed", "consensus_iou", "fusion_iou",
@@ -78,7 +78,7 @@ KNOWN_SECTION_KEYS = {
     "logging": {"root", "max_file_bytes", "retained_files", "request_bodies"},
     "incremental_workbench": {
         "root", "max_archive_bytes", "max_extracted_bytes", "max_extracted_files",
-        "max_image_pixels", "allowed_image_extensions", "allowed_label_formats", "require_labels", "validation_fraction",
+        "max_image_pixels", "allowed_image_extensions", "validation_fraction",
         "minimum_images", "preview_limit", "job_log_tail_lines", "poll_interval_ms", "training",
         "lock_fraction", "split_seed", "lineage", "lifecycle",
     },
@@ -246,6 +246,11 @@ def validate_config(
         errors.append("runtime.server_host 必须是本机回环地址")
     _number(runtime, "server_port", errors, 1, 65535)
 
+    web = _require_mapping(config, "web", errors)
+    for key in ("generation_registry", "generation_channel", "functional_registry"):
+        if not web.get(key):
+            errors.append(f"web.{key}不能为空")
+
     inference = _require_mapping(config, "inference", errors)
     if inference.get("backend") not in {"ultralytics_cuda", "tensorrt_engine", "tensorrt_native", "ascend_acl"}:
         errors.append("inference.backend 必须为 ultralytics_cuda、tensorrt_engine、tensorrt_native 或 ascend_acl")
@@ -312,16 +317,6 @@ def validate_config(
         isinstance(value, str) and value.startswith(".") for value in extensions
     ):
         errors.append("incremental_workbench.allowed_image_extensions必须是带点号的非空扩展名列表")
-    label_formats = workbench.get("allowed_label_formats")
-    supported_label_formats = {"class_id_bbox", "bbox_only"}
-    if not isinstance(label_formats, list) or not label_formats or not all(
-        isinstance(value, str) and value in supported_label_formats for value in label_formats
-    ):
-        errors.append(
-            "incremental_workbench.allowed_label_formats必须是class_id_bbox/bbox_only的非空列表"
-        )
-    if not isinstance(workbench.get("require_labels"), bool):
-        errors.append("incremental_workbench.require_labels必须为布尔值")
     _number(workbench, "validation_fraction", errors, 0.01, 0.50)
     if "lock_fraction" in workbench:
         _number(workbench, "lock_fraction", errors, 0.01, 0.50)

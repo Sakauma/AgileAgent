@@ -17,10 +17,7 @@ def _quantile_higher(values: Sequence[float], quantile: float) -> float:
     if not values:
         raise ValueError("原型距离集合不能为空")
     ordered = np.asarray(values, dtype=np.float64)
-    try:
-        return float(np.quantile(ordered, quantile, method="higher"))
-    except TypeError:  # NumPy < 1.22 compatibility.
-        return float(np.quantile(ordered, quantile, interpolation="higher"))
+    return float(np.quantile(ordered, quantile, method="higher"))
 
 
 def crop_descriptor(

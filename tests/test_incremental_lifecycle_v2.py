@@ -88,7 +88,6 @@ def _store_settings(tmp_path: Path) -> dict:
         "root": str(tmp_path / "batches"), "max_archive_bytes": 10_000_000,
         "max_extracted_bytes": 20_000_000, "max_extracted_files": 100,
         "max_image_pixels": 1_000_000, "allowed_image_extensions": [".png"],
-        "allowed_label_formats": ["class_id_bbox"], "require_labels": True,
         "validation_fraction": 0.2, "lock_fraction": 0.2, "split_seed": 20260705,
         "minimum_images": 2, "preview_limit": 5, "job_log_tail_lines": 30,
         "poll_interval_ms": 1000,
