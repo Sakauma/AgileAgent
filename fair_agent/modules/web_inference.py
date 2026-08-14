@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, TypeVar
 
+import numpy as np
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
 from fair_agent.modules.detection_fusion import (
@@ -18,6 +19,7 @@ from fair_agent.modules.detection_fusion import (
     box_iou,
     context_adjusted_threshold,
     context_affinity,
+    pairwise_box_overlap_metrics,
 )
 from fair_agent.modules.incremental_rejection import apply_positive_prototype_to_image
 
@@ -122,15 +124,27 @@ def decode_batch_images(
 
 
 def result_records(result: Any, class_names: Mapping[int, str] | None = None) -> List[Dict[str, Any]]:
-    boxes = getattr(result, "boxes", None)
-    if boxes is None or len(boxes) == 0:
-        return []
-    xyxy = boxes.xyxy.detach().cpu().tolist()
-    confidences = boxes.conf.detach().cpu().tolist()
-    class_ids = boxes.cls.detach().cpu().tolist()
     names = dict(class_names or CLASS_NAMES)
+    native_records = getattr(result, "records", None)
+    if native_records is not None:
+        source_rows = (
+            (
+                row["xyxy"],
+                row["confidence"],
+                row["class_id"],
+            )
+            for row in native_records
+        )
+    else:
+        boxes = getattr(result, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return []
+        xyxy = boxes.xyxy.detach().cpu().tolist()
+        confidences = boxes.conf.detach().cpu().tolist()
+        class_ids = boxes.cls.detach().cpu().tolist()
+        source_rows = zip(xyxy, confidences, class_ids)
     rows = []
-    for coordinates, confidence, class_id in zip(xyxy, confidences, class_ids):
+    for coordinates, confidence, class_id in source_rows:
         numeric_id = int(class_id)
         rows.append(
             {
@@ -271,12 +285,39 @@ def apply_protocol_thresholds(
     thresholds: Mapping[int, float],
     affinity: float,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    rows = [dict(raw_row) for raw_row in records]
     kept: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []
-    for raw_row in records:
-        row = dict(raw_row)
+    keep_mask: np.ndarray | None = None
+    if len(rows) >= 8:
+        class_ids = np.fromiter(
+            (int(row["class_id"]) for row in rows), dtype=np.int64, count=len(rows)
+        )
+        confidences = np.fromiter(
+            (float(row.get("confidence", 0.0)) for row in rows),
+            dtype=np.float64,
+            count=len(rows),
+        )
+        has_threshold = np.fromiter(
+            (int(class_id) in thresholds for class_id in class_ids),
+            dtype=np.bool_,
+            count=len(rows),
+        )
+        threshold_values = np.fromiter(
+            (float(thresholds.get(int(class_id), 0.0)) for class_id in class_ids),
+            dtype=np.float64,
+            count=len(rows),
+        )
+        keep_mask = ~has_threshold | (confidences >= threshold_values)
+    for index, row in enumerate(rows):
         threshold = thresholds.get(int(row["class_id"]))
-        if threshold is None or float(row.get("confidence", 0.0)) >= float(threshold):
+        passes = (
+            bool(keep_mask[index])
+            if keep_mask is not None
+            else threshold is None
+            or float(row.get("confidence", 0.0)) >= float(threshold)
+        )
+        if passes:
             kept.append(row)
             continue
         rejected.append(
@@ -486,12 +527,30 @@ def class_aware_nms(
             key=lambda row: (-float(row.get("confidence", 0.0)), 0 if row.get("source") == "incremental_model" else 1),
         )
         class_kept: List[Dict[str, Any]] = []
-        for candidate in candidates:
-            if any(box_iou(candidate["xyxy"], existing["xyxy"]) >= iou_threshold for existing in class_kept):
+        suppressed_mask: np.ndarray | None = None
+        pairwise_iou: np.ndarray | None = None
+        if len(candidates) >= 8:
+            pairwise_iou, _ = pairwise_box_overlap_metrics(
+                [row["xyxy"] for row in candidates],
+                [row["xyxy"] for row in candidates],
+            )
+            suppressed_mask = np.zeros(len(candidates), dtype=np.bool_)
+        for index, candidate in enumerate(candidates):
+            if suppressed_mask is not None and suppressed_mask[index]:
+                suppressed += 1
+                continue
+            if suppressed_mask is None and any(
+                box_iou(candidate["xyxy"], existing["xyxy"]) >= iou_threshold
+                for existing in class_kept
+            ):
                 suppressed += 1
                 continue
             status = "specialist_kept" if candidate.get("source") == "incremental_model" else "base_retained"
             class_kept.append({**candidate, "fusion_status": status})
+            if suppressed_mask is not None and pairwise_iou is not None:
+                suppressed_mask[index + 1 :] |= (
+                    pairwise_iou[index, index + 1 :] >= float(iou_threshold)
+                )
         kept.extend(class_kept)
     kept.sort(key=lambda row: (int(row["class_id"]), -float(row.get("confidence", 0.0))))
     return kept, {"input_count": len(rows), "output_count": len(kept), "suppressed_count": suppressed}

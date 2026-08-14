@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
+import numpy as np
+
 from fair_agent.modules.incremental_guardian import confusion_edge
 
 
@@ -30,6 +32,52 @@ def box_overlap_metrics(
 
 def box_iou(first: Iterable[float], second: Iterable[float]) -> float:
     return box_overlap_metrics(first, second)["iou"]
+
+
+def pairwise_box_overlap_metrics(
+    first: Sequence[Iterable[float]],
+    second: Sequence[Iterable[float]],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return IoU and first-box coverage matrices using float64 semantics."""
+    first_boxes = np.asarray(first, dtype=np.float64).reshape((-1, 4))
+    second_boxes = np.asarray(second, dtype=np.float64).reshape((-1, 4))
+    shape = (len(first_boxes), len(second_boxes))
+    if not first_boxes.size or not second_boxes.size:
+        return np.zeros(shape, dtype=np.float64), np.zeros(shape, dtype=np.float64)
+
+    intersection_width = np.maximum(
+        0.0,
+        np.minimum(first_boxes[:, None, 2], second_boxes[None, :, 2])
+        - np.maximum(first_boxes[:, None, 0], second_boxes[None, :, 0]),
+    )
+    intersection_height = np.maximum(
+        0.0,
+        np.minimum(first_boxes[:, None, 3], second_boxes[None, :, 3])
+        - np.maximum(first_boxes[:, None, 1], second_boxes[None, :, 1]),
+    )
+    intersection = intersection_width * intersection_height
+    first_area = (
+        np.maximum(0.0, first_boxes[:, 2] - first_boxes[:, 0])
+        * np.maximum(0.0, first_boxes[:, 3] - first_boxes[:, 1])
+    )
+    second_area = (
+        np.maximum(0.0, second_boxes[:, 2] - second_boxes[:, 0])
+        * np.maximum(0.0, second_boxes[:, 3] - second_boxes[:, 1])
+    )
+    union = first_area[:, None] + second_area[None, :] - intersection
+    iou = np.divide(
+        intersection,
+        union,
+        out=np.zeros(shape, dtype=np.float64),
+        where=union > 0.0,
+    )
+    first_coverage = np.divide(
+        intersection,
+        first_area[:, None],
+        out=np.zeros(shape, dtype=np.float64),
+        where=first_area[:, None] > 0.0,
+    )
+    return iou, first_coverage
 
 
 def context_affinity(
@@ -160,19 +208,32 @@ def arbitrate_cross_class_conflicts(
     in one image.
     """
     base_rows = [dict(row) for row in base_records]
+    incremental_rows = [dict(row) for row in incremental_records]
+    pairwise_iou: np.ndarray | None = None
+    pairwise_incremental_coverage: np.ndarray | None = None
+    if len(base_rows) * len(incremental_rows) >= 16:
+        pairwise_iou, pairwise_incremental_coverage = pairwise_box_overlap_metrics(
+            [row["xyxy"] for row in incremental_rows],
+            [row["xyxy"] for row in base_rows],
+        )
     kept: List[Dict[str, Any]] = []
     decisions: List[Dict[str, Any]] = []
     suppressed_base_indices: set[int] = set()
-    for raw_candidate in incremental_records:
-        candidate = dict(raw_candidate)
+    for candidate_index, candidate in enumerate(incremental_rows):
         fallback_conflict = None
         learned_overrides: list[tuple[int, Dict[str, Any]]] = []
         for index, base in enumerate(base_rows):
             if int(base["class_id"]) == int(candidate["class_id"]):
                 continue
-            overlap_metrics = box_overlap_metrics(candidate["xyxy"], base["xyxy"])
-            overlap = overlap_metrics["iou"]
-            candidate_coverage = overlap_metrics["first_coverage"]
+            if pairwise_iou is None or pairwise_incremental_coverage is None:
+                overlap_metrics = box_overlap_metrics(candidate["xyxy"], base["xyxy"])
+                overlap = overlap_metrics["iou"]
+                candidate_coverage = overlap_metrics["first_coverage"]
+            else:
+                overlap = float(pairwise_iou[candidate_index, index])
+                candidate_coverage = float(
+                    pairwise_incremental_coverage[candidate_index, index]
+                )
             base_score = float(base.get("confidence", 0.0))
             incremental_score = float(candidate.get("confidence", 0.0))
             edge = confusion_edge(
