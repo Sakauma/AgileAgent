@@ -24,7 +24,6 @@ from fair_agent.modules.web_inference import (
     remap_specialist_records,
     remap_base_records,
     consensus_specialist_records,
-    arbitrate_cross_class_conflicts,
     yolo_inference_ms,
     decode_batch_images,
     decode_image_bytes,
@@ -552,3 +551,150 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     assert result["agent"]["decision"]["fusion_summary"]["suppressed_count"] == 1
     assert all("fusion_status" in item for item in result["detections"])
     assert created_specialists["new.pt"].calls[0]["conf"] == 0.5
+
+
+def test_ascend_async_path_submits_three_models_before_collecting_results() -> None:
+    events = []
+
+    class Handle:
+        def __init__(self, name, value):
+            self.name = name
+            self.value = value
+
+        def result(self):
+            events.append(f"result:{self.name}")
+            return self.value
+
+    class AsyncContext:
+        def submit(self, _image):
+            events.append("submit:scene")
+            return Handle(
+                "scene",
+                {
+                    "sensor": "sar",
+                    "sensor_confidence": 0.9,
+                    "sensor_probabilities": {"ir": 0.1, "sar": 0.9},
+                    "scene": "urban",
+                    "scene_confidence": 0.8,
+                    "scene_probabilities": {
+                        "air": 0.0,
+                        "forest": 0.1,
+                        "sea": 0.1,
+                        "urban": 0.8,
+                    },
+                    "_inference_ms": 1.0,
+                    "_ascend_timings": {
+                        "ascend_submit": 0.1,
+                        "ascend_wait": 0.2,
+                        "ascend_input_copy": 0.3,
+                        "ascend_output_copy": 0.4,
+                    },
+                },
+            )
+
+    class AsyncDetector:
+        def __init__(self, name, result, timing):
+            self.name = name
+            self.result_value = result
+            self.result_value.speed.update(timing)
+
+        def submit(self, _image, **_options):
+            events.append(f"submit:{self.name}")
+            return Handle(self.name, self.result_value)
+
+    base_result = DynamicResult([([0, 0, 20, 20], 0.80, 0)], inference=2.0)
+    specialist_result = DynamicResult(
+        [([30, 30, 50, 50], 0.88, 0)], inference=3.0
+    )
+    engine = WebInferenceEngine.__new__(WebInferenceEngine)
+    engine.context_model = AsyncContext()
+    engine.context_checkpoint = {}
+    engine.device = "ascend:0"
+    engine.device_index = "0"
+    engine.generation_id = "test_generation"
+    engine.base_model_id = "test_base_model"
+    engine.imgsz = 640
+    engine.specialist_imgsz = 512
+    engine.iou = 0.7
+    engine.max_det = 300
+    engine.quantize = 16
+    engine.compile = False
+    engine.fusion_iou = 0.60
+    engine.max_specialists = 1
+    engine.conflict_iou = 0.50
+    engine.conflict_incremental_coverage = None
+    engine.conflict_base_confidence = 0.50
+    engine.specialist_margin = 0.15
+    engine.preserve_base_class_owners = True
+    engine.detection_evidence_weight = 0.70
+    engine.context_evidence_weight = 0.30
+    engine.neutral_context_score = 0.50
+    engine.default_routing_prior = 0.50
+    engine.parallel_model_execution = True
+    engine.parallel_context_execution = True
+    engine.context_stream = None
+    engine.class_names = {0: "soldier", 4: "new_vehicle"}
+    engine.base_class_ids = {0}
+    engine.base_local_to_global = {0: 0}
+    engine.base_local_names = {0: "soldier"}
+    engine.class_owners = {0: "test_base_model", 4: "p05_new_vehicle"}
+    engine.unified_class_gates = {}
+    engine.backend_name = "ascend_acl"
+    engine.native_options = {"execution_mode": "async_stream"}
+    engine.encoded_preprocessor = None
+    engine.detector = AsyncDetector(
+        "base",
+        base_result,
+        {
+            "ascend_submit": 0.2,
+            "ascend_wait": 0.3,
+            "ascend_input_copy": 0.4,
+            "ascend_output_copy": 0.5,
+        },
+    )
+    engine.specialist_detectors = {
+        "p05_new_vehicle": AsyncDetector(
+            "specialist",
+            specialist_result,
+            {
+                "ascend_submit": 0.25,
+                "ascend_wait": 0.35,
+                "ascend_input_copy": 0.45,
+                "ascend_output_copy": 0.55,
+            },
+        )
+    }
+    engine.incremental_protocols = {
+        "p05_new_vehicle": {
+            "available": True,
+            "incremental_mode": "class_incremental",
+            "global_class_id": 4,
+            "local_to_global": {0: 4},
+            "class_name": "new_vehicle",
+            "activation_threshold": 0.63,
+            "calibration_source": "incremental_val/calibration.json",
+            "routing_prior": 0.8,
+            "context_prior": {},
+            "weights": "new.pt",
+            "new_map50": 0.8,
+            "krr": 0.95,
+        }
+    }
+
+    result = engine._predict_unlocked(
+        Image.new("RGB", (100, 100)), "sample.png", 0.5, "auto"
+    )
+
+    assert events == [
+        "submit:scene",
+        "submit:base",
+        "submit:specialist",
+        "result:scene",
+        "result:base",
+        "result:specialist",
+    ]
+    assert result["timings"]["dvpp_device_ms"] == 0.0
+    assert result["timings"]["ascend_submit_ms"] == 0.55
+    assert result["timings"]["ascend_wait_ms"] == 0.85
+    assert result["timings"]["ascend_input_copy_max_ms"] == 0.45
+    assert result["timings"]["ascend_output_copy_max_ms"] == 0.55
