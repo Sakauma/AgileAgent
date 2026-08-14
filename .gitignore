@@ -63,6 +63,7 @@ venv/
 !/tools/99_validate_ascend_dvpp_inputs.py
 !/tools/100_profile_ascend_request.py
 !/tools/101_summarize_ascend_profile.py
+!/tools/102_check_ascend_aoe.py
 !/scripts/start_agent_ascend310b.sh
 !/scripts/stop_agent_ascend310b.sh
 
