@@ -68,11 +68,22 @@
 /home/HwHiAiUser/agileagent/candidates/20260814-wave0-p0-7c61f2b
 ```
 
+### 板端 Git 工作副本同步
+
+板端正式 release 和旧候选最初都是不含 `.git` 的文件快照，不能证明与远程仓库一致。现已在不修改正式 release 的前提下建立独立工作副本：
+
+```text
+/home/HwHiAiUser/agileagent/repo
+```
+
+板端无法直连 GitHub `443`，因此先在已与远程核对一致的本地仓库生成完整 Git bundle，经 SHA256 校验后在板端 clone；后续提交通过带 prerequisite 的增量 bundle fetch，并以 `--ff-only` 更新。当前工作副本跟踪 `origin/agent/ascend-310b-wave0-p0`，P0 复测提交为 `eac65cc42ed77fa9f7de4468b64089bd8ceb4941`，`origin` 仍为 `https://github.com/Sakauma/AgileAgent.git`，工作树 clean。完整初始 bundle SHA256 为 `f6bffae8d76265de4d9c788febdba1c6b6f757d047d7704306635aad8526b388`。同步前后正式 `8501` 均保持 `ready`。
+
 ### 受控构建与门禁
 
 - 三份 AIPP 配置已纳入 `configs/ascend310b/aipp/`；
 - `scripts/build_ascend_aipp_oms.sh` 固定 ONNX、SoC、precision、输入 shape，拒绝覆盖，并记录 ATC 命令、日志和全部 SHA256；
 - 完整 P0-r3 构建清单 SHA256 为 `a62131586d33ade4090dbf925fb1adca3ad9a852049d1780fe4b990097c3d1d4`；
+- 早期 P0-r3 构建清单中的 `git_sha` 错记为不存在于当前仓库的 `7c61f2b4308bc146009df260984a1506a6274737`；实际起点和当时 `origin/main` 均为 `7c61f2b9ec0004aec5a0f3c2ab8858a2f229c5e3`。两者前 7 位碰巧相同，旧候选目录短名未暴露该错误。该清单不得作为可晋级 provenance；后续设备报告从板端 clean Git 工作副本直接记录完整 `HEAD`、分支、远程和工作树状态；
 - Base、Specialist、Scene OM SHA256 分别为：
   - `2bc60b224ba3702232f6e35363199ae2b2f3b7382498340a719bf093f80a8851`；
   - `69957129b060295736e9812b459588147f7f0dee7d35b1e600196d077a431b7a`；
@@ -110,12 +121,15 @@
 | --- | ---: | ---: | ---: | ---: | --- |
 | 原始单级 Scene DVPP | `48.76 ms` | `65.90 ms` | `38.00 ms` | `9.31 ms` | 未通过 |
 | 多级 Scene DVPP | `49.27 ms` | `66.71 ms` | `38.13 ms` | `9.69 ms` | 未通过 |
+| 多级 Scene DVPP + 有界 multipart 快速解析 (`eac65cc`) | `41.439 ms` | `47.200 ms` | `38.371 ms` | `1.640 ms` | 未通过 |
 
-细分计时显示 `routing_fusion_ms` 均值约 `0.36 ms`，旧记录中的 `16.64 ms` 已不再是当前候选热点。现阶段外层主要开销是 Multipart 上传解析，Engine P95 也已接近 `42 ms` 门槛。
+复测表明 Starlette/python-multipart 通用逐块解析是确定热点：原多级候选上传解析均值/P95 约 `9.69/22.71 ms`；对带明确 `Content-Length` 且不超过 `2 MiB + 64 KiB` 的单图请求启用有界快速解析后降至 `1.640/3.491 ms`，完整 API 均值和 P95 分别改善约 `15.9%` 和 `29.3%`。较大或非标准请求仍走原解析器，公共 multipart 字段保持不变。
+
+细分计时显示 `routing_fusion_ms` 的常态均值约 `0.36 ms`，旧记录中的 `16.64 ms` 已不再是当前候选热点。P0 最终受 Engine P95 `42.709 ms`、完整 API `41.439/47.200 ms` 和 Base 阈值边界差异共同阻断，继续微调 HTTP 层不能同时闭合精度与 `40/42 ms` 门禁。
 
 ### 晋级结论
 
-P0 当前状态为 **拒绝晋级**：多级 Scene DVPP 修复保留为候选实现，但 Base 阈值边界和完整 API 性能门禁仍未通过。候选配置保持 `validated: false`，`8502` 已停止，正式 `8501` 保持 `ready`。P1/P2/P3 不得基于该未验收候选继续晋级。
+P0 当前状态为 **拒绝晋级**：多级 Scene DVPP 和 multipart 快速解析保留为候选实现，但 Base 阈值边界、构建 provenance 和完整 API 性能门禁仍未通过。候选配置保持 `validated: false`，`8502` 已停止，正式 `8501` 保持 `ready`。后续 P1/P2/P3 只能从上一已验收正式版本建立独立实验候选，不得把该 P0 候选视为已晋级基线。
 
 关键板端证据均保存在候选的 `validation/` 目录：
 
@@ -125,6 +139,7 @@ P0 当前状态为 **拒绝晋级**：多级 Scene DVPP 修复保留为候选实
 | `p0-dvpp-input-alignment-multistage.json` | `545eebe7c91550b426fc3ab8987de5a0f12a9fcdf7fb731ded7cfff01d28b89d` |
 | `p0-multistage-0.5-alignment.json` | `7b12b0ded32a6d3940cef04723f2700563aab24521881c9a3dd9375552497ec7` |
 | `p0-multistage-890-characterization.json` | `18ec053814007ecea59297f1a3c2b31f3087511365f670529d8aa62a6fd03e61` |
+| `p0-fast-multipart-eac65cc-890-characterization.json` | `756a537c54576bf0e665cad46de8b00b164cf6e7871fef76709126034bd247c0` |
 
 ## 环境迁移记录
 
