@@ -76,6 +76,7 @@ venv/
 /*.md
 !/README.md
 /docs/*
+!/docs/ascend-310b-p0-p3-improvement-plan.md
 !/docs/ascend-310b-deployment.md
 !/docs/ascend-310b-current-status.md
 !/docs/ascend-310b-ssh-environment.md
