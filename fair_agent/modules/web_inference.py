@@ -1296,6 +1296,11 @@ class WebInferenceEngine:
         rgb_image = image if image.mode == "RGB" else image.convert("RGB")
         ascend_rgb_array = None
         dvpp_preprocess_ms = 0.0
+        dvpp_device_ms = 0.0
+        ascend_submit_ms = 0.0
+        ascend_wait_ms = 0.0
+        ascend_input_copy_max_ms = 0.0
+        ascend_output_copy_max_ms = 0.0
         encoded_preloaded = encoded_data is not None
         if encoded_preloaded:
             if self.encoded_preprocessor is None:
@@ -1379,6 +1384,59 @@ class WebInferenceEngine:
             value = backend.predict(rgb_image, **predict_options)
             return value, (time.perf_counter() - started) * 1000
 
+        def context_submit_task() -> tuple[Any, float]:
+            started = time.perf_counter()
+            handle = (
+                self.context_model.submit_preloaded(
+                    self.encoded_preprocessor.context_ready_event
+                )
+                if encoded_preloaded
+                else self.context_model.submit(rgb_image)
+            )
+            return handle, started
+
+        def detector_submit_task(backend: Any, imgsz: int) -> tuple[Any, float]:
+            started = time.perf_counter()
+            predict_options = {
+                "imgsz": imgsz,
+                "conf": float(confidence),
+                "iou": self.iou,
+                "max_det": self.max_det,
+                "quantize": self.quantize,
+                "compile": self.compile,
+            }
+            if encoded_preloaded:
+                if (backend.expected_height, backend.expected_width) == (736, 896):
+                    ready_event = self.encoded_preprocessor.base_ready_event
+                    info = {
+                        "original_height": 512,
+                        "original_width": 640,
+                        "scale": 1.4,
+                        "pad_left": 0,
+                        "pad_top": 9,
+                    }
+                elif (backend.expected_height, backend.expected_width) == (512, 640):
+                    ready_event = self.encoded_preprocessor.specialist_ready_event
+                    info = {
+                        "original_height": 512,
+                        "original_width": 640,
+                        "scale": 1.0,
+                        "pad_left": 0,
+                        "pad_top": 0,
+                    }
+                else:
+                    raise RuntimeError(
+                        "Ascend DVPP检测输入契约不受支持："
+                        f"{backend.expected_height}x{backend.expected_width}"
+                    )
+                return (
+                    backend.submit_preloaded(info, ready_event, **predict_options),
+                    started,
+                )
+            if ascend_rgb_array is not None:
+                predict_options["_ascend_rgb_array"] = ascend_rgb_array
+            return backend.submit(rgb_image, **predict_options), started
+
         prefetch_ids = [
             protocol_id for protocol_id, protocol in protocol_pool.items()
             if protocol.get("available") and (
@@ -1393,7 +1451,53 @@ class WebInferenceEngine:
                     self.backend_name, protocol["weights"], self.device_index, self.native_options
                 )
         prefetched_predictions: Dict[str, tuple[Any, float]] = {}
-        if self.parallel_model_execution and prefetch_ids:
+        unified_ascend_submit = (
+            self.backend_name == "ascend_acl"
+            and self.parallel_model_execution
+            and bool(prefetch_ids)
+            and self.native_options.get("execution_mode", "synchronous")
+            == "async_stream"
+        )
+        if unified_ascend_submit:
+            pending: list[tuple[str, Any, float]] = []
+            submission_error: BaseException | None = None
+            try:
+                context_handle, context_started = context_submit_task()
+                pending.append(("context", context_handle, context_started))
+                detector_handle, detector_started = detector_submit_task(
+                    self.detector, self.imgsz
+                )
+                pending.append(("detector", detector_handle, detector_started))
+                for protocol_id in prefetch_ids:
+                    handle, started = detector_submit_task(
+                        self.specialist_detectors[protocol_id], self.specialist_imgsz
+                    )
+                    pending.append((protocol_id, handle, started))
+            except BaseException as exc:
+                submission_error = exc
+
+            completed: dict[str, tuple[Any, float]] = {}
+            collection_error: BaseException | None = None
+            for key, handle, started in pending:
+                try:
+                    value = handle.result()
+                    completed[key] = (
+                        value,
+                        (time.perf_counter() - started) * 1000,
+                    )
+                except BaseException as exc:
+                    if collection_error is None:
+                        collection_error = exc
+            if submission_error is not None:
+                raise submission_error
+            if collection_error is not None:
+                raise collection_error
+            context, context_total_ms = completed["context"]
+            prediction, detector_total_ms = completed["detector"]
+            prefetched_predictions = {
+                protocol_id: completed[protocol_id] for protocol_id in prefetch_ids
+            }
+        elif self.parallel_model_execution and prefetch_ids:
             context_future = self._model_executor.submit(context_task)
             detector_future = self._model_executor.submit(detector_task, self.detector, self.imgsz)
             specialist_futures = {
@@ -1416,7 +1520,29 @@ class WebInferenceEngine:
             prediction, detector_total_ms = detector_task(self.detector, self.imgsz)
 
         context_inference_ms = float(context.pop("_inference_ms", 0.0))
+        context_ascend_timings = dict(context.pop("_ascend_timings", {}) or {})
+
+        def accumulate_ascend_timings(timings: Mapping[str, Any]) -> None:
+            nonlocal ascend_submit_ms, ascend_wait_ms
+            nonlocal ascend_input_copy_max_ms, ascend_output_copy_max_ms
+            ascend_submit_ms += float(timings.get("ascend_submit", 0.0))
+            ascend_wait_ms += float(timings.get("ascend_wait", 0.0))
+            ascend_input_copy_max_ms = max(
+                ascend_input_copy_max_ms,
+                float(timings.get("ascend_input_copy", 0.0)),
+            )
+            ascend_output_copy_max_ms = max(
+                ascend_output_copy_max_ms,
+                float(timings.get("ascend_output_copy", 0.0)),
+            )
+
+        accumulate_ascend_timings(context_ascend_timings)
         detector_timings = yolo_timings(prediction)
+        accumulate_ascend_timings(dict(getattr(prediction, "speed", {}) or {}))
+        for prefetched_prediction, _total_ms in prefetched_predictions.values():
+            accumulate_ascend_timings(
+                dict(getattr(prefetched_prediction, "speed", {}) or {})
+            )
         inference_ms = context_inference_ms + detector_timings["inference_ms"]
         conversion_started = time.perf_counter()
         raw_base_records = remap_base_records(
@@ -1472,6 +1598,10 @@ class WebInferenceEngine:
                     self.specialist_detectors[protocol_id], self.specialist_imgsz
                 )
             specialist_timing = yolo_timings(specialist_prediction)
+            if protocol_id not in prefetched_predictions:
+                accumulate_ascend_timings(
+                    dict(getattr(specialist_prediction, "speed", {}) or {})
+                )
             specialist_preprocess_ms += specialist_timing["preprocess_ms"]
             specialist_inference_ms += specialist_timing["inference_ms"]
             specialist_postprocess_ms += specialist_timing["postprocess_ms"]
@@ -1593,6 +1723,8 @@ class WebInferenceEngine:
         routing_nms_ms = (time.perf_counter() - nms_started) * 1000
         fusion_summary["conflict_suppressed_count"] = len(conflict_rejections)
         routing_fusion_ms = (time.perf_counter() - routing_started) * 1000
+        if encoded_preloaded:
+            dvpp_device_ms = self.encoded_preprocessor.device_ms()
         decision_started = time.perf_counter()
         base_model_id = self.base_model_id
         generation_id = self.generation_id
@@ -1647,6 +1779,11 @@ class WebInferenceEngine:
             "inference_ms": round(inference_ms, 1),
             "timings": {
                 "dvpp_enqueue_ms": round(dvpp_preprocess_ms, 3),
+                "dvpp_device_ms": round(dvpp_device_ms, 3),
+                "ascend_submit_ms": round(ascend_submit_ms, 3),
+                "ascend_wait_ms": round(ascend_wait_ms, 3),
+                "ascend_input_copy_max_ms": round(ascend_input_copy_max_ms, 3),
+                "ascend_output_copy_max_ms": round(ascend_output_copy_max_ms, 3),
                 "context_total_ms": round(context_total_ms, 3),
                 "context_inference_ms": round(context_inference_ms, 3),
                 "detector_total_ms": round(detector_total_ms, 3),

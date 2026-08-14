@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import ctypes
 import threading
 import time
 import weakref
@@ -71,6 +72,20 @@ def _numpy_pointer(acl: Any, array: np.ndarray) -> int:
     if not isinstance(pointer, int):
         raise RuntimeError(f"acl.util.numpy_to_ptr返回格式异常：{pointer!r}")
     return pointer
+
+
+def _pinned_numpy_buffer(acl: Any, size: int, operation: str) -> tuple[int, Any, np.ndarray]:
+    """Allocate non-owning NumPy storage over an ACL pinned host buffer.
+
+    ``acl.util.ptr_to_numpy`` installs an owning base object on CANN 7.0.RC1 and
+    therefore double-frees memory that is also released with ``free_host``.
+    A ctypes view has no such ownership transfer; the ACL allocation remains
+    the sole owner and is explicitly released during model shutdown.
+    """
+
+    pointer = int(_value(acl.rt.malloc_host(int(size)), operation))
+    owner = (ctypes.c_uint8 * int(size)).from_address(pointer)
+    return pointer, owner, np.ctypeslib.as_array(owner)
 
 
 class AscendAclRuntime:
@@ -152,32 +167,139 @@ class AscendAclRuntime:
                     self.acl.finalize()
 
 
+class AscendAclExecutionHandle:
+    """One in-flight model execution with exactly one final device wait."""
+
+    def __init__(
+        self,
+        model: "AscendAclModel",
+        submit_ms: float,
+        input_reference: np.ndarray | None,
+        preloaded: bool,
+    ) -> None:
+        self.model = model
+        self.submit_ms = float(submit_ms)
+        # Pageable async copies may retain the source until the stream reaches
+        # the H2D operation. Pinned mode instead retains its resident staging
+        # allocation through the model lifetime.
+        self.input_reference = input_reference
+        self.preloaded = bool(preloaded)
+        self._lock = threading.Lock()
+        self._completed = False
+        self._result: tuple[list[np.ndarray], dict[str, float]] | None = None
+        self._error: BaseException | None = None
+
+    def result(self) -> tuple[list[np.ndarray], dict[str, float]]:
+        with self._lock:
+            if self._completed:
+                if self._error is not None:
+                    raise self._error
+                assert self._result is not None
+                return self._result
+            acl = self.model.runtime.acl
+            wait_started = time.perf_counter_ns()
+            try:
+                with self.model.runtime.lock:
+                    self.model.runtime.activate()
+                    _require(
+                        acl.rt.synchronize_event(self.model.output_copy_end_event),
+                        "acl.rt.synchronize_event(model completion)",
+                    )
+                    wait_ms = (time.perf_counter_ns() - wait_started) / 1_000_000.0
+                    input_copy_ms = (
+                        0.0
+                        if self.preloaded
+                        else self.model._event_elapsed(
+                            self.model.input_copy_start_event,
+                            self.model.inference_start_event,
+                            "input copy",
+                        )
+                    )
+                    inference_ms = self.model._event_elapsed(
+                        self.model.inference_start_event,
+                        self.model.inference_end_event,
+                        "model",
+                    )
+                    output_copy_ms = self.model._event_elapsed(
+                        self.model.inference_end_event,
+                        self.model.output_copy_end_event,
+                        "output copy",
+                    )
+                outputs = self.model._output_views()
+                self._result = (
+                    outputs,
+                    {
+                        "submit_ms": self.submit_ms,
+                        "wait_ms": wait_ms,
+                        "input_copy_ms": input_copy_ms,
+                        "inference_ms": inference_ms,
+                        "output_copy_ms": output_copy_ms,
+                    },
+                )
+            except BaseException as exc:
+                # A failed event wait or timing query must not leave a stream
+                # using resident host buffers while close() tears them down.
+                try:
+                    with self.model.runtime.lock:
+                        if not self.model.runtime.closed:
+                            self.model.runtime.activate()
+                            acl.rt.synchronize_stream(self.model.stream)
+                except Exception:
+                    pass
+                self._error = exc
+            finally:
+                self.input_reference = None
+                self._completed = True
+                self.model._finish_handle(self)
+            if self._error is not None:
+                raise self._error
+            assert self._result is not None
+            return self._result
+
+
 class AscendAclModel:
     def __init__(
         self,
         runtime: AscendAclRuntime,
         path: Path,
         execution_mode: str = "synchronous",
+        memory_mode: str = "pageable",
     ) -> None:
         self.runtime = runtime
         self.path = path
         self.execution_mode = str(execution_mode)
         if self.execution_mode not in {"synchronous", "async_stream"}:
             raise RuntimeError(f"Ascend执行模式非法：{self.execution_mode}")
+        self.memory_mode = str(memory_mode)
+        if self.memory_mode not in {"pageable", "pinned"}:
+            raise RuntimeError(f"Ascend内存模式非法：{self.memory_mode}")
+        if self.memory_mode == "pinned" and self.execution_mode != "async_stream":
+            raise RuntimeError("Ascend锁页内存要求async_stream执行模式")
         self.closed = False
+        self.accepting_submissions = True
+        self.close_lock = threading.Lock()
         self.execution_lock = threading.Lock()
+        self.execution_condition = threading.Condition(self.execution_lock)
+        self._submission_in_progress = False
+        self._outstanding: AscendAclExecutionHandle | None = None
         self.model_id: int | None = None
         self.desc: Any = None
         self.stream: Any = None
-        self.timing_start_event: Any = None
-        self.timing_end_event: Any = None
-        self.preloaded_runs = 0
+        self.input_copy_start_event: Any = None
+        self.inference_start_event: Any = None
+        self.inference_end_event: Any = None
+        self.output_copy_end_event: Any = None
+        self.async_runs = 0
         self.input_dataset: Any = None
         self.output_dataset: Any = None
         self.device_buffers: list[int] = []
         self.data_buffers: list[Any] = []
         self.output_contracts: list[dict[str, Any]] = []
         self.output_hosts: list[np.ndarray] = []
+        self.host_pointers: list[int] = []
+        self.host_owners: list[Any] = []
+        self.input_host_pointer: int | None = None
+        self.input_host: np.ndarray | None = None
         with runtime.lock:
             runtime.activate()
             try:
@@ -199,16 +321,19 @@ class AscendAclModel:
                     self.stream = _value(
                         runtime.acl.rt.create_stream(), "acl.rt.create_stream"
                     )
-                    self.timing_start_event = _value(
-                        runtime.acl.rt.create_event(), "acl.rt.create_event(start)"
-                    )
-                    self.timing_end_event = _value(
-                        runtime.acl.rt.create_event(), "acl.rt.create_event(end)"
-                    )
+                    self.input_copy_start_event = self._create_event("input copy start")
+                    self.inference_start_event = self._create_event("inference start")
+                    self.inference_end_event = self._create_event("inference end")
+                    self.output_copy_end_event = self._create_event("output copy end")
                 runtime.register(self)
             except Exception:
                 self.close()
                 raise
+
+    def _create_event(self, name: str) -> Any:
+        return _value(
+            self.runtime.acl.rt.create_event(), f"acl.rt.create_event({name})"
+        )
 
     def _create_datasets(self) -> None:
         acl = self.runtime.acl
@@ -218,6 +343,14 @@ class AscendAclModel:
         self.input_shape = tuple(int(value) for value in input_dims["dims"])
         self.input_dtype = _dtype(int(acl.mdl.get_input_data_type(self.desc, 0)))
         self.input_size = int(acl.mdl.get_input_size_by_index(self.desc, 0))
+        if self.memory_mode == "pinned":
+            pointer, owner, host = _pinned_numpy_buffer(
+                acl, self.input_size, "acl.rt.malloc_host(input)"
+            )
+            self.input_host_pointer = pointer
+            self.input_host = host
+            self.host_pointers.append(pointer)
+            self.host_owners.append(owner)
         self.input_dataset = acl.mdl.create_dataset()
         if self.input_dataset is None:
             raise RuntimeError("acl.mdl.create_dataset(input)返回空")
@@ -263,24 +396,36 @@ class AscendAclModel:
                 acl.mdl.add_dataset_buffer(self.output_dataset, buffer),
                 f"acl.mdl.add_dataset_buffer(output {index})",
             )
-            self.output_contracts.append(
-                {
-                    "index": index,
-                    "shape": tuple(int(value) for value in dims["dims"]),
-                    "dtype": data_type,
-                    "size": size,
-                    "device": device,
-                }
-            )
-            # The web engine serializes requests and each backend consumes its
-            # raw output before the next invocation.  Reusing one host buffer
-            # per output avoids allocating a byte array and copying it again
-            # for every image while retaining the exact output dtype/shape.
-            self.output_hosts.append(np.empty(size, dtype=np.uint8))
+            contract = {
+                "index": index,
+                "shape": tuple(int(value) for value in dims["dims"]),
+                "dtype": data_type,
+                "size": size,
+                "device": device,
+            }
+            self.output_contracts.append(contract)
+            # The web engine serializes requests and consumes raw output before
+            # the next invocation. Reusing resident host buffers avoids both
+            # allocation and an additional post-copy on every image.
+            if self.memory_mode == "pinned":
+                pointer, owner, host = _pinned_numpy_buffer(
+                    acl, size, f"acl.rt.malloc_host(output {index})"
+                )
+                self.host_pointers.append(pointer)
+                self.host_owners.append(owner)
+                contract["host_pointer"] = pointer
+                self.output_hosts.append(host)
+            else:
+                self.output_hosts.append(np.empty(size, dtype=np.uint8))
 
-    def _copy_outputs(self) -> list[np.ndarray]:
+    def _output_views(self) -> list[np.ndarray]:
+        return [
+            host.view(contract["dtype"]).reshape(contract["shape"])
+            for contract, host in zip(self.output_contracts, self.output_hosts)
+        ]
+
+    def _copy_outputs_synchronous(self) -> list[np.ndarray]:
         acl = self.runtime.acl
-        outputs = []
         for contract, host in zip(self.output_contracts, self.output_hosts):
             _require(
                 acl.rt.memcpy(
@@ -292,12 +437,180 @@ class AscendAclModel:
                 ),
                 f"acl.rt.memcpy(output {contract['index']})",
             )
-            outputs.append(
-                host.view(contract["dtype"]).reshape(contract["shape"])
+        return self._output_views()
+
+    def _event_elapsed(self, start: Any, end: Any, name: str) -> float:
+        return float(
+            _value(
+                self.runtime.acl.rt.event_elapsed_time(start, end),
+                f"acl.rt.event_elapsed_time({name})",
             )
-        return outputs
+        )
+
+    def _finish_handle(self, handle: AscendAclExecutionHandle) -> None:
+        with self.execution_condition:
+            if self._outstanding is handle:
+                self._outstanding = None
+            self.execution_condition.notify_all()
+
+    def _claim_submission(self) -> None:
+        with self.execution_condition:
+            if self.closed or not self.accepting_submissions:
+                raise RuntimeError(f"{self.path.name}已经关闭，拒绝Ascend提交")
+            if self._submission_in_progress or self._outstanding is not None:
+                raise RuntimeError(f"{self.path.name}已有未完成的Ascend执行")
+            self._submission_in_progress = True
+
+    def _reset_async_events(self) -> None:
+        if not self.async_runs:
+            return
+        acl = self.runtime.acl
+        for event, name in (
+            (self.input_copy_start_event, "input copy start"),
+            (self.inference_start_event, "inference start"),
+            (self.inference_end_event, "inference end"),
+            (self.output_copy_end_event, "output copy end"),
+        ):
+            _require(
+                acl.rt.reset_event(event, self.stream),
+                f"acl.rt.reset_event({name})",
+            )
+
+    def _enqueue(
+        self,
+        batch: np.ndarray | None,
+        ready_event: Any | None,
+    ) -> AscendAclExecutionHandle:
+        if self.execution_mode != "async_stream" or self.stream is None:
+            raise RuntimeError("Ascend异步提交要求async_stream执行模式")
+        self._claim_submission()
+        acl = self.runtime.acl
+        submit_started = time.perf_counter_ns()
+        input_reference: np.ndarray | None = None
+        try:
+            with self.runtime.lock:
+                self.runtime.activate()
+                self._reset_async_events()
+                if ready_event is None:
+                    assert batch is not None
+                    if self.memory_mode == "pinned":
+                        assert self.input_host is not None
+                        np.copyto(
+                            self.input_host,
+                            batch.view(np.uint8).reshape(-1),
+                        )
+                        source_pointer = int(self.input_host_pointer)
+                    else:
+                        input_reference = batch
+                        source_pointer = _numpy_pointer(acl, batch)
+                    _require(
+                        acl.rt.record_event(self.input_copy_start_event, self.stream),
+                        "acl.rt.record_event(input copy start)",
+                    )
+                    _require(
+                        acl.rt.memcpy_async(
+                            self.input_device,
+                            self.input_size,
+                            source_pointer,
+                            self.input_size,
+                            ACL_MEMCPY_HOST_TO_DEVICE,
+                            self.stream,
+                        ),
+                        "acl.rt.memcpy_async(input)",
+                    )
+                else:
+                    _require(
+                        acl.rt.stream_wait_event(self.stream, ready_event),
+                        "acl.rt.stream_wait_event(input)",
+                    )
+                    # Keep a well-defined zero-length input-copy interval for
+                    # preloaded device inputs without adding another wait.
+                    _require(
+                        acl.rt.record_event(self.input_copy_start_event, self.stream),
+                        "acl.rt.record_event(preloaded input)",
+                    )
+                _require(
+                    acl.rt.record_event(self.inference_start_event, self.stream),
+                    "acl.rt.record_event(inference start)",
+                )
+                _require(
+                    acl.mdl.execute_async(
+                        self.model_id,
+                        self.input_dataset,
+                        self.output_dataset,
+                        self.stream,
+                    ),
+                    "acl.mdl.execute_async",
+                )
+                _require(
+                    acl.rt.record_event(self.inference_end_event, self.stream),
+                    "acl.rt.record_event(inference end)",
+                )
+                for contract, host in zip(self.output_contracts, self.output_hosts):
+                    host_pointer = int(
+                        contract.get("host_pointer") or _numpy_pointer(acl, host)
+                    )
+                    _require(
+                        acl.rt.memcpy_async(
+                            host_pointer,
+                            host.nbytes,
+                            contract["device"],
+                            contract["size"],
+                            ACL_MEMCPY_DEVICE_TO_HOST,
+                            self.stream,
+                        ),
+                        f"acl.rt.memcpy_async(output {contract['index']})",
+                    )
+                _require(
+                    acl.rt.record_event(self.output_copy_end_event, self.stream),
+                    "acl.rt.record_event(output copy end)",
+                )
+                self.async_runs += 1
+            handle = AscendAclExecutionHandle(
+                self,
+                (time.perf_counter_ns() - submit_started) / 1_000_000.0,
+                input_reference,
+                ready_event is not None,
+            )
+            with self.execution_condition:
+                if self._outstanding is not None:
+                    raise RuntimeError(f"{self.path.name}Ascend提交状态冲突")
+                self._outstanding = handle
+                self._submission_in_progress = False
+                self.execution_condition.notify_all()
+            return handle
+        except BaseException:
+            try:
+                with self.runtime.lock:
+                    if not self.runtime.closed and self.stream is not None:
+                        self.runtime.activate()
+                        acl.rt.synchronize_stream(self.stream)
+            except Exception:
+                pass
+            with self.execution_condition:
+                self._submission_in_progress = False
+                self.execution_condition.notify_all()
+            raise
+
+    def submit(self, array: np.ndarray) -> AscendAclExecutionHandle:
+        batch = np.ascontiguousarray(array, dtype=self.input_dtype)
+        if tuple(batch.shape) != self.input_shape:
+            raise RuntimeError(
+                f"{self.path.name}输入shape错误：{batch.shape} != {self.input_shape}"
+            )
+        if batch.nbytes != self.input_size:
+            raise RuntimeError(
+                f"{self.path.name}输入字节数错误：{batch.nbytes} != {self.input_size}"
+            )
+        return self._enqueue(batch, None)
+
+    def submit_preloaded(self, ready_event: Any) -> AscendAclExecutionHandle:
+        return self._enqueue(None, ready_event)
 
     def execute(self, array: np.ndarray) -> tuple[list[np.ndarray], float]:
+        if self.execution_mode == "async_stream":
+            outputs, timings = self.submit(array).result()
+            return outputs, timings["inference_ms"]
         batch = np.ascontiguousarray(array, dtype=self.input_dtype)
         if tuple(batch.shape) != self.input_shape:
             raise RuntimeError(
@@ -326,111 +639,73 @@ class AscendAclModel:
                 "acl.rt.memcpy(input)",
             )
             started = time.perf_counter_ns()
-            if self.execution_mode == "async_stream":
-                _require(
-                    acl.mdl.execute_async(
-                        self.model_id,
-                        self.input_dataset,
-                        self.output_dataset,
-                        self.stream,
-                    ),
-                    "acl.mdl.execute_async",
-                )
-                _require(
-                    acl.rt.synchronize_stream(self.stream),
-                    "acl.rt.synchronize_stream",
-                )
-            else:
-                _require(
-                    acl.mdl.execute(
-                        self.model_id, self.input_dataset, self.output_dataset
-                    ),
-                    "acl.mdl.execute",
-                )
+            _require(
+                acl.mdl.execute(
+                    self.model_id, self.input_dataset, self.output_dataset
+                ),
+                "acl.mdl.execute",
+            )
             inference_ms = (time.perf_counter_ns() - started) / 1_000_000.0
-            outputs = self._copy_outputs()
+            outputs = self._copy_outputs_synchronous()
         return outputs, inference_ms
 
     def execute_preloaded(self, ready_event: Any) -> tuple[list[np.ndarray], float]:
-        if self.execution_mode != "async_stream" or self.stream is None:
-            raise RuntimeError("Ascend设备预处理输入要求async_stream执行模式")
-        acl = self.runtime.acl
-        with self.execution_lock:
-            self.runtime.activate()
-            if self.preloaded_runs:
-                _require(
-                    acl.rt.reset_event(self.timing_start_event, self.stream),
-                    "acl.rt.reset_event(start)",
-                )
-                _require(
-                    acl.rt.reset_event(self.timing_end_event, self.stream),
-                    "acl.rt.reset_event(end)",
-                )
-            _require(
-                acl.rt.stream_wait_event(self.stream, ready_event),
-                "acl.rt.stream_wait_event(input)",
-            )
-            _require(
-                acl.rt.record_event(self.timing_start_event, self.stream),
-                "acl.rt.record_event(start)",
-            )
-            _require(
-                acl.mdl.execute_async(
-                    self.model_id,
-                    self.input_dataset,
-                    self.output_dataset,
-                    self.stream,
-                ),
-                "acl.mdl.execute_async(preloaded)",
-            )
-            _require(
-                acl.rt.record_event(self.timing_end_event, self.stream),
-                "acl.rt.record_event(end)",
-            )
-            self.preloaded_runs += 1
-            _require(
-                acl.rt.synchronize_stream(self.stream),
-                "acl.rt.synchronize_stream(preloaded)",
-            )
-            inference_ms = float(
-                _value(
-                    acl.rt.event_elapsed_time(
-                        self.timing_start_event, self.timing_end_event
-                    ),
-                    "acl.rt.event_elapsed_time(model)",
-                )
-            )
-            outputs = self._copy_outputs()
-        return outputs, inference_ms
+        outputs, timings = self.submit_preloaded(ready_event).result()
+        return outputs, timings["inference_ms"]
 
     def close(self) -> None:
-        if self.closed:
-            return
-        self.closed = True
-        acl = self.runtime.acl
-        with self.runtime.lock:
-            if self.runtime.closed:
+        with self.close_lock:
+            if self.closed:
                 return
-            self.runtime.activate()
-            for buffer in reversed(self.data_buffers):
-                acl.destroy_data_buffer(buffer)
-            if self.input_dataset is not None:
-                acl.mdl.destroy_dataset(self.input_dataset)
-            if self.output_dataset is not None:
-                acl.mdl.destroy_dataset(self.output_dataset)
-            if self.timing_end_event is not None:
-                acl.rt.destroy_event(self.timing_end_event)
-            if self.timing_start_event is not None:
-                acl.rt.destroy_event(self.timing_start_event)
-            if self.stream is not None:
-                acl.rt.destroy_stream(self.stream)
-            for device in reversed(self.device_buffers):
-                acl.rt.free(device)
-            if self.desc is not None:
-                acl.mdl.destroy_desc(self.desc)
-            if self.model_id is not None:
-                acl.mdl.unload(self.model_id)
-            self.runtime.unregister(self)
+            with self.execution_condition:
+                self.accepting_submissions = False
+                while self._submission_in_progress:
+                    self.execution_condition.wait()
+                outstanding = self._outstanding
+            outstanding_error: BaseException | None = None
+            if outstanding is not None:
+                try:
+                    outstanding.result()
+                except BaseException as exc:
+                    outstanding_error = exc
+            acl = self.runtime.acl
+            with self.runtime.lock:
+                if self.runtime.closed:
+                    self.closed = True
+                    return
+                self.runtime.activate()
+                for event in (
+                    self.output_copy_end_event,
+                    self.inference_end_event,
+                    self.inference_start_event,
+                    self.input_copy_start_event,
+                ):
+                    if event is not None:
+                        acl.rt.destroy_event(event)
+                if self.stream is not None:
+                    acl.rt.destroy_stream(self.stream)
+                for buffer in reversed(self.data_buffers):
+                    acl.destroy_data_buffer(buffer)
+                if self.input_dataset is not None:
+                    acl.mdl.destroy_dataset(self.input_dataset)
+                if self.output_dataset is not None:
+                    acl.mdl.destroy_dataset(self.output_dataset)
+                for device in reversed(self.device_buffers):
+                    acl.rt.free(device)
+                for pointer in reversed(self.host_pointers):
+                    acl.rt.free_host(pointer)
+                self.host_pointers.clear()
+                self.host_owners.clear()
+                self.input_host = None
+                self.output_hosts.clear()
+                if self.desc is not None:
+                    acl.mdl.destroy_desc(self.desc)
+                if self.model_id is not None:
+                    acl.mdl.unload(self.model_id)
+                self.runtime.unregister(self)
+                self.closed = True
+            if outstanding_error is not None:
+                raise outstanding_error
 
     def __del__(self) -> None:
         try:
@@ -464,6 +739,7 @@ def _load_model(options: Mapping[str, Any], entry: Mapping[str, Any]) -> AscendA
         runtime,
         path,
         execution_mode=str(options.get("execution_mode", "synchronous")),
+        memory_mode=str(options.get("memory_mode", "pageable")),
     )
 
 
@@ -509,6 +785,7 @@ class AscendEncodedPreprocessor:
         specialist_model: AscendAclModel,
         context_model: AscendAclModel,
         scene_resize_stages: Any = None,
+        max_encoded_bytes: int = 2 * 1024 * 1024,
     ) -> None:
         contracts = (
             (base_model, (1, 736, 896, 3), "base"),
@@ -529,6 +806,12 @@ class AscendEncodedPreprocessor:
         self.base_model = base_model
         self.specialist_model = specialist_model
         self.context_model = context_model
+        if len({model.memory_mode for model, _shape, _name in contracts}) != 1:
+            raise RuntimeError("Ascend DVPP三个模型必须使用相同内存模式")
+        self.memory_mode = base_model.memory_mode
+        self.max_encoded_bytes = int(max_encoded_bytes)
+        if self.max_encoded_bytes <= 0:
+            raise RuntimeError("Ascend编码输入上限必须为正数")
         self.scene_resize_stages = validate_dvpp_scene_resize_stages(
             scene_resize_stages
         )
@@ -538,6 +821,7 @@ class AscendEncodedPreprocessor:
         self.base_ready_event: Any = None
         self.specialist_ready_event: Any = None
         self.context_ready_event: Any = None
+        self.timing_start_event: Any = None
         self.prepared_runs = 0
         self.channel: Any = None
         self.descriptors: list[Any] = []
@@ -545,6 +829,10 @@ class AscendEncodedPreprocessor:
         self.scene_intermediate_descs: list[Any] = []
         self.roi: Any = None
         self.dvpp_buffers: list[int] = []
+        self.encoded_host_pointer: int | None = None
+        self.encoded_host_owner: Any = None
+        self.encoded_host: np.ndarray | None = None
+        self.encoded_host_capacity = 0
         with runtime.lock:
             runtime.activate()
             try:
@@ -636,6 +924,9 @@ class AscendEncodedPreprocessor:
         self.context_ready_event = _value(
             acl.rt.create_event(), "acl.rt.create_event(context input)"
         )
+        self.timing_start_event = _value(
+            acl.rt.create_event(), "acl.rt.create_event(DVPP start)"
+        )
         self.channel = acl.media.dvpp_create_channel_desc()
         if self.channel is None:
             raise RuntimeError("acl.media.dvpp_create_channel_desc返回空")
@@ -714,14 +1005,54 @@ class AscendEncodedPreprocessor:
         if self.roi is None:
             raise RuntimeError("acl.media.dvpp_create_roi_config返回空")
 
+    def _ensure_encoded_host(self, size: int) -> tuple[int, np.ndarray]:
+        if size > self.max_encoded_bytes:
+            raise ValueError(
+                f"Ascend编码PNG超过锁页staging上限：{size} > {self.max_encoded_bytes}"
+            )
+        if self.memory_mode != "pinned":
+            raise RuntimeError("Ascend锁页encoded staging仅在pinned模式分配")
+        if size > self.encoded_host_capacity:
+            capacity = max(size, min(self.max_encoded_bytes, max(64 * 1024, self.encoded_host_capacity * 2)))
+            if self.encoded_host_pointer is not None:
+                _require(
+                    self.runtime.acl.rt.synchronize_stream(self.stream),
+                    "acl.rt.synchronize_stream(encoded staging grow)",
+                )
+                _require(
+                    self.runtime.acl.rt.free_host(self.encoded_host_pointer),
+                    "acl.rt.free_host(encoded staging grow)",
+                )
+            pointer, owner, host = _pinned_numpy_buffer(
+                self.runtime.acl,
+                capacity,
+                "acl.rt.malloc_host(encoded staging)",
+            )
+            self.encoded_host_pointer = pointer
+            self.encoded_host_owner = owner
+            self.encoded_host = host
+            self.encoded_host_capacity = capacity
+        assert self.encoded_host_pointer is not None and self.encoded_host is not None
+        return self.encoded_host_pointer, self.encoded_host[:size]
+
     def prepare(self, data: bytes) -> float:
         if not self.accepts(data):
             raise ValueError("Ascend DVPP仅接受固定640x512的8位RGB/RGBA PNG")
+        if self.closed:
+            raise RuntimeError("Ascend DVPP编码预处理器已经关闭")
+        if len(data) > self.max_encoded_bytes:
+            raise ValueError(
+                f"Ascend编码PNG超过上传上限：{len(data)} > {self.max_encoded_bytes}"
+            )
         acl = self.runtime.acl
-        encoded = np.frombuffer(data, dtype=np.uint8)
-        encoded_pointer = _numpy_pointer(acl, encoded)
         with self.lock:
             self.runtime.activate()
+            if self.memory_mode == "pinned":
+                encoded_pointer, encoded = self._ensure_encoded_host(len(data))
+                np.copyto(encoded, np.frombuffer(data, dtype=np.uint8))
+            else:
+                encoded = np.frombuffer(data, dtype=np.uint8)
+                encoded_pointer = _numpy_pointer(acl, encoded)
             width, height, _components = _value(
                 acl.media.dvpp_png_get_image_info(
                     encoded_pointer, encoded.nbytes
@@ -745,6 +1076,7 @@ class AscendEncodedPreprocessor:
             started = time.perf_counter_ns()
             if self.prepared_runs:
                 for event, name in (
+                    (self.timing_start_event, "DVPP start"),
                     (self.base_ready_event, "base"),
                     (self.specialist_ready_event, "specialist"),
                     (self.context_ready_event, "context"),
@@ -753,6 +1085,10 @@ class AscendEncodedPreprocessor:
                         acl.rt.reset_event(event, self.stream),
                         f"acl.rt.reset_event({name})",
                     )
+            _require(
+                acl.rt.record_event(self.timing_start_event, self.stream),
+                "acl.rt.record_event(DVPP start)",
+            )
             _require(
                 acl.media.dvpp_png_decode_async(
                     self.channel,
@@ -834,6 +1170,20 @@ class AscendEncodedPreprocessor:
             self.prepared_runs += 1
             return (time.perf_counter_ns() - started) / 1_000_000.0
 
+    def device_ms(self) -> float:
+        if not self.prepared_runs:
+            return 0.0
+        with self.runtime.lock:
+            self.runtime.activate()
+            return float(
+                _value(
+                    self.runtime.acl.rt.event_elapsed_time(
+                        self.timing_start_event, self.context_ready_event
+                    ),
+                    "acl.rt.event_elapsed_time(DVPP)",
+                )
+            )
+
     def close(self) -> None:
         if self.closed:
             return
@@ -843,6 +1193,11 @@ class AscendEncodedPreprocessor:
             if self.runtime.closed:
                 return
             self.runtime.activate()
+            if self.stream is not None:
+                _require(
+                    acl.rt.synchronize_stream(self.stream),
+                    "acl.rt.synchronize_stream(DVPP close)",
+                )
             if self.roi is not None:
                 acl.media.dvpp_destroy_roi_config(self.roi)
             for config in reversed(self.resize_configs):
@@ -858,11 +1213,18 @@ class AscendEncodedPreprocessor:
                 self.context_ready_event,
                 self.specialist_ready_event,
                 self.base_ready_event,
+                self.timing_start_event,
             ):
                 if event is not None:
                     acl.rt.destroy_event(event)
             if self.stream is not None:
                 acl.rt.destroy_stream(self.stream)
+            if self.encoded_host_pointer is not None:
+                acl.rt.free_host(self.encoded_host_pointer)
+                self.encoded_host_pointer = None
+                self.encoded_host_owner = None
+                self.encoded_host = None
+                self.encoded_host_capacity = 0
             self.runtime.unregister_preprocessor(self)
 
     def __del__(self) -> None:
@@ -1036,6 +1398,53 @@ class AscendResult:
         self.speed = dict(timings)
 
 
+class AscendDetectorExecutionHandle:
+    def __init__(
+        self,
+        backend: "AscendAclBackend",
+        model_handle: AscendAclExecutionHandle,
+        info: Mapping[str, float | int],
+        options: Mapping[str, Any],
+        preprocess_ms: float,
+    ) -> None:
+        self.backend = backend
+        self.model_handle = model_handle
+        self.info = dict(info)
+        self.options = dict(options)
+        self.preprocess_ms = float(preprocess_ms)
+        self._result: AscendResult | None = None
+        self._lock = threading.Lock()
+
+    def result(self) -> AscendResult:
+        with self._lock:
+            if self._result is not None:
+                return self._result
+            outputs, execution = self.model_handle.result()
+            postprocess_started = time.perf_counter_ns()
+            rows = yolo_detections(
+                outputs[0],
+                self.info,
+                float(self.options.get("conf", 0.5)),
+                float(self.options.get("iou", 0.7)),
+                int(self.options.get("max_det", 300)),
+            )
+            postprocess_ms = (
+                time.perf_counter_ns() - postprocess_started
+            ) / 1_000_000.0
+            timings = {
+                "preprocess": self.preprocess_ms,
+                "inference": execution["inference_ms"],
+                "postprocess": postprocess_ms,
+                "ascend_submit": execution["submit_ms"],
+                "ascend_wait": execution["wait_ms"],
+                "ascend_input_copy": execution["input_copy_ms"],
+                "ascend_output_copy": execution["output_copy_ms"],
+            }
+            self.backend._last_timings = timings
+            self._result = AscendResult(rows, timings)
+            return self._result
+
+
 class AscendAclBackend:
     name = "ascend_acl"
 
@@ -1072,6 +1481,8 @@ class AscendAclBackend:
         self._last_timings: dict[str, float] = {}
 
     def predict(self, image: Image.Image, **options: Any) -> AscendResult:
+        if self.model.execution_mode == "async_stream":
+            return self.submit(image, **options).result()
         preprocess_started = time.perf_counter_ns()
         batch, info = detector_tensor(
             image,
@@ -1100,30 +1511,47 @@ class AscendAclBackend:
         }
         return AscendResult(rows, self._last_timings)
 
+    def submit(self, image: Image.Image, **options: Any) -> AscendDetectorExecutionHandle:
+        preprocess_started = time.perf_counter_ns()
+        batch, info = detector_tensor(
+            image,
+            self.expected_height,
+            self.expected_width,
+            options.get("_ascend_rgb_array"),
+            self.input_mode,
+        )
+        preprocess_ms = (
+            time.perf_counter_ns() - preprocess_started
+        ) / 1_000_000.0
+        return AscendDetectorExecutionHandle(
+            self,
+            self.model.submit(batch),
+            info,
+            options,
+            preprocess_ms,
+        )
+
     def predict_preloaded(
         self,
         info: Mapping[str, float | int],
         ready_event: Any,
         **options: Any,
     ) -> AscendResult:
-        outputs, inference_ms = self.model.execute_preloaded(ready_event)
-        postprocess_started = time.perf_counter_ns()
-        rows = yolo_detections(
-            outputs[0],
+        return self.submit_preloaded(info, ready_event, **options).result()
+
+    def submit_preloaded(
+        self,
+        info: Mapping[str, float | int],
+        ready_event: Any,
+        **options: Any,
+    ) -> AscendDetectorExecutionHandle:
+        return AscendDetectorExecutionHandle(
+            self,
+            self.model.submit_preloaded(ready_event),
             info,
-            float(options.get("conf", 0.5)),
-            float(options.get("iou", 0.7)),
-            int(options.get("max_det", 300)),
+            options,
+            0.0,
         )
-        postprocess_ms = (
-            time.perf_counter_ns() - postprocess_started
-        ) / 1_000_000.0
-        self._last_timings = {
-            "preprocess": 0.0,
-            "inference": inference_ms,
-            "postprocess": postprocess_ms,
-        }
-        return AscendResult(rows, self._last_timings)
 
     def predict_batch(
         self, images: Sequence[Image.Image], **options: Any
@@ -1208,6 +1636,8 @@ class AscendAclContextModel:
         self.image_size = input_height
 
     def predict(self, image: Image.Image) -> dict[str, Any]:
+        if self.model.execution_mode == "async_stream":
+            return self.submit(image).result()
         outputs, inference_ms = self.model.execute(
             context_tensor(
                 image,
@@ -1217,19 +1647,40 @@ class AscendAclContextModel:
         )
         return self._result(outputs, inference_ms)
 
+    def submit(self, image: Image.Image) -> "AscendContextExecutionHandle":
+        return AscendContextExecutionHandle(
+            self,
+            self.model.submit(
+                context_tensor(
+                    image,
+                    self.image_size,
+                    self.input_mode,
+                )
+            ),
+        )
+
     def predict_preloaded(self, ready_event: Any) -> dict[str, Any]:
-        outputs, inference_ms = self.model.execute_preloaded(ready_event)
-        return self._result(outputs, inference_ms)
+        return self.submit_preloaded(ready_event).result()
+
+    def submit_preloaded(self, ready_event: Any) -> "AscendContextExecutionHandle":
+        return AscendContextExecutionHandle(
+            self,
+            self.model.submit_preloaded(ready_event),
+        )
 
     @staticmethod
-    def _result(outputs: Sequence[np.ndarray], inference_ms: float) -> dict[str, Any]:
+    def _result(
+        outputs: Sequence[np.ndarray],
+        inference_ms: float,
+        ascend_timings: Mapping[str, float] | None = None,
+    ) -> dict[str, Any]:
         sensor_prob = _softmax(outputs[0])[0]
         scene_prob = _softmax(outputs[1])[0]
         sensor_names = ["ir", "sar"]
         scene_names = ["air", "forest", "sea", "urban"]
         sensor_id = int(sensor_prob.argmax())
         scene_id = int(scene_prob.argmax())
-        return {
+        result = {
             "sensor": sensor_names[sensor_id],
             "sensor_confidence": float(sensor_prob[sensor_id]),
             "sensor_probabilities": {
@@ -1244,12 +1695,44 @@ class AscendAclContextModel:
             },
             "_inference_ms": inference_ms,
         }
+        if ascend_timings is not None:
+            result["_ascend_timings"] = dict(ascend_timings)
+        return result
 
     def predict_batch(self, images: Sequence[Image.Image]) -> list[dict[str, Any]]:
         return [self.predict(image) for image in images]
 
     def close(self) -> None:
         self.model.close()
+
+
+class AscendContextExecutionHandle:
+    def __init__(
+        self,
+        context_model: AscendAclContextModel,
+        model_handle: AscendAclExecutionHandle,
+    ) -> None:
+        self.context_model = context_model
+        self.model_handle = model_handle
+        self._result: dict[str, Any] | None = None
+        self._lock = threading.Lock()
+
+    def result(self) -> dict[str, Any]:
+        with self._lock:
+            if self._result is not None:
+                return self._result
+            outputs, timings = self.model_handle.result()
+            self._result = self.context_model._result(
+                outputs,
+                timings["inference_ms"],
+                {
+                    "ascend_submit": timings["submit_ms"],
+                    "ascend_wait": timings["wait_ms"],
+                    "ascend_input_copy": timings["input_copy_ms"],
+                    "ascend_output_copy": timings["output_copy_ms"],
+                },
+            )
+            return self._result
 
 
 def load_ascend_context_model(

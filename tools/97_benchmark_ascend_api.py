@@ -13,7 +13,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict
 from urllib.parse import urlsplit
 
 
@@ -25,11 +25,20 @@ ROUTING_TIMING_KEYS = (
     "routing_nms_ms",
     "routing_decision_ms",
 )
+ASCEND_TIMING_KEYS = (
+    "dvpp_enqueue_ms",
+    "dvpp_device_ms",
+    "ascend_submit_ms",
+    "ascend_wait_ms",
+    "ascend_input_copy_max_ms",
+    "ascend_output_copy_max_ms",
+)
 TIMING_KEYS = (
     "upload_parse_ms",
     "decode_ms",
     "queue_wait_ms",
     "engine_total_ms",
+    *ASCEND_TIMING_KEYS,
     *ROUTING_TIMING_KEYS,
 )
 
@@ -252,12 +261,22 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--build-manifest", type=Path)
+    parser.add_argument("--gate-profile", choices=("p0", "p3"), default="p0")
+    parser.add_argument("--baseline-mean-ms", type=float)
+    parser.add_argument("--baseline-p99-ms", type=float)
     args = parser.parse_args()
 
     if args.output.exists():
         raise FileExistsError(f"性能报告已存在，拒绝覆盖：{args.output}")
     if args.warmup_requests < 0 or args.rounds <= 0:
         raise ValueError("warmup_requests必须非负且rounds必须为正数。")
+    if args.gate_profile == "p3" and (
+        not args.baseline_mean_ms
+        or args.baseline_mean_ms <= 0
+        or not args.baseline_p99_ms
+        or args.baseline_p99_ms <= 0
+    ):
+        raise ValueError("P3门禁要求正数baseline-mean-ms和baseline-p99-ms。")
     paths = sorted(args.image_root.glob("*.png"))
     if len(paths) != args.expected_images:
         raise ValueError(
@@ -308,14 +327,32 @@ def main() -> int:
                 "client_wall": distribution([float(row["wall_ms"]) for row in subset]),
             }
         )
-    gates = {
-        "sample_count": len(rows) == args.rounds * args.expected_images,
-        "mean_server_ms": float(distributions["server"]["mean_ms"]) <= 40.0,
-        "p95_server_ms": float(distributions["server"]["p95_ms"]) <= 42.0,
-        "request_failures": True,
-    }
+    if args.gate_profile == "p3":
+        baseline_mean_ms = float(args.baseline_mean_ms)
+        baseline_p99_ms = float(args.baseline_p99_ms)
+        mean_ms = float(distributions["server"]["mean_ms"])
+        gates = {
+            "sample_count": len(rows) == args.rounds * args.expected_images,
+            "mean_improvement_at_least_3pct": (
+                baseline_mean_ms - mean_ms
+            ) / baseline_mean_ms >= 0.03,
+            "mean_server_ms": mean_ms <= 33.33,
+            "p95_server_ms": float(distributions["server"]["p95_ms"]) <= 35.0,
+            "p99_not_worse_than_2pct": float(
+                distributions["server"]["p99_ms"]
+            )
+            <= baseline_p99_ms * 1.02,
+            "request_failures": True,
+        }
+    else:
+        gates = {
+            "sample_count": len(rows) == args.rounds * args.expected_images,
+            "mean_server_ms": float(distributions["server"]["mean_ms"]) <= 40.0,
+            "p95_server_ms": float(distributions["server"]["p95_ms"]) <= 42.0,
+            "request_failures": True,
+        }
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "protocol": {
             "transport": "loopback_http_multipart_png_keep_alive",
@@ -326,6 +363,9 @@ def main() -> int:
             "rounds": args.rounds,
             "sample_count": len(rows),
             "concurrency": 1,
+            "gate_profile": args.gate_profile,
+            "baseline_mean_ms": args.baseline_mean_ms,
+            "baseline_p99_ms": args.baseline_p99_ms,
             "png_contracts": {
                 "width": 640,
                 "height": 512,
