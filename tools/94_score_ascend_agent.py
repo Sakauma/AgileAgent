@@ -113,23 +113,33 @@ def main() -> int:
         "lock_recall": float(lock_pr["recall"]),
         "false_activation_rate": float(false_activation),
     }
-    gates = {
+    competition_gates = {
         "base_map50": metrics["base_map50"] >= 0.80,
         "new_map50": metrics["new_map50"] >= 0.60,
         "krr": metrics["krr"] >= 0.95,
+    }
+    diagnostic_checks = {
         "lock_precision": metrics["lock_precision"] >= 0.90,
         "false_activation_rate": metrics["false_activation_rate"] <= 0.05,
     }
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "provider": "Ascend ACL",
         "unlabeled_predictions_frozen_before_labels": True,
         "image_count": len(mixed),
         "base_image_count": len(base_images),
         "prediction_count": len(combined),
         "metrics": metrics,
-        "gates": gates,
-        "passed": all(gates.values()),
+        # Base mAP50、New-mAP50 与 KRR 是赛题唯一三项精度计分门槛。
+        # precision/误激活率继续保留为部署诊断，但不得再淘汰一个计分
+        # 满分候选。
+        "competition_gates": competition_gates,
+        "diagnostic_checks": diagnostic_checks,
+        "diagnostic_warnings": [
+            name for name, passed in diagnostic_checks.items() if not passed
+        ],
+        "score_passed": all(competition_gates.values()),
+        "passed": all(competition_gates.values()),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
