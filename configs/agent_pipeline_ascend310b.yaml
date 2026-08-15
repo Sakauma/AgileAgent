@@ -199,6 +199,8 @@ ascend_backend:
   memory_mode: pageable
   schedule_mode: threaded_execute
   detailed_event_timing: false
+  submit_order: [scene, base, specialist]
+  collect_order: [scene, base, specialist]
   dvpp_scene_resize_stages: []
   validated: true
   validation_candidate: false

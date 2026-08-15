@@ -27,7 +27,61 @@ from fair_agent.modules.incremental_rejection import apply_positive_prototype_to
 CLASS_NAMES = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
 SENSOR_LABELS = {"ir": "红外", "sar": "SAR"}
 SCENE_LABELS = {"air": "空域", "forest": "林地", "sea": "海域", "urban": "城市场景"}
+ASCEND_MODEL_ROLES = ("scene", "base", "specialist")
 T = TypeVar("T")
+
+
+def _ascend_role_order(
+    options: Mapping[str, Any], key: str
+) -> tuple[str, str, str]:
+    raw = options.get(key, ASCEND_MODEL_ROLES)
+    if (
+        not isinstance(raw, (list, tuple))
+        or len(raw) != len(ASCEND_MODEL_ROLES)
+        or set(raw) != set(ASCEND_MODEL_ROLES)
+    ):
+        raise RuntimeError(
+            f"Ascend {key}必须是scene/base/specialist的无重复全排列"
+        )
+    return tuple(str(value) for value in raw)  # type: ignore[return-value]
+
+
+def _ordered_group_results(
+    groups: Mapping[str, Sequence[tuple[str, Callable[[], Any]]]],
+    submit_order: Sequence[str],
+    collect_order: Sequence[str],
+    collector: Callable[[Any], Any],
+) -> dict[str, Any]:
+    """Submit and drain grouped work in independently configured orders."""
+
+    pending: dict[str, Any] = {}
+    submission_error: BaseException | None = None
+    for role in submit_order:
+        for key, submitter in groups[role]:
+            try:
+                pending[key] = submitter()
+            except BaseException as exc:
+                submission_error = exc
+                break
+        if submission_error is not None:
+            break
+
+    completed: dict[str, Any] = {}
+    collection_error: BaseException | None = None
+    for role in collect_order:
+        for key, _submitter in groups[role]:
+            if key not in pending:
+                continue
+            try:
+                completed[key] = collector(pending[key])
+            except BaseException as exc:
+                if collection_error is None:
+                    collection_error = exc
+    if submission_error is not None:
+        raise submission_error
+    if collection_error is not None:
+        raise collection_error
+    return completed
 
 
 class FairInferenceQueue:
@@ -642,13 +696,25 @@ class WebInferenceEngine:
         self.native_options = dict(native_options or {})
         self._create_backend = create_backend
         self.detector = create_backend(
-            self.backend_name, detector_path, self.device_index, self.native_options
+            self.backend_name,
+            detector_path,
+            self.device_index,
+            self._backend_options_for_role("base"),
         )
         if self.backend_name == "ascend_acl":
             from fair_agent.backends.ascend_acl import load_ascend_context_model
 
             self.context_model, self.context_checkpoint = load_ascend_context_model(
                 self.native_options
+            )
+            self.ascend_stream_priority_status = dict(
+                self.detector.model.runtime.stream_priority_status
+                or {
+                    "requested": False,
+                    "supported": False,
+                    "reason": "not_requested",
+                    "values": {},
+                }
             )
             self.device = f"ascend:{self.device_index}"
         elif self.backend_name == "tensorrt_engine":
@@ -769,7 +835,10 @@ class WebInferenceEngine:
                 if not protocol.get("available"):
                     continue
                 backend = self._create_backend(
-                    self.backend_name, protocol["weights"], self.device_index, self.native_options
+                    self.backend_name,
+                    protocol["weights"],
+                    self.device_index,
+                    self._backend_options_for_role("specialist"),
                 )
                 backend.predict(
                     warmup_image,
@@ -827,6 +896,13 @@ class WebInferenceEngine:
                 ),
             )
         self.queue = FairInferenceQueue()
+
+    def _backend_options_for_role(self, role: str) -> Mapping[str, Any]:
+        if self.backend_name != "ascend_acl":
+            return self.native_options
+        if role not in {"base", "specialist"}:
+            raise RuntimeError(f"Ascend检测后端角色非法：{role}")
+        return {**self.native_options, "_stream_role": role}
 
     def close(self) -> None:
         if self._closed:
@@ -1000,7 +1076,10 @@ class WebInferenceEngine:
             protocol = protocol_pool[protocol_id]
             if protocol_id not in self.specialist_detectors:
                 self.specialist_detectors[protocol_id] = self._create_backend(
-                    self.backend_name, protocol["weights"], self.device_index, self.native_options
+                    self.backend_name,
+                    protocol["weights"],
+                    self.device_index,
+                    self._backend_options_for_role("specialist"),
                 )
         prefetched_batches: Dict[str, Sequence[Any]] = {}
         if self.parallel_model_execution and prefetch_ids:
@@ -1084,7 +1163,7 @@ class WebInferenceEngine:
                     self.backend_name,
                     protocol["weights"],
                     self.device_index,
-                    self.native_options,
+                    self._backend_options_for_role("specialist"),
                 )
             if protocol_id in prefetched_batches:
                 predictions = [prefetched_batches[protocol_id][index] for index in selected]
@@ -1448,9 +1527,18 @@ class WebInferenceEngine:
             protocol = protocol_pool[protocol_id]
             if protocol_id not in self.specialist_detectors:
                 self.specialist_detectors[protocol_id] = self._create_backend(
-                    self.backend_name, protocol["weights"], self.device_index, self.native_options
+                    self.backend_name,
+                    protocol["weights"],
+                    self.device_index,
+                    self._backend_options_for_role("specialist"),
                 )
         prefetched_predictions: Dict[str, tuple[Any, float]] = {}
+        ascend_submit_order = _ascend_role_order(
+            self.native_options, "submit_order"
+        )
+        ascend_collect_order = _ascend_role_order(
+            self.native_options, "collect_order"
+        )
         unified_ascend_submit = (
             self.backend_name == "ascend_acl"
             and self.parallel_model_execution
@@ -1461,39 +1549,77 @@ class WebInferenceEngine:
             == "unified_enqueue"
         )
         if unified_ascend_submit:
-            pending: list[tuple[str, Any, float]] = []
-            submission_error: BaseException | None = None
-            try:
-                context_handle, context_started = context_submit_task()
-                pending.append(("context", context_handle, context_started))
-                detector_handle, detector_started = detector_submit_task(
-                    self.detector, self.imgsz
-                )
-                pending.append(("detector", detector_handle, detector_started))
-                for protocol_id in prefetch_ids:
-                    handle, started = detector_submit_task(
-                        self.specialist_detectors[protocol_id], self.specialist_imgsz
+            groups = {
+                "scene": (("context", context_submit_task),),
+                "base": ((
+                    "detector",
+                    lambda: detector_submit_task(self.detector, self.imgsz),
+                ),),
+                "specialist": tuple(
+                    (
+                        protocol_id,
+                        lambda protocol_id=protocol_id: detector_submit_task(
+                            self.specialist_detectors[protocol_id],
+                            self.specialist_imgsz,
+                        ),
                     )
-                    pending.append((protocol_id, handle, started))
-            except BaseException as exc:
-                submission_error = exc
+                    for protocol_id in prefetch_ids
+                ),
+            }
 
-            completed: dict[str, tuple[Any, float]] = {}
-            collection_error: BaseException | None = None
-            for key, handle, started in pending:
-                try:
-                    value = handle.result()
-                    completed[key] = (
-                        value,
-                        (time.perf_counter() - started) * 1000,
+            def collect_ascend_handle(pending: tuple[Any, float]) -> tuple[Any, float]:
+                handle, started = pending
+                return handle.result(), (time.perf_counter() - started) * 1000
+
+            completed = _ordered_group_results(
+                groups,
+                ascend_submit_order,
+                ascend_collect_order,
+                collect_ascend_handle,
+            )
+            context, context_total_ms = completed["context"]
+            prediction, detector_total_ms = completed["detector"]
+            prefetched_predictions = {
+                protocol_id: completed[protocol_id] for protocol_id in prefetch_ids
+            }
+        elif (
+            self.backend_name == "ascend_acl"
+            and self.parallel_model_execution
+            and bool(prefetch_ids)
+            and self.native_options.get("execution_mode", "synchronous")
+            == "async_stream"
+            and self.native_options.get("schedule_mode", "threaded_execute")
+            == "threaded_execute"
+        ):
+            groups = {
+                "scene": ((
+                    "context",
+                    lambda: self._model_executor.submit(context_task),
+                ),),
+                "base": ((
+                    "detector",
+                    lambda: self._model_executor.submit(
+                        detector_task, self.detector, self.imgsz
+                    ),
+                ),),
+                "specialist": tuple(
+                    (
+                        protocol_id,
+                        lambda protocol_id=protocol_id: self._model_executor.submit(
+                            detector_task,
+                            self.specialist_detectors[protocol_id],
+                            self.specialist_imgsz,
+                        ),
                     )
-                except BaseException as exc:
-                    if collection_error is None:
-                        collection_error = exc
-            if submission_error is not None:
-                raise submission_error
-            if collection_error is not None:
-                raise collection_error
+                    for protocol_id in prefetch_ids
+                ),
+            }
+            completed = _ordered_group_results(
+                groups,
+                ascend_submit_order,
+                ascend_collect_order,
+                lambda future: future.result(),
+            )
             context, context_total_ms = completed["context"]
             prediction, detector_total_ms = completed["detector"]
             prefetched_predictions = {
@@ -1591,7 +1717,7 @@ class WebInferenceEngine:
                     self.backend_name,
                     protocol["weights"],
                     self.device_index,
-                    self.native_options,
+                    self._backend_options_for_role("specialist"),
                 )
             if protocol_id in prefetched_predictions:
                 specialist_prediction, _specialist_total_ms = prefetched_predictions[protocol_id]

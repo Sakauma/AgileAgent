@@ -75,6 +75,35 @@ def test_ascend_p4_runtime_ablation_fields_are_validated() -> None:
         validate_config(config)
 
 
+def test_ascend_p5_order_and_priority_fields_are_validated() -> None:
+    config = clean_config()
+    config["ascend_backend"]["submit_order"] = [
+        "specialist",
+        "base",
+        "scene",
+    ]
+    config["ascend_backend"]["collect_order"] = [
+        "base",
+        "specialist",
+        "scene",
+    ]
+    config["ascend_backend"]["stream_priorities"] = {
+        "scene": "normal",
+        "base": "high",
+        "specialist": "low",
+    }
+    validate_config(config)
+
+    config["ascend_backend"]["submit_order"] = ["base", "base", "scene"]
+    with pytest.raises(ValueError, match="submit_order"):
+        validate_config(config)
+
+    config["ascend_backend"]["submit_order"] = ["scene", "base", "specialist"]
+    config["ascend_backend"]["stream_priorities"]["specialist"] = "urgent"
+    with pytest.raises(ValueError, match="stream_priorities"):
+        validate_config(config)
+
+
 def test_cli_overrides_are_typed_and_process_local() -> None:
     config = clean_config()
     effective = apply_overrides(config, ["inference.confidence_default=0.61", "ui.history_limit=7"])
