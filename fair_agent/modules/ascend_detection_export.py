@@ -270,7 +270,16 @@ def build_detections_v1_module(
             anchor_count = int(prediction.shape[1])
             if self.nms_backend == "batch_multiclass_nms":
                 batch_boxes = boxes.unsqueeze(0).unsqueeze(2).to(torch.float16)
-                batch_scores = class_scores.transpose(0, 1).unsqueeze(0).to(
+                nms_scores = class_scores
+                if self.class_count == 1:
+                    # CANN 7.0.RC1 returns valid_count=0 for the operator's
+                    # single-class shape even when boxes/scores are populated.
+                    # A zero-score dummy class selects the working C=2 kernel
+                    # without adding any candidate above the fixed threshold.
+                    nms_scores = torch.cat(
+                        (class_scores, torch.zeros_like(class_scores)), dim=0
+                    )
+                batch_scores = nms_scores.transpose(0, 1).unsqueeze(0).to(
                     torch.float16
                 )
                 result_boxes, result_scores, result_classes, result_count = (
