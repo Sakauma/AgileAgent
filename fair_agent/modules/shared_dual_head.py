@@ -54,11 +54,43 @@ class ResidualAdaptedDetect(Detect):
     def forward(self, features: list[torch.Tensor]) -> Any:
         if len(features) != len(self.adapters):
             raise RuntimeError("residual adapter收到的特征层数量不匹配")
-        adapted = [
-            feature + adapter(feature)
-            for feature, adapter in zip(features, self.adapters)
-        ]
+        if getattr(self, "export_collapsed", False):
+            adapted = [
+                adapter(feature)
+                for feature, adapter in zip(features, self.adapters)
+            ]
+        else:
+            adapted = [
+                feature + adapter(feature)
+                for feature, adapter in zip(features, self.adapters)
+            ]
         return self.detect(adapted)
+
+
+def collapse_residual_adapter_for_export(
+    wrapper: ResidualAdaptedDetect,
+) -> dict[str, Any]:
+    """Fold each identity skip into its 1x1 adapter before FP16 export."""
+
+    if not isinstance(wrapper, ResidualAdaptedDetect):
+        raise TypeError("只能折叠ResidualAdaptedDetect")
+    if getattr(wrapper, "export_collapsed", False):
+        raise ValueError("residual adapter已经折叠")
+    with torch.no_grad():
+        for adapter in wrapper.adapters:
+            channels = int(adapter.weight.shape[0])
+            identity = torch.eye(
+                channels,
+                device=adapter.weight.device,
+                dtype=adapter.weight.dtype,
+            ).reshape(channels, channels, 1, 1)
+            adapter.weight.add_(identity)
+    wrapper.export_collapsed = True
+    return {
+        "kind": "identity_folded_1x1",
+        "adapter_count": len(wrapper.adapters),
+        "explicit_add_removed": True,
+    }
 
 
 def attach_residual_feature_adapters(model: Any) -> dict[str, Any]:
@@ -344,6 +376,11 @@ def build_shared_dual_head_export_module(
         base = base.fuse().eval()
     if hasattr(new, "fuse"):
         new = new.fuse().eval()
+    adapter_export = (
+        collapse_residual_adapter_for_export(new.model[-1])
+        if isinstance(new.model[-1], ResidualAdaptedDetect)
+        else None
+    )
     module = compose_shared_dual_head(base, new).to(device).eval()
     for layer in module.modules():
         if hasattr(layer, "export"):
@@ -358,6 +395,7 @@ def build_shared_dual_head_export_module(
         "new_head_weight": str(new_path),
         "new_head_weight_sha256": sha256_file(new_path),
         "shared_max_drift": drift,
+        "residual_adapter_export": adapter_export,
     }
 
 
