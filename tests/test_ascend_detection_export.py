@@ -124,7 +124,7 @@ def test_batch_multiclass_nms_probe_contains_cann_operator(tmp_path) -> None:
     )
     target = tmp_path / "batch-multiclass-nms.onnx"
 
-    export_detections_v1_onnx(
+    result = export_detections_v1_onnx(
         module,
         _raw_predictions(),
         target,
@@ -132,6 +132,27 @@ def test_batch_multiclass_nms_probe_contains_cann_operator(tmp_path) -> None:
     )
 
     assert b"BatchMultiClassNMS" in target.read_bytes()
+    assert result["opset"] == 16
+
+
+def test_batch_multiclass_nms_rejects_unregistered_cann_opset(tmp_path) -> None:
+    module = build_detections_v1_module(
+        RawIdentity(),
+        class_count=2,
+        candidate_confidence=0.5,
+        iou_threshold=0.5,
+        max_det=3,
+        nms_backend="batch_multiclass_nms",
+    )
+
+    with pytest.raises(ValueError, match="opset 16"):
+        export_detections_v1_onnx(
+            module,
+            _raw_predictions(),
+            tmp_path / "unsupported.onnx",
+            input_name="raw_predictions",
+            opset=17,
+        )
 
 
 def test_detections_v1_rejects_unknown_nms_backend() -> None:
