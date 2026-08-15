@@ -387,6 +387,10 @@ def main() -> int:
             candidate_state="ready",
             max_npu_temperature_c=args.max_npu_temperature_c,
             max_process_cpu_percent=args.max_process_cpu_percent,
+            # P8 requires the board to cool before each timed run.  The
+            # post-run temperature is evidence of the load, not a start gate
+            # applied retroactively to an otherwise valid measurement.
+            require_temperature_limit=False,
         )
         guard_run_consistency = compare_environment_snapshots(guard_after, guard_before)
 

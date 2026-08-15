@@ -350,6 +350,7 @@ def evaluate_environment_snapshot(
     max_npu_temperature_c: int = DEFAULT_NPU_TEMPERATURE_LIMIT,
     max_process_cpu_percent: float = DEFAULT_PROCESS_CPU_LIMIT,
     process_whitelist: Sequence[str] = tuple(DEFAULT_PROCESS_WHITELIST),
+    require_temperature_limit: bool = True,
 ) -> dict[str, Any]:
     if candidate_state not in {"free", "ready"}:
         raise ValueError(f"candidate_state invalid: {candidate_state}")
@@ -432,7 +433,10 @@ def evaluate_environment_snapshot(
             isinstance(row, Mapping) and row.get("health") == "OK" for row in devices
         ),
         "npu_temperature_at_most_limit": bool(temperatures)
-        and max(temperatures) <= int(max_npu_temperature_c),
+        and (
+            not require_temperature_limit
+            or max(temperatures) <= int(max_npu_temperature_c)
+        ),
         "process_cpu_below_limit": len(offenders) == 0,
         "cpu_governor_consistent": governor_ok,
         "git_clean": bool(
@@ -453,6 +457,7 @@ def evaluate_environment_snapshot(
         "candidate_state": candidate_state,
         "limits": {
             "max_npu_temperature_c": int(max_npu_temperature_c),
+            "temperature_limit_required": bool(require_temperature_limit),
             "max_process_cpu_percent": float(max_process_cpu_percent),
         },
         "offenders": offenders,
