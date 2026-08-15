@@ -132,6 +132,32 @@ def test_encoded_batch_rejects_invalid_input_before_queue(rows, message) -> None
         engine.predict_encoded_batch(rows)
 
 
+def test_shared_dual_head_batch_uses_single_image_orchestration_path() -> None:
+    engine = WebInferenceEngine.__new__(WebInferenceEngine)
+    engine.shared_dual_head = True
+    calls = []
+
+    def predict_unlocked(image, filename, confidence, protocol):
+        calls.append((image.size, filename, confidence, protocol))
+        return {"filename": filename}
+
+    engine._predict_unlocked = predict_unlocked
+    results = engine._predict_batch_unlocked(
+        [
+            (Image.new("RGB", (10, 20)), "one.png"),
+            (Image.new("RGB", (30, 40)), "two.png"),
+        ],
+        0.37,
+        "auto",
+    )
+
+    assert calls == [
+        ((10, 20), "one.png", 0.37, "auto"),
+        ((30, 40), "two.png", 0.37, "auto"),
+    ]
+    assert results == [{"filename": "one.png"}, {"filename": "two.png"}]
+
+
 def test_p5_ordered_model_groups_drain_after_collection_failure() -> None:
     events = []
 

@@ -5,6 +5,8 @@ import pytest
 from PIL import Image
 
 from fair_agent.backends.ascend_acl import (
+    AscendAclBackend,
+    AscendDualDetectorExecutionHandle,
     AscendEncodedPreprocessor,
     context_tensor,
     decoded_candidates_v1_records,
@@ -305,3 +307,77 @@ def test_decoded_output_copy_plan_selects_only_raw_for_low_threshold() -> None:
     assert normal["metadata_indices"] == (4, 5)
     assert fallback["force_raw"] is True
     assert fallback["raw_index"] == 6
+
+
+def _single_anchor_raw(class_scores: list[float]) -> np.ndarray:
+    raw = np.zeros((1, 4 + len(class_scores), 1), dtype=np.float32)
+    raw[0, :4, 0] = [10.0, 10.0, 4.0, 4.0]
+    raw[0, 4:, 0] = class_scores
+    return raw
+
+
+def test_shared_dual_head_parses_two_logical_outputs_without_double_timing() -> None:
+    backend = AscendAclBackend.__new__(AscendAclBackend)
+    backend.is_shared_dual_head = True
+    backend.logical_heads = {
+        "old": {"output_index": 0},
+        "new": {"output_index": 1},
+    }
+    backend._last_timings = {}
+
+    old, new = backend._dual_results_from_outputs(
+        [
+            _single_anchor_raw([0.1, 0.9, 0.2]),
+            _single_anchor_raw([0.8]),
+        ],
+        {
+            "original_height": 32,
+            "original_width": 32,
+            "scale": 1.0,
+            "pad_left": 0,
+            "pad_top": 0,
+        },
+        {"conf": 0.5, "iou": 0.7, "max_det": 300},
+        1.25,
+        {
+            "inference_ms": 4.5,
+            "submit_ms": 0.2,
+            "wait_ms": 0.3,
+            "input_copy_ms": 0.4,
+            "output_copy_ms": 0.5,
+        },
+    )
+
+    assert old.records[0]["class_id"] == 1
+    assert new.records[0]["class_id"] == 0
+    assert old.speed["preprocess"] == 1.25
+    assert old.speed["inference"] == 4.5
+    assert old.speed["ascend_output_copy"] == 0.5
+    assert new.speed["preprocess"] == 0.0
+    assert new.speed["inference"] == 0.0
+    assert "ascend_output_copy" not in new.speed
+
+
+def test_shared_dual_execution_handle_resolves_physical_model_once() -> None:
+    calls = {"model": 0, "parse": 0}
+
+    class ModelHandle:
+        def result(self):
+            calls["model"] += 1
+            return ["old", "new"], {"inference_ms": 1.0}
+
+    class Backend:
+        def _dual_results_from_outputs(self, outputs, *_args):
+            calls["parse"] += 1
+            return tuple(outputs)
+
+    handle = AscendDualDetectorExecutionHandle(
+        Backend(), ModelHandle(), {}, {}, 0.0
+    )
+
+    first = handle.result()
+    second = handle.result()
+
+    assert first == ("old", "new")
+    assert second is first
+    assert calls == {"model": 1, "parse": 1}

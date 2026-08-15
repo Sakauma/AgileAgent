@@ -153,6 +153,43 @@ def test_ascend_p9_decoded_contract_pins_threshold_capacity_and_layout() -> None
         validate_config(config)
 
 
+def test_ascend_p10_shared_dual_head_contract_is_fully_owned() -> None:
+    config = clean_config()
+    config["ascend_backend"]["model_layout"] = "shared_backbone_dual_head_v1"
+    config["inference"]["specialist_imgsz"] = config["inference"]["imgsz"]
+    entry = next(iter(config["ascend_backend"]["models"].values()))
+    entry.update(
+        {
+            "output_contract": "raw_dual_head_v1",
+            "logical_heads": {
+                "old": {
+                    "owner": "frozen_base_model",
+                    "class_map": {"0": 0, "1": 1, "2": 3},
+                    "class_count": 3,
+                    "anchor_count": 13524,
+                    "output_index": 0,
+                },
+                "new": {
+                    "owner": "incremental_model",
+                    "class_map": {"0": 2},
+                    "class_count": 1,
+                    "anchor_count": 13524,
+                    "output_index": 1,
+                },
+            },
+        }
+    )
+    validate_config(config)
+
+    entry["logical_heads"]["new"]["owner"] = "frozen_base_model"
+    with pytest.raises(ValueError, match="owner"):
+        validate_config(config)
+    entry["logical_heads"]["new"]["owner"] = "incremental_model"
+    entry["logical_heads"]["old"]["class_map"] = {"1": 0, "2": 1, "3": 3}
+    with pytest.raises(ValueError, match="本地类别必须连续"):
+        validate_config(config)
+
+
 def test_api_business_signature_ignores_only_request_timing_fields() -> None:
     payload = {
         "filename": "sample.png",
