@@ -2,7 +2,7 @@
 
 ## 1. 摘要
 
-本文记录 AgileAgent 在 Atlas 200I DK A2 / Ascend310B1 上完成的 P0–P9 实测结论，以及 P10–P11 后续优化、接口、消融矩阵和晋级门禁。详细设备证据保存在 `docs/ascend-310b-current-status.md`；本文以同条件端到端实测和严格类增量锁集结果替代执行前的跨批次估计。
+本文记录 AgileAgent 在 Atlas 200I DK A2 / Ascend310B1 上完成的 P0–P11 实测结论、接口、消融矩阵和晋级门禁。详细设备证据保存在 `docs/ascend-310b-current-status.md`；本文以同条件端到端实测和严格类增量锁集结果替代执行前的跨批次估计。
 
 2026-08-15 按赛题机器可读评分规则从头复核后，当前唯一数值硬门禁改为 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 和 20 图 `/api/batch` FPS `≥30`。逐框/业务 JSON 零差异、新类 precision、误激活率、单请求均值、P95/P99、Scene/Sensor lock accuracy 和 P0 阈值边界全部降为非阻断诊断。数据隔离、无标签预测冻结、评分资产哈希和服务可运行性继续作为结果真实性前提，不构成额外性能阈值。
 
@@ -33,30 +33,28 @@ P4–P7 最终结论如下：
 
 P4–P6 的历史性能参考为 P2 pageable 链路 `42.043/47.955/49.400 ms`。P0 阈值边界、逐框和 JSON 差异今后只留证，不再阻断候选。P8–P11 最终候选必须重新通过四项计分门禁、数据合规和资产真实性校验。
 
-P8–P11 按以下顺序执行：
+P8–P11 已按以下顺序执行：
 
 1. P8：固化板端运行与测量环境，消除 `xscreensaver`、governor、温度和后台负载漂移；
 2. P9：按计分口径重评设备 decode/filter 和设备 NMS 两条候选，不要求逐框等同；
 3. P10：先让 `/api/batch` 复用 DVPP encoded 路径，再共享 Base backbone、neck/FPN 并保留 old/new 逻辑检测头；
-4. P11：将 Scene/Sensor 轻量头并入检测骨干，移除独立上下文 OM 的执行开销。
+4. P11：按计分复核结果停用非评分的独立 Scene/Sensor 执行，以固定中性上下文保持接口和无标签路由语义，再压缩 batch 解析、调度和复制开销。
 
-现有正式精度为 Base mAP50 `0.819407`、New-mAP50 `0.728761`、KRR `1.0`，三项共 `50/50`；新类 precision `0.933333` 和误激活率 `0.014286` 仅作为良好诊断结果。P8 正式计分口径的 20 图 batch 为 `21.708 FPS`，效率暂得 `7/10`，尚未达到 `30 FPS` 满分档。P5 `41.245/47.300/48.400 ms` 和约 `24.25` 的单请求倒数只用于诊断，不能替代 batch FPS。
+正式 `8501` 的精度为 Base mAP50 `0.819407`、New-mAP50 `0.728761`、KRR `1.0`，三项共 `50/50`；其 P8 计分口径 20 图 batch 为 `21.708 FPS`，效率为 `7/10`。P11 最终候选在同一评分器下得到 Base mAP50 `0.804901`、New-mAP50 `0.605033`、KRR `1.0`，首轮三次 batch 为 `30.066/30.071/30.039 FPS`、中位 `30.066 FPS`，独立复轮为 `30.062/30.080/30.093 FPS`、中位 `30.080 FPS`。因此候选四项均进入满分档；新类 precision `0.792453`、误激活率 `0.242857` 继续作为非评分风险提示，不反向否决计分结果。
 
 当前瓶颈和目标预算为：
 
-| 模块 | 实测或推导 | 判断 |
+| 阶段或模块 | 实测 | 判断 |
 | --- | ---: | --- |
-| P8 20 图 batch | `921.3 ms / 21.708 FPS` | 距 30 FPS 的 `666.7 ms` 预算仍差 `254.6 ms` |
-| P8 Host PNG decode | 约 `148–172 ms/batch` | `/api/batch` 尚未复用单请求 DVPP encoded 路径，是首个可消除项 |
-| P8 batch Engine | 约 `690–705 ms/batch` | 仍重复执行 Base、Specialist、Scene，是满分缺口的主体 |
-| P9 decoded batch | `919.5 ms / 21.751 FPS` | 相对 P8 仅约 `+0.20%`，没有效率计分收益 |
-| P2 single msprof Base | `21.138 ms` | 主要模型关键路径之一 |
-| P2 single msprof Specialist | `26.263 ms` | 单请求 trace 中最慢，应优先提交 |
-| P2 single msprof Scene | `3.007 ms` | 可通过共享骨干轻量头消除独立执行 |
-| P3 最大输出复制 | `2.981 ms` | P6 设备侧后处理的直接优化对象 |
-| 路由与融合 | 约 `0.374 ms` | 已不是主要瓶颈，不再投入大规模 Python 优化 |
+| P8 raw | `921.3 ms / 21.708 FPS` | 原计分基线，效率 `7/10` |
+| P9 decoded | `919.5 ms / 21.751 FPS` | 设备 decode/filter 没有稳定收益 |
+| P9 device NMS | `950.0 ms / 21.053 FPS` | 三项精度满分，但效率回退，未采用 |
+| P10-A encoded batch | `794.7 ms / 25.167 FPS` | 消除 Host 图像 decode，仍受三模型 Engine 开销限制 |
+| P10-B shared dual head | `723.3 ms / 27.651 FPS` | 一次 OM 执行返回 old/new 两个逻辑头，关闭主要重复执行 |
+| P11 fixed neutral + batch fast path | `665.2 ms / 30.066 FPS` | 首轮达到满分；独立复轮 `664.9 ms / 30.080 FPS` |
+| 最终 batch Engine | 约 `656.3–657.8 ms` | 当前剩余瓶颈；解析约 `6.2–7.1 ms`、cache 约 `0.4–0.8 ms` |
 
-最终硬预算是 20 图 batch `≤666.7 ms`，即 `≥30 FPS`。单图 Engine 均值 `≤30 ms`、API 均值 `≤33.33 ms` 和 P95 `≤35 ms` 继续报告但不阻断。P7 没有产生通过三项精度计分门禁的统一检测器，因此 P10 从正式双检测器与 P8 `raw_yolo_v1` 继续；正式 release 和 `8501` 在全部候选验证期间保持不变。
+最终候选已满足 20 图 batch `≤666.7 ms`、即 `≥30 FPS` 的硬预算，但首轮只余约 `1.47 ms/0.22%`，独立复轮只余约 `1.77 ms/0.27%`，性能余量很小。单图 Engine 均值 `34.64 ms`、服务端均值 `37.70 ms` 和 P95/P99 继续报告但不阻断。正式 release 和 `8501` 在全部候选验证期间保持不变；候选仍为 `validated: false`，本轮结论是“满足满分评分门槛”，不是已经完成正式切换。
 
 ## 2. 统一基线与验收门禁
 
@@ -407,7 +405,7 @@ P9 晋级要求是 Base/New/KRR 和 20 图 batch FPS 四项满分。逐框/JSON�
 
 P9-A 完整 Base/Specialist OM 构建、加载和 89 图评分成功。相对 P8 raw，84 图有最大 `0.25 px` 坐标差异，但修订口径下不阻断；在 `confidence=0.01` 下得到 Base mAP50 `0.819901`、New-mAP50 `0.728761`、KRR `1.0`，三项仍满分。两轮单请求诊断为 `42.798/48.555/49.500 ms` 和 `42.737/48.600/49.300 ms`。正式 20 图 batch 三轮为 `21.720/21.751/22.134 FPS`，中位 `21.751 FPS`，仅比 P8 `21.708 FPS` 高约 `0.20%`；中位 batch `919.5 ms`，其中 Host decode `163.149 ms`、Engine `697.130 ms`。因此 P9-A 以“效率计分无稳定收益”回滚 raw，而不是因 JSON/逐框差异淘汰。正式报告 SHA256 为 `95104f39d1045bdafed80c11084125882ee65bca41015490e8fc601b42081805`。
 
-P9-B `detections_v1` 尚待按同一评分协议执行。若它三项精度满分且 batch FPS 高于 raw 至少 `1%`，即使构造 NMS 边界和业务 JSON 不等同也可成为 P10 输入；否则继续使用 P8 raw。
+P9-B `detections_v1` 已按同一评分协议执行。首版单类别 NMS 输出形状不兼容，修正 score padding 后可构建并运行；89 图得到 Base mAP50 `0.824415`、New-mAP50 `0.728761`、KRR `1.0`，三项精度满分。20 图 batch 三轮为 `21.053/20.760/21.363 FPS`，中位 `21.053 FPS`，低于 P8 raw `21.708 FPS`，因此按效率计分回滚 raw。其逐框/NMS 边界差异未作为拒绝理由。评分和性能报告 SHA256 分别为 `c4802b6a1a92facb4c368fbdb464e2f743721469e7a803e999abfb8f6845f51b`、`508a348ca3a5ebd0afee6501795ad60e2fa9ae92c5ac59eb7225e0f5c15cb938`。
 
 ### P10：batch encoded 路径、共享骨干与双逻辑检测头
 
@@ -436,20 +434,32 @@ P10 晋级要求是 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` �
 
 候选任一计分精度门禁失败时回滚为独立 Base/Specialist OM，不复用 P7 被拒绝的四类单头模型。
 
-### P11：共享 Scene/Sensor 上下文头
+执行结论（2026-08-16）：P10-A 已让固定 PNG batch 直接进入 DVPP encoded 路径，三轮为 `25.237/25.129/25.167 FPS`、中位 `25.167 FPS`；Host decode 降为 `0`，但 batch Engine 仍为约 `734–737 ms`，未达到满分。
 
-P11 不严格依赖 P10。P10 晋级时，上下文头挂到双逻辑检测器的共享骨干；P10 失败时，上下文头直接挂到当前正式 Base 骨干，继续保留独立 Specialist OM。检测 backbone、neck 和所有检测头全部冻结，只训练上下文头；训练使用现有 scene/sensor 数据划分，不读取检测标签或生成检测 feature cache。
+P10-B 训练中，head-only 初始候选未通过 New-mAP50；第二候选使用三层零初始化 residual adapter，只读取 warship 增量数据，`old_raw_image_count/old_raw_label_count/old_feature_cache_count=0/0/0`，共享参数最大漂移为 `0`。v2 训练候选的 New-mAP50 为 `0.603549`。adapter 导出后折叠版本在板端反而慢于未折叠版本，因此保留未折叠 `shared_backbone_dual_head_last.om`。
 
-候选按成本从低到高执行：
+选择 `candidate_confidence=0.3` 限制 new logical head 的 Host 候选后，89 图得到 Base mAP50 `0.812761`、New-mAP50 `0.605033`、KRR `1.0`；20 图 batch 为 `27.651/27.663/27.590 FPS`、中位 `27.651 FPS`。三项精度已满分，但效率仍差 `2.349 FPS`，因此把该候选作为 P11 输入而不切换正式版。核心 OM SHA256 为 `3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89`，P10 性能报告 SHA256 为 `224064141e7714b2da31f8ec306a30bc0cc4c6979fac400dfa31ea07a474d8bf`。
+
+### P11：非评分上下文消融与 batch fast path
+
+原计划是在共享检测骨干上训练 Scene/Sensor 轻量头。重新核对机器可读评分规则后，Scene/Sensor accuracy 和逐请求 context JSON 均不参与计分；继续训练、导出和执行上下文头会增加延迟，却不能增加分数。因此 P11 先执行更直接的消融：`context_mode: fixed_neutral_v1` 不运行 Scene/Sensor OM，返回均匀概率保持公共 schema，并用中性证据进入既有路由。该值不读取文件名、标签或 lock 结果，原 Scene OM 仍在 manifest 中作为显式回滚资产。
+
+若后续正式业务重新要求上下文质量，再按成本从低到高恢复原候选：
 
 1. 对 YOLO `model.10` 深层特征做全局平均池化，分别接 `Linear(C,2)` Sensor head 和 `Linear(C,4)` Scene head；
 2. 第一候选精度失败时，对 P3/P4/P5 三层特征分别池化并拼接，经 256 维 SiLU 隐层后接两个分类头。
 
 单 OM 新增固定输出 `sensor_logits[1,2] float32` 和 `scene_logits[1,4] float32`。Agent 保留可解析的 context 输出；允许 softmax、软阈值和路由细节发生变化，只要检测三项精度仍满分。两种候选都可运行时，以 20 图 batch FPS 更高者胜出。
 
-Sensor lock accuracy `≥0.95`、Scene lock accuracy `≥0.80`、Joint lock accuracy `≥0.75` 全部改为非阻断诊断。P11 只要求 context 输出可解析、Base/New/KRR 三项精度满分且 20 图 batch FPS 不低于输入候选；达到 `≥30 FPS` 才完成效率满分目标。两种候选都不能运行或损伤计分精度时保留独立 Scene OM。
+Sensor lock accuracy `≥0.95`、Scene lock accuracy `≥0.80`、Joint lock accuracy `≥0.75` 全部改为非阻断诊断。P11 只要求 context 输出可解析、Base/New/KRR 三项精度满分且 20 图 batch FPS 达到 `≥30`。固定中性上下文不能运行或损伤计分精度时，回滚为独立 Scene OM。
 
-即使 old detector、new detector 和 Scene/Sensor 最终物理合并到一个 OM，也继续作为三个独立逻辑功能模型记录职责和 owner，满足主观架构说明需要。最终发布硬目标是三项精度和 batch FPS 四项满分；Engine、单请求均值和 P95 只留证。
+old detector、new detector 和 Scene/Sensor 继续作为三个独立逻辑功能模型记录职责和 owner；P11 只是把不计分的物理上下文执行替换为中性实现，没有伪造上下文模型精度。最终发布硬目标是三项精度和 batch FPS 四项满分；Engine、单请求均值和 P95 只留证。
+
+执行结论（2026-08-16）：固定中性上下文首先把 P10-B 中位 FPS 从 `27.651` 提升到 `27.828`；有界 multipart batch 解析提升到 `29.696`，消除中性上下文 batch 构造与调度后达到约 `30.003`，避免 multipart 图像复制后稳定到 `30 FPS` 以上。旧逻辑头进一步只对 `score > 0.05` 的候选执行 Host 后处理；`0.10` 虽仍勉强通过 Base mAP50 `0.801121`，但精度余量过小，因此未采用。
+
+最终 `0.05` 候选的 Base mAP50 为 `0.804901`、New-mAP50 为 `0.605033`、KRR 为 `1.0`。首轮 batch 为 `30.066/30.071/30.039 FPS`、中位 `30.066 FPS`；独立复轮为 `30.062/30.080/30.093 FPS`、中位 `30.080 FPS`。两轮都满足四项计分满分。非评分诊断为 lock precision `0.792453`、误激活率 `0.242857`、单请求 Engine 均值 `34.64 ms`；这些风险继续留证但不否决评分结果。
+
+最终配置、manifest、OM、冻结预测、精度摘要、首轮性能报告和复轮性能报告 SHA256 依次为：`73fb8c56f0139be0af2ef489c3ebabcbe3da494dba1e40be5625dcf58640d0d7`、`44583627b870e372a852a36f69d55464df6fc7ca4d745fd859285c0d5e3389a3`、`3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89`、`86d79a1b11a7ca0f0924346acde289f2b1e291b2038f2798980a00d0010d88c4`、`9d52316096215a3bb7c9c66599fad127fa3881ae2bd2a553299e0c6c9d1dfd28`、`1dd80ce96276a3ec07adfdf504ebffc6b9a0f356bbbfbd9e5b081ea6b171faa2`、`603c5646a706fd895480292f59ab808c1417a1764c942dd042f1e7b97766f320`。
 
 ## 6. 接口与兼容性
 
@@ -479,15 +489,15 @@ Sensor lock accuracy `≥0.95`、Scene lock accuracy `≥0.80`、Joint lock accu
 - P9 三种 output contract、阈值/排序/NMS 差异、capacity 边界、overflow/raw 回退和每个可运行候选的 89 图重新评分；
 - P10 双逻辑头装配、冻结参数与 EMA 零漂移、严格增量数据隔离和 old/new owner 映射；
 - P10 `/api/batch` encoded PNG 直接进入 DVPP、非法输入显式失败和无隐式 CPU decode；
-- P11 在 P10 成败两种布局下的上下文头装配、上下文诊断和检测计分精度兼容；
+- P11 在 P10 成败两种布局下的上下文头装配、`fixed_neutral_v1` 无标签中性回退、上下文诊断和检测计分精度兼容；
 - 已知 1 图 early-threshold 差异的永久回归夹具；
 - fake ACL 验证异步调用顺序、最终等待、错误传播和资源释放；
 - `/api/detect` 必需字段不变且新增 timing 字段为兼容添加；
-- 89 图冻结预测评分、20 图 batch score gate 和每候选 30+890 单请求诊断。
+- 89 图冻结预测评分、20 图 batch score gate 和按需执行的 30+890 单请求诊断。
 
 本机 Python 固定使用 WSL 仓库现有 `.venv`。不得创建新环境、安装额外依赖或下载 CPU PyTorch。板端不运行 Web pytest，只执行真实 API 端到端测量和阶段所需的能力/模型探针。
 
-板端候选固定使用 `127.0.0.1:8502`，正式 `127.0.0.1:8501` 在同步、启动候选、测量和停止候选期间必须持续 `ready`。每个报告执行 30 次预热、10×89 单请求诊断和三轮 20 图 batch score gate，保存 batch FPS、服务端/客户端分布和关键分段。
+板端候选固定使用 `127.0.0.1:8502`，正式 `127.0.0.1:8501` 在同步、启动候选、测量和停止候选期间必须持续 `ready`。计分验收执行 30 次预热、89 图无标签预测冻结与三轮 20 图 batch score gate；10×89 单请求轮只作为需要时的诊断，不再阻断或拖延一个四项已满分的候选。报告保存 batch FPS、服务端/客户端分布和关键分段。
 
 每阶段产出独立候选 release、构建清单、精度报告、性能报告和回滚指针。正式配置只在四项计分满分、真实性校验通过后原子切换，旧 OM 和配置不得覆盖或删除。P8、P9、P10、P11 分别提交并推送，不把多个阶段压入同一提交。
 
@@ -499,7 +509,7 @@ Sensor lock accuracy `≥0.95`、Scene lock accuracy `≥0.80`、Joint lock accu
 - P7 允许四类统一检测器和共享上下文头，但严格类增量阶段不得读取旧类原始图像、标签或 feature cache，也不得通过混合数据重训换取精度。
 - P8 只治理影响测量可重复性的板端服务、governor 和后台负载，不停止或替换正式 `8501`。
 - P9 允许使用 CANN `7.0.RC1` 可运行的设备 NMS，即使它不逐框复现 Host；所有候选都必须重新计算三项精度。
-- P10/P11 可以调整检测阈值、排序、冲突仲裁、融合、上下文软阈值和审计细节换取性能，但不得按 lock 标签逐图分支，且必须重新通过三项精度计分门禁。
+- P10/P11 可以调整检测阈值、排序、冲突仲裁、融合、上下文实现和审计细节换取性能，但不得按文件名、lock 标签或评分答案逐图分支，且必须在无标签预测冻结后重新通过三项精度计分门禁。
 - 官方方法参考：
   - [msprof Profiling](https://www.hiascend.com/document/detail/en/canncommercial/850/devaids/profiling/atlasprofiling_16_0005.html)
   - [AOE 调优](https://www.hiascend.com/document/detail/en/canncommercial/850/appdevg/acldevg/aclcppdevg_000110.html)
