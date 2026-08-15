@@ -175,6 +175,37 @@ def multipart_body(path: Path, confidence: float, boundary: str) -> bytes:
     return prefix + path.read_bytes() + suffix
 
 
+def batch_multipart_body(
+    paths: list[Path], confidence: float, boundary: str
+) -> bytes:
+    if not paths:
+        raise ValueError("batch性能探针至少需要一张图像。")
+    chunks: list[bytes] = []
+    for path in paths:
+        filename = path.name.replace('"', "_")
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode("ascii"),
+                (
+                    'Content-Disposition: form-data; name="files"; '
+                    f'filename="{filename}"\r\n'
+                ).encode("utf-8"),
+                b"Content-Type: image/png\r\n\r\n",
+                path.read_bytes(),
+                b"\r\n",
+            ]
+        )
+    chunks.extend(
+        [
+            f"--{boundary}\r\n".encode("ascii"),
+            b'Content-Disposition: form-data; name="confidence"\r\n\r\n',
+            f"{confidence:.8g}\r\n".encode("ascii"),
+            f"--{boundary}--\r\n".encode("ascii"),
+        ]
+    )
+    return b"".join(chunks)
+
+
 class KeepAliveClient:
     def __init__(self, base_url: str, timeout: float) -> None:
         parsed = urlsplit(base_url)
@@ -211,6 +242,21 @@ class KeepAliveClient:
         payload = self._json_response(
             "POST",
             "/api/detect",
+            body=body,
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Length": str(len(body)),
+                "Connection": "keep-alive",
+            },
+        )
+        wall_ms = (time.perf_counter_ns() - started) / 1_000_000.0
+        return payload, wall_ms
+
+    def batch(self, body: bytes, boundary: str) -> tuple[Dict[str, Any], float]:
+        started = time.perf_counter_ns()
+        payload = self._json_response(
+            "POST",
+            "/api/batch",
             body=body,
             headers={
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
@@ -286,7 +332,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--build-manifest", type=Path)
-    parser.add_argument("--gate-profile", choices=("p0", "p3", "p8"), default="p0")
+    parser.add_argument(
+        "--gate-profile", choices=("p0", "p3", "p8", "score"), default="p0"
+    )
     parser.add_argument("--baseline-mean-ms", type=float)
     parser.add_argument("--baseline-p99-ms", type=float)
     parser.add_argument("--environment-guard", action="store_true")
@@ -296,12 +344,21 @@ def main() -> int:
     parser.add_argument("--process-samples", type=int, default=3)
     parser.add_argument("--process-sample-interval", type=float, default=1.0)
     parser.add_argument("--p8-reference-report", type=Path)
+    parser.add_argument("--batch-probe-size", type=int, default=20)
+    parser.add_argument("--batch-rounds", type=int, default=3)
+    parser.add_argument("--target-batch-fps", type=float, default=30.0)
     args = parser.parse_args()
 
     if args.output.exists():
         raise FileExistsError(f"性能报告已存在，拒绝覆盖：{args.output}")
     if args.warmup_requests < 0 or args.rounds <= 0:
         raise ValueError("warmup_requests必须非负且rounds必须为正数。")
+    if (
+        args.batch_probe_size <= 0
+        or args.batch_rounds <= 0
+        or args.target_batch_fps <= 0.0
+    ):
+        raise ValueError("batch探针大小、轮数和目标FPS必须为正数。")
     if args.gate_profile == "p3" and (
         not args.baseline_mean_ms
         or args.baseline_mean_ms <= 0
@@ -366,8 +423,33 @@ def main() -> int:
             for round_index in range(args.rounds)
             for path in paths
         ]
+        batch_paths = paths[: min(args.batch_probe_size, len(paths))]
+        batch_boundary = boundary + "Batch"
+        batch_body = batch_multipart_body(
+            batch_paths, args.confidence, batch_boundary
+        )
+        batch_rounds = []
+        for round_index in range(args.batch_rounds):
+            payload, wall_ms = client.batch(batch_body, batch_boundary)
+            system_total_ms = float(payload["system_total_ms"])
+            if system_total_ms <= 0.0:
+                raise RuntimeError("batch响应system_total_ms必须为正数。")
+            batch_rounds.append(
+                {
+                    "round": round_index + 1,
+                    "image_count": len(batch_paths),
+                    "system_total_ms": system_total_ms,
+                    "wall_ms": wall_ms,
+                    "fps": len(batch_paths) * 1000.0 / system_total_ms,
+                    "timings": dict(payload.get("timings") or {}),
+                }
+            )
     finally:
         client.close()
+
+    median_batch = sorted(
+        batch_rounds, key=lambda row: float(row["system_total_ms"])
+    )[len(batch_rounds) // 2]
 
     guard_after: Dict[str, Any] | None = None
     guard_after_evaluation: Dict[str, Any] | None = None
@@ -428,7 +510,30 @@ def main() -> int:
             guard_before, reference_guard
         )
 
-    if args.gate_profile == "p3":
+    if args.gate_profile == "score":
+        gates = {
+            "sample_count": len(rows) == args.rounds * args.expected_images,
+            "request_failures": True,
+            "batch_fps": float(median_batch["fps"]) >= args.target_batch_fps,
+        }
+        if args.environment_guard:
+            gates.update(
+                {
+                    "environment_before": bool(
+                        guard_before_evaluation
+                        and guard_before_evaluation["passed"]
+                    ),
+                    "environment_after": bool(
+                        guard_after_evaluation
+                        and guard_after_evaluation["passed"]
+                    ),
+                    "environment_unchanged_during_run": bool(
+                        guard_run_consistency
+                        and guard_run_consistency["passed"]
+                    ),
+                }
+            )
+    elif args.gate_profile == "p3":
         baseline_mean_ms = float(args.baseline_mean_ms)
         baseline_p99_ms = float(args.baseline_p99_ms)
         mean_ms = float(distributions["server"]["mean_ms"])
@@ -494,7 +599,7 @@ def main() -> int:
             "request_failures": True,
         }
     report = {
-        "schema_version": 4,
+        "schema_version": 5,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "protocol": {
             "transport": "loopback_http_multipart_png_keep_alive",
@@ -513,6 +618,9 @@ def main() -> int:
                 if args.p8_reference_report is not None
                 else None
             ),
+            "batch_probe_size": len(batch_paths),
+            "batch_rounds": args.batch_rounds,
+            "target_batch_fps": args.target_batch_fps,
             "png_contracts": {
                 "width": 640,
                 "height": 512,
@@ -523,6 +631,16 @@ def main() -> int:
         "health": health,
         "distributions": distributions,
         "rounds": rounds,
+        "competition": {
+            "batch_fps": float(median_batch["fps"]),
+            "batch_system_total_ms": float(median_batch["system_total_ms"]),
+            "batch_wall_ms": float(median_batch["wall_ms"]),
+            "batch_image_count": len(batch_paths),
+            "batch_rounds": batch_rounds,
+            "batch_fps_passed": (
+                float(median_batch["fps"]) >= args.target_batch_fps
+            ),
+        },
         "requests": rows,
         "environment": {
             "python": sys.version,

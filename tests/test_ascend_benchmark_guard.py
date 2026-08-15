@@ -203,3 +203,22 @@ def test_p8_relative_stability_uses_two_percent_boundary() -> None:
     within = script["relative_difference_within"]
     assert within(102.0, 100.0, 0.02) is True
     assert within(97.9, 100.0, 0.02) is False
+
+
+def test_score_batch_multipart_uses_files_field_and_strict_fps_gate(
+    tmp_path: Path,
+) -> None:
+    script = runpy.run_path("tools/97_benchmark_ascend_api.py")
+    first = tmp_path / "one.png"
+    second = tmp_path / "two.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    body = script["batch_multipart_body"](
+        [first, second], 0.5, "ScoreBoundary"
+    )
+    assert body.count(b'name="files"') == 2
+    assert b'name="file";' not in body
+    assert b'name="confidence"' in body
+    assert body.endswith(b"--ScoreBoundary--\r\n")
+    assert 20 * 1000.0 / 666.6666666667 < 30.0
+    assert 20 * 1000.0 / 666.6666666666 >= 30.0
