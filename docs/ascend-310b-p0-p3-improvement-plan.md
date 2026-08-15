@@ -2,7 +2,7 @@
 
 ## 1. 摘要
 
-本文记录 AgileAgent 在 Atlas 200I DK A2 / Ascend310B1 上完成的 P0–P7 实测结论，以及 P8–P11 后续优化、接口、消融矩阵和晋级门禁。详细设备证据保存在 `docs/ascend-310b-current-status.md`；本文以同条件端到端实测和严格类增量锁集结果替代执行前的跨批次估计。
+本文记录 AgileAgent 在 Atlas 200I DK A2 / Ascend310B1 上完成的 P0–P8 实测结论，以及 P9–P11 后续优化、接口、消融矩阵和晋级门禁。详细设备证据保存在 `docs/ascend-310b-current-status.md`；本文以同条件端到端实测和严格类增量锁集结果替代执行前的跨批次估计。
 
 P0–P3 已全部结束，结果如下：
 
@@ -362,6 +362,17 @@ P4/P5 期间曾发现 `xscreensaver` 稳定占用约 `38%` CPU。P8 先治理环
 - 报告保存测试前后进程、CPU governor、温度、`npu-smi`、内存、端口、CANN/Python/SoC 和资产哈希快照。
 
 环境治理后重新执行两轮 30 次预热 + 10×89 请求，形成 P8 新鲜基线。两轮均值、P95 和 P99 的相对差异必须分别 `≤2%`；不满足时停止 P8，继续定位环境漂移，不进入 P9。旧 P5 `41.245/47.300/48.400 ms` 只用于说明治理前后差异，不要求新基线强行落入旧结果 `±2%`。
+
+执行结论（2026-08-15）：P8 环境固化、只读 guard 和报告快照已实现并在板端启用。`xscreensaver`、`xscreensaver-systemd` 和 `xfce4-screensaver` 已停止，并通过三个用户级 XDG `Hidden=true` override 阻止自启动；板端未暴露 cpufreq policy，因此 governor 明确记录为 `unsupported`。每轮开始前的 NPU 温度门禁保持 `≤65°C`，结束温度只作为持续负载证据记录，不反向否决开始条件合格的测量。
+
+P5 保留配置在 clean Git HEAD `5702511040986bbd7b3a37316db9d393746310bf` 上完成两轮正式测量：
+
+| P8 基线 | API mean | P95 | P99 | Engine mean | 结果 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Run 1 | `41.1265 ms` | `47.200 ms` | `48.200 ms` | `38.0903 ms` | 通过 |
+| Run 2 | `41.1347 ms` | `47.300 ms` | `48.211 ms` | `38.1017 ms` | 通过 |
+
+Run 2 相对 Run 1 的 mean、P95、P99 差异分别约为 `0.020%`、`0.212%`、`0.023%`，均满足 `≤2%`。两轮开始温度分别为 `59°C` 和 `61°C`，结束快照分别为 `67°C` 和 `70°C`；NPU Health、正式/候选 health、Git、配置、build manifest、OM/AIPP 哈希、Python、SoC 和 governor 身份均通过门禁。P8 形成的新鲜性能基线固定为 Run 1 `41.1265/47.200/48.200 ms`，用于 P9 的改善比较。测量后 `8502` 已停止，正式 `8501` 在同步、启动、测量和停止期间始终为 `ready`。
 
 ### P9：设备侧解码 + Host 精确 NMS
 
