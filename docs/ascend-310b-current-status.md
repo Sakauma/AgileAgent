@@ -329,6 +329,48 @@ P4 实现提交为 `e8bb1072dd7a673015a6fc9515594027daeaf915`；首次板端启�
 
 P4 测量和完整性校验结束后 `8502` 已停止；正式 `8501` 在同步、启动、切换候选、测量和停止期间始终保持 `ready`。
 
+## P5 关键路径调度（2026-08-15）
+
+P5 调度实现提交为 `f0b59954a82d613a23dbebb0c8cdf2693bd156b7`。`submit_order` 和 `collect_order` 分别接受 Scene/Base/Specialist 的无重复全排列；P4 胜出的 `threaded_execute` 路径和保留用于诊断的 `unified_enqueue` 路径共用有序提交、全量 drain 和首异常传播逻辑。Base、Specialist、Scene 三个模型的 runtime role 也被显式传到 Ascend 后端，为条件式 stream priority 建立内部接口。配置枚举、异常恢复、顺序执行和 priority 支持/回退均有本地 fake runtime 覆盖。
+
+为满足业务 JSON 零差异门禁，同一端到端基准从提交 `863a77b3637a10e285b68973c7544e39482bd0fa` 开始为每个请求保存剔除 `inference_ms`、`timings`、`queue_wait_ms` 和 `system_total_ms` 后的 canonical SHA256。首次板端启动工具时发现该实现间接导入 `httpx`，而板端环境没有该包；请求尚未开始，未生成性能报告。提交 `55f498bba537a6073578dbcf21b60d1c2866f68c` 将哈希函数下沉到零第三方依赖的 `fair_agent.core.hashes`，没有安装依赖或创建环境。修复后本地系统 Python 和 WSL `.venv` 均可直接启动基准工具，全量回归为 `241 passed, 1 skipped`。
+
+### Stream priority 能力结论
+
+目标 CANN 7.0.RC1 的 PyACL 存在 `acl.rt.create_stream_with_config`，随板 `acl_rt.h` 声明通用优先级参数范围 `0..7`，但没有 `get_stream_priority_range`。独立实探逐个创建 `0..7`：只有 priority `0` 成功创建和销毁，`1..7` 全部返回 `107000`。探针前后正式 `8501` 均为 `ready`。该板卡/运行时无法形成可区分的 high/normal/low 三档，因此 P5 按计划记录 `priority_range_api_unavailable` 并跳过 Specialist 高优先级和 Base 高优先级两个候选，没有引入兼容替代。实现只有在运行时能报告并实探通过至少三档时才映射 `high/normal/low`；否则三个模型统一使用普通 stream，避免部分应用 priority 的混合状态。
+
+### 提交与收集顺序结果
+
+P5 继续使用 P4 胜出的 `pageable + threaded_execute + detailed_event_timing=false`。每个候选在受控 screen saver 条件下执行 30 次预热加 10×89 单并发回环 HTTP keep-alive 请求；当前 Scene→Base→Specialist 提交及同序收集作为新鲜基线。三个 OM、AIPP、输入集和构建清单均未改变，板端未运行 Web pytest。
+
+| 候选 | 提交顺序 | 收集顺序 | Mean / P95 / P99 | 相对基线均值 | 业务签名差异 | 结论 |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| 当前 | Scene→Base→Specialist | Scene→Base→Specialist | `41.245 / 47.300 / 48.400 ms` | — | `0` | 新鲜基线 |
+| 提交 1 | Specialist→Base→Scene | Scene→Base→Specialist | `41.202 / 47.300 / 48.211 ms` | 改善 `0.043 ms / 0.104%` | `0` | 未达到 `0.5 ms` 和 `1%` |
+| 提交 2 | Base→Specialist→Scene | Scene→Base→Specialist | `41.240 / 47.300 / 48.200 ms` | 改善 `0.005 ms / 0.012%` | `0` | 未达到 `0.5 ms` 和 `1%` |
+| 收集 1 | Scene→Base→Specialist | Base→Specialist→Scene | `41.227 / 47.400 / 48.200 ms` | 改善 `0.018 ms / 0.044%` | `0` | 未达到门槛，P95 略高 |
+| 收集 2 | Scene→Base→Specialist | Specialist→Base→Scene | `41.288 / 47.200 / 48.211 ms` | 恶化 `0.044 ms / 0.106%` | `0` | 均值回退 |
+
+5 份报告均包含 890 个成功请求，每份报告的 89 张图在 10 轮内业务签名完全稳定；四个候选相对当前基线按 `(round, image)` 对齐均为 0 差异。所有候选的 P95/P99 变化都在 `±2%` 内，但没有任何候选同时满足均值改善 `≥1%` 和 `≥0.5 ms`。P5 因此保留 **Scene→Base→Specialist 提交、Scene→Base→Specialist 收集、普通 stream**，P6 从该组合继续。
+
+| 配置 | SHA256 |
+| --- | --- |
+| `p5-submit-scene-base-specialist.yaml` | `5c5c9fef4718af5d8bfcacedad041e2b0d29baf50ac49014daedf1d376597c1a` |
+| `p5-submit-specialist-base-scene.yaml` | `e21e7af0018921fbb66eb1f52f743f6e589c3fb4e1f49e35f1265e736a3a3d9a` |
+| `p5-submit-base-specialist-scene.yaml` | `efea5af0a2194a2dc11ae09269abbcb3d5150619a2ad925623dd5ff70ea120a1` |
+| `p5-collect-base-specialist-scene.yaml` | `957c74076c6e9131174984d337722a35d152b41ae89a0e73942b9acc0eae3287` |
+| `p5-collect-specialist-base-scene.yaml` | `79290b291858dd266e7f6385989183c7797edd996cab5ab0c5ccc77619cfdf08` |
+
+| 报告 | SHA256 |
+| --- | --- |
+| `p5-submit-scene-base-specialist-55f498b-890-e2e.json` | `49daece8087bf778b3a4421e49ddf82d52d98ae2107b523a996689a5dabbea1f` |
+| `p5-submit-specialist-base-scene-55f498b-890-e2e.json` | `78fb041a1d809ae586edf2be53bf00b606fec1ad1908f6af22e6bc473d441032` |
+| `p5-submit-base-specialist-scene-55f498b-890-e2e.json` | `3fcc53d0348a68d0fe57f2c6aeb87b20fc3b2b2da7bd15d3b72640d8513ee95b` |
+| `p5-collect-base-specialist-scene-55f498b-890-e2e.json` | `39ee9ab35ebcebde4e96e4a27af083b8f5b3b0b2ce627b3a486d550b1e226306` |
+| `p5-collect-specialist-base-scene-55f498b-890-e2e.json` | `5ffd139a648dfd7307652df5737549dfa637c7d11e0ffcaf239e2f8fc59b2781` |
+
+P5 仍未达到完整 API 均值 `≤33.33 ms` 和 P95 `≤35 ms`，并继续继承 P0 的阈值边界与 provenance 阻断，不能晋级正式版。测量结束后 `8502` 已停止，正式 `8501` 始终保持 `ready`。
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
@@ -349,7 +391,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `234 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `241 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
 
 ## 运行态检查
 
