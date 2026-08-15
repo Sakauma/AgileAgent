@@ -451,9 +451,38 @@ Run ID 为 `p7-yolo-iod-20260815`，完整训练 `80/80` epoch，最终 dev mAP5
 
 P7 结论为：**两个统一检测器候选均拒绝晋级。** 因第一步没有胜出的四类检测器，未训练 Scene/Sensor 共享上下文头，未导出单 OM，未启动 8502，也未执行 30 次预热 + 10×89 性能门禁。正式 release、双检测器 OM、Scene OM 和 `8501` 均保持原状；失败配置、冻结修复、逻辑 owner 映射与本地训练证据保留，rejected profile 不能被生产加载。
 
-## P8–P11 待执行方案
+## P8 板端环境固化（2026-08-15）
 
-P8–P11 已完成方案设计，尚未产生代码、模型、板端探针或性能结果。执行顺序固定为环境固化、设备解码与 Host 精确 NMS、共享骨干双逻辑检测头、共享 Scene/Sensor 上下文头。完整实施门禁和回滚规则记录在 `docs/ascend-310b-p0-p3-improvement-plan.md`。
+P8 实现提交为 `6aaff39f56188660fcd50a0dc405d359d98a12a7`；板端实测发现结束温度被错误当作开始门禁后，以 `5702511040986bbd7b3a37316db9d393746310bf` 修正为“开始温度闭锁、结束温度留证”。两个提交均已推送，板端 clean 工作副本通过 SHA256 校验的增量 Git bundle `--ff-only` 同步。现有 WSL `.venv` 全量回归为 `266 passed, 1 skipped`，未安装依赖或下载 CPU PyTorch；板端未运行 Web pytest。
+
+环境治理结果：
+
+- 停止 `xscreensaver`、`xscreensaver-systemd` 和 `xfce4-screensaver`，为三者写入用户级 XDG `Hidden=true` autostart override；
+- 板端不存在 `/sys/devices/system/cpu/cpufreq/policy*`，因此 governor 记录为 `unsupported`，未伪造 `performance` 状态；
+- pre-start/prerun guard 均确认 `8501 ready`、`8502` 端口状态符合阶段、NPU Health `OK`、三次 CPU 采样无非白名单 `>10%` 进程；
+- Git HEAD、配置、build manifest、OM/ONNX/AIPP SHA256、Python、SoC 和 governor 均已绑定，两轮身份比较完全一致。
+
+使用 P5 保留配置执行两轮独立 30 次预热 + 10×89 请求：
+
+| P8 基线 | API mean | P95 | P99 | Engine mean | 开始/结束温度 | 门禁 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Run 1 | `41.1265 ms` | `47.200 ms` | `48.200 ms` | `38.0903 ms` | `59/67°C` | 通过 |
+| Run 2 | `41.1347 ms` | `47.300 ms` | `48.211 ms` | `38.1017 ms` | `61/70°C` | 通过 |
+
+Run 2 相对 Run 1 的 mean、P95、P99 差异约为 `0.020%/0.212%/0.023%`，全部 `≤2%`。P8 后续阶段基线固定为 Run 1 `41.1265/47.200/48.200 ms`；相对旧 P5 参考的 mean 变化仅约 `-0.287%`，说明环境治理主要提升了测量可重复性，没有伪装成模型收益。正式报告与运行前 guard 的 SHA256 为：
+
+| 证据 | SHA256 |
+| --- | --- |
+| `p8-run1-5702511.json` | `4c11fa96e89d478cc8cd2fef6932cf5be1757e0261b1c162e2ef38be8dc7c79f` |
+| `p8-run2-5702511.json` | `733742c99c0b3f206829e4c0851e51650b26fcb03f6656bca09388c69ffee68e` |
+| `prerun1-5702511.json` | `a7fe5880c09221fd13f37934ab550c3978257bc63ba0cb785cbcbb3bc5d34197` |
+| `prerun2-5702511.json` | `ee6ca9d11957928e2d4272d893fcf73f2a78826a7829cf2a2e02ca7fc44cc703` |
+
+测量完成后只停止 `8502`；正式 `8501` 在候选启动前、两轮测量间和候选停止后均为 `ready`。P8 结论为：**环境固化和两轮重复性门禁通过，允许进入 P9；性能仍未达到最终 30 FPS 门禁。**
+
+## P9–P11 待执行方案
+
+P9–P11 已完成方案设计，尚未产生设备解码 OM、双逻辑检测头、共享上下文头或相应板端晋级结果。执行顺序固定为设备解码与 Host 精确 NMS、共享骨干双逻辑检测头、共享 Scene/Sensor 上下文头。完整实施门禁和回滚规则记录在 `docs/ascend-310b-p0-p3-improvement-plan.md`。
 
 当前参考状态：
 
@@ -465,12 +494,12 @@ P8–P11 已完成方案设计，尚未产生代码、模型、板端探针或�
 | 正式新类 precision | `0.933333` | 已达到满分档 |
 | 正式误激活率 | `0.014286` | 已达到满分档 |
 | 正式 API | 约 `13.99 FPS` | 未达到 `30 FPS` 满分档 |
-| P5 保留组合 | `41.245/47.300/48.400 ms` | 约 `24.25 FPS`，作为 P8 前参考 |
+| P8 新鲜基线 Run 1 | `41.1265/47.200/48.200 ms` | 约 `24.32 FPS`，作为 P9 参考 |
 | 最终性能预算 | Engine `≤30 ms` | API mean `≤33.33 ms`、P95 `≤35 ms` |
 
 计划要点如下：
 
-- P8 持久禁用 `xscreensaver`，在可用时固定 CPU `performance` governor，并用温度、后台 CPU、NPU Health、端口、Git/配置/OM 哈希守卫两轮 30+890 新鲜基线；
+- P8 已持久禁用屏保进程并以温度、后台 CPU、NPU Health、端口、Git/配置/OM 哈希守卫两轮 30+890 新鲜基线；governor 在该板明确为 `unsupported`；
 - P9 新增 `decoded_candidates_v1`，Base/Specialist capacity 分别为 `4096/2048`，设备只做 decode/filter，Host 保留严格排序和 NMS；阈值低于 `0.01` 或候选溢出时显式回到 raw 路径；
 - P10 共享 Base backbone 与 neck/FPN，保留独立 old/new Detect head 和原双模型冲突仲裁；只用 warship 数据训练 new head 或 residual adapter，Base/EMA 漂移必须为 `0`；
 - P11 即使 P10 失败也继续挂到正式 Base 骨干，依次测试深层单尺度和 P3/P4/P5 多尺度上下文头，检测网络保持冻结；
@@ -498,7 +527,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `257 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5/P6/P7 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest；P7 在精度门禁先失败，因此没有启动板端性能候选。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `266 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5/P6/P7 候选因上述门禁失败保持未验收；P8 环境与重复性门禁已通过。板端各阶段验证按操作者要求只执行探针和真实 API 端到端时长，没有运行 Web pytest；P7 在精度门禁先失败，因此没有启动板端性能候选。
 
 ## 运行态检查
 
