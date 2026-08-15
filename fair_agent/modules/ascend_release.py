@@ -12,6 +12,7 @@ from fair_agent.core.hashes import sha256_file
 EXPECTED_CONTRACTS = {
     "base": [1, 736, 896, 3],
     "specialist": [1, 512, 640, 3],
+    "dual_detector": [1, 736, 896, 3],
     "context": [1, 160, 160, 3],
 }
 REQUIRED_VALIDATION_REPORTS = ("golden", "accuracy", "performance")
@@ -128,6 +129,10 @@ def verify_ascend_artifacts(
     """
 
     errors: List[str] = []
+    model_layout = str(
+        options.get("model_layout", "independent_models_v1")
+    )
+    shared_dual_head = model_layout == "shared_backbone_dual_head_v1"
     require_validation = (
         options.get("validated") is True
         if require_validation is None
@@ -198,18 +203,27 @@ def verify_ascend_artifacts(
             or contract.get("shape") != expected_shape
         ):
             errors.append(f"input_contract_mismatch:{model_id}:{role}")
-    for role, rows in by_role.items():
-        if len(rows) != 1:
+    expected_role_counts = (
+        {"base": 0, "specialist": 0, "dual_detector": 1, "context": 1}
+        if shared_dual_head
+        else {"base": 1, "specialist": 1, "dual_detector": 0, "context": 1}
+    )
+    for role, expected_count in expected_role_counts.items():
+        rows = by_role[role]
+        if len(rows) != expected_count:
             errors.append(f"artifact_role_count_invalid:{role}:{len(rows)}")
 
     configured_detectors, configured_context = _configured_om_rows(options)
     configured_contracts = _configured_detector_contracts(options)
+    detector_roles = (
+        ("dual_detector",) if shared_dual_head else ("base", "specialist")
+    )
     manifest_detectors = {
         (
             str(resolve_path(str(row.get("om", {}).get("path") or ""))),
             str(row.get("om", {}).get("sha256") or ""),
         )
-        for role in ("base", "specialist")
+        for role in detector_roles
         for row in by_role[role]
     }
     manifest_context = {
@@ -221,7 +235,7 @@ def verify_ascend_artifacts(
     }
     if configured_detectors != manifest_detectors:
         errors.append("configured_detector_oms_do_not_match_manifest")
-    for role in ("base", "specialist"):
+    for role in detector_roles:
         for row in by_role[role]:
             key = (
                 str(resolve_path(str(row.get("om", {}).get("path") or ""))),
@@ -236,7 +250,15 @@ def verify_ascend_artifacts(
                 errors.append(f"output_contract_mismatch:{role}")
                 continue
             contract = row.get("postprocess_contract")
-            if configured_name == "detections_v1":
+            if configured_name == "raw_dual_head_v1":
+                configured_heads = dict(
+                    (configured or {}).get("logical_heads") or {}
+                )
+                if row.get("logical_heads") != configured_heads:
+                    errors.append(f"logical_heads_contract_mismatch:{role}")
+                if contract is not None:
+                    errors.append(f"raw_output_has_postprocess_contract:{role}")
+            elif configured_name == "detections_v1":
                 expected = {
                     "candidate_confidence": float(
                         (configured or {}).get("candidate_confidence", -1.0)

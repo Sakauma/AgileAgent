@@ -206,6 +206,65 @@ def test_decoded_candidates_v1_manifest_binds_raw_fallback_contract(
     assert "postprocess_contract_mismatch:base" in result["errors"]
 
 
+def test_shared_dual_head_manifest_uses_one_physical_detector(
+    tmp_path: Path,
+) -> None:
+    options = _candidate(tmp_path)
+    manifest_path = Path(options["build_manifest"])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifacts = payload["artifacts"]
+    dual = artifacts.pop("base_detector")
+    artifacts.pop("incremental_detector")
+    logical_heads = {
+        "old": {
+            "owner": "frozen_base_model",
+            "class_map": {"0": 0, "1": 1, "2": 3},
+            "class_count": 3,
+            "anchor_count": 13524,
+            "output_index": 0,
+        },
+        "new": {
+            "owner": "incremental_model",
+            "class_map": {"0": 2},
+            "class_count": 1,
+            "anchor_count": 13524,
+            "output_index": 1,
+        },
+    }
+    dual.update(
+        {
+            "role": "dual_detector",
+            "output_contract": "raw_dual_head_v1",
+            "logical_heads": logical_heads,
+        }
+    )
+    artifacts["shared_backbone_dual_head"] = dual
+    _write_json(manifest_path, payload)
+
+    options.update(
+        {
+            "model_layout": "shared_backbone_dual_head_v1",
+            "build_manifest_sha256": sha256_file(manifest_path),
+            "models": {
+                "base.pt": {
+                    **dual["om"],
+                    "output_contract": "raw_dual_head_v1",
+                    "logical_heads": logical_heads,
+                }
+            },
+        }
+    )
+    result = verify_ascend_artifacts(options, require_validation=False)
+    assert result["status"] == "passed", result["errors"]
+    assert result["artifact_count"] == 2
+
+    options["models"]["base.pt"]["logical_heads"]["new"][
+        "owner"
+    ] = "frozen_base_model"
+    result = verify_ascend_artifacts(options, require_validation=False)
+    assert "logical_heads_contract_mismatch:dual_detector" in result["errors"]
+
+
 def test_candidate_runtime_requires_explicit_process_authorization(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
