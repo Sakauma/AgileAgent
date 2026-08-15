@@ -69,6 +69,7 @@ KNOWN_SECTION_KEYS = {
     "native_backend": {"library", "base_engine", "engines", "context_engine", "precision", "require_exact_gpu", "validated"},
     "ascend_backend": {
         "device_id", "soc_version", "cann_version", "precision", "execution_mode",
+        "model_layout",
         "encoded_preprocessing", "memory_mode", "schedule_mode", "detailed_event_timing",
         "submit_order", "collect_order", "stream_priorities",
         "validated", "validation_candidate", "validation_report",
@@ -490,6 +491,12 @@ def validate_config(
                 errors.append(f"TensorRT后端缺少 native_backend.{key}")
 
     ascend = _require_mapping(config, "ascend_backend", errors)
+    model_layout = ascend.get("model_layout", "independent_models_v1")
+    if model_layout not in {
+        "independent_models_v1",
+        "shared_backbone_dual_head_v1",
+    }:
+        errors.append("ascend_backend.model_layout非法")
     if not str(ascend.get("device_id", "")).isdigit():
         errors.append("ascend_backend.device_id必须是非负设备编号")
     if ascend.get("soc_version") != "Ascend310B1":
@@ -605,13 +612,14 @@ def validate_config(
             unknown = sorted(set(entry) - {
                 "path", "sha256", "output_contract", "candidate_confidence",
                 "iou_threshold", "max_det", "candidate_capacity",
-                "anchor_count", "class_count",
+                "anchor_count", "class_count", "logical_heads",
             })
             if unknown:
                 errors.append(f"ascend_backend.models.{source}包含未知字段：" + ", ".join(unknown))
             output_contract = entry.get("output_contract", "raw_yolo_v1")
             if output_contract not in {
                 "raw_yolo_v1", "decoded_candidates_v1", "detections_v1",
+                "raw_dual_head_v1",
             }:
                 errors.append(f"ascend_backend.models.{source}.output_contract非法")
             contract_fields = {
@@ -685,7 +693,95 @@ def validate_config(
                     errors.append(
                         f"ascend_backend.models.{source}.candidate_capacity超出候选总数"
                     )
-            elif configured_contract_fields:
+            elif output_contract == "raw_dual_head_v1":
+                if configured_contract_fields:
+                    errors.append(
+                        f"ascend_backend.models.{source}.raw_dual_head_v1禁止配置设备后处理参数"
+                    )
+                logical_heads = entry.get("logical_heads")
+                if not isinstance(logical_heads, Mapping) or set(logical_heads) != {
+                    "old", "new",
+                }:
+                    errors.append(
+                        f"ascend_backend.models.{source}.logical_heads必须包含old/new"
+                    )
+                else:
+                    expected_owners = {
+                        "old": "frozen_base_model",
+                        "new": "incremental_model",
+                    }
+                    output_indices = set()
+                    for head_name, head in logical_heads.items():
+                        if not isinstance(head, Mapping) or set(head) != {
+                            "owner", "class_map", "class_count",
+                            "anchor_count", "output_index",
+                        }:
+                            errors.append(
+                                f"ascend_backend.models.{source}.logical_heads.{head_name}字段非法"
+                            )
+                            continue
+                        if head.get("owner") != expected_owners[head_name]:
+                            errors.append(
+                                f"ascend_backend.models.{source}.logical_heads.{head_name}.owner非法"
+                            )
+                        class_map = head.get("class_map")
+                        class_count = head.get("class_count")
+                        anchor_count = head.get("anchor_count")
+                        output_index = head.get("output_index")
+                        if (
+                            not isinstance(class_map, Mapping)
+                            or not class_map
+                            or any(
+                                isinstance(key, bool)
+                                or not str(key).isdigit()
+                                or isinstance(value, bool)
+                                or not isinstance(value, int)
+                                or value < 0
+                                for key, value in class_map.items()
+                            )
+                        ):
+                            errors.append(
+                                f"ascend_backend.models.{source}.logical_heads.{head_name}.class_map非法"
+                            )
+                        if (
+                            isinstance(class_count, bool)
+                            or not isinstance(class_count, int)
+                            or class_count <= 0
+                            or isinstance(class_map, Mapping)
+                            and len(class_map) != class_count
+                        ):
+                            errors.append(
+                                f"ascend_backend.models.{source}.logical_heads.{head_name}.class_count非法"
+                            )
+                        elif isinstance(class_map, Mapping) and {
+                            int(key) for key in class_map
+                        } != set(range(class_count)):
+                            errors.append(
+                                f"ascend_backend.models.{source}.logical_heads.{head_name}.class_map本地类别必须连续"
+                            )
+                        if (
+                            isinstance(anchor_count, bool)
+                            or not isinstance(anchor_count, int)
+                            or anchor_count <= 0
+                        ):
+                            errors.append(
+                                f"ascend_backend.models.{source}.logical_heads.{head_name}.anchor_count非法"
+                            )
+                        if (
+                            isinstance(output_index, bool)
+                            or not isinstance(output_index, int)
+                            or output_index not in {0, 1}
+                        ):
+                            errors.append(
+                                f"ascend_backend.models.{source}.logical_heads.{head_name}.output_index非法"
+                            )
+                        else:
+                            output_indices.add(output_index)
+                    if output_indices != {0, 1}:
+                        errors.append(
+                            f"ascend_backend.models.{source}.logical_heads.output_index必须为0/1"
+                        )
+            elif configured_contract_fields or "logical_heads" in entry:
                 errors.append(
                     f"ascend_backend.models.{source}.raw_yolo_v1禁止配置设备后处理参数"
                 )
@@ -694,6 +790,18 @@ def validate_config(
                 not isinstance(digest, str) or len(digest) != 64
             ):
                 errors.append(f"已验收Ascend OM缺少SHA256：{source}")
+        dual_entries = sum(
+            isinstance(entry, Mapping)
+            and entry.get("output_contract") == "raw_dual_head_v1"
+            for entry in ascend_models.values()
+        )
+        if model_layout == "shared_backbone_dual_head_v1":
+            if dual_entries != 1:
+                errors.append("shared_backbone_dual_head_v1要求恰好一个raw_dual_head_v1 OM")
+            if inference.get("imgsz") != inference.get("specialist_imgsz"):
+                errors.append("共享双head要求Base与Specialist推理分辨率一致")
+        elif dual_entries:
+            errors.append("raw_dual_head_v1要求shared_backbone_dual_head_v1布局")
     context_model = ascend.get("context_model")
     if not isinstance(context_model, Mapping) or not context_model.get("path"):
         errors.append("ascend_backend.context_model非法")

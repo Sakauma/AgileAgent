@@ -1266,7 +1266,7 @@ def validate_dvpp_scene_resize_stages(value: Any) -> tuple[tuple[int, int], ...]
 
 
 class AscendEncodedPreprocessor:
-    """Decode one fixed production PNG into the three resident AIPP inputs."""
+    """Decode one fixed production PNG into the resident AIPP inputs."""
 
     source_width = 640
     source_height = 512
@@ -1275,16 +1275,20 @@ class AscendEncodedPreprocessor:
         self,
         runtime: AscendAclRuntime,
         base_model: AscendAclModel,
-        specialist_model: AscendAclModel,
+        specialist_model: AscendAclModel | None,
         context_model: AscendAclModel,
         scene_resize_stages: Any = None,
         max_encoded_bytes: int = 2 * 1024 * 1024,
     ) -> None:
-        contracts = (
+        contracts = [
             (base_model, (1, 736, 896, 3), "base"),
-            (specialist_model, (1, 512, 640, 3), "specialist"),
             (context_model, (1, 160, 160, 3), "context"),
-        )
+        ]
+        if specialist_model is not None:
+            contracts.insert(
+                1,
+                (specialist_model, (1, 512, 640, 3), "specialist"),
+            )
         for model, shape, name in contracts:
             if model.runtime is not runtime:
                 raise RuntimeError(f"Ascend {name}模型没有共享同一ACL Runtime")
@@ -1419,8 +1423,10 @@ class AscendEncodedPreprocessor:
         self.base_ready_event = _value(
             acl.rt.create_event(), "acl.rt.create_event(base input)"
         )
-        self.specialist_ready_event = _value(
-            acl.rt.create_event(), "acl.rt.create_event(specialist input)"
+        self.specialist_ready_event = (
+            _value(acl.rt.create_event(), "acl.rt.create_event(specialist input)")
+            if self.specialist_model is not None
+            else None
         )
         self.context_ready_event = _value(
             acl.rt.create_event(), "acl.rt.create_event(context input)"
@@ -1443,15 +1449,30 @@ class AscendEncodedPreprocessor:
             "acl.media.dvpp_create_channel",
         )
 
+        expected_decoded_size = (
+            _align(self.source_width, 16)
+            * 3
+            * _align(self.source_height, 2)
+        )
+        if self.specialist_model is not None:
+            decoded_pointer = self.specialist_model.input_device
+            if expected_decoded_size != self.specialist_model.input_size:
+                raise RuntimeError("Ascend增量OM输入大小与RGB888 PNGD输出不一致")
+        else:
+            decoded_pointer = self._dvpp_buffer(
+                expected_decoded_size,
+                "acl.media.dvpp_malloc(decoded input)",
+            )
         self.decoded_desc, self.decoded_width_stride, _, decoded_size = (
             self._picture_desc(
-                self.specialist_model.input_device,
+                decoded_pointer,
                 self.source_width,
                 self.source_height,
             )
         )
-        if decoded_size != self.specialist_model.input_size:
-            raise RuntimeError("Ascend增量OM输入大小与RGB888 PNGD输出不一致")
+        if decoded_size != expected_decoded_size:
+            raise RuntimeError("Ascend RGB888 PNGD输出大小计算不一致")
+        self.decoded_size = decoded_size
 
         base_resize_size = _align(896, 16) * 3 * _align(717, 2)
         self.base_resize_pointer = self._dvpp_buffer(
@@ -1573,15 +1594,19 @@ class AscendEncodedPreprocessor:
                     "acl.media.dvpp_png_predict_dec_size",
                 )
             )
-            if predicted_size != self.specialist_model.input_size:
-                raise ValueError("Ascend DVPP PNG解码大小与增量OM输入不一致")
+            if predicted_size != self.decoded_size:
+                raise ValueError("Ascend DVPP PNG解码大小与固定RGB输出不一致")
             started = time.perf_counter_ns()
             if self.prepared_runs:
                 reset_events = [
                     (self.base_ready_event, "base"),
-                    (self.specialist_ready_event, "specialist"),
                     (self.context_ready_event, "context"),
                 ]
+                if self.specialist_ready_event is not None:
+                    reset_events.insert(
+                        1,
+                        (self.specialist_ready_event, "specialist"),
+                    )
                 if self.detailed_event_timing:
                     reset_events.insert(0, (self.timing_start_event, "DVPP start"))
                 for event, name in reset_events:
@@ -1604,10 +1629,11 @@ class AscendEncodedPreprocessor:
                 ),
                 "acl.media.dvpp_png_decode_async",
             )
-            _require(
-                acl.rt.record_event(self.specialist_ready_event, self.stream),
-                "acl.rt.record_event(specialist input)",
-            )
+            if self.specialist_ready_event is not None:
+                _require(
+                    acl.rt.record_event(self.specialist_ready_event, self.stream),
+                    "acl.rt.record_event(specialist input)",
+                )
             _require(
                 acl.media.dvpp_vpc_resize_async(
                     self.channel,
@@ -2155,6 +2181,38 @@ class AscendDetectorExecutionHandle:
             return self._result
 
 
+class AscendDualDetectorExecutionHandle:
+    def __init__(
+        self,
+        backend: "AscendAclBackend",
+        model_handle: AscendAclExecutionHandle,
+        info: Mapping[str, float | int],
+        options: Mapping[str, Any],
+        preprocess_ms: float,
+    ) -> None:
+        self.backend = backend
+        self.model_handle = model_handle
+        self.info = dict(info)
+        self.options = dict(options)
+        self.preprocess_ms = float(preprocess_ms)
+        self._result: tuple[AscendResult, AscendResult] | None = None
+        self._lock = threading.Lock()
+
+    def result(self) -> tuple[AscendResult, AscendResult]:
+        with self._lock:
+            if self._result is not None:
+                return self._result
+            outputs, execution = self.model_handle.result()
+            self._result = self.backend._dual_results_from_outputs(
+                outputs,
+                self.info,
+                self.options,
+                self.preprocess_ms,
+                execution,
+            )
+            return self._result
+
+
 class AscendAclBackend:
     name = "ascend_acl"
 
@@ -2171,6 +2229,7 @@ class AscendAclBackend:
         self.output_contract = str(entry.get("output_contract", "raw_yolo_v1"))
         if self.output_contract not in {
             "raw_yolo_v1", "decoded_candidates_v1", "detections_v1",
+            "raw_dual_head_v1",
         }:
             raise RuntimeError(f"Ascend检测输出契约非法：{self.output_contract}")
         self.candidate_confidence = float(entry.get("candidate_confidence", 0.0))
@@ -2179,9 +2238,39 @@ class AscendAclBackend:
         self.candidate_capacity = int(entry.get("candidate_capacity", 0))
         self.anchor_count = int(entry.get("anchor_count", 0))
         self.class_count = int(entry.get("class_count", 0))
+        self.logical_heads = dict(entry.get("logical_heads") or {})
+        self.is_shared_dual_head = self.output_contract == "raw_dual_head_v1"
         if self.output_contract == "raw_yolo_v1":
             if len(self.model.output_contracts) != 1:
                 raise RuntimeError("raw_yolo_v1 OM必须只有一个原始检测输出")
+        elif self.output_contract == "raw_dual_head_v1":
+            expected = []
+            for name in ("old", "new"):
+                head = dict(self.logical_heads.get(name) or {})
+                expected.append(
+                    (
+                        int(head.get("output_index", -1)),
+                        (
+                            1,
+                            4 + int(head.get("class_count", 0)),
+                            int(head.get("anchor_count", 0)),
+                        ),
+                        np.dtype(np.float32),
+                    )
+                )
+            expected.sort(key=lambda row: row[0])
+            actual = tuple(
+                (index, tuple(contract["shape"]), contract["dtype"])
+                for index, contract in enumerate(self.model.output_contracts)
+            )
+            if (
+                len(self.logical_heads) != 2
+                or [row[0] for row in expected] != [0, 1]
+                or actual != tuple(expected)
+            ):
+                raise RuntimeError(
+                    f"raw_dual_head_v1 OM输出契约错误：{actual} != {tuple(expected)}"
+                )
         elif self.output_contract == "detections_v1":
             expected = (
                 ((self.contract_max_det, 4), np.dtype(np.float32)),
@@ -2270,6 +2359,10 @@ class AscendAclBackend:
         confidence = float(options.get("conf", 0.5))
         iou = float(options.get("iou", 0.7))
         max_det = int(options.get("max_det", 300))
+        if self.output_contract == "raw_dual_head_v1":
+            return self._dual_results_from_outputs(
+                outputs, info, options, preprocess_ms, execution
+            )[0]
         if self.output_contract == "raw_yolo_v1":
             rows = yolo_detections(outputs[0], info, confidence, iou, max_det)
         elif self.output_contract == "detections_v1":
@@ -2321,6 +2414,140 @@ class AscendAclBackend:
             )
         self._last_timings = timings
         return AscendResult(rows, timings)
+
+    def _dual_results_from_outputs(
+        self,
+        outputs: Sequence[np.ndarray],
+        info: Mapping[str, float | int],
+        options: Mapping[str, Any],
+        preprocess_ms: float,
+        execution: Mapping[str, float],
+    ) -> tuple[AscendResult, AscendResult]:
+        if not self.is_shared_dual_head or len(outputs) != 2:
+            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
+        confidence = float(options.get("conf", 0.5))
+        iou = float(options.get("iou", 0.7))
+        max_det = int(options.get("max_det", 300))
+        parsed: dict[str, tuple[list[dict[str, Any]], float]] = {}
+        for name in ("old", "new"):
+            head = dict(self.logical_heads[name])
+            started = time.perf_counter_ns()
+            rows = yolo_detections(
+                outputs[int(head["output_index"])],
+                info,
+                confidence,
+                iou,
+                max_det,
+            )
+            parsed[name] = (
+                rows,
+                (time.perf_counter_ns() - started) / 1_000_000.0,
+            )
+        old_timings = {
+            "preprocess": float(preprocess_ms),
+            "inference": float(execution["inference_ms"]),
+            "postprocess": parsed["old"][1],
+        }
+        if "submit_ms" in execution:
+            old_timings.update(
+                {
+                    "ascend_submit": float(execution["submit_ms"]),
+                    "ascend_wait": float(execution["wait_ms"]),
+                    "ascend_input_copy": float(execution["input_copy_ms"]),
+                    "ascend_output_copy": float(execution["output_copy_ms"]),
+                }
+            )
+        new_timings = {
+            "preprocess": 0.0,
+            "inference": 0.0,
+            "postprocess": parsed["new"][1],
+        }
+        self._last_timings = old_timings
+        return (
+            AscendResult(parsed["old"][0], old_timings),
+            AscendResult(parsed["new"][0], new_timings),
+        )
+
+    def _detector_input(
+        self, image: Image.Image, options: Mapping[str, Any]
+    ) -> tuple[np.ndarray, dict[str, float | int], float]:
+        preprocess_started = time.perf_counter_ns()
+        batch, info = detector_tensor(
+            image,
+            self.expected_height,
+            self.expected_width,
+            options.get("_ascend_rgb_array"),
+            self.input_mode,
+        )
+        preprocess_ms = (
+            time.perf_counter_ns() - preprocess_started
+        ) / 1_000_000.0
+        return batch, info, preprocess_ms
+
+    def predict_dual(
+        self, image: Image.Image, **options: Any
+    ) -> tuple[AscendResult, AscendResult]:
+        if not self.is_shared_dual_head:
+            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
+        if (
+            self.model.execution_mode == "async_stream"
+            and self.model.schedule_mode == "unified_enqueue"
+        ):
+            return self.submit_dual(image, **options).result()
+        batch, info, preprocess_ms = self._detector_input(image, options)
+        if self.model.execution_mode == "async_stream":
+            outputs, execution = self.model.execute_threaded(batch)
+        else:
+            outputs, inference_ms = self.model.execute(batch)
+            execution = {"inference_ms": inference_ms}
+        return self._dual_results_from_outputs(
+            outputs, info, options, preprocess_ms, execution
+        )
+
+    def submit_dual(
+        self, image: Image.Image, **options: Any
+    ) -> AscendDualDetectorExecutionHandle:
+        if not self.is_shared_dual_head:
+            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
+        batch, info, preprocess_ms = self._detector_input(image, options)
+        return AscendDualDetectorExecutionHandle(
+            self,
+            self.model.submit(batch),
+            info,
+            options,
+            preprocess_ms,
+        )
+
+    def predict_dual_preloaded(
+        self,
+        info: Mapping[str, float | int],
+        ready_event: Any,
+        **options: Any,
+    ) -> tuple[AscendResult, AscendResult]:
+        if not self.is_shared_dual_head:
+            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
+        if self.model.schedule_mode == "unified_enqueue":
+            return self.submit_dual_preloaded(
+                info, ready_event, **options
+            ).result()
+        outputs, execution = self.model.execute_preloaded_threaded(ready_event)
+        return self._dual_results_from_outputs(outputs, info, options, 0.0, execution)
+
+    def submit_dual_preloaded(
+        self,
+        info: Mapping[str, float | int],
+        ready_event: Any,
+        **options: Any,
+    ) -> AscendDualDetectorExecutionHandle:
+        if not self.is_shared_dual_head:
+            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
+        return AscendDualDetectorExecutionHandle(
+            self,
+            self.model.submit_preloaded(ready_event),
+            info,
+            options,
+            0.0,
+        )
 
     def predict(self, image: Image.Image, **options: Any) -> AscendResult:
         if (
