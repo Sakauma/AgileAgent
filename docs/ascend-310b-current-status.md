@@ -277,6 +277,58 @@ P3 结论为：**实现与异常安全门禁完成，但 pinned 候选拒绝晋�
 
 最终结论为：**本轮 P0–P3 已全部执行并留下可复核报告，但工程未达到最终 `≤33.33 ms` 均值和 `≤35 ms` P95 目标。** 没有任何候选同时满足性能、精度和发布门禁，因此正式 release、正式 OM 和 `8501` 均保持原状。P0 的有界 multipart、P1 的 records/路由优化和 P2/P3 的诊断工具保留为后续工作的代码基础，但不得据此宣称 Ascend 310B 端到端指标已经达标。
 
+## P4 P3 运行时消融（2026-08-15）
+
+P4 实现提交为 `e8bb1072dd7a673015a6fc9515594027daeaf915`；首次板端启动发现运行时代码已经消费 `schedule_mode` 和 `detailed_event_timing`，但配置白名单遗漏这两个字段。修复提交 `1ffa6699a7022af3b35f291d4560bea07be0bdb1` 增加字段枚举、类型校验和完整配置回归。两个提交均已推送，板端 clean Git 工作副本通过带 prerequisite 和 SHA256 校验的增量 bundle `--ff-only` 快进到 `1ffa669`。本地只使用既有 WSL `.venv`，全量回归为 `234 passed, 1 skipped`，没有安装依赖或下载 CPU PyTorch。
+
+实现将 P3 的两项变化拆为独立开关：
+
+- `threaded_execute` 恢复每个模型在线程池内执行、等待自身 stream 并同步 D2H 的 P2 调度；
+- `unified_enqueue` 保留 Scene→Base→Specialist 统一提交、异步 D2H 和最终收集；
+- `memory_mode` 继续独立选择 `pageable` 或 `pinned`；
+- `detailed_event_timing: false` 在正式轮保留模型 inference event，但不查询 copy/DVPP 细分 event；另跑开启详细 event 的诊断轮评估插桩扰动。
+
+### 复现门禁与环境漂移
+
+最初两轮 A 的均值为 `41.403 ms` 和 `42.056 ms`。审计发现板载 `xscreensaver` 在两轮之间启动 `/usr/libexec/xscreensaver/m6502 -root`，持续占用约 `38%` Host CPU，导致两轮负载条件不一致。正式矩阵没有停止桌面或修改系统服务，只在每轮开始前使用标准 `xscreensaver-command -deactivate` 重置空闲计时，并确认除常驻 `xscreensaver-systemd` 外没有屏保子进程；最初两份报告只保留为漂移诊断证据，不参与候选比较。
+
+受控 A 两轮为 `41.173 / 46.955 / 48.200 ms` 和 `41.276 / 47.400 / 48.300 ms`。相对 P2 的均值一轮略低于 `-2%` 下界，P99 两轮快 `2.2%–2.4%`；开启 `detailed_event_timing` 的独立 890 请求诊断轮为 `41.689 / 47.500 / 48.800 ms`，Mean/P95/P99 全部落在 P2 `±2%` 复现带内。关闭详细 event 查询使两轮 A 平均均值相对诊断轮减少 `1.11%`，因此复现偏差可由按计划关闭插桩解释，P4 矩阵继续使用受控、关闭插桩的 A 作为公平对照。
+
+### 四候选端到端结果
+
+每个候选均使用独立 `8502` 配置执行两轮 30 次预热加 10×89 单并发回环 HTTP keep-alive 请求，`confidence=0.5`。三个 OM、AIPP、输入集和构建清单 SHA256 `a62131586d33ade4090dbf925fb1adca3ad9a852049d1780fe4b990097c3d1d4` 均未改变；板端未运行 Web pytest。
+
+| 候选 | 组合 | Run 1 Mean / P95 / P99 | Run 2 Mean / P95 / P99 | 相对 P2 均值 | 结论 |
+| --- | --- | ---: | ---: | ---: | --- |
+| A | pageable + threaded | `41.173 / 46.955 / 48.200 ms` | `41.276 / 47.400 / 48.300 ms` | `-2.07% / -1.82%` | 公平对照；Run 2 未达 `2%`，但按规则在无胜者时保留 |
+| B | pageable + unified | `45.170 / 50.800 / 52.211 ms` | `45.093 / 50.900 / 52.300 ms` | `+7.44% / +7.25%` | 两轮均显著回退，淘汰 |
+| C | pinned + threaded | `41.299 / 47.100 / 48.422 ms` | `41.224 / 47.255 / 48.300 ms` | `-1.77% / -1.95%` | 两轮改善均不足 `2%`；相对 A 平均慢 `0.09%`，淘汰 |
+| D | pinned + unified | `44.353 / 50.000 / 51.500 ms` | `44.313 / 50.000 / 51.200 ms` | `+5.50% / +5.40%` | 两轮均显著回退，淘汰 |
+
+8 份正式报告均为 890 个成功请求，Git head、配置哈希和构建清单一致；按 round、文件名和检测数量逐请求对齐，相对 A Run 1 的不一致数均为 0。B、D 说明统一提交是 P3 回退的主要来源；C 说明锁页内存单独没有稳定收益。没有候选在两轮中都满足“均值改善至少 `2%` 且 P95/P99 不恶化超过 `2%`”，P4 因此按规则保留 **pageable + threaded_execute**，作为 P5 关键路径调度的起点。该结果仍继承 P0 的阈值边界和 provenance 阻断，不晋级正式版。
+
+| 配置 | SHA256 |
+| --- | --- |
+| `p4-a-pageable-threaded.yaml` | `bab2215c5d4c3c9886e33bd277b47fc18cab28d3fc270ab8ee38da14df5d9ebf` |
+| `p4-b-pageable-unified.yaml` | `d50c6605473623ca1fc4ab81ed4314df34967f3b4c88efbbe85b17f408f14d91` |
+| `p4-c-pinned-threaded.yaml` | `c5a36443e81a819ca5a7e9d455eaf40058a61327f8d82aa799281f50d57e976c` |
+| `p4-d-pinned-unified.yaml` | `ab85f43a6701991e3c6d5bcb66efc5efdd5559b22bde37c17d8fb448c98afd82` |
+| `p4-a-pageable-threaded-events.yaml` | `d993be155d2bb083e75853a069bb356399209a4f70c6fd9e468c4de6ebe620a7` |
+
+| 报告 | SHA256 |
+| --- | --- |
+| `p4-a-controlled-run1-1ffa669-890-e2e.json` | `bd84cbe5a3adbebf592ef6b19dae50cbb3dd0b82c1b2ee9d151bf93ad6f02282` |
+| `p4-a-controlled-run2-1ffa669-890-e2e.json` | `dddbd6958d65592b7cbec8ce09cf17b1b3363f84598d35b4572a2b8099244f81` |
+| `p4-b-run1-1ffa669-890-e2e.json` | `a98a1066f5215d33a43673c6bf732696a97406948937eb9050610bfa1cf59033` |
+| `p4-b-run2-1ffa669-890-e2e.json` | `bd342c78f8784db28e5e09a31a0866be088b0023b11610267e88757b6ef330a9` |
+| `p4-c-run1-1ffa669-890-e2e.json` | `724df4cae758a7e607cf4316db9c03acef9f0f6f58cc06cfdd47b2c11ad2c86e` |
+| `p4-c-run2-1ffa669-890-e2e.json` | `cf7f2b9cf326a350252c3e30295c74ab5f2ea56f1c4c1b977ff66d58a1c920ac` |
+| `p4-d-run1-1ffa669-890-e2e.json` | `c7308472b7f3d33f184420712f5fd781ce8b53a384c55ade0239b1fa715e0f21` |
+| `p4-d-run2-1ffa669-890-e2e.json` | `0c25674093f9be8b86dd08cedaa1d911af5a707deb20e8a20c9fd72ada46dcbf` |
+| `p4-a-events-diagnostic-1ffa669-890-e2e.json` | `496593a17b43e7b3fd6e83527751bf85277c95c3e687174ea5982c10de19b00d` |
+
+P4 测量和完整性校验结束后 `8502` 已停止；正式 `8501` 在同步、启动、切换候选、测量和停止期间始终保持 `ready`。
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
@@ -297,7 +349,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `231 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `234 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
 
 ## 运行态检查
 
