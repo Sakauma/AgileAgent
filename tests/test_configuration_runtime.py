@@ -27,7 +27,10 @@ from fair_agent.modules.tensorrt_export import (
     prepare_calibration_manifest,
     write_export_hashes,
 )
-from fair_agent.modules.api_benchmark import _performance_assessment
+from fair_agent.modules.api_benchmark import (
+    _performance_assessment,
+    business_payload_sha256,
+)
 from fair_agent.modules.tensorrt_validation import (
     _apply_protocol_thresholds,
     _competition_accuracy_gates,
@@ -102,6 +105,36 @@ def test_ascend_p5_order_and_priority_fields_are_validated() -> None:
     config["ascend_backend"]["stream_priorities"]["specialist"] = "urgent"
     with pytest.raises(ValueError, match="stream_priorities"):
         validate_config(config)
+
+
+def test_api_business_signature_ignores_only_request_timing_fields() -> None:
+    payload = {
+        "filename": "sample.png",
+        "detections": [{"class_id": 1, "confidence": 0.75}],
+        "agent": {"mode": "automatic", "activated_classes": []},
+        "inference_ms": 10.0,
+        "timings": {"engine_total_ms": 12.0},
+        "queue_wait_ms": 0.1,
+        "system_total_ms": 13.0,
+    }
+    changed_timing = copy.deepcopy(payload)
+    changed_timing.update(
+        {
+            "inference_ms": 99.0,
+            "timings": {"engine_total_ms": 101.0},
+            "queue_wait_ms": 2.0,
+            "system_total_ms": 105.0,
+        }
+    )
+    changed_business = copy.deepcopy(payload)
+    changed_business["detections"][0]["class_id"] = 2
+
+    assert business_payload_sha256(payload) == business_payload_sha256(
+        changed_timing
+    )
+    assert business_payload_sha256(payload) != business_payload_sha256(
+        changed_business
+    )
 
 
 def test_cli_overrides_are_typed_and_process_local() -> None:
