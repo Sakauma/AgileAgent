@@ -712,10 +712,16 @@ def validate_config(
                     }
                     output_indices = set()
                     for head_name, head in logical_heads.items():
-                        if not isinstance(head, Mapping) or set(head) != {
+                        required_head_fields = {
                             "owner", "class_map", "class_count",
                             "anchor_count", "output_index",
-                        }:
+                        }
+                        if (
+                            not isinstance(head, Mapping)
+                            or not required_head_fields.issubset(head)
+                            or set(head) - required_head_fields
+                            - {"candidate_confidence"}
+                        ):
                             errors.append(
                                 f"ascend_backend.models.{source}.logical_heads.{head_name}字段非法"
                             )
@@ -728,6 +734,7 @@ def validate_config(
                         class_count = head.get("class_count")
                         anchor_count = head.get("anchor_count")
                         output_index = head.get("output_index")
+                        candidate_confidence = head.get("candidate_confidence")
                         if (
                             not isinstance(class_map, Mapping)
                             or not class_map
@@ -777,6 +784,14 @@ def validate_config(
                             )
                         else:
                             output_indices.add(output_index)
+                        if candidate_confidence is not None and (
+                            isinstance(candidate_confidence, bool)
+                            or not isinstance(candidate_confidence, (int, float))
+                            or not 0.0 <= float(candidate_confidence) < 1.0
+                        ):
+                            errors.append(
+                                f"ascend_backend.models.{source}.logical_heads.{head_name}.candidate_confidence非法"
+                            )
                     if output_indices != {0, 1}:
                         errors.append(
                             f"ascend_backend.models.{source}.logical_heads.output_index必须为0/1"

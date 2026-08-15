@@ -2431,11 +2431,15 @@ class AscendAclBackend:
         parsed: dict[str, tuple[list[dict[str, Any]], float]] = {}
         for name in ("old", "new"):
             head = dict(self.logical_heads[name])
+            head_confidence = max(
+                confidence,
+                float(head.get("candidate_confidence", confidence)),
+            )
             started = time.perf_counter_ns()
             rows = yolo_detections(
                 outputs[int(head["output_index"])],
                 info,
-                confidence,
+                head_confidence,
                 iou,
                 max_det,
             )

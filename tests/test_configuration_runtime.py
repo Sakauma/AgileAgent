@@ -175,6 +175,7 @@ def test_ascend_p10_shared_dual_head_contract_is_fully_owned() -> None:
                     "class_count": 1,
                     "anchor_count": 13524,
                     "output_index": 1,
+                    "candidate_confidence": 0.3,
                 },
             },
         }
@@ -185,6 +186,10 @@ def test_ascend_p10_shared_dual_head_contract_is_fully_owned() -> None:
     with pytest.raises(ValueError, match="owner"):
         validate_config(config)
     entry["logical_heads"]["new"]["owner"] = "incremental_model"
+    entry["logical_heads"]["new"]["candidate_confidence"] = 1.0
+    with pytest.raises(ValueError, match="candidate_confidence"):
+        validate_config(config)
+    entry["logical_heads"]["new"]["candidate_confidence"] = 0.3
     entry["logical_heads"]["old"]["class_map"] = {"1": 0, "2": 1, "3": 3}
     with pytest.raises(ValueError, match="本地类别必须连续"):
         validate_config(config)
