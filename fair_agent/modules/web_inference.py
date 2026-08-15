@@ -1070,6 +1070,35 @@ class WebInferenceEngine:
         result["queue_wait_ms"] = queue_wait_ms
         return result
 
+    def predict_encoded_batch(
+        self,
+        items: Iterable[tuple[bytes, str]],
+        confidence: float | None = None,
+        incremental_protocol: str | None = "auto",
+    ) -> List[Dict[str, Any]]:
+        rows = list(items)
+        if not rows:
+            raise ValueError("请选择至少一张图像。")
+        if not all(self.accepts_encoded(data) for data, _filename in rows):
+            raise ValueError("批量Ascend编码输入不符合DVPP固定生产契约")
+        resolved_confidence = (
+            self.default_confidence if confidence is None else confidence
+        )
+        results, queue_wait_ms = self.queue.run(
+            lambda: [
+                self._predict_encoded_unlocked(
+                    data,
+                    filename,
+                    resolved_confidence,
+                    incremental_protocol,
+                )
+                for data, filename in rows
+            ]
+        )
+        for result in results:
+            result["queue_wait_ms"] = queue_wait_ms
+        return results
+
     def _predict_encoded_unlocked(
         self,
         data: bytes,
