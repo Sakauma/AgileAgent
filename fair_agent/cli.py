@@ -497,27 +497,41 @@ def cmd_detect(args: argparse.Namespace) -> int:
             if profile.get("deployment") == "single_detector":
                 student_id = f"{profile['profile_id']}_student"
                 prototype = profile.get("positive_prototype")
+                new_global_id = int(profile["new_global_id"])
+                old_global_ids = sorted(
+                    set(base_mapping.values()) - {new_global_id}
+                )
                 settings.update({
                     "detector_path": resolve_path(profile["model_weight"]),
                     "class_names": class_names,
-                    "base_class_ids": list(base_mapping.values()),
+                    "base_class_ids": old_global_ids,
                     "base_local_to_global": base_mapping,
                     "generation_id": f"experiment-{profile['profile_id']}",
                     "base_model_id": student_id,
                     "class_owners": {
-                        global_id: student_id for global_id in base_mapping.values()
+                        **{
+                            global_id: "frozen_base_model"
+                            for global_id in old_global_ids
+                        },
+                        new_global_id: "incremental_model",
                     },
                     "protocols": {},
                     "unified_class_gates": {
                         "activation_thresholds": {
-                            int(profile["new_global_id"]): float(profile["activation_threshold"])
+                            new_global_id: float(profile["activation_threshold"])
                         },
+                        "protocol_id": str(profile["profile_id"]),
+                        "class_names": {
+                            new_global_id: class_names[new_global_id]
+                        },
+                        "new_map50": float(profile.get("new_map50", 0.0)),
+                        "krr": float(profile.get("krr", 0.0)),
                         "context_prior": dict(profile.get("context_prior") or {}),
                         "context_gate": dict(
                             profile.get("context_gate") or {"enabled": False}
                         ),
                         "positive_prototypes": (
-                            {int(profile["new_global_id"]): prototype}
+                            {new_global_id: prototype}
                             if isinstance(prototype, dict) else {}
                         ),
                     },

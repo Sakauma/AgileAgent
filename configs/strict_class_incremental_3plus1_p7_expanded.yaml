@@ -1,0 +1,178 @@
+schema_version: 1
+seed: 20260705
+model: models/pretrained/yolo11s.pt
+
+paths:
+  source_splits:
+    train: splits/pool_train.txt
+    val: splits/pool_dev.txt
+    lock: splits/mixed_test.txt
+  base_test_split: splits/strict_3plus1/base_test.txt
+  shared_base_checkpoint: models/production/incremental_detection/three_class_base_detector.pt
+  dataset_root: incremental_strict_3plus1_p7
+  run_root: runs/detect/strict_3plus1_p7
+  report_root: reports/strict_3plus1_p7
+  freeze_root: models/profiles
+
+runtime:
+  preferred_devices: ["0"]
+  parallel: false
+  workers: 4
+  env:
+    NCCL_P2P_DISABLE: "1"
+    NCCL_IB_DISABLE: "1"
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+
+training_policy:
+  require_full_epochs: true
+  checkpoint_metric: map50
+
+common:
+  imgsz: 896
+  batch: 4
+  optimizer: AdamW
+  patience: 0
+  cache: false
+  plots: true
+  amp: true
+  deterministic: true
+  weight_decay: 0.0005
+
+# Base 由 production checkpoint 复用；保留本段只用于统一预检契约。
+base_train:
+  epochs: 160
+  imgsz: 896
+  lr0: 0.001
+  lrf: 0.01
+  cos_lr: true
+  close_mosaic: 20
+  mosaic: 0.80
+  mixup: 0.0
+  copy_paste: 0.0
+  multi_scale: 0.0
+  degrees: 3.0
+  translate: 0.15
+  scale: 0.50
+  fliplr: 0.50
+  hsv_h: 0.0
+  hsv_s: 0.0
+  hsv_v: 0.30
+
+# 双检测器回滚契约保留，但 expanded 路径不执行本段。
+incremental_train:
+  epochs: 80
+  imgsz: 896
+  lr0: 0.001
+  lrf: 0.01
+  cos_lr: true
+  close_mosaic: 10
+  mosaic: 1.0
+  mixup: 0.0
+  copy_paste: 0.0
+
+student_train:
+  epochs: 80
+  imgsz: 896
+  lr0: 0.003
+  lrf: 0.01
+  cos_lr: true
+  close_mosaic: 10
+  mosaic: 1.0
+  mixup: 0.0
+  copy_paste: 0.0
+  multi_scale: 0.0
+  degrees: 3.0
+  translate: 0.15
+  scale: 0.50
+  fliplr: 0.50
+  hsv_h: 0.0
+  hsv_s: 0.0
+  hsv_v: 0.30
+
+adaptation:
+  mode: expanded_single_student
+  student_init: models/pretrained/yolo11s.pt
+  max_old_channel_drift: 0.0
+
+agent_structure:
+  architecture: unified_incremental_detector
+  inference_scope: every_image
+  old_class_owner: frozen_base_model
+  new_class_owner: incremental_model
+  fusion_level: logical_class_ownership
+  scene_hard_routing: false
+  label_aware_routing: false
+  filename_class_routing: false
+
+predict:
+  conf: 0.01
+  iou: 0.70
+  max_det: 300
+  batch: 4
+  evaluation_batch: 1
+  rect: true
+  base_imgsz: 896
+  incremental_imgsz: 896
+  augment: false
+
+fusion:
+  nms_iou: 0.60
+  cross_class:
+    enabled: true
+    iou: 0.50
+    base_confidence: 0.50
+    incremental_margin: 0.15
+    preserve_base_class_owners: true
+
+prototype_gate:
+  enabled: false
+  grid_size: 8
+  minimum_scale: 0.10
+  target_recall: 0.95
+  safety_factor: 1.10
+  iou_threshold: 0.50
+
+calibration:
+  deployment_policy: incremental_dev_calibrated
+  threshold_min: 0.01
+  threshold_max: 0.99
+  threshold_step: 0.01
+  target_precision: 0.95
+
+context_gate:
+  enabled: true
+  model: models/context/scene_sensor_net.pt
+  dimensions: [scene]
+  max_threshold_penalty: 0.05
+  batch_size: 32
+
+deployment_acceptance:
+  min_new_class_precision: 0.90
+  max_new_class_false_activation_rate: 0.05
+
+bootstrap:
+  iterations: 1000
+  seed: 20260705
+  strata: [sensor, class_presence]
+
+acceptance:
+  min_base_map50: 0.80
+  min_new_map50: 0.60
+  min_krr: 0.95
+
+integrity:
+  max_evaluator_error: 0.005
+  max_base_weight_drift: 0.0
+
+protocols:
+  - id: warship-incremental-p7-expanded
+    display_name: 舰船严格 3+1 P7 expanded student
+    base_classes: [soldier, small_aircraft, tank]
+    new_class: warship
+    new_global_id: 2
+    base_local_to_global: {0: 0, 1: 1, 2: 3}
+    adaptation_mode: expanded_single_student
+    build_unified_student: true
+    expected_incremental_counts: {train: 132, val: 18}
+    expected_base_test_count: 70
+    preferred_device: "0"

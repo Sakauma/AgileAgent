@@ -401,6 +401,56 @@ P6 不能通过“严格 `score > threshold`、稳定 tie-break、class-aware NM
 
 P6 结论为：**双契约和回滚基础设施保留，但设备后处理候选拒绝晋级，P7 继续从 P5 的 `pageable + threaded_execute + Scene→Base→Specialist` 原始输出链路开始。** 因语义门禁先失败，本阶段不执行 89 图业务零差异和 30+890 性能轮；正式 `8501` 未停止、未替换。
 
+## P7 统一检测器与共享上下文头（2026-08-15）
+
+P7 首先修复并固化统一检测器实验基础：
+
+- `expanded_single_student` 的三个旧类分类行在每步后同时恢复到 model 和 EMA，冻结 BatchNorm 保持 eval；
+- `yolo_iod_lite` 同样在 model/EMA 中恢复受保护旧类行并冻结 BN 统计；
+- 预检允许统一四类架构使用显存可承受的 batch 4，但继续保留原双检测器严格基准 `batch=32`；
+- P7 统一使用 Base 的 `896` 输入，复用 production Base checkpoint；YOLO-IOD 额外复用现有 current teacher；
+- 单检测器物理输出在 Agent 层继续把旧类标记为 `frozen_base_model`、warship 标记为 `incremental_model`，并生成原协议结构的逻辑审计结果；
+- 两个专用配置的只读训练预检均为 `ready: true`，本机仍只使用 WSL 仓库现有 `.venv`，没有安装依赖或下载 CPU PyTorch。
+
+### 候选 1：expanded_single_student
+
+Run ID 为 `p7-expanded-20260815`。候选复用冻结 Base checkpoint，只在 warship 增量数据上训练新增类别通道；共享参数和旧类通道漂移均为 `0`。锁集结果为：
+
+| 门禁 | 实测 | 要求 | 结果 |
+| --- | ---: | ---: | --- |
+| Base mAP50 | `0.8140883421` | `≥0.80` | 通过 |
+| New-mAP50 | `0.0166666667` | `≥0.60` | 失败 |
+| KRR | `1.0000000000` | `≥0.95` | 通过 |
+| 新类 precision | `0.6666666667` | `≥0.90` | 失败 |
+| 误激活率 | `0.0142857143` | `≤0.05` | 通过 |
+
+部署阈值 `0.68` 下只有 `TP=2`、`FP=1`、`targets=76`。该候选完整保留旧知识，但新增通道几乎没有召回，按门禁拒绝。
+
+### 候选 2：yolo_iod_lite
+
+Run ID 为 `p7-yolo-iod-20260815`，完整训练 `80/80` epoch，最终 dev mAP50 为 `0.8281`。current teacher 复用 `models/production/incremental_detection/incremental_detector.pt`，SHA256 为 `d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957`；教师只在增量 student 图像上推理，不读取旧类原始训练数据。
+
+| 门禁 | 实测 | 要求 | 结果 |
+| --- | ---: | ---: | --- |
+| Base mAP50 | `0.8140883421` | `≥0.80` | 通过 |
+| New-mAP50 | `0.5981284425` | `≥0.60` | 失败，差 `0.0018715575` |
+| KRR | `0.3445057231` | `≥0.95` | 失败 |
+| 新类 precision | `0.4166666667` | `≥0.90` | 失败 |
+| 误激活率 | `0.4285714286` | `≤0.05` | 失败 |
+
+该候选的旧类通道最大漂移为 `0`，共享参数相对漂移为 `0.0771120489`。部署阈值同为 `0.68`，锁集得到 `TP=70`、`FP=98`、`targets=76`，70 张负样本中 30 张产生误激活。`fusion decision_count=0`，原因是 Base/New 已处于同一物理检测器，原双检测器之间的冲突仲裁不再能够清理新类误激活。New-mAP50 虽接近阈值，但其余三项关键门禁明显失败，不能通过降低门槛或改变阈值语义晋级。
+
+### 数据隔离、证据与阶段结论
+
+两个 dataset manifest 的 `learning_data_scope` 均为 `incremental_dataset_only`，`old_raw_image_count`、`old_raw_label_count`、`old_feature_cache_count` 均为 `0`，`original_data_modified=false`，且锁集只在无标签预测冻结后物化。
+
+| 候选 | student weight SHA256 | metrics SHA256 | dataset manifest SHA256 |
+| --- | --- | --- | --- |
+| expanded | `cd82013926bde21504315f99bb437821276cee3a24775901a544f602b82e1392` | `c52c3f59505e8bdab6dfdff61e28bfbef1791887a4e2e68ce1dcbad264b3adc6` | `94f3f6edd893192c06370ba80078976bf9d26093a158229bf43dc062401e23b3` |
+| YOLO-IOD-lite | `889e43bf22059e5901ab7407d395d7824a4b6c2c3d54f018c79685c8694e12db` | `545d2c6221dc9bd07eadeb39298a58b147f84c545c5aeb77f027ace79a630586` | `40bed0ec033c11134f5b4be95af2b36556f30739f64c1dce848f6f1698f90405` |
+
+P7 结论为：**两个统一检测器候选均拒绝晋级。** 因第一步没有胜出的四类检测器，未训练 Scene/Sensor 共享上下文头，未导出单 OM，未启动 8502，也未执行 30 次预热 + 10×89 性能门禁。正式 release、双检测器 OM、Scene OM 和 `8501` 均保持原状；失败配置、冻结修复、逻辑 owner 映射与本地训练证据保留，rejected profile 不能被生产加载。
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
@@ -421,7 +471,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `254 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5/P6 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `257 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5/P6/P7 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest；P7 在精度门禁先失败，因此没有启动板端性能候选。
 
 ## 运行态检查
 
