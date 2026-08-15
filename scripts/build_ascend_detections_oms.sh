@@ -16,10 +16,10 @@ if (( $# != 3 )); then
   exit 2
 fi
 
-if [[ "${AGILE_AGENT_P6_SEMANTIC_GATE:-}" != "passed" ]]; then
+if [[ "${AGILE_AGENT_P6_SCORE_CANDIDATE:-}" != "1" ]]; then
   printf '%s\n' \
-    'P6设备NMS严格语义门禁未通过；拒绝构建detections_v1候选。' \
-    '只有保存通过报告后，才可显式设置AGILE_AGENT_P6_SEMANTIC_GATE=passed。' >&2
+    'detections_v1只允许作为受控score-gate候选构建。' \
+    '请显式设置AGILE_AGENT_P6_SCORE_CANDIDATE=1，并在发布前重新执行89图精度与20图batch FPS。' >&2
   exit 1
 fi
 
@@ -32,6 +32,7 @@ AIPP_DIR="$(readlink -f "$AIPP_DIR")"
 ASCEND_PYTHON="${AGILE_AGENT_ASCEND_PYTHON:-/usr/local/miniconda3/envs/agileagent/bin/python}"
 
 test -d "$ONNX_DIR" || { printf 'ONNX目录不存在：%s\n' "$ONNX_DIR" >&2; exit 1; }
+test -f "$ONNX_DIR/export-manifest.json" || { printf '缺少导出清单：%s\n' "$ONNX_DIR" >&2; exit 1; }
 test -f "$BASE_MANIFEST" || { printf '基础构建清单不存在：%s\n' "$BASE_MANIFEST" >&2; exit 1; }
 test -x "$ASCEND_PYTHON" || { printf 'Ascend Python不存在：%s\n' "$ASCEND_PYTHON" >&2; exit 1; }
 for name in base_detector incremental_detector; do
@@ -111,6 +112,10 @@ aipp_dir = Path(os.environ["AGILE_AGENT_AIPP_DIR"])
 output_dir = Path(os.environ["AGILE_AGENT_OUTPUT_DIR"])
 base_manifest_path = Path(os.environ["AGILE_AGENT_BASE_MANIFEST"])
 base_manifest = json.loads(base_manifest_path.read_text(encoding="utf-8"))
+export_manifest_path = onnx_dir / "export-manifest.json"
+export_manifest = json.loads(export_manifest_path.read_text(encoding="utf-8"))
+if export_manifest.get("nms_backend") != "batch_multiclass_nms":
+    raise RuntimeError("score-gate构建只接受已实探可编译的batch_multiclass_nms")
 scene = base_manifest["artifacts"]["scene_sensor_net"]
 try:
     git_sha = subprocess.check_output(
@@ -178,6 +183,12 @@ payload = {
     "cann_version": "7.0.RC1",
     "precision": "mixed_float16",
     "validated": False,
+    "validation_basis": "competition_score_pending",
+    "nms_backend": export_manifest["nms_backend"],
+    "export_manifest": {
+        "path": str(export_manifest_path),
+        "sha256": sha256(export_manifest_path),
+    },
     "parent_build_manifest": {
         "path": str(base_manifest_path),
         "sha256": sha256(base_manifest_path),

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -85,6 +88,83 @@ def test_detections_v1_probe_exports_without_onnx_package(tmp_path) -> None:
         "class_ids",
         "valid_count",
     ]
+
+
+def test_batch_multiclass_nms_has_fixed_output_contract() -> None:
+    module = build_detections_v1_module(
+        RawIdentity(),
+        class_count=2,
+        candidate_confidence=0.5,
+        iou_threshold=0.5,
+        max_det=3,
+        nms_backend="batch_multiclass_nms",
+    )
+
+    boxes, scores, class_ids, valid_count = module(_raw_predictions())
+
+    assert boxes.shape == (3, 4)
+    assert scores.shape == (3,)
+    assert class_ids.shape == (3,)
+    assert valid_count.shape == (1,)
+    assert boxes.dtype == torch.float32
+    assert scores.dtype == torch.float32
+    assert class_ids.dtype == torch.int32
+    assert valid_count.dtype == torch.int32
+    assert valid_count.tolist() == [3]
+
+
+def test_batch_multiclass_nms_probe_contains_cann_operator(tmp_path) -> None:
+    module = build_detections_v1_module(
+        RawIdentity(),
+        class_count=2,
+        candidate_confidence=0.5,
+        iou_threshold=0.5,
+        max_det=3,
+        nms_backend="batch_multiclass_nms",
+    )
+    target = tmp_path / "batch-multiclass-nms.onnx"
+
+    export_detections_v1_onnx(
+        module,
+        _raw_predictions(),
+        target,
+        input_name="raw_predictions",
+    )
+
+    assert b"BatchMultiClassNMS" in target.read_bytes()
+
+
+def test_detections_v1_rejects_unknown_nms_backend() -> None:
+    with pytest.raises(ValueError, match="nms_backend"):
+        build_detections_v1_module(
+            RawIdentity(),
+            class_count=2,
+            candidate_confidence=0.5,
+            iou_threshold=0.5,
+            max_det=3,
+            nms_backend="unknown",
+        )
+
+
+def test_detection_om_build_requires_explicit_score_candidate_flag() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            "bash",
+            str(root / "scripts" / "build_ascend_detections_oms.sh"),
+            "missing-onnx",
+            "missing-output",
+            "missing-manifest",
+        ],
+        cwd=root,
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "AGILE_AGENT_P6_SCORE_CANDIDATE=1" in result.stderr
 
 
 def test_decoded_candidates_v1_keeps_anchor_major_order_and_strict_boundary() -> None:
