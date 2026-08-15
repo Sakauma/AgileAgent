@@ -480,9 +480,40 @@ Run 2 相对 Run 1 的 mean、P95、P99 差异约为 `0.020%/0.212%/0.023%`，�
 
 测量完成后只停止 `8502`；正式 `8501` 在候选启动前、两轮测量间和候选停止后均为 `ready`。P8 结论为：**环境固化和两轮重复性门禁通过，允许进入 P9；性能仍未达到最终 30 FPS 门禁。**
 
-## P9–P11 待执行方案
+## P9 设备解码与 Host 精确 NMS（2026-08-15）
 
-P9–P11 已完成方案设计，尚未产生设备解码 OM、双逻辑检测头、共享上下文头或相应板端晋级结果。执行顺序固定为设备解码与 Host 精确 NMS、共享骨干双逻辑检测头、共享 Scene/Sensor 上下文头。完整实施门禁和回滚规则记录在 `docs/ascend-310b-p0-p3-improvement-plan.md`。
+P9 实现提交为 `23993fdf44a4996902039d0c16ef345b90f1ca5b`，业务 JSON 对比工具提交为 `4ee54dc`，均已推送。实现增加 `decoded_candidates_v1` 固定输出契约、anchor-major/class-minor 唯一 TopK 键、Host 稳定全局排序与 class-aware 严格 NMS、低阈值/overflow raw 回滚、选择性 D2H、manifest 绑定和可复现导出/探针/构建工具。完整 WSL `.venv` 回归为 `279 passed, 1 skipped`，没有安装依赖或下载 CPU PyTorch。
+
+### CANN 7.0.RC1 严格探针
+
+标准 ONNX TopK/gather 图可由 CANN `7.0.RC1` 编译。v1 的候选 boxes、scores、class/anchor ID 和 raw 输出正确，但设备把 int32 `ReduceSum` 错误计算为 `1`，导致 `valid_count/overflow` 失真。v2 改为 float32 求和再转 int32后，三个构造输入的 7 个输出全部逐项匹配 Host reference：
+
+| 探针 | 预期候选数/overflow | 结果 |
+| --- | ---: | --- |
+| 严格语义 | `6/0` | 阈值相等排除、`0.01001` 保留、同分稳定顺序、跨类重叠、`IoU=0.5` 不抑制和 NMS 后补位全部通过 |
+| capacity 边界 | `8/0` | 通过 |
+| overflow | `8/1` | 通过，要求 raw 回滚 |
+
+v2 语义报告 SHA256 为 `9aae98eb4744ecb7edf6aeffd8915826c197203c836b904307ea7dabbe31d68c`。板端探针 ONNX/OM SHA256 分别为 `f5fa2c63358c5eedd6e9e9e78b2cb4b0a8d9fe1eb5cdfdf647edd9c828fc55f6` 和 `ab40c31b1920688aa8caeee9629cc74b95711086de01cc673847616e7c3943ad`。
+
+### 完整 OM 与 89 图停止门禁
+
+本机使用现有 CUDA `.venv` 导出 Base `13524 anchors/capacity 4096` 与 Specialist `6720/capacity 2048` ONNX，SHA256 分别为 `02cd5f20237a83fa5b4f793166734f1d2303ca77d313a5eda559ffcd4ae03fb4`、`e663f63a13db79f65ebed50a59e0f88a24b705cda4d20a16af83c4bd85567958`。板端两份完整 OM 均得到 `ATC run success`，release manifest 验证为 `passed`：
+
+| 产物 | SHA256 |
+| --- | --- |
+| Base OM | `5f02b38224a1a22bbe2e034b4f695c232428e7c9ad786a899edaf53c17993413` |
+| Specialist OM | `9b303c04f2eb081671c078e69c7593b8213254304fbb1467d5fe448ae372b5f2` |
+| build manifest | `5cda5197e2d408a29f897c46a44e791bc9bfadf32a7226867eb04b26fba00694` |
+| candidate config | `901e83413f686bd90e28fb445cafdf5657b32217e13c11a47ee8c7dfdfc6b9bd` |
+
+真实 89 图对照使用同一 P8 Scene/DVPP/调度配置。P8 raw 与 P9 decoded 均输出 `343` 个检测，检测数、类别数、置信度及 Scene/Sensor 上下文全部一致；但 mixed-fp16 图内坐标解码导致 `84/89` 图的框坐标不完全相同，最大绝对差为 `0.25 px`，业务 JSON SHA256 也有 `84/89` 不一致。冻结 P8/P9 预测 SHA256 分别为 `d3abb58c851cd4f7fd1d1d5ac71d31857195840b5179b129d240a26e8b5f9e2d`、`d909e11d157b40e251bdb23aa0a79e6ed4a683e1d24fe0f599b489755c8f1d28`，零容差逐框报告 SHA256 为 `8ef790f460eb1a5285e3972745dac387d2cb7286b75b7f4b05cb1a7a00b0cd68`。
+
+P9 结论为：**设备解码基础设施、严格构造探针和 raw 回滚通过，但 89 图零差异门禁失败，拒绝晋级。** 按停止条件没有运行两轮 30+890 正式性能门禁；单轮 89 图诊断不能作为收益结论。`8502` 已停止，正式 `8501` 在构建、探针、候选加载、89 图与停止后始终为 `ready`。P10 从 P8 `raw_yolo_v1` 新鲜基线继续。
+
+## P10–P11 待执行方案
+
+P10–P11 已完成方案设计，尚未产生双逻辑检测头、共享上下文头或相应板端晋级结果。执行顺序固定为共享骨干双逻辑检测头、共享 Scene/Sensor 上下文头。完整实施门禁和回滚规则记录在 `docs/ascend-310b-p0-p3-improvement-plan.md`。
 
 当前参考状态：
 
@@ -527,7 +558,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `266 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5/P6/P7 候选因上述门禁失败保持未验收；P8 环境与重复性门禁已通过。板端各阶段验证按操作者要求只执行探针和真实 API 端到端时长，没有运行 Web pytest；P7 在精度门禁先失败，因此没有启动板端性能候选。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `279 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5/P6/P7/P9 候选因上述门禁失败保持未验收；P8 环境与重复性门禁已通过。板端各阶段验证按操作者要求只执行探针和真实 API 端到端时长，没有运行 Web pytest；P7、P9 均在正式性能轮之前因精度或严格语义门禁失败。
 
 ## 运行态检查
 
