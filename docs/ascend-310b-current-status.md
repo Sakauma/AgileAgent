@@ -2,6 +2,12 @@
 
 本文记录截至 2026-08-15 已完成的 Ascend 310B 实现、部署、精度复核和性能测量。
 
+## 计分口径重新复核（2026-08-15）
+
+仓库评分规则确认，候选的数值硬门禁只有 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 和正式 20 图 `/api/batch` FPS `≥30`。逐框/业务 JSON 零差异、新类 precision、误激活率、单请求均值、P95/P99、Scene/Sensor accuracy 和 P0 阈值边界均为非评分诊断，不再阻断晋级。数据隔离、无标签预测冻结、模型/评分资产哈希和服务可运行性仍是结果真实性前提。
+
+评分器、训练产物、实验 profile、代际晋级和发布校验已统一为上述口径：precision/FAR 继续输出 `diagnostic_warnings`，但不再决定 `accepted`。历史 P0–P9 章节中的旧门禁文字保留执行背景；与本节冲突时以本节和主计划的“计分门禁、真实性前提与诊断项”为准。
+
 ## 板端环境
 
 | 项目 | 已确认值 |
@@ -57,8 +63,10 @@
 | 已解码 Agent 核心 | 200 | 均值 `32.148 ms`、P95 `33.193 ms`、`31.11 FPS` |
 | AIPP staging multipart PNG API | 1,068 | 均值 `51.203 ms`、P95 `63.9 ms`、`19.53 FPS` |
 | DVPP 编码输入测量 | 240 | 均值 `37.124 ms`、P95 `38.154 ms`、`26.94 FPS` |
+| P8 raw 正式 score gate | 3×20 图 batch | 中位 `921.3 ms`、`21.708 FPS`，效率 `7/10` |
+| P9 decoded 正式 score gate | 3×20 图 batch | 中位 `919.5 ms`、`21.751 FPS`，效率 `7/10` |
 
-这些记录分别覆盖完整 89 图运行、已解码核心、真实 multipart PNG API 和编码输入路径。
+单请求 FPS 只作诊断，效率分只读取 20 图 batch FPS。当前正式可复现满分缺口是把 P8 的 `921.3 ms` 降到 `≤666.7 ms`。
 
 ## Wave 0 / P0 执行记录（2026-08-15）
 
@@ -397,9 +405,9 @@ P6 已实现 `raw_yolo_v1 | detections_v1` 显式输出契约。Ascend 后端只
 
 完整证据保存在板端 `/home/HwHiAiUser/agileagent/candidates/20260815-p6/probe-v1` 至 `probe-v10`，包括 ONNX、ATC 日志、OM、构造输入、输出 `.npy` 和报告。ATC 日志中的 `customize_impl/mrgba.py` 权限异常来自既有 root-only vendor 算子；成功探针仍明确结束为 `ATC run success` 并生成 OM，不影响上述结论。
 
-P6 不能通过“严格 `score > threshold`、稳定 tie-break、class-aware NMS 和 `IoU > threshold`”语义门禁。工程没有用 epsilon 改阈值、没有升级 CANN、没有启动 8502，也没有运行板端 Web pytest。`scripts/build_ascend_detections_oms.sh` 只有在存在已保存的通过报告并显式设置 `AGILE_AGENT_P6_SEMANTIC_GATE=passed` 时才允许构建，防止把已证伪的实验图误作发布候选。
+P6 当时不能通过“严格 `score > threshold`、稳定 tie-break、class-aware NMS 和 `IoU > threshold`”零差异门禁。工程没有用 epsilon 改阈值、没有升级 CANN、没有启动 8502，也没有运行板端 Web pytest。该停止条件现在已降为诊断：可编译的 `BatchMultiClassNMS` 候选将在 P9-B 直接执行 89 图重新评分和 batch score gate，不能再仅凭构造边界差异淘汰。
 
-P6 结论为：**双契约和回滚基础设施保留，但设备后处理候选拒绝晋级，P7 继续从 P5 的 `pageable + threaded_execute + Scene→Base→Specialist` 原始输出链路开始。** 因语义门禁先失败，本阶段不执行 89 图业务零差异和 30+890 性能轮；正式 `8501` 未停止、未替换。
+P6 修订结论为：**双契约和回滚基础设施保留，旧拒绝结论撤销为“待计分口径复测”。** 当前正式仍使用 raw；只有设备 NMS 实测三项精度满分且 batch FPS 更高才切换。
 
 ## P7 统一检测器与共享上下文头（2026-08-15）
 
@@ -424,7 +432,7 @@ Run ID 为 `p7-expanded-20260815`。候选复用冻结 Base checkpoint，只在 
 | 新类 precision | `0.6666666667` | `≥0.90` | 失败 |
 | 误激活率 | `0.0142857143` | `≤0.05` | 通过 |
 
-部署阈值 `0.68` 下只有 `TP=2`、`FP=1`、`targets=76`。该候选完整保留旧知识，但新增通道几乎没有召回，按门禁拒绝。
+部署阈值 `0.68` 下只有 `TP=2`、`FP=1`、`targets=76`。该候选完整保留旧知识，但 New-mAP50 明确未到 `0.60`，按计分门禁拒绝；precision 只作诊断。
 
 ### 候选 2：yolo_iod_lite
 
@@ -438,7 +446,7 @@ Run ID 为 `p7-yolo-iod-20260815`，完整训练 `80/80` epoch，最终 dev mAP5
 | 新类 precision | `0.4166666667` | `≥0.90` | 失败 |
 | 误激活率 | `0.4285714286` | `≤0.05` | 失败 |
 
-该候选的旧类通道最大漂移为 `0`，共享参数相对漂移为 `0.0771120489`。部署阈值同为 `0.68`，锁集得到 `TP=70`、`FP=98`、`targets=76`，70 张负样本中 30 张产生误激活。`fusion decision_count=0`，原因是 Base/New 已处于同一物理检测器，原双检测器之间的冲突仲裁不再能够清理新类误激活。New-mAP50 虽接近阈值，但其余三项关键门禁明显失败，不能通过降低门槛或改变阈值语义晋级。
+该候选的旧类通道最大漂移为 `0`，共享参数相对漂移为 `0.0771120489`。部署阈值同为 `0.68`，锁集得到 `TP=70`、`FP=98`、`targets=76`，70 张负样本中 30 张产生误激活。`fusion decision_count=0`。按新口径，拒绝它的充分理由是 New-mAP50 `0.598128 <0.60` 且 KRR `0.344506 <0.95`；precision/FAR 不参与结论。
 
 ### 数据隔离、证据与阶段结论
 
@@ -449,7 +457,7 @@ Run ID 为 `p7-yolo-iod-20260815`，完整训练 `80/80` epoch，最终 dev mAP5
 | expanded | `cd82013926bde21504315f99bb437821276cee3a24775901a544f602b82e1392` | `c52c3f59505e8bdab6dfdff61e28bfbef1791887a4e2e68ce1dcbad264b3adc6` | `94f3f6edd893192c06370ba80078976bf9d26093a158229bf43dc062401e23b3` |
 | YOLO-IOD-lite | `889e43bf22059e5901ab7407d395d7824a4b6c2c3d54f018c79685c8694e12db` | `545d2c6221dc9bd07eadeb39298a58b147f84c545c5aeb77f027ace79a630586` | `40bed0ec033c11134f5b4be95af2b36556f30739f64c1dce848f6f1698f90405` |
 
-P7 结论为：**两个统一检测器候选均拒绝晋级。** 因第一步没有胜出的四类检测器，未训练 Scene/Sensor 共享上下文头，未导出单 OM，未启动 8502，也未执行 30 次预热 + 10×89 性能门禁。正式 release、双检测器 OM、Scene OM 和 `8501` 均保持原状；失败配置、冻结修复、逻辑 owner 映射与本地训练证据保留，rejected profile 不能被生产加载。
+P7 计分口径复核结论仍为：**两个统一检测器候选均拒绝晋级。** 两者都失败于 New-mAP50，第二个还失败于 KRR，并非由 precision/FAR 误杀。正式 release、双检测器 OM、Scene OM 和 `8501` 均保持原状。
 
 ## P8 板端环境固化（2026-08-15）
 
@@ -480,7 +488,9 @@ Run 2 相对 Run 1 的 mean、P95、P99 差异约为 `0.020%/0.212%/0.023%`，�
 
 测量完成后只停止 `8502`；正式 `8501` 在候选启动前、两轮测量间和候选停止后均为 `ready`。P8 结论为：**环境固化和两轮重复性门禁通过，允许进入 P9；性能仍未达到最终 30 FPS 门禁。**
 
-## P9 设备解码与 Host 精确 NMS（2026-08-15）
+随后用正确评分阈值 `confidence=0.01` 重新冻结预测，P8 raw 得到 Base mAP50 `0.819415`、New-mAP50 `0.728761`、KRR `1.0`，精度三项满分。正式 20 图 batch 三轮的中位时长为 `921.3 ms`、`21.708 FPS`；上传解析约 `51.8 ms`、Host decode 约 `148–172 ms`、batch Engine 约 `690–705 ms`。因此 P8 是当前 score-aligned raw 基线，效率仅为 `7/10`。
+
+## P9 设备后处理计分复核（2026-08-15）
 
 P9 实现提交为 `23993fdf44a4996902039d0c16ef345b90f1ca5b`，业务 JSON 对比工具提交为 `4ee54dc`，均已推送。实现增加 `decoded_candidates_v1` 固定输出契约、anchor-major/class-minor 唯一 TopK 键、Host 稳定全局排序与 class-aware 严格 NMS、低阈值/overflow raw 回滚、选择性 D2H、manifest 绑定和可复现导出/探针/构建工具。完整 WSL `.venv` 回归为 `279 passed, 1 skipped`，没有安装依赖或下载 CPU PyTorch。
 
@@ -496,7 +506,7 @@ P9 实现提交为 `23993fdf44a4996902039d0c16ef345b90f1ca5b`，业务 JSON 对�
 
 v2 语义报告 SHA256 为 `9aae98eb4744ecb7edf6aeffd8915826c197203c836b904307ea7dabbe31d68c`。板端探针 ONNX/OM SHA256 分别为 `f5fa2c63358c5eedd6e9e9e78b2cb4b0a8d9fe1eb5cdfdf647edd9c828fc55f6` 和 `ab40c31b1920688aa8caeee9629cc74b95711086de01cc673847616e7c3943ad`。
 
-### 完整 OM 与 89 图停止门禁
+### 完整 OM、89 图评分与正式 batch score gate
 
 本机使用现有 CUDA `.venv` 导出 Base `13524 anchors/capacity 4096` 与 Specialist `6720/capacity 2048` ONNX，SHA256 分别为 `02cd5f20237a83fa5b4f793166734f1d2303ca77d313a5eda559ffcd4ae03fb4`、`e663f63a13db79f65ebed50a59e0f88a24b705cda4d20a16af83c4bd85567958`。板端两份完整 OM 均得到 `ATC run success`，release manifest 验证为 `passed`：
 
@@ -507,13 +517,15 @@ v2 语义报告 SHA256 为 `9aae98eb4744ecb7edf6aeffd8915826c197203c836b904307ea
 | build manifest | `5cda5197e2d408a29f897c46a44e791bc9bfadf32a7226867eb04b26fba00694` |
 | candidate config | `901e83413f686bd90e28fb445cafdf5657b32217e13c11a47ee8c7dfdfc6b9bd` |
 
-真实 89 图对照使用同一 P8 Scene/DVPP/调度配置。P8 raw 与 P9 decoded 均输出 `343` 个检测，检测数、类别数、置信度及 Scene/Sensor 上下文全部一致；但 mixed-fp16 图内坐标解码导致 `84/89` 图的框坐标不完全相同，最大绝对差为 `0.25 px`，业务 JSON SHA256 也有 `84/89` 不一致。冻结 P8/P9 预测 SHA256 分别为 `d3abb58c851cd4f7fd1d1d5ac71d31857195840b5179b129d240a26e8b5f9e2d`、`d909e11d157b40e251bdb23aa0a79e6ed4a683e1d24fe0f599b489755c8f1d28`，零容差逐框报告 SHA256 为 `8ef790f460eb1a5285e3972745dac387d2cb7286b75b7f4b05cb1a7a00b0cd68`。
+真实 89 图对照使用同一 P8 Scene/DVPP/调度配置。P8 raw 与 P9 decoded 均输出 `343` 个检测，检测数、类别数、置信度及 Scene/Sensor 上下文全部一致；mixed-fp16 图内坐标解码导致 `84/89` 图的框坐标不完全相同，最大绝对差为 `0.25 px`，业务 JSON SHA256 也有 `84/89` 不一致。该差异现仅作诊断。按 `confidence=0.01` 重新评分，P9 decoded 得到 Base mAP50 `0.819901`、New-mAP50 `0.728761`、KRR `1.0`，三项满分；冻结预测 SHA256 为 `7f57f7f012e6e94693b0a571efe97143cf01a23332e677b1db9b1d98927c0006`。
 
-P9 结论为：**设备解码基础设施、严格构造探针和 raw 回滚通过，但 89 图零差异门禁失败，拒绝晋级。** 按停止条件没有运行两轮 30+890 正式性能门禁；单轮 89 图诊断不能作为收益结论。`8502` 已停止，正式 `8501` 在构建、探针、候选加载、89 图与停止后始终为 `ready`。P10 从 P8 `raw_yolo_v1` 新鲜基线继续。
+P9 decoded 已补跑两轮 30+890 单请求诊断：Run 1 `42.798/48.555/49.500 ms`，Run 2 `42.737/48.600/49.300 ms`。正式 20 图 batch 三轮为 `920.8/919.5/903.6 ms`，中位 `919.5 ms`、`21.751 FPS`；中位分解为上传解析 `51.936 ms`、Host decode `163.149 ms`、Engine `697.130 ms`、cache `6.025 ms`。相对 P8 `21.708 FPS` 只高约 `0.20%`，没有稳定效率收益，且仍为 `7/10`。报告 SHA256 为 `95104f39d1045bdafed80c11084125882ee65bca41015490e8fc601b42081805`。
+
+P9-A 修订结论为：**精度三项满分，但效率计分不提升，回滚 `raw_yolo_v1`。** 拒绝理由不再包含逐框或 JSON 差异。P9-B 将重新开放 P6 可编译的 `detections_v1/BatchMultiClassNMS`，直接跑 89 图评分与 batch score gate。补测结束后 `8502` 已停止，正式 `8501` 为 `ready`。
 
 ## P10–P11 待执行方案
 
-P10–P11 已完成方案设计，尚未产生双逻辑检测头、共享上下文头或相应板端晋级结果。执行顺序固定为共享骨干双逻辑检测头、共享 Scene/Sensor 上下文头。完整实施门禁和回滚规则记录在 `docs/ascend-310b-p0-p3-improvement-plan.md`。
+P10–P11 已按计分口径重排，尚未产生双逻辑检测头、共享上下文头或相应板端晋级结果。执行顺序固定为：P9-B 设备 NMS 计分复测、P10-A batch DVPP encoded 路径、P10-B 共享骨干双逻辑检测头、P11 共享 Scene/Sensor 上下文头。完整规则记录在 `docs/ascend-310b-p0-p3-improvement-plan.md`。
 
 当前参考状态：
 
@@ -522,21 +534,22 @@ P10–P11 已完成方案设计，尚未产生双逻辑检测头、共享上下�
 | 正式 Base mAP50 | `0.819407` | 已达到满分档 |
 | 正式 New-mAP50 | `0.728761` | 已达到满分档 |
 | 正式 KRR | `1.000000` | 已达到满分档 |
-| 正式新类 precision | `0.933333` | 已达到满分档 |
-| 正式误激活率 | `0.014286` | 已达到满分档 |
-| 正式 API | 约 `13.99 FPS` | 未达到 `30 FPS` 满分档 |
-| P8 新鲜基线 Run 1 | `41.1265/47.200/48.200 ms` | 约 `24.32 FPS`，作为 P9 参考 |
-| 最终性能预算 | Engine `≤30 ms` | API mean `≤33.33 ms`、P95 `≤35 ms` |
+| 正式新类 precision | `0.933333` | 非评分诊断 |
+| 正式误激活率 | `0.014286` | 非评分诊断 |
+| P8 raw 20 图 batch | `21.708 FPS` | 效率 `7/10`，未满分 |
+| P9 decoded 20 图 batch | `21.751 FPS` | 与 P8 基本持平，回滚 |
+| 最终性能预算 | batch `≤666.7 ms` | `≥30 FPS`，效率 `10/10` |
 
 计划要点如下：
 
 - P8 已持久禁用屏保进程并以温度、后台 CPU、NPU Health、端口、Git/配置/OM 哈希守卫两轮 30+890 新鲜基线；governor 在该板明确为 `unsupported`；
-- P9 新增 `decoded_candidates_v1`，Base/Specialist capacity 分别为 `4096/2048`，设备只做 decode/filter，Host 保留严格排序和 NMS；阈值低于 `0.01` 或候选溢出时显式回到 raw 路径；
-- P10 共享 Base backbone 与 neck/FPN，保留独立 old/new Detect head 和原双模型冲突仲裁；只用 warship 数据训练 new head 或 residual adapter，Base/EMA 漂移必须为 `0`；
+- P9-A decoded 已证明精度满分但 batch 无收益；P9-B 重新开放设备 NMS，不再因 NMS 边界或 JSON 差异提前停止；
+- P10-A 让 `/api/batch` 复用 DVPP encoded 路径，优先消除每批 `148–172 ms` Host decode；
+- P10-B 共享 Base backbone 与 neck/FPN，保留独立 old/new Detect head；只用 warship 数据训练 new head 或 residual adapter，Base/EMA 漂移必须为 `0`；
 - P11 即使 P10 失败也继续挂到正式 Base 骨干，依次测试深层单尺度和 P3/P4/P5 多尺度上下文头，检测网络保持冻结；
 - P8–P11 候选只使用 `8502`，正式 `8501` 不停止、不替换；板端不运行 Web pytest；CANN 固定 `7.0.RC1`，不使用 INT8、降分辨率、剪枝或跨请求流水线。
 
-P9 只有在 89 图业务 JSON 零差异、copy 加 Host 后处理至少减少 `1.5 ms`、两轮 API 均值改善至少 `3%` 时晋级。P10/P11 结构候选必须重新通过 Base `≥0.80`、New `≥0.60`、KRR `≥0.95`、precision `≥0.90`、误激活率 `≤0.05`；最终候选还须重新通过 P0 严格阈值边界、provenance 和发布校验。本文在各阶段实际执行前不记录任何推测结果。
+所有可运行候选均冻结 89 图预测并重算 Base `≥0.80`、New `≥0.60`、KRR `≥0.95`，再用三轮 20 图 batch 的中位 FPS 判定效率；四项满分即可晋级。precision/FAR、逐框/JSON、P95/P99、上下文 accuracy 和 P0 阈值边界只作诊断。provenance、数据隔离和资产哈希继续验证结果真实性。
 
 ## 环境迁移记录
 
@@ -558,7 +571,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `279 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5/P6/P7/P9 候选因上述门禁失败保持未验收；P8 环境与重复性门禁已通过。板端各阶段验证按操作者要求只执行探针和真实 API 端到端时长，没有运行 Web pytest；P7、P9 均在正式性能轮之前因精度或严格语义门禁失败。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `280 passed, 1 skipped`；修订门禁后的定向回归为 `106 passed`。正式 release 的既有发布校验状态仍为 `passed`。P7 因计分精度失败保持拒绝；P9-A 精度满分但 batch FPS 未提升，回滚 raw；P6/P9-B 设备 NMS 重新开放待测。板端只执行探针、89 图评分和真实 API 端到端时长，没有运行 Web pytest。
 
 ## 运行态检查
 

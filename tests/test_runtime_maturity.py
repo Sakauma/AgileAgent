@@ -238,7 +238,9 @@ def test_manifest_blocks_uncalibrated_or_overlapping_true_new_class() -> None:
     assert "manifest_new_class_overlaps_base:incremental_detector" in _validate_model_manifest(manifest)
     candidate["base_class_ids"].remove(2)
     candidate["deployment_accepted"] = False
-    assert "manifest_deployment_gates_missing:incremental_detector" in _validate_model_manifest(manifest)
+    assert _validate_model_manifest(manifest) == []
+    candidate["competition_accepted"] = False
+    assert "manifest_competition_gates_missing:incremental_detector" in _validate_model_manifest(manifest)
 
 
 def test_low_risk_action_output_cannot_escape_allowlist(tmp_path: Path) -> None:

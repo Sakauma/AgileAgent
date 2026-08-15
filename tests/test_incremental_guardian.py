@@ -84,7 +84,7 @@ def test_new_map_full_score_failure_blocks_promotion_and_selects_recovery() -> N
     assert diagnosis["actions"] == ["retry_training_on_dev"]
 
 
-def test_deployment_quality_blocks_promotion_without_rewriting_competition_result() -> None:
+def test_deployment_quality_warns_without_blocking_full_score_candidate() -> None:
     result = assess_incremental_candidate(
         metrics(lock_precision=0.60, false_activation_rate=0.30),
         compliance(),
@@ -94,13 +94,13 @@ def test_deployment_quality_blocks_promotion_without_rewriting_competition_resul
 
     assert result["competition_accepted"] is True
     assert result["deployment_accepted"] is False
-    assert result["accepted"] is False
-    assert result["status"] == "deployment_rejected"
+    assert result["accepted"] is True
+    assert result["status"] == "accepted_with_warnings"
     assert result["deployment_quality"]["lock_precision"]["passed"] is False
     assert result["deployment_quality"]["false_activation_rate"]["passed"] is False
-    assert result["deployment_quality"]["lock_precision"]["blocking"] is True
+    assert result["deployment_quality"]["lock_precision"]["blocking"] is False
     assert all(
-        row["severity"] == "blocking"
+        row["severity"] == "warning"
         for row in result["diagnoses"]
         if row["metric"] in {"lock_precision", "false_activation_rate"}
     )

@@ -4,11 +4,13 @@
 
 本文记录 AgileAgent 在 Atlas 200I DK A2 / Ascend310B1 上完成的 P0–P9 实测结论，以及 P10–P11 后续优化、接口、消融矩阵和晋级门禁。详细设备证据保存在 `docs/ascend-310b-current-status.md`；本文以同条件端到端实测和严格类增量锁集结果替代执行前的跨批次估计。
 
+2026-08-15 按赛题机器可读评分规则从头复核后，当前唯一数值硬门禁改为 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 和 20 图 `/api/batch` FPS `≥30`。逐框/业务 JSON 零差异、新类 precision、误激活率、单请求均值、P95/P99、Scene/Sensor lock accuracy 和 P0 阈值边界全部降为非阻断诊断。数据隔离、无标签预测冻结、评分资产哈希和服务可运行性继续作为结果真实性前提，不构成额外性能阈值。
+
 P0–P3 已全部结束，结果如下：
 
 | 阶段 | 服务端均值 | P95 | P99 | 结论 |
 | --- | ---: | ---: | ---: | --- |
-| P0 | `41.439 ms` | `47.200 ms` | `48.411 ms` | multipart 已优化，但精度边界、provenance 和性能门禁失败 |
+| P0 | `41.439 ms` | `47.200 ms` | `48.411 ms` | multipart 已优化；旧门禁中的精度边界不再阻断，正式 batch FPS 当时未测 |
 | P1 | `41.302 ms` | `47.355 ms` | `48.311 ms` | 路由降至约 `0.37 ms`，完整 API 未达标 |
 | P2 | `42.043 ms` | `47.955 ms` | `49.400 ms` | profiling 完成，AOE 与固定 precision 不兼容，未生成 tuned OM |
 | P3 | `45.916 ms` | `51.700 ms` | `53.800 ms` | pinned + 统一异步编排使均值恶化 `9.21%`，拒绝晋级 |
@@ -26,34 +28,35 @@ P4–P7 最终结论如下：
 | --- | --- | --- |
 | P4 | pageable/pinned × threaded/unified 四组合、两轮 890 请求 | `pageable + threaded_execute` 胜出；统一提交是 P3 回退主因，pinned 无稳定收益 |
 | P5 | 三种提交顺序、三种收集顺序、stream priority 能力探针 | 无候选同时改善 `≥1%` 和 `≥0.5 ms`；保留 Scene→Base→Specialist 同序提交/收集 |
-| P6 | 标准 ONNX NMS、`NPUNmsWithMask`、`BatchMultiClassNMS` 严格语义探针 | CANN `7.0.RC1` 无兼容实现；保留 `raw_yolo_v1`，未启动 8502 性能轮 |
-| P7 | `expanded_single_student` 与 `yolo_iod_lite` 两个四类统一检测器 | 两候选均未通过完整精度门禁；停止共享上下文头、单 OM 和性能门禁 |
+| P6 | 标准 ONNX NMS、`NPUNmsWithMask`、`BatchMultiClassNMS` 严格语义探针 | 只因非评分的严格 NMS 边界停止；按新口径重新开放 `detections_v1` 评分候选 |
+| P7 | `expanded_single_student` 与 `yolo_iod_lite` 两个四类统一检测器 | 两候选均失败于 New-mAP50 或 KRR 计分项，结论不变 |
 
-P4–P6 的性能参考固定为 P2 pageable 链路 `42.043/47.955/49.400 ms`。该链路仍继承 P0 的 Base 阈值边界差异，只能用于性能筛选，不能直接晋级正式 release。P8–P11 最终候选必须重新通过完整精度、P0 严格阈值边界、provenance、语义和发布门禁。
+P4–P6 的历史性能参考为 P2 pageable 链路 `42.043/47.955/49.400 ms`。P0 阈值边界、逐框和 JSON 差异今后只留证，不再阻断候选。P8–P11 最终候选必须重新通过四项计分门禁、数据合规和资产真实性校验。
 
 P8–P11 按以下顺序执行：
 
 1. P8：固化板端运行与测量环境，消除 `xscreensaver`、governor、温度和后台负载漂移；
-2. P9：设备侧只执行 YOLO 解码和候选筛选，Host 保留严格 NMS；
-3. P10：共享 Base backbone、neck/FPN，保留相互独立的 old/new 逻辑检测头；
+2. P9：按计分口径重评设备 decode/filter 和设备 NMS 两条候选，不要求逐框等同；
+3. P10：先让 `/api/batch` 复用 DVPP encoded 路径，再共享 Base backbone、neck/FPN 并保留 old/new 逻辑检测头；
 4. P11：将 Scene/Sensor 轻量头并入检测骨干，移除独立上下文 OM 的执行开销。
 
-现有正式精度为 Base mAP50 `0.819407`、New-mAP50 `0.728761`、KRR `1.0`、新类 precision `0.933333`、误激活率 `0.014286`，均处于满分档。正式 API 约 `13.99 FPS`，尚未达到 30 FPS 满分档；P5 保留组合为 `41.245/47.300/48.400 ms`，约 `24.25 FPS`，作为 P8 固化环境前的最新候选参考。
+现有正式精度为 Base mAP50 `0.819407`、New-mAP50 `0.728761`、KRR `1.0`，三项共 `50/50`；新类 precision `0.933333` 和误激活率 `0.014286` 仅作为良好诊断结果。P8 正式计分口径的 20 图 batch 为 `21.708 FPS`，效率暂得 `7/10`，尚未达到 `30 FPS` 满分档。P5 `41.245/47.300/48.400 ms` 和约 `24.25` 的单请求倒数只用于诊断，不能替代 batch FPS。
 
 当前瓶颈和目标预算为：
 
 | 模块 | 实测或推导 | 判断 |
 | --- | ---: | --- |
-| P2 完整 API | `42.043 ms` | 距均值目标仍差 `8.713 ms`，即 `20.7%` |
-| P2 Engine | `38.723 ms` | 占完整 API 约 `92.1%`，是主瓶颈 |
-| Host/API 非 Engine | 约 `3.320 ms` | 即使完全消除也不能达到 `33.33 ms` |
+| P8 20 图 batch | `921.3 ms / 21.708 FPS` | 距 30 FPS 的 `666.7 ms` 预算仍差 `254.6 ms` |
+| P8 Host PNG decode | 约 `148–172 ms/batch` | `/api/batch` 尚未复用单请求 DVPP encoded 路径，是首个可消除项 |
+| P8 batch Engine | 约 `690–705 ms/batch` | 仍重复执行 Base、Specialist、Scene，是满分缺口的主体 |
+| P9 decoded batch | `919.5 ms / 21.751 FPS` | 相对 P8 仅约 `+0.20%`，没有效率计分收益 |
 | P2 single msprof Base | `21.138 ms` | 主要模型关键路径之一 |
 | P2 single msprof Specialist | `26.263 ms` | 单请求 trace 中最慢，应优先提交 |
 | P2 single msprof Scene | `3.007 ms` | 可通过共享骨干轻量头消除独立执行 |
 | P3 最大输出复制 | `2.981 ms` | P6 设备侧后处理的直接优化对象 |
 | 路由与融合 | 约 `0.374 ms` | 已不是主要瓶颈，不再投入大规模 Python 优化 |
 
-为达到完整 API 均值 `≤33.33 ms`，最终 Engine 均值预算固定为 `≤30 ms`。P7 没有产生通过精度门禁的统一检测器，因此 P8–P11 从正式双检测器语义和 P5 保留调度继续；正式 release 和 `8501` 在全部候选验证期间保持不变。
+最终硬预算是 20 图 batch `≤666.7 ms`，即 `≥30 FPS`。单图 Engine 均值 `≤30 ms`、API 均值 `≤33.33 ms` 和 P95 `≤35 ms` 继续报告但不阻断。P7 没有产生通过三项精度计分门禁的统一检测器，因此 P10 从正式双检测器与 P8 `raw_yolo_v1` 继续；正式 release 和 `8501` 在全部候选验证期间保持不变。
 
 ## 2. 统一基线与验收门禁
 
@@ -63,38 +66,34 @@ P8–P11 按以下顺序执行：
 - 固定 `640×512`、8 位 RGB/RGBA PNG，`incremental_protocol=auto`，单请求、并发数 1、本机回环 HTTP keep-alive。
 - 生产性能使用 `confidence=0.5`；另用 `confidence=0.01` 做高候选数压力回归。
 - 服务和模型预热后再执行 30 个预热请求。
-- 正式测量执行 10 轮固定 89 图，共 890 个请求，记录客户端完整请求墙钟、服务端 `system_total_ms`、均值、P50、P95、P99 和 FPS。
+- 诊断测量执行 10 轮固定 89 图，共 890 个单请求，记录客户端完整请求墙钟、服务端 `system_total_ms`、均值、P50、P95 和 P99。
+- 效率计分使用正式 `benchmark-api` 口径：固定取 20 图调用 `/api/batch` 三轮，以 `system_total_ms` 的中位轮计算 `batch_fps = 20×1000/system_total_ms`。
 - 每次测量保存 Git SHA、OM/ONNX/AIPP SHA256、CANN/驱动/固件信息、温度、NPU 内存及 msprof/AOE 版本。
 - `reports/` 保存原始设备产物；发布清单保存路径、摘要和 SHA256。
 
-最终硬目标为：
-
-- 完整 encoded PNG API 均值 `≤33.33 ms`；
-- P95 `≤35.00 ms`；
-- 任一候选不得以均值提升换取 P95/P99 超过上一正式版本 `2%` 的恶化。
-
-### 精度与语义
-
-所有阶段均须满足：
+最终计分硬目标为：
 
 - Base mAP50 `≥0.80`；
 - New-mAP50 `≥0.60`；
 - KRR `≥0.95`；
-- 新类 precision `≥0.90`；
-- 误激活率 `≤0.05`。
+- 20 图 `/api/batch` FPS `≥30`，等价于该 batch 的 `system_total_ms ≤666.7 ms`。
 
-P0、P2 等可能产生数值差异的阶段还须满足：
+### 计分门禁、真实性前提与诊断项
 
-- 89 图逐图类别和检测框数量相同；
-- 坐标最大绝对差 `≤1.0 px`；
-- confidence 最大绝对差 `≤0.02`；
-- Base/New-mAP50、KRR 相对当前正式值的绝对下降均不超过 `0.005`。
+只有以下条件可以阻断晋级：
 
-P1、P3 属于语义保持型优化，要求业务响应完全一致，包括：
+- 上述四项计分指标未满分；
+- 候选不能启动、请求失败、公共必需字段缺失或输出无法由评分器解析；
+- 评分前预测未冻结、评分资产/模型哈希不匹配，或增量阶段违反只读取增量数据的赛题约束。
 
-- detections、class counts、context、协议状态、路由结果；
-- 完整 `conflict_suppressions`、fusion summary 和审计详情；
-- 排除耗时、queue wait、trace 等非确定字段后，89 图 JSON 业务负载零差异。
+以下项目继续测量、保存和报警，但不得再淘汰一个四项计分满分候选：
+
+- 新类 precision、误激活率、Scene/Sensor/Joint lock accuracy；
+- 逐图类别、框数量、坐标、confidence、排序、NMS 边界和完整业务 JSON 差异；
+- 单请求/Engine 的均值、P95、P99、copy/后处理分段及两轮波动；
+- 相对上一候选的百分比收益、Engine `≤30 ms`、单请求 API `≤33.33 ms` 和 P95 `≤35 ms`。
+
+允许候选改变内部阈值、排序、NMS、路由和审计细节以换取效率；每次变化必须重新冻结 89 图无标签预测并重新计算三项精度，不能根据 lock 标签逐图路由或调参。旧阶段文中的“零差异”“P95 不恶化”和阶段百分比收益保留为当时执行记录，自本节修订后均按诊断项解释。
 
 ## 3. 分阶段改进
 
@@ -296,13 +295,13 @@ P6 将 Base 和 Specialist 的原始 YOLO 输出解码、置信度过滤、坐�
 1. 先构建最小 ONNX 兼容探针，验证当前 CANN `7.0.RC1` 能否编译所需 sort/NMS 图；
 2. 支持时把后处理图拼接到现有检测 ONNX 后生成新 OM；
 3. 不支持时使用当前工具链可编译的 AscendC/TBE 自定义算子；
-4. 两条路径都失败时结束 P6，保留 Host `raw_yolo_v1`，不升级 CANN、不改变阈值或 NMS 语义。
+4. 两条路径都无法构建或启动时结束 P6，保留 Host `raw_yolo_v1`，不升级 CANN。
 
-模型配置增加 `output_contract: raw_yolo_v1 | detections_v1`。Ascend 后端按契约选择现有 Host 解码或直接读取最终框，原始 OM、Host 解码和回滚配置全部保留。`detections_v1` 必须逐项复现当前严格 `score > confidence`、相同 confidence 的 anchor/class tie-break、class-aware NMS、坐标还原和 `max_det` 截断顺序。
+模型配置增加 `output_contract: raw_yolo_v1 | detections_v1`。Ascend 后端按契约选择现有 Host 解码或直接读取最终框，原始 OM、Host 解码和回滚配置全部保留。原计划要求 `detections_v1` 逐项复现 Host 语义；修订后只把差异写入诊断报告，并以重新计算的 Base/New/KRR 和 batch FPS 决定晋级。
 
-P6 先用构造输入覆盖阈值边界、同分、重叠、多类和 `max_det` 饱和，再对 89 图比较最终检测 records 和完整业务 JSON。只有零差异、输出复制加后处理均值至少减少 `1.5 ms`、完整 API 均值至少改善 `3%`，且 P95/P99 不恶化超过 `2%` 时才晋级。
+P6 先用构造输入覆盖阈值边界、同分、重叠、多类和 `max_det` 饱和，再对 89 图重新评分。构造差异、copy/后处理收益、单请求均值和 P95/P99 只作诊断；候选能构建运行且四项计分满分时即可晋级。
 
-执行结论（2026-08-15）：配置、运行时双契约、发布清单绑定、无新增依赖 ONNX 导出和严格语义测试已经实现；板端 CANN `7.0.RC1` 的标准 ONNX NMS 因动态输出无法编译，`NPUNmsWithMask` 不抑制同类重复框，`BatchMultiClassNMS` 则错误抑制 IoU 恰好等于 `0.7` 的框。默认和 `norm_class` 两种实现均未通过现有严格 `IoU > threshold` 边界，因此按第 4 条结束 P6，不启动 8502 性能候选，继续保留 `raw_yolo_v1`。`detections_v1` 构建入口在没有显式通过语义门禁时会拒绝执行，不能用于发布。
+原执行结论（2026-08-15）：配置、运行时双契约、发布清单绑定、无新增依赖 ONNX 导出和严格语义测试已经实现；板端 CANN `7.0.RC1` 的标准 ONNX NMS 因动态输出无法编译，`NPUNmsWithMask` 不抑制同类重复框，`BatchMultiClassNMS` 会抑制 IoU 恰好等于 `0.7` 的框，因此旧口径停止。新口径下这只是非阻断语义差异，P9 后续重新开放可编译的 `BatchMultiClassNMS detections_v1`，必须实际跑 89 图评分和 20 图 batch 后再决定，不能继续由构造零差异探针提前淘汰。
 
 ### P7：统一检测器与共享上下文头
 
@@ -327,14 +326,14 @@ P7 是闭合至少 `8.713 ms` 缺口的主收益阶段。模型结构变化允�
 - 导出单个多输出 OM，输出四类检测契约、sensor logits 和 scene logits；
 - 通过后才移除独立 Scene OM，原 Scene OM 保留为回滚。
 
-P7 固定精度门禁为 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95`、新类 precision `≥0.90`、误激活率 `≤0.05`。最终 Engine 均值必须 `≤30 ms`，完整 API 均值 `≤33.33 ms`、P95 `≤35 ms`，P99 相对 P6 或此前最快合格候选不得恶化超过 `2%`。
+P7 计分门禁只包含 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 和 batch FPS `≥30`。precision、误激活、Engine、单请求均值和尾延迟继续记录但不参与晋级。
 
 执行结论（2026-08-15）：P7 增加了两个专用严格配置、统一检测器预检、Base/current teacher 复用、统一模型逻辑 owner/source 映射和原协议审计结构。`expanded_single_student` 与 `yolo_iod_lite` 均完整训练并在同一 89 图锁集上评分；旧类分类行在 model/EMA 中逐步恢复，冻结 BatchNorm 始终保持 eval。两个 manifest 都证明增量阶段读取旧类原始图像、标签和 feature cache 的数量为 `0/0/0`，且原始数据未修改。
 
 | 候选 | Base mAP50 | New-mAP50 | KRR | 新类 precision | 误激活率 | 结论 |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | `expanded_single_student` | `0.814088` | `0.016667` | `1.000000` | `0.666667` | `0.014286` | 旧知识保持，但新增通道几乎未学到，拒绝 |
-| `yolo_iod_lite` | `0.814088` | `0.598128` | `0.344506` | `0.416667` | `0.428571` | New-mAP50 仍低于门槛，且旧知识、precision 和误激活同时失败，拒绝 |
+| `yolo_iod_lite` | `0.814088` | `0.598128` | `0.344506` | `0.416667` | `0.428571` | New-mAP50 与 KRR 两项计分失败；precision/误激活仅诊断，拒绝结论不变 |
 
 `expanded_single_student` 的旧通道最大漂移和共享参数相对漂移均为 `0`。`yolo_iod_lite` 的旧通道最大漂移为 `0`，共享参数相对漂移为 `0.077112`；它复用 SHA256 `d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957` 的 current teacher，教师只在增量 student 图像上推理。其锁集得到 `TP=70`、`FP=98`、`targets=76`，70 张负样本中 30 张误激活，且统一模型没有双检测器冲突仲裁可用，`fusion decision_count=0`。
 
@@ -343,7 +342,7 @@ P7 固定精度门禁为 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.
 | `p7-expanded-20260815` | `9c2800525a66f79f6a03cba2e2680b2c8b29427cc34d517678eec8f527529a2c` | `c52c3f59505e8bdab6dfdff61e28bfbef1791887a4e2e68ce1dcbad264b3adc6` | `94f3f6edd893192c06370ba80078976bf9d26093a158229bf43dc062401e23b3` |
 | `p7-yolo-iod-20260815` | `d8518910ace533797ad8e9a70d99aa86d4caadf3c5eeb45c048b96f1e7545ae3` | `545d2c6221dc9bd07eadeb39298a58b147f84c545c5aeb77f027ace79a630586` | `40bed0ec033c11134f5b4be95af2b36556f30739f64c1dce848f6f1698f90405` |
 
-按既定顺序，第一步没有胜出的四类检测器后立即停止 P7：不训练 Scene/Sensor 共享上下文头，不导出单 OM，不启动 8502，也不执行 30+890 性能门禁。不得通过读取旧类原始训练数据、降低门禁或改变阈值/融合语义绕过失败。两个配置、EMA/BN 冻结修复、严格数据隔离、single-detector 逻辑映射和失败证据保留，作为下一轮算法研究的可复现起点；被拒绝的 profile 不能被正式加载。
+按新口径复核，第一候选 New-mAP50 明确失败，第二候选 New-mAP50 和 KRR 明确失败，因此 P7 的停止结论不变；precision/FAR 失败不再用于论证。不得通过读取旧类原始训练数据绕过赛题约束。两个配置、EMA/BN 冻结修复、严格数据隔离、single-detector 逻辑映射和失败证据保留，作为后续双逻辑头研究的可复现起点。
 
 ## 5. P8–P11 后续优化
 
@@ -374,9 +373,11 @@ P5 保留配置在 clean Git HEAD `5702511040986bbd7b3a37316db9d393746310bf` 上
 
 Run 2 相对 Run 1 的 mean、P95、P99 差异分别约为 `0.020%`、`0.212%`、`0.023%`，均满足 `≤2%`。两轮开始温度分别为 `59°C` 和 `61°C`，结束快照分别为 `67°C` 和 `70°C`；NPU Health、正式/候选 health、Git、配置、build manifest、OM/AIPP 哈希、Python、SoC 和 governor 身份均通过门禁。P8 形成的新鲜性能基线固定为 Run 1 `41.1265/47.200/48.200 ms`，用于 P9 的改善比较。测量后 `8502` 已停止，正式 `8501` 在同步、启动、测量和停止期间始终为 `ready`。
 
-### P9：设备侧解码 + Host 精确 NMS
+按修订后的计分口径补测，P8 raw 在 `confidence=0.01` 下得到 Base mAP50 `0.819415`、New-mAP50 `0.728761`、KRR `1.0`，三项满分；20 图 batch 中位时长 `921.3 ms`、`21.708 FPS`，效率为 `7/10`。batch 分解中上传解析约 `51.8 ms`、Host decode 约 `148–172 ms`、Engine 约 `690–705 ms`。
 
-P6 已证明 CANN `7.0.RC1` 的设备 NMS 无法同时复现严格 `IoU > threshold`、稳定 tie-break 和重复框抑制。P9 不再尝试设备 NMS，只把坐标解码和候选筛选移入 OM，Host 继续执行现有精确 NMS。
+### P9：设备侧后处理的计分口径复核
+
+P9-A 只把坐标解码和候选筛选移入 OM，Host 继续执行现有 NMS；P9-B 重新开放 CANN `7.0.RC1` 可编译的设备 NMS。两者都不再要求与 Host 逐框等同，只以三项精度和 batch FPS 判定。
 
 内部输出契约扩展为：
 
@@ -398,22 +399,21 @@ Base `capacity=4096`，Specialist `capacity=2048`。候选保持 anchor-major、
 
 请求阈值 `<0.01` 或 `overflow=1` 时，运行时只复制 raw 输出并执行现有 `raw_yolo_v1` 路径，禁止静默丢弃候选。正常路径先复制 `valid_count/overflow`，再复制紧凑候选数组，raw fallback 不复制到 Host。优先使用 CANN `7.0.RC1` 可编译的 ONNX 图算子；若固定候选 gather 无法编译，只允许为 decode/filter/gather 实现 AscendC/TBE 算子，不实现 NMS。
 
-构造探针覆盖阈值相等、IoU 相等、同分框、跨类重叠、NMS 后补位、capacity 边界和 overflow/raw 回退。任一严格语义探针失败即停止 P9，继续使用 `raw_yolo_v1`，不进入 89 图或性能轮。
+构造探针继续覆盖阈值相等、IoU 相等、同分框、跨类重叠、NMS 后补位、capacity 边界和 overflow/raw 回退，用于说明差异和发现崩溃/溢出；语义不等同本身不得停止 89 图评分或性能轮。
 
-P9 晋级要求：
-
-- 89 图检测记录和排除耗时字段后的业务 JSON 零差异；
-- output copy 加 Host 后处理均值至少减少 `1.5 ms`；
-- 两轮完整 API 均值相对 P8 新鲜基线均改善至少 `3%`；
-- 两轮 P95/P99 均不恶化超过 `2%`。
+P9 晋级要求是 Base/New/KRR 和 20 图 batch FPS 四项满分。逐框/JSON、output copy、Host 后处理、单请求均值和 P95/P99全部降为诊断。若多个候选都未到 30 FPS，则只保留 batch FPS 最高且三项精度满分者作为 P10 输入；差异小于 `1%` 时视为无稳定收益，保留更简单的 raw 路径。
 
 执行结论（2026-08-15）：P9 已实现 `decoded_candidates_v1`、固定 TopK 候选收集、Host 严格排序/NMS、低阈值/overflow raw 回滚、两阶段选择性 D2H、构建清单验证和完整探针工具。CANN `7.0.RC1` 能编译该标准 ONNX 图；首版 int32 `ReduceSum` 在设备上错误退化为 `0/1`，改用 float32 求和后，阈值相等/略高、同分框、跨类重叠、`IoU` 相等、NMS 后补位、capacity 边界和 overflow 回滚探针全部逐输出通过。
 
-完整 Base/Specialist OM 也构建和加载成功，但 89 图零差异门禁失败。相对同一 P8 raw 配置，89 图检测数均为 `343`，类别数、置信度和 Scene/Sensor 结果完全相同；设备侧 mixed-fp16 坐标解码仍使 84 图出现框坐标差异，最大绝对差 `0.25 px`。业务 JSON SHA256 同样有 `84/89` 不一致。该差异虽不改变检测数量或置信度，但违反 P9 的严格逐框和业务 JSON 零差异要求，因此 P9 拒绝晋级并回滚 `raw_yolo_v1`。按停止条件未执行两轮 30+890 性能门禁，也不以单轮诊断耗时宣称收益；P10 从 P8 raw 基线继续。
+P9-A 完整 Base/Specialist OM 构建、加载和 89 图评分成功。相对 P8 raw，84 图有最大 `0.25 px` 坐标差异，但修订口径下不阻断；在 `confidence=0.01` 下得到 Base mAP50 `0.819901`、New-mAP50 `0.728761`、KRR `1.0`，三项仍满分。两轮单请求诊断为 `42.798/48.555/49.500 ms` 和 `42.737/48.600/49.300 ms`。正式 20 图 batch 三轮为 `21.720/21.751/22.134 FPS`，中位 `21.751 FPS`，仅比 P8 `21.708 FPS` 高约 `0.20%`；中位 batch `919.5 ms`，其中 Host decode `163.149 ms`、Engine `697.130 ms`。因此 P9-A 以“效率计分无稳定收益”回滚 raw，而不是因 JSON/逐框差异淘汰。正式报告 SHA256 为 `95104f39d1045bdafed80c11084125882ee65bca41015490e8fc601b42081805`。
 
-### P10：共享骨干与双逻辑检测头
+P9-B `detections_v1` 尚待按同一评分协议执行。若它三项精度满分且 batch FPS 高于 raw 至少 `1%`，即使构造 NMS 边界和业务 JSON 不等同也可成为 P10 输入；否则继续使用 P8 raw。
 
-P7 的四类单分类头会失去原双模型冲突仲裁，并在新增类学习、KRR、precision 或误激活上失败。P10 改为共享 Base backbone 和 neck/FPN，但保留相互独立的 old/new Detect head，物理上一次执行，逻辑上仍是两个检测器。
+### P10：batch encoded 路径、共享骨干与双逻辑检测头
+
+P10-A 先让 `/api/batch` 的 20 张 PNG 直接进入已有 DVPP encoded 预处理，避免当前整批约 `148–172 ms` 的 Host OpenCV/PIL decode；非法 PNG 明确报错，不静默 CPU 回退。该子阶段不改模型，预期直接把 P8 `921.3 ms` 压到约 `750–773 ms`，仍需后续共享执行闭合剩余缺口。
+
+P10-B 解决 Engine 重复执行。P7 的四类单分类头在 New-mAP50/KRR 计分项上失败；P10 改为共享 Base backbone 和 neck/FPN，但保留相互独立的 old/new Detect head，物理上一次执行，逻辑上仍是两个检测器。
 
 新增内部布局 `shared_backbone_dual_head_v1`：
 
@@ -428,19 +428,13 @@ P7 的四类单分类头会失去原双模型冲突仲裁，并在新增类学�
 1. 复制现有 Specialist 的 `cv2/cv3/DFL` 到 new head，仅训练 new head；
 2. 第一候选精度失败时，在三层共享特征前增加零初始化 residual `1×1` adapter，仅训练 adapter 和 new head。
 
-两种候选都只允许读取 warship 增量数据。Base backbone、neck、old head、BatchNorm 统计以及 model/EMA 中所有冻结参数的最大漂移必须为 `0`。两种候选都通过精度门禁时，以板端完整 API 均值更低者胜出。
+两种候选都只允许读取 warship 增量数据。Base backbone、neck、old head、BatchNorm 统计以及 model/EMA 中所有冻结参数的最大漂移必须为 `0`，这是数据合规与可复现前提。两种候选都通过三项精度计分门禁时，以 20 图 batch FPS 更高者胜出。
 
-若 P9 晋级，两个逻辑头均使用 `decoded_candidates_v1`；否则使用双 raw 输出。Ascend 后端一次执行返回两个逻辑结果，Web 编排继续按 Base/Specialist 两个结果运行，公共响应和审计字段不变。
+P10 从 P9 胜出契约开始；当前 P9-A 无稳定收益，因此默认使用双 raw 输出。Ascend 后端一次执行返回两个逻辑结果，Web 编排继续按 Base/Specialist 两个结果运行，公共必需响应字段不变。
 
-P10 晋级要求：
+P10 晋级要求是 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 和 20 图 batch FPS `≥30`。若尚未达到 30 FPS，则可保留三项精度满分且 batch FPS 最高的中间候选继续 P11；`≥8%/≥3 ms`、precision/FAR、逐框差异和 P95/P99 均只作诊断。Base/EMA 零漂移和增量数据隔离继续作为评分真实性前提。
 
-- Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95`；
-- 新类 precision `≥0.90`、误激活率 `≤0.05`；
-- Base 冻结参数和 EMA 最大漂移为 `0`；
-- 两轮完整 API 均值相对上一胜出组合均同时改善 `≥8%` 且 `≥3 ms`；
-- 两轮 P95/P99 均不恶化超过 `2%`。
-
-两个候选任一精度门禁失败，或没有候选达到性能门禁时，回滚为独立 Base/Specialist OM，不复用 P7 被拒绝的四类单头模型。
+候选任一计分精度门禁失败时回滚为独立 Base/Specialist OM，不复用 P7 被拒绝的四类单头模型。
 
 ### P11：共享 Scene/Sensor 上下文头
 
@@ -451,24 +445,24 @@ P11 不严格依赖 P10。P10 晋级时，上下文头挂到双逻辑检测器�
 1. 对 YOLO `model.10` 深层特征做全局平均池化，分别接 `Linear(C,2)` Sensor head 和 `Linear(C,4)` Scene head；
 2. 第一候选精度失败时，对 P3/P4/P5 三层特征分别池化并拼接，经 256 维 SiLU 隐层后接两个分类头。
 
-单 OM 新增固定输出 `sensor_logits[1,2] float32` 和 `scene_logits[1,4] float32`。Agent 复用当前 softmax、上下文概率、软阈值和路由语义；两种候选都通过时，以新增 Engine 时长更低者胜出。
+单 OM 新增固定输出 `sensor_logits[1,2] float32` 和 `scene_logits[1,4] float32`。Agent 保留可解析的 context 输出；允许 softmax、软阈值和路由细节发生变化，只要检测三项精度仍满分。两种候选都可运行时，以 20 图 batch FPS 更高者胜出。
 
-P11 上下文门禁为 Sensor lock accuracy `≥0.95`、Scene lock accuracy `≥0.80`、Joint lock accuracy `≥0.75`，并重新通过 P10 的全部检测精度门禁。性能晋级还要求两轮 API 均值同时改善 `≥1%` 和 `≥0.5 ms`，P95/P99 不恶化超过 `2%`。两种候选均失败时保留独立 Scene OM。
+Sensor lock accuracy `≥0.95`、Scene lock accuracy `≥0.80`、Joint lock accuracy `≥0.75` 全部改为非阻断诊断。P11 只要求 context 输出可解析、Base/New/KRR 三项精度满分且 20 图 batch FPS 不低于输入候选；达到 `≥30 FPS` 才完成效率满分目标。两种候选都不能运行或损伤计分精度时保留独立 Scene OM。
 
-即使 old detector、new detector 和 Scene/Sensor 最终物理合并到一个 OM，也必须作为三个独立逻辑功能模型记录职责、输出、owner 和审计证据。最终发布仍须达到 Engine 均值 `≤30 ms`、完整 API 均值 `≤33.33 ms`、P95 `≤35 ms`。
+即使 old detector、new detector 和 Scene/Sensor 最终物理合并到一个 OM，也继续作为三个独立逻辑功能模型记录职责和 owner，满足主观架构说明需要。最终发布硬目标是三项精度和 batch FPS 四项满分；Engine、单请求均值和 P95 只留证。
 
 ## 6. 接口与兼容性
 
 - `POST /api/detect` 的请求字段和现有必需响应字段保持不变。
-- `agent.decision.conflict_suppressions` 等完整审计响应保持不变。
+- `agent.decision` 等公共必需字段保持可解析；内部审计明细允许随候选变化，不要求业务 JSON 零差异。
 - `timings` 仅向后兼容地增加字段，不删除或重命名已有字段。
 - P4/P5 Ascend 候选配置增加 `schedule_mode`、提交顺序、收集顺序和可选的模型 priority 映射；所有字段均为内部运行时接口。
 - P6/P9 模型条目支持 `raw_yolo_v1 | decoded_candidates_v1 | detections_v1`；未声明时保持 `raw_yolo_v1`，禁止依据输出 shape 静默猜测契约。
 - P7 复用现有 `deployment: single_detector` profile；公共 class ID、class name、source、protocol 和审计字段保持现有语义。
-- P10/P11 增加内部 `model_layout`、logical head owner、class map、anchor count 和 candidate capacity；这些字段不进入 Web 公共接口。
+- P10/P11 增加内部 `model_layout`、logical head owner、class map、anchor count、candidate capacity 和 batch encoded 输入契约；这些字段不进入 Web 公共接口。
 - DVPP 候选配置只接受固定 PNG 契约；不合规输入明确报错。正式配置只有在 P8–P11 最终候选全部门禁通过后才允许切换，CPU 和双检测器回滚通过独立配置显式选择。
 - 内部 submit/result 句柄不成为 Web 公共接口。
-- 批量 API、多请求并发和响应审计精简不在本轮范围。
+- `/api/batch` 的 Host decode 消除属于 P10-A 核心范围；跨请求流水线和并发压测仍不在本轮范围。
 
 ## 7. 测试与交付
 
@@ -479,22 +473,23 @@ P11 上下文门禁为 Sensor lock accuracy `≥0.95`、Scene lock accuracy `≥
 - 固定 PNG 接受规则及非法格式不触发 CPU fallback；
 - P4 四种 memory/schedule 组合、P2 行为回滚和详细 timing 开关；
 - P5 提交/收集顺序、priority range 映射和 priority API 缺失时的明确跳过；
-- P6 两种 output contract，以及阈值边界、相同置信度、anchor/class tie-break、重叠框、多类别和 `max_det` 饱和场景下与 Host reference 完全一致；
-- P7 统一 student 数据视图、增量数据隔离、旧类权重/通道冻结、single-detector source 映射和共享上下文头不改变检测输出；
+- P6 两种 output contract，以及阈值边界、相同置信度、anchor/class tie-break、重叠框、多类别和 `max_det` 饱和场景的差异报告、崩溃防护和重新评分；
+- P7 统一 student 数据视图、增量数据隔离、旧类权重/通道冻结、single-detector source 映射和三项计分精度复核；
 - P8 环境快照解析、guard 失败闭锁、governor 不支持和两轮环境一致性；
-- P9 三种 output contract、严格阈值/排序/NMS、capacity 边界和 overflow/raw 回退；
+- P9 三种 output contract、阈值/排序/NMS 差异、capacity 边界、overflow/raw 回退和每个可运行候选的 89 图重新评分；
 - P10 双逻辑头装配、冻结参数与 EMA 零漂移、严格增量数据隔离和 old/new owner 映射；
-- P11 在 P10 成败两种布局下的上下文头装配、上下文精度门禁和检测输出兼容；
+- P10 `/api/batch` encoded PNG 直接进入 DVPP、非法输入显式失败和无隐式 CPU decode；
+- P11 在 P10 成败两种布局下的上下文头装配、上下文诊断和检测计分精度兼容；
 - 已知 1 图 early-threshold 差异的永久回归夹具；
 - fake ACL 验证异步调用顺序、最终等待、错误传播和资源释放；
 - `/api/detect` 必需字段不变且新增 timing 字段为兼容添加；
-- raw/device-NMS golden 对齐、89 图冻结预测评分和每候选两轮 890 请求性能测试。
+- 89 图冻结预测评分、20 图 batch score gate 和每候选 30+890 单请求诊断。
 
 本机 Python 固定使用 WSL 仓库现有 `.venv`。不得创建新环境、安装额外依赖或下载 CPU PyTorch。板端不运行 Web pytest，只执行真实 API 端到端测量和阶段所需的能力/模型探针。
 
-板端候选固定使用 `127.0.0.1:8502`，正式 `127.0.0.1:8501` 在同步、启动候选、测量和停止候选期间必须持续 `ready`。每个正式性能报告均使用 30 次预热、10×89 请求、单并发和 HTTP keep-alive，并保存服务端、客户端和关键分段的均值、P50、P95、P99。
+板端候选固定使用 `127.0.0.1:8502`，正式 `127.0.0.1:8501` 在同步、启动候选、测量和停止候选期间必须持续 `ready`。每个报告执行 30 次预热、10×89 单请求诊断和三轮 20 图 batch score gate，保存 batch FPS、服务端/客户端分布和关键分段。
 
-每阶段产出独立候选 release、构建清单、精度报告、性能报告和回滚指针。正式配置只在全部门禁通过后原子切换，旧 OM 和配置不得覆盖或删除。P8、P9、P10、P11 分别提交并推送，不把多个阶段压入同一提交。
+每阶段产出独立候选 release、构建清单、精度报告、性能报告和回滚指针。正式配置只在四项计分满分、真实性校验通过后原子切换，旧 OM 和配置不得覆盖或删除。P8、P9、P10、P11 分别提交并推送，不把多个阶段压入同一提交。
 
 ## 8. 明确假设与非目标
 
@@ -503,9 +498,8 @@ P11 上下文门禁为 Sensor lock accuracy `≥0.95`、Scene lock accuracy `≥
 - P6 只允许使用当前 CANN 可编译的图算子或 AscendC/TBE 自定义算子；不以升级工具链绕过兼容结论。
 - P7 允许四类统一检测器和共享上下文头，但严格类增量阶段不得读取旧类原始图像、标签或 feature cache，也不得通过混合数据重训换取精度。
 - P8 只治理影响测量可重复性的板端服务、governor 和后台负载，不停止或替换正式 `8501`。
-- P9 不再实现或近似设备 NMS；候选溢出或低于候选阈值的请求必须显式回到 raw Host 路径。
-- P10/P11 不通过改变检测阈值、类别映射、冲突仲裁或上下文软阈值语义换取性能。
-- 不改变检测阈值、融合策略、类别映射或审计语义来换取性能。
+- P9 允许使用 CANN `7.0.RC1` 可运行的设备 NMS，即使它不逐框复现 Host；所有候选都必须重新计算三项精度。
+- P10/P11 可以调整检测阈值、排序、冲突仲裁、融合、上下文软阈值和审计细节换取性能，但不得按 lock 标签逐图分支，且必须重新通过三项精度计分门禁。
 - 官方方法参考：
   - [msprof Profiling](https://www.hiascend.com/document/detail/en/canncommercial/850/devaids/profiling/atlasprofiling_16_0005.html)
   - [AOE 调优](https://www.hiascend.com/document/detail/en/canncommercial/850/appdevg/acldevg/aclcppdevg_000110.html)

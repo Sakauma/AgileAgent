@@ -147,7 +147,7 @@ gates:
     old_data_overlap_max: 0
   advisory:
     cumulative_map50_min: 0.80
-    # precision 与误激活率共同构成 production 质量门禁。
+    # precision 与误激活率只生成非阻断诊断告警。
     lock_precision_min: 0.90
     false_activation_rate_max: 0.05
     latency_proxy_ms_max: 33.3

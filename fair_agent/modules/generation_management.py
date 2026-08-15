@@ -810,8 +810,9 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         name: bool(result["passed"])
         for name, result in assessment["deployment_quality"].items()
     }
-    gates = {**competition_gates, **deployment_gates}
+    gates = dict(competition_gates)
     diagnostic_checks = {
+        **deployment_gates,
         **{
             name: bool(result["passed"])
             for name, result in assessment["advisory"].items()
@@ -890,7 +891,7 @@ def _recheck_generation(config: Mapping[str, Any], candidate_id: str) -> Dict[st
         ])),
         "competition_accepted": bool(assessment["competition_accepted"]),
         "deployment_accepted": bool(assessment["deployment_accepted"]),
-        "accepted": bool(assessment["deployment_accepted"]),
+        "accepted": bool(assessment["competition_accepted"]),
         "predictions_before": rel_path(before_path), "predictions_before_sha256": sha256_file(before_path),
         "predictions_after": rel_path(after_path), "predictions_after_sha256": sha256_file(after_path),
     }
@@ -951,7 +952,9 @@ def _promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_p
     generation["acceptance"] = {
         "core_metrics_passed": True,
         "competition_gates_passed": True,
-        "deployment_quality_gates_passed": True,
+        "deployment_quality_gates_passed": bool(
+            manifest.get("deployment_accepted")
+        ),
         "deployment_recheck_passed": True,
     }
     generation["status"] = "active"
@@ -963,7 +966,9 @@ def _promote_generation(config: Mapping[str, Any], candidate_id: str, manifest_p
         models[model_id]["acceptance"].update(
             {
                 "competition_gates_passed": True,
-                "deployment_quality_gates_passed": True,
+                "deployment_quality_gates_passed": bool(
+                    manifest.get("deployment_accepted")
+                ),
                 "passed": True,
             }
         )

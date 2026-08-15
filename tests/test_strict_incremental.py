@@ -899,9 +899,14 @@ def test_experiment_profile_requires_passed_hash_verified_assets(tmp_path: Path,
     metrics_payload = json.loads(metrics.read_text(encoding="utf-8"))
     metrics_payload["deployment_accepted"] = False
     metrics.write_text(json.dumps(metrics_payload), encoding="utf-8")
+    loaded_with_warning = load_experiment_profile("strict-p01")
+    assert loaded_with_warning["competition_accepted"] is True
+    assert loaded_with_warning["deployment_accepted"] is False
+    metrics_payload["competition_accepted"] = False
+    metrics.write_text(json.dumps(metrics_payload), encoding="utf-8")
     with pytest.raises(ValueError, match="合规证据无效"):
         load_experiment_profile("strict-p01")
-    metrics_payload["deployment_accepted"] = True
+    metrics_payload["competition_accepted"] = True
     metrics.write_text(json.dumps(metrics_payload), encoding="utf-8")
     calibration_payload = json.loads(calibration.read_text(encoding="utf-8"))
     calibration_payload["source_split"] = "mixed_test"

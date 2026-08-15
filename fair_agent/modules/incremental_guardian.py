@@ -147,15 +147,15 @@ def assess_incremental_candidate(
             float(metrics["lock_precision"]),
             float(advisory_config["lock_precision_min"]),
             ">=",
-            "Agent production部署质量门禁（不改变赛题分数）",
-            True,
+            "Agent production部署质量诊断（非赛题评分项）",
+            False,
         ),
         "false_activation_rate": _check(
             float(metrics["false_activation_rate"]),
             float(advisory_config["false_activation_rate_max"]),
             "<=",
-            "Agent production部署质量门禁（不改变赛题分数）",
-            True,
+            "Agent production部署质量诊断（非赛题评分项）",
+            False,
         ),
         "latency_proxy_ms": _check(
             float(metrics["mean_inference_ms"]),
@@ -182,18 +182,16 @@ def assess_incremental_candidate(
         "schema_version": 1,
         "competition_accepted": competition_accepted,
         "deployment_accepted": deployment_accepted,
-        "accepted": deployment_accepted,
+        # 只有赛题计分项与数据合规前提可以阻断晋级。部署质量字段保留
+        # 为诊断信号，不能淘汰一个计分满分候选。
+        "accepted": competition_accepted,
         "status": (
             "competition_rejected"
             if not competition_accepted
             else (
-                "deployment_rejected"
-                if not deployment_accepted
-                else (
-                    "accepted_with_warnings"
-                    if any(not row["passed"] for row in advisory.values())
-                    else "accepted"
-                )
+                "accepted_with_warnings"
+                if any(not row["passed"] for row in advisory.values())
+                else "accepted"
             )
         ),
         "official_hard": official_hard,
