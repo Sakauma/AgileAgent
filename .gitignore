@@ -67,6 +67,7 @@ venv/
 !/tools/103_export_ascend_detections.py
 !/scripts/start_agent_ascend310b.sh
 !/scripts/stop_agent_ascend310b.sh
+!/scripts/prepare_ascend310b_benchmark_env.sh
 
 /configs/*
 !/configs/incremental/
