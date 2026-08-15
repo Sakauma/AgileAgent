@@ -431,7 +431,7 @@ def parse_small_multipart(body: bytes, content_type: str) -> tuple[bytes, str, A
 
 def parse_small_batch_multipart(
     body: bytes, content_type: str
-) -> tuple[list[tuple[str, bytes]], Any]:
+) -> tuple[list[tuple[str, bytes | memoryview]], Any]:
     """Extract a bounded in-memory batch without Starlette tempfile objects."""
 
     if len(body) > BATCH_FAST_MULTIPART_MAX_BYTES:
@@ -445,7 +445,8 @@ def parse_small_batch_multipart(
         raise ValueError("Multipart请求起始boundary无效。")
 
     cursor = len(delimiter) + 2
-    rows: list[tuple[str, bytes]] = []
+    rows: list[tuple[str, bytes | memoryview]] = []
+    body_view = memoryview(body)
     confidence: Any = None
     part_count = 0
     while True:
@@ -455,10 +456,11 @@ def parse_small_batch_multipart(
         marker = body.find(b"\r\n" + delimiter, cursor)
         if marker < 0:
             raise ValueError("Multipart请求缺少结束boundary。")
-        part = body[cursor:marker]
-        header_block, separator, content = part.partition(b"\r\n\r\n")
-        if not separator or len(header_block) > 16 * 1024:
+        header_end = body.find(b"\r\n\r\n", cursor, marker)
+        if header_end < 0 or header_end - cursor > 16 * 1024:
             raise ValueError("Multipart分段头无效。")
+        header_block = body[cursor:header_end]
+        content = body_view[header_end + 4:marker]
         headers: dict[bytes, bytes] = {}
         for line in header_block.split(b"\r\n"):
             key, colon, value = line.partition(b":")
@@ -477,7 +479,7 @@ def parse_small_batch_multipart(
             filename = options[b"filename"].decode("utf-8", "replace") or "image"
             rows.append((filename, content))
         elif field_name == "confidence" and confidence is None:
-            confidence = content.decode("ascii", "strict")
+            confidence = bytes(content).decode("ascii", "strict")
 
         boundary_end = marker + 2 + len(delimiter)
         suffix = body[boundary_end:boundary_end + 2]
@@ -773,6 +775,11 @@ async def batch_detect(request: Request) -> Response:
                 )
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
+        if getattr(engine, "backend_name", "") != "ascend_acl":
+            rows = [
+                (filename, bytes(data) if isinstance(data, memoryview) else data)
+                for filename, data in rows
+            ]
         accepts_encoded = getattr(engine, "accepts_encoded", None)
         predict_encoded_batch = getattr(engine, "predict_encoded_batch", None)
         if (
