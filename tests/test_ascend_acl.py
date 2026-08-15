@@ -321,7 +321,7 @@ def test_shared_dual_head_parses_two_logical_outputs_without_double_timing() -> 
     backend.is_shared_dual_head = True
     backend.logical_heads = {
         "old": {"output_index": 0},
-        "new": {"output_index": 1},
+        "new": {"output_index": 1, "candidate_confidence": 0.9},
     }
     backend._last_timings = {}
 
@@ -349,7 +349,7 @@ def test_shared_dual_head_parses_two_logical_outputs_without_double_timing() -> 
     )
 
     assert old.records[0]["class_id"] == 1
-    assert new.records[0]["class_id"] == 0
+    assert not new.records
     assert old.speed["preprocess"] == 1.25
     assert old.speed["inference"] == 4.5
     assert old.speed["ascend_output_copy"] == 0.5
