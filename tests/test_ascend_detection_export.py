@@ -113,6 +113,23 @@ def test_batch_multiclass_nms_has_fixed_output_contract() -> None:
     assert valid_count.tolist() == [3]
 
 
+def test_batch_multiclass_nms_pads_single_class_without_dummy_detections() -> None:
+    module = build_detections_v1_module(
+        RawIdentity(),
+        class_count=1,
+        candidate_confidence=0.5,
+        iou_threshold=0.5,
+        max_det=3,
+        nms_backend="batch_multiclass_nms",
+    )
+
+    _boxes, scores, class_ids, valid_count = module(_raw_predictions()[:, :5])
+
+    assert valid_count.tolist() == [2]
+    assert scores[:2].tolist() == pytest.approx([0.8, 0.8], abs=1e-3)
+    assert class_ids.tolist() == [0, 0, 0]
+
+
 def test_batch_multiclass_nms_probe_contains_cann_operator(tmp_path) -> None:
     module = build_detections_v1_module(
         RawIdentity(),
