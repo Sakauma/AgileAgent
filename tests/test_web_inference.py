@@ -82,6 +82,56 @@ def test_p5_ordered_model_groups_separate_submit_and_collect_order() -> None:
     }
 
 
+def test_encoded_batch_runs_once_in_queue_and_preserves_order() -> None:
+    engine = WebInferenceEngine.__new__(WebInferenceEngine)
+    engine.default_confidence = 0.5
+    engine.queue = FairInferenceQueue()
+    engine.accepts_encoded = lambda data: data.startswith(b"accepted-")
+    calls = []
+
+    def predict_unlocked(data, filename, confidence, protocol):
+        calls.append((data, filename, confidence, protocol))
+        return {"filename": filename}
+
+    engine._predict_encoded_unlocked = predict_unlocked
+    try:
+        results = engine.predict_encoded_batch(
+            [(b"accepted-one", "one.bin"), (b"accepted-two", "two.bin")],
+            0.31,
+            "auto",
+        )
+    finally:
+        engine.queue.close()
+
+    assert calls == [
+        (b"accepted-one", "one.bin", 0.31, "auto"),
+        (b"accepted-two", "two.bin", 0.31, "auto"),
+    ]
+    assert [row["filename"] for row in results] == ["one.bin", "two.bin"]
+    assert results[0]["queue_wait_ms"] == results[1]["queue_wait_ms"]
+
+
+@pytest.mark.parametrize(
+    "rows, message",
+    [
+        ([], "至少一张图像"),
+        ([(b"rejected", "bad.bin")], "不符合DVPP固定生产契约"),
+    ],
+)
+def test_encoded_batch_rejects_invalid_input_before_queue(rows, message) -> None:
+    engine = WebInferenceEngine.__new__(WebInferenceEngine)
+    engine.default_confidence = 0.5
+    engine.accepts_encoded = lambda data: data.startswith(b"accepted-")
+
+    class FailQueue:
+        def run(self, _operation):
+            raise AssertionError("invalid encoded batch entered inference queue")
+
+    engine.queue = FailQueue()
+    with pytest.raises(ValueError, match=message):
+        engine.predict_encoded_batch(rows)
+
+
 def test_p5_ordered_model_groups_drain_after_collection_failure() -> None:
     events = []
 

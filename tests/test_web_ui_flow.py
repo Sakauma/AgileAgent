@@ -88,6 +88,19 @@ class EncodedFakeEngine(FakeEngine):
             incremental_protocol,
         )
 
+    def predict_encoded_batch(
+        self, items, confidence=0.50, incremental_protocol=None
+    ):
+        return [
+            self.predict_encoded(
+                data,
+                filename,
+                confidence,
+                incremental_protocol,
+            )
+            for data, filename in items
+        ]
+
 
 def client_with_engine() -> tuple[TestClient, FakeEngine]:
     engine = FakeEngine()
@@ -392,6 +405,66 @@ def test_batch_api_returns_archive_and_summary_headers() -> None:
         assert len([name for name in archive.namelist() if name.startswith("annotated/")]) == 2
         summary = json.loads(archive.read("results.json"))
     assert summary["image_count"] == 2
+
+
+def test_batch_api_uses_encoded_backend_without_cpu_decode(monkeypatch) -> None:
+    engine = EncodedFakeEngine()
+    client = TestClient(create_app(engine_provider=lambda: engine))
+
+    def fail_decode(*_args, **_kwargs):
+        raise AssertionError("CPU batch decoder must not run for encoded input")
+
+    monkeypatch.setattr("fair_agent.web.app.decode_batch_images", fail_decode)
+    first = b"encoded-test-first"
+    second = b"encoded-test-second"
+    response = client.post(
+        "/api/batch",
+        files=[
+            ("files", ("first.bin", first, "application/octet-stream")),
+            ("files", ("second.bin", second, "application/octet-stream")),
+        ],
+        data={"confidence": "0.29"},
+    )
+
+    assert response.status_code == 200
+    assert engine.encoded_calls == [
+        (first, "first.bin", 0.29, "auto"),
+        (second, "second.bin", 0.29, "auto"),
+    ]
+    payload = response.json()
+    assert payload["timings"]["decode_ms"] == 0.0
+    assert [row["filename"] for row in payload["results"]] == [
+        "first.bin",
+        "second.bin",
+    ]
+
+
+def test_batch_api_falls_back_entire_batch_when_one_encoded_input_is_rejected() -> None:
+    engine = EncodedFakeEngine()
+    first = png("white")
+    second = png("black")
+    engine.accepts_encoded = lambda data: data == first
+    client = TestClient(create_app(engine_provider=lambda: engine))
+    response = client.post(
+        "/api/batch",
+        files=[
+            ("files", ("first.png", first, "image/png")),
+            ("files", ("second.png", second, "image/png")),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert engine.encoded_calls == []
+    assert [call[0] for call in engine.calls] == ["first.png", "second.png"]
+
+
+def test_batch_api_rejects_empty_batch() -> None:
+    client, engine = client_with_engine()
+    response = client.post("/api/batch", files=[])
+
+    assert response.status_code == 400
+    assert "至少一张图像" in response.json()["error"]
+    assert engine.calls == []
 
 
 def test_batch_api_uses_production_generation_for_every_image() -> None:

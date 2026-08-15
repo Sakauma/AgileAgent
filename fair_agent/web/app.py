@@ -650,6 +650,26 @@ async def batch_detect(request: Request) -> Response:
             uploads = [item for item in form.getlist("files") if isinstance(item, UploadFile)]
             rows = [(item.filename or "image", await item.read()) for item in uploads]
             upload_ms = (time.perf_counter() - upload_started) * 1000
+            confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
+        provider: EngineProvider = request.app.state.engine_provider
+        engine = await run_in_threadpool(provider)
+        accepts_encoded = getattr(engine, "accepts_encoded", None)
+        predict_encoded_batch = getattr(engine, "predict_encoded_batch", None)
+        if (
+            rows
+            and callable(accepts_encoded)
+            and callable(predict_encoded_batch)
+            and all(accepts_encoded(data) for _filename, data in rows)
+        ):
+            decode_ms = 0.0
+            engine_started = time.perf_counter()
+            completed_results = await run_in_threadpool(
+                predict_encoded_batch,
+                [(data, filename) for filename, data in rows],
+                confidence,
+                "auto",
+            )
+        else:
             decode_started = time.perf_counter()
             validated = decode_batch_images(
                 rows,
@@ -657,20 +677,17 @@ async def batch_detect(request: Request) -> Response:
                 int(decoding["workers"]),
             )
             decode_ms = (time.perf_counter() - decode_started) * 1000
-            confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
-        provider: EngineProvider = request.app.state.engine_provider
-        engine = await run_in_threadpool(provider)
-        engine_started = time.perf_counter()
-        completed_results = await run_in_threadpool(
-            engine.predict_batch,
-            [(image, filename) for filename, _data, image in validated],
-            confidence,
-            "auto",
-        )
-        if len(completed_results) != len(validated):
+            engine_started = time.perf_counter()
+            completed_results = await run_in_threadpool(
+                engine.predict_batch,
+                [(image, filename) for filename, _data, image in validated],
+                confidence,
+                "auto",
+            )
+        if len(completed_results) != len(rows):
             raise RuntimeError("批量推理结果数量与输入不一致。")
         engine_ms = (time.perf_counter() - engine_started) * 1000
-        for result, (_filename, source_bytes, _image) in zip(completed_results, validated):
+        for result, (_filename, source_bytes) in zip(completed_results, rows):
             result["source_bytes"] = source_bytes
         total_detections = sum(int(item["detection_count"]) for item in completed_results)
         total_inference = round(sum(float(item["inference_ms"]) for item in completed_results), 1)
