@@ -1279,6 +1279,7 @@ class AscendEncodedPreprocessor:
         context_model: AscendAclModel,
         scene_resize_stages: Any = None,
         max_encoded_bytes: int = 2 * 1024 * 1024,
+        prepare_context: bool = True,
     ) -> None:
         contracts = [
             (base_model, (1, 736, 896, 3), "base"),
@@ -1303,6 +1304,7 @@ class AscendEncodedPreprocessor:
         self.base_model = base_model
         self.specialist_model = specialist_model
         self.context_model = context_model
+        self.prepare_context = bool(prepare_context)
         if len({model.memory_mode for model, _shape, _name in contracts}) != 1:
             raise RuntimeError("Ascend DVPP三个模型必须使用相同内存模式")
         self.memory_mode = base_model.memory_mode
@@ -1598,10 +1600,9 @@ class AscendEncodedPreprocessor:
                 raise ValueError("Ascend DVPP PNG解码大小与固定RGB输出不一致")
             started = time.perf_counter_ns()
             if self.prepared_runs:
-                reset_events = [
-                    (self.base_ready_event, "base"),
-                    (self.context_ready_event, "context"),
-                ]
+                reset_events = [(self.base_ready_event, "base")]
+                if self.prepare_context:
+                    reset_events.append((self.context_ready_event, "context"))
                 if self.specialist_ready_event is not None:
                     reset_events.insert(
                         1,
@@ -1659,45 +1660,46 @@ class AscendEncodedPreprocessor:
                 acl.rt.record_event(self.base_ready_event, self.stream),
                 "acl.rt.record_event(base input)",
             )
-            scene_source = self.decoded_desc
-            for index, intermediate_desc in enumerate(
-                self.scene_intermediate_descs
-            ):
+            if self.prepare_context:
+                scene_source = self.decoded_desc
+                for index, intermediate_desc in enumerate(
+                    self.scene_intermediate_descs
+                ):
+                    _require(
+                        acl.media.dvpp_vpc_resize_async(
+                            self.channel,
+                            scene_source,
+                            intermediate_desc,
+                            self.scene_resize_config,
+                            self.stream,
+                        ),
+                        f"acl.media.dvpp_vpc_resize_async(scene intermediate {index})",
+                    )
+                    scene_source = intermediate_desc
                 _require(
                     acl.media.dvpp_vpc_resize_async(
                         self.channel,
                         scene_source,
-                        intermediate_desc,
+                        self.scene_resize_desc,
                         self.scene_resize_config,
                         self.stream,
                     ),
-                    f"acl.media.dvpp_vpc_resize_async(scene intermediate {index})",
+                    "acl.media.dvpp_vpc_resize_async(scene final)",
                 )
-                scene_source = intermediate_desc
-            _require(
-                acl.media.dvpp_vpc_resize_async(
-                    self.channel,
-                    scene_source,
-                    self.scene_resize_desc,
-                    self.scene_resize_config,
-                    self.stream,
-                ),
-                "acl.media.dvpp_vpc_resize_async(scene final)",
-            )
-            _require(
-                acl.media.dvpp_vpc_crop_async(
-                    self.channel,
-                    self.scene_resize_desc,
-                    self.scene_desc,
-                    self.roi,
-                    self.stream,
-                ),
-                "acl.media.dvpp_vpc_crop_async(scene)",
-            )
-            _require(
-                acl.rt.record_event(self.context_ready_event, self.stream),
-                "acl.rt.record_event(context input)",
-            )
+                _require(
+                    acl.media.dvpp_vpc_crop_async(
+                        self.channel,
+                        self.scene_resize_desc,
+                        self.scene_desc,
+                        self.roi,
+                        self.stream,
+                    ),
+                    "acl.media.dvpp_vpc_crop_async(scene)",
+                )
+                _require(
+                    acl.rt.record_event(self.context_ready_event, self.stream),
+                    "acl.rt.record_event(context input)",
+                )
             self.prepared_runs += 1
             return (time.perf_counter_ns() - started) / 1_000_000.0
 
@@ -1712,14 +1714,19 @@ class AscendEncodedPreprocessor:
             # completion event has finished. At this point all model handles
             # have already completed, so this confirms timestamp visibility
             # without extending the device critical path.
+            completion_event = (
+                self.context_ready_event
+                if self.prepare_context
+                else self.base_ready_event
+            )
             _require(
-                self.runtime.acl.rt.synchronize_event(self.context_ready_event),
+                self.runtime.acl.rt.synchronize_event(completion_event),
                 "acl.rt.synchronize_event(DVPP completion)",
             )
             return float(
                 _value(
                     self.runtime.acl.rt.event_elapsed_time(
-                        self.timing_start_event, self.context_ready_event
+                        self.timing_start_event, completion_event
                     ),
                     "acl.rt.event_elapsed_time(DVPP)",
                 )

@@ -1046,6 +1046,7 @@ class WebInferenceEngine:
                 scene_resize_stages=self.native_options.get(
                     "dvpp_scene_resize_stages", []
                 ),
+                prepare_context=not self.fixed_neutral_context,
             )
             self._encoded_image_stub = Image.new(
                 "RGB",

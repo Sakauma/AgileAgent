@@ -41,6 +41,8 @@ DETECTION_UPLOAD_SPOOL_MAX_BYTES = 2 * 1024 * 1024
 DETECTION_FAST_MULTIPART_MAX_BYTES = DETECTION_UPLOAD_SPOOL_MAX_BYTES + 64 * 1024
 BATCH_FAST_MULTIPART_MAX_BYTES = 64 * 1024 * 1024
 BATCH_FAST_MULTIPART_MAX_PARTS = 256
+BATCH_RESULT_METADATA_BASE_BYTES = 128 * 1024
+BATCH_RESULT_METADATA_PER_ROW_BYTES = 4096
 
 
 class BatchResultStore:
@@ -53,12 +55,29 @@ class BatchResultStore:
 
     @staticmethod
     def _result_bytes(results: list[Dict[str, Any]]) -> int:
-        image_bytes = sum(len(item.get("source_bytes", b"")) for item in results)
-        metadata = [
-            {key: value for key, value in item.items() if key not in {"source_bytes", "annotated_png", "annotated_image"}}
-            for item in results
-        ]
-        return image_bytes + len(json.dumps(metadata, ensure_ascii=False, default=str).encode("utf-8"))
+        total = 0
+        excluded = {"source_bytes", "annotated_png", "annotated_image"}
+        for item in results:
+            total += len(item.get("source_bytes", b""))
+            total += len(item.get("annotated_png", b""))
+            if not (set(item) - excluded):
+                continue
+            detections = item.get("detections") or []
+            decision = dict((item.get("agent") or {}).get("decision") or {})
+            protocols = (item.get("agent") or {}).get("protocols") or []
+            complexity = max(
+                int(item.get("detection_count") or 0),
+                len(detections) if isinstance(detections, list) else 0,
+            )
+            complexity += len(decision.get("conflict_suppressions") or [])
+            complexity += sum(
+                int(row.get("raw_candidate_count") or 0)
+                for row in protocols
+                if isinstance(row, Mapping)
+            )
+            total += BATCH_RESULT_METADATA_BASE_BYTES
+            total += BATCH_RESULT_METADATA_PER_ROW_BYTES * complexity
+        return total
 
     @property
     def total_bytes(self) -> int:
