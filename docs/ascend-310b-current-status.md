@@ -451,6 +451,33 @@ Run ID 为 `p7-yolo-iod-20260815`，完整训练 `80/80` epoch，最终 dev mAP5
 
 P7 结论为：**两个统一检测器候选均拒绝晋级。** 因第一步没有胜出的四类检测器，未训练 Scene/Sensor 共享上下文头，未导出单 OM，未启动 8502，也未执行 30 次预热 + 10×89 性能门禁。正式 release、双检测器 OM、Scene OM 和 `8501` 均保持原状；失败配置、冻结修复、逻辑 owner 映射与本地训练证据保留，rejected profile 不能被生产加载。
 
+## P8–P11 待执行方案
+
+P8–P11 已完成方案设计，尚未产生代码、模型、板端探针或性能结果。执行顺序固定为环境固化、设备解码与 Host 精确 NMS、共享骨干双逻辑检测头、共享 Scene/Sensor 上下文头。完整实施门禁和回滚规则记录在 `docs/ascend-310b-p0-p3-improvement-plan.md`。
+
+当前参考状态：
+
+| 项目 | 当前值 | 目标或结论 |
+| --- | ---: | --- |
+| 正式 Base mAP50 | `0.819407` | 已达到满分档 |
+| 正式 New-mAP50 | `0.728761` | 已达到满分档 |
+| 正式 KRR | `1.000000` | 已达到满分档 |
+| 正式新类 precision | `0.933333` | 已达到满分档 |
+| 正式误激活率 | `0.014286` | 已达到满分档 |
+| 正式 API | 约 `13.99 FPS` | 未达到 `30 FPS` 满分档 |
+| P5 保留组合 | `41.245/47.300/48.400 ms` | 约 `24.25 FPS`，作为 P8 前参考 |
+| 最终性能预算 | Engine `≤30 ms` | API mean `≤33.33 ms`、P95 `≤35 ms` |
+
+计划要点如下：
+
+- P8 持久禁用 `xscreensaver`，在可用时固定 CPU `performance` governor，并用温度、后台 CPU、NPU Health、端口、Git/配置/OM 哈希守卫两轮 30+890 新鲜基线；
+- P9 新增 `decoded_candidates_v1`，Base/Specialist capacity 分别为 `4096/2048`，设备只做 decode/filter，Host 保留严格排序和 NMS；阈值低于 `0.01` 或候选溢出时显式回到 raw 路径；
+- P10 共享 Base backbone 与 neck/FPN，保留独立 old/new Detect head 和原双模型冲突仲裁；只用 warship 数据训练 new head 或 residual adapter，Base/EMA 漂移必须为 `0`；
+- P11 即使 P10 失败也继续挂到正式 Base 骨干，依次测试深层单尺度和 P3/P4/P5 多尺度上下文头，检测网络保持冻结；
+- P8–P11 候选只使用 `8502`，正式 `8501` 不停止、不替换；板端不运行 Web pytest；CANN 固定 `7.0.RC1`，不使用 INT8、降分辨率、剪枝或跨请求流水线。
+
+P9 只有在 89 图业务 JSON 零差异、copy 加 Host 后处理至少减少 `1.5 ms`、两轮 API 均值改善至少 `3%` 时晋级。P10/P11 结构候选必须重新通过 Base `≥0.80`、New `≥0.60`、KRR `≥0.95`、precision `≥0.90`、误激活率 `≤0.05`；最终候选还须重新通过 P0 严格阈值边界、provenance 和发布校验。本文在各阶段实际执行前不记录任何推测结果。
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
