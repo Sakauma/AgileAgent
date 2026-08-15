@@ -142,9 +142,15 @@ class FakeRt:
         size: int,
         kind: int,
     ) -> int:
-        return self.memcpy_async(
-            destination, destination_size, source, size, kind, 0
-        )
+        if kind == ACL_MEMCPY_HOST_TO_DEVICE:
+            self.devices[destination][:size] = ctypes.string_at(source, size)
+            self.operations.append("memcpy_h2d")
+        elif kind == ACL_MEMCPY_DEVICE_TO_HOST:
+            ctypes.memmove(destination, bytes(self.devices[source][:size]), size)
+            self.operations.append("memcpy_d2h")
+        else:
+            raise AssertionError(f"unexpected memcpy kind: {kind}")
+        return 0
 
 
 class FakeMdl:
@@ -275,13 +281,20 @@ class FakeRuntime:
         self.models.discard(model)
 
 
-def create_model() -> tuple[FakeRuntime, AscendAclModel]:
+def create_model(
+    *,
+    memory_mode: str = "pinned",
+    schedule_mode: str = "unified_enqueue",
+    detailed_event_timing: bool = True,
+) -> tuple[FakeRuntime, AscendAclModel]:
     runtime = FakeRuntime()
     model = AscendAclModel(
         runtime,  # type: ignore[arg-type]
         Path("fake.om"),
         execution_mode="async_stream",
-        memory_mode="pinned",
+        memory_mode=memory_mode,
+        schedule_mode=schedule_mode,
+        detailed_event_timing=detailed_event_timing,
     )
     return runtime, model
 
@@ -329,6 +342,40 @@ def test_preloaded_execution_waits_on_ready_event_without_h2d() -> None:
     assert "memcpy_async_h2d" not in operations
     assert outputs[0].tolist() == [[9, 8, 7, 6]]
     assert timings["input_copy_ms"] == 0.0
+    model.close()
+
+
+def test_threaded_execute_reproduces_stream_wait_then_synchronous_d2h() -> None:
+    runtime, model = create_model(schedule_mode="threaded_execute")
+    runtime.acl.rt.devices[model.input_device][:] = b"\x04\x03\x02\x01"
+
+    operation_start = len(runtime.acl.operations)
+    outputs, timings = model.execute_preloaded_threaded("dvpp-ready")
+    operations = runtime.acl.operations[operation_start:]
+
+    assert outputs[0].tolist() == [[4, 3, 2, 1]]
+    assert operations.index("stream_wait_event") < operations.index(
+        "execute_async"
+    ) < operations.index("synchronize_stream") < operations.index("memcpy_d2h")
+    assert "memcpy_async_d2h" not in operations
+    assert runtime.acl.rt.synchronize_event_calls == 0
+    assert timings["input_copy_ms"] == 0.0
+    assert timings["inference_ms"] == 1.0
+    model.close()
+
+
+def test_compact_event_timing_keeps_model_time_and_skips_copy_queries() -> None:
+    runtime, model = create_model(detailed_event_timing=False)
+    handle = model.submit(np.asarray([[1, 2, 3, 4]], dtype=np.uint8))
+
+    outputs, timings = handle.result()
+
+    assert outputs[0].tolist() == [[1, 2, 3, 4]]
+    assert timings["input_copy_ms"] == 0.0
+    assert timings["inference_ms"] == 1.0
+    assert timings["output_copy_ms"] == 0.0
+    assert runtime.acl.operations.count("create_event") == 3
+    assert runtime.acl.operations.count("event_elapsed_time") == 1
     model.close()
 
 

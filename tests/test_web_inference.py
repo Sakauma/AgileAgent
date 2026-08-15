@@ -640,7 +640,10 @@ def test_ascend_async_path_submits_three_models_before_collecting_results() -> N
     engine.class_owners = {0: "test_base_model", 4: "p05_new_vehicle"}
     engine.unified_class_gates = {}
     engine.backend_name = "ascend_acl"
-    engine.native_options = {"execution_mode": "async_stream"}
+    engine.native_options = {
+        "execution_mode": "async_stream",
+        "schedule_mode": "unified_enqueue",
+    }
     engine.encoded_preprocessor = None
     engine.detector = AsyncDetector(
         "base",

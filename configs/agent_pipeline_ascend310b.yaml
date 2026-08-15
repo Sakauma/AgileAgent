@@ -197,6 +197,8 @@ ascend_backend:
   execution_mode: async_stream
   encoded_preprocessing: cpu
   memory_mode: pageable
+  schedule_mode: threaded_execute
+  detailed_event_timing: false
   dvpp_scene_resize_stages: []
   validated: true
   validation_candidate: false
