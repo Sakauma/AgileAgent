@@ -1457,6 +1457,8 @@ class WebInferenceEngine:
             and bool(prefetch_ids)
             and self.native_options.get("execution_mode", "synchronous")
             == "async_stream"
+            and self.native_options.get("schedule_mode", "threaded_execute")
+            == "unified_enqueue"
         )
         if unified_ascend_submit:
             pending: list[tuple[str, Any, float]] = []
