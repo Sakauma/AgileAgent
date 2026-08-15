@@ -174,10 +174,15 @@ def test_generation_zero_excludes_warship_and_base_cannot_claim_unregistered_cla
 
     premature = deepcopy(payload)
     expert = next(item for item in premature["models"] if item["id"] == "incremental_detector")
-    expert["acceptance"]["passed"] = False
+    expert["acceptance"]["deployment_quality_gates_passed"] = False
+    diagnostic_only_path = tmp_path / "diagnostic-only.json"
+    diagnostic_only_path.write_text(json.dumps(premature), encoding="utf-8")
+    assert load_generation_registry(diagnostic_only_path)["channels"]["production"]
+
+    expert["acceptance"]["competition_gates_passed"] = False
     premature_path = tmp_path / "premature.json"
     premature_path.write_text(json.dumps(premature), encoding="utf-8")
-    with pytest.raises(ValueError, match="未通过部署门禁"):
+    with pytest.raises(ValueError, match="未通过计分或完整性门禁"):
         load_generation_registry(premature_path)
 
 

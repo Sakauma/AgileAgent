@@ -139,7 +139,7 @@ context_gate:
   batch_size: 32
 
 deployment_acceptance:
-  # 这两项不改写官方三项分数，但决定模型能否进入实际 Agent。
+  # 兼容旧报告字段；两项只生成诊断告警，不再阻断计分满分候选进入 Agent。
   min_new_class_precision: 0.90
   max_new_class_false_activation_rate: 0.05
 

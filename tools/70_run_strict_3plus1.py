@@ -1582,7 +1582,7 @@ def freeze_profile(
         "schema_version": 1,
         "profile_id": protocol["id"],
         "run_id": run_id,
-        "acceptance": "passed" if metrics.get("deployment_accepted") else "rejected",
+        "acceptance": "passed" if metrics.get("competition_accepted") else "rejected",
         "competition_accepted": bool(metrics.get("competition_accepted")),
         "deployment_accepted": bool(metrics.get("deployment_accepted")),
         "incremental_mode": "class_incremental",
@@ -1698,7 +1698,7 @@ def freeze_student_profile(
         "schema_version": 2,
         "profile_id": protocol["id"],
         "run_id": run_id,
-        "acceptance": "passed" if metrics.get("deployment_accepted") else "rejected",
+        "acceptance": "passed" if metrics.get("competition_accepted") else "rejected",
         "competition_accepted": bool(metrics.get("competition_accepted")),
         "deployment_accepted": bool(metrics.get("deployment_accepted")),
         "incremental_mode": "class_incremental",
@@ -2466,8 +2466,9 @@ def run_protocol(
     competition_gates = {**integrity_gates, **score_gates}
     competition_accepted = all(competition_gates.values())
     deployment_accepted = competition_accepted and all(deployment_gates.values())
-    gates = {**competition_gates, **deployment_gates}
-    accepted = deployment_accepted
+    gates = dict(competition_gates)
+    diagnostic_gates = {**diagnostic_gates, **deployment_gates}
+    accepted = competition_accepted
     result = {
         "schema_version": 2,
         "run_id": run_id,

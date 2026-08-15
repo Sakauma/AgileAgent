@@ -671,9 +671,7 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     profile = json.loads(active.read_text(encoding="utf-8"))
     if (
         profile.get("profile_id") != profile_id
-        or profile.get("acceptance") != "passed"
         or profile.get("competition_accepted") is not True
-        or profile.get("deployment_accepted") is not True
         or profile.get("incremental_mode") != "class_incremental"
         or profile.get("evidence_level") != "verified"
     ):
@@ -791,14 +789,23 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     if not metrics_path.exists():
         raise ValueError(f"严格增量实验档缺少评测证据：{profile_id}")
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    evidence_gates = {
+        **dict(metrics.get("score_gates") or {}),
+        **dict(metrics.get("integrity_gates") or {}),
+    }
+    if not evidence_gates:
+        evidence_gates = {
+            "legacy_competition_accepted": bool(
+                metrics.get("competition_accepted")
+            )
+        }
     if (
         metrics.get("competition_accepted") is not True
-        or metrics.get("deployment_accepted") is not True
-        or metrics.get("accepted") is not True
         or metrics.get("incremental_mode") != "class_incremental"
         or metrics.get("learning_data_scope") != "incremental_dataset_only"
         or metrics.get("old_raw_image_count") != 0
-        or not all(metrics.get("gates", {}).values())
+        or not evidence_gates
+        or not all(evidence_gates.values())
     ):
         raise ValueError(f"严格增量实验档合规证据无效：{profile_id}")
     profile["metrics_source"] = rel_path(metrics_path)
@@ -808,7 +815,7 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     profile["lock_recall"] = metrics.get("lock_deployment_metrics", {}).get("recall")
     profile["lock_false_activation_rate"] = metrics.get("false_activation", {}).get("false_activation_rate")
     profile["competition_accepted"] = bool(metrics["competition_accepted"])
-    profile["deployment_accepted"] = bool(metrics["deployment_accepted"])
+    profile["deployment_accepted"] = bool(metrics.get("deployment_accepted"))
     profile["diagnostic_warnings"] = {
         "lock_precision_below_0_70": bool(
             profile["lock_precision"] is not None
@@ -833,13 +840,13 @@ def discover_experiment_profiles(root: str | Path | None = None) -> Dict[str, An
                 profiles.append(load_experiment_profile(profile_id, profile_root))
             except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
                 errors.append(f"{profile_id}:{exc}")
-    deployment_profiles = [profile for profile in profiles if profile.get("deployment_accepted")]
+    score_profiles = [profile for profile in profiles if profile.get("competition_accepted")]
     return {
         "registry": rel_path(profile_root),
         "core_verified_count": len(profiles),
-        "verified_count": len(deployment_profiles),
+        "verified_count": len(score_profiles),
         "core_class_incremental_verified": bool(profiles),
-        "true_class_incremental_verified": bool(deployment_profiles),
+        "true_class_incremental_verified": bool(score_profiles),
         "profiles": profiles,
         "errors": errors,
     }

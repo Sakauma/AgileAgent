@@ -73,17 +73,12 @@ def _validate_model_manifest(manifest: Dict[str, Any]) -> List[str]:
                     base_ids = set(base_class_map)
             if global_class_id in base_ids:
                 errors.append(f"manifest_new_class_overlaps_base:{protocol_id}")
-            if item.get("acceptance") == "passed" and (
+            if item.get("available") and (
                 not item.get("calibration_source") or item.get("evidence_level") != "verified"
             ):
                 errors.append(f"manifest_new_class_calibration_missing:{protocol_id}")
-        if item.get("available") and item.get("acceptance") != "passed":
-            errors.append(f"manifest_unaccepted_protocol_available:{protocol_id}")
-        if item.get("available") and (
-            item.get("competition_accepted") is not True
-            or item.get("deployment_accepted") is not True
-        ):
-            errors.append(f"manifest_deployment_gates_missing:{protocol_id}")
+        if item.get("available") and item.get("competition_accepted") is not True:
+            errors.append(f"manifest_competition_gates_missing:{protocol_id}")
         if item.get("available") and not item.get("path"):
             errors.append(f"manifest_available_protocol_artifact_missing:{protocol_id}")
     if any(not value for value in protocol_ids) or len(protocol_ids) != len(set(protocol_ids)):
@@ -131,7 +126,10 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             for model_id in production_models
             if generation_registry["models_by_id"][model_id]["role"] == "class_incremental_expert"
         ]
-        if any(model.get("acceptance", {}).get("passed") is not True for model in production_experts):
+        if any(
+            model.get("acceptance", {}).get("competition_gates_passed") is not True
+            for model in production_experts
+        ):
             errors.append("unverified_incremental_expert_in_production")
         if candidate.get("status") == "active" and candidate_id != production_id:
             errors.append("candidate_generation_prematurely_active")

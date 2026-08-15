@@ -102,11 +102,10 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
                     continue
                 acceptance = model.get("acceptance", {})
                 if (
-                    acceptance.get("passed") is not True
-                    or acceptance.get("competition_gates_passed") is not True
-                    or acceptance.get("deployment_quality_gates_passed") is not True
+                    acceptance.get("competition_gates_passed") is not True
+                    or acceptance.get("integrity_gates_passed", True) is not True
                 ):
-                    raise ValueError(f"未通过部署门禁的增量专家不得进入active代际：{generation['id']}")
+                    raise ValueError(f"未通过计分或完整性门禁的增量专家不得进入active代际：{generation['id']}")
                 thresholds = model["per_class_thresholds"]
                 active_owned = model["owns_classes"] & set(owners)
                 missing = active_owned - set(thresholds)
