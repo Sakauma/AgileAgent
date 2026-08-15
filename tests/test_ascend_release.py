@@ -158,6 +158,54 @@ def test_detections_v1_candidate_binds_fixed_postprocess_contract(tmp_path: Path
     assert "postprocess_contract_mismatch:base" in result["errors"]
 
 
+def test_decoded_candidates_v1_manifest_binds_raw_fallback_contract(
+    tmp_path: Path,
+) -> None:
+    options = _candidate(tmp_path)
+    manifest_path = Path(options["build_manifest"])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    base = payload["artifacts"]["base_detector"]
+    base["output_contract"] = "decoded_candidates_v1"
+    base["postprocess_contract"] = {
+        "candidate_confidence": 0.01,
+        "candidate_capacity": 5,
+        "anchor_count": 3,
+        "class_count": 2,
+        "outputs": {
+            "boxes": {"shape": [5, 4], "dtype": "float32"},
+            "scores": {"shape": [5], "dtype": "float32"},
+            "class_ids": {"shape": [5], "dtype": "int32"},
+            "anchor_ids": {"shape": [5], "dtype": "int32"},
+            "valid_count": {"shape": [1], "dtype": "int32"},
+            "overflow": {"shape": [1], "dtype": "int32"},
+            "raw_output": {"shape": [1, 6, 3], "dtype": "float32"},
+        },
+    }
+    _write_json(manifest_path, payload)
+    options["build_manifest_sha256"] = sha256_file(manifest_path)
+    base_entry = next(
+        entry
+        for entry in options["models"].values()
+        if entry["path"] == base["om"]["path"]
+    )
+    base_entry.update(
+        {
+            "output_contract": "decoded_candidates_v1",
+            "candidate_confidence": 0.01,
+            "candidate_capacity": 5,
+            "anchor_count": 3,
+            "class_count": 2,
+        }
+    )
+
+    result = verify_ascend_artifacts(options, require_validation=False)
+    assert result["status"] == "passed", result["errors"]
+
+    base_entry["candidate_capacity"] = 4
+    result = verify_ascend_artifacts(options, require_validation=False)
+    assert "postprocess_contract_mismatch:base" in result["errors"]
+
+
 def test_candidate_runtime_requires_explicit_process_authorization(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -604,17 +604,26 @@ def validate_config(
                 continue
             unknown = sorted(set(entry) - {
                 "path", "sha256", "output_contract", "candidate_confidence",
-                "iou_threshold", "max_det",
+                "iou_threshold", "max_det", "candidate_capacity",
+                "anchor_count", "class_count",
             })
             if unknown:
                 errors.append(f"ascend_backend.models.{source}包含未知字段：" + ", ".join(unknown))
             output_contract = entry.get("output_contract", "raw_yolo_v1")
-            if output_contract not in {"raw_yolo_v1", "detections_v1"}:
+            if output_contract not in {
+                "raw_yolo_v1", "decoded_candidates_v1", "detections_v1",
+            }:
                 errors.append(f"ascend_backend.models.{source}.output_contract非法")
-            contract_fields = {"candidate_confidence", "iou_threshold", "max_det"}
+            contract_fields = {
+                "candidate_confidence", "iou_threshold", "max_det",
+                "candidate_capacity", "anchor_count", "class_count",
+            }
             configured_contract_fields = contract_fields & set(entry)
             if output_contract == "detections_v1":
-                if configured_contract_fields != contract_fields:
+                required_fields = {
+                    "candidate_confidence", "iou_threshold", "max_det",
+                }
+                if configured_contract_fields != required_fields:
                     errors.append(
                         f"ascend_backend.models.{source}.detections_v1缺少固定后处理参数"
                     )
@@ -639,6 +648,43 @@ def validate_config(
                     or contract_max_det <= 0
                 ):
                     errors.append(f"ascend_backend.models.{source}.max_det非法")
+            elif output_contract == "decoded_candidates_v1":
+                required_fields = {
+                    "candidate_confidence", "candidate_capacity",
+                    "anchor_count", "class_count",
+                }
+                if configured_contract_fields != required_fields:
+                    errors.append(
+                        f"ascend_backend.models.{source}.decoded_candidates_v1缺少固定解码参数"
+                    )
+                candidate_confidence = entry.get("candidate_confidence")
+                candidate_capacity = entry.get("candidate_capacity")
+                anchor_count = entry.get("anchor_count")
+                class_count = entry.get("class_count")
+                if (
+                    isinstance(candidate_confidence, bool)
+                    or not isinstance(candidate_confidence, (int, float))
+                    or float(candidate_confidence) != 0.01
+                ):
+                    errors.append(
+                        f"ascend_backend.models.{source}.candidate_confidence必须固定为0.01"
+                    )
+                for name, value in (
+                    ("candidate_capacity", candidate_capacity),
+                    ("anchor_count", anchor_count),
+                    ("class_count", class_count),
+                ):
+                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                        errors.append(f"ascend_backend.models.{source}.{name}非法")
+                if (
+                    isinstance(candidate_capacity, int)
+                    and isinstance(anchor_count, int)
+                    and isinstance(class_count, int)
+                    and candidate_capacity > anchor_count * class_count
+                ):
+                    errors.append(
+                        f"ascend_backend.models.{source}.candidate_capacity超出候选总数"
+                    )
             elif configured_contract_fields:
                 errors.append(
                     f"ascend_backend.models.{source}.raw_yolo_v1禁止配置设备后处理参数"

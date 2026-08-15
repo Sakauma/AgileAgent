@@ -16,6 +16,16 @@ DETECTIONS_V1_OUTPUT_NAMES = (
     "valid_count",
 )
 
+DECODED_CANDIDATES_V1_OUTPUT_NAMES = (
+    "boxes",
+    "scores",
+    "class_ids",
+    "anchor_ids",
+    "valid_count",
+    "overflow",
+    "raw_output",
+)
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -291,6 +301,128 @@ def build_detections_v1_module(
     return DetectionsV1()
 
 
+def build_decoded_candidates_v1_module(
+    detector: Any,
+    *,
+    class_count: int,
+    candidate_confidence: float,
+    candidate_capacity: int,
+) -> Any:
+    """Decode and gather fixed candidates while leaving exact NMS on Host.
+
+    The fixed TopK key ranks every strict-threshold candidate ahead of every
+    invalid entry, then ranks by the flattened anchor-major/class-minor index.
+    Unlike NonZero, this keeps all output shapes static for CANN 7.0.RC1.
+    """
+
+    import torch
+
+    if int(class_count) <= 0:
+        raise ValueError("class_count必须为正整数")
+    if float(candidate_confidence) != 0.01:
+        raise ValueError("decoded_candidates_v1候选阈值必须固定为0.01")
+    if int(candidate_capacity) <= 0:
+        raise ValueError("candidate_capacity必须为正整数")
+
+    class DecodedCandidatesV1(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.detector = detector
+            self.class_count = int(class_count)
+            self.candidate_confidence = float(candidate_confidence)
+            self.candidate_capacity = int(candidate_capacity)
+
+        def forward(self, images):
+            raw = self.detector(images)
+            if isinstance(raw, (tuple, list)):
+                raw = raw[0]
+            prediction = raw[0]
+            anchor_count = int(prediction.shape[1])
+            total_candidates = anchor_count * self.class_count
+            if self.candidate_capacity > total_candidates:
+                raise RuntimeError(
+                    "candidate_capacity不能超过anchor_count*class_count"
+                )
+
+            xywh = prediction[:4].transpose(0, 1)
+            decoded_boxes = torch.cat(
+                (
+                    xywh[:, :2] - xywh[:, 2:] / 2.0,
+                    xywh[:, :2] + xywh[:, 2:] / 2.0,
+                ),
+                dim=1,
+            )
+            flat_scores = (
+                prediction[4 : 4 + self.class_count]
+                .transpose(0, 1)
+                .reshape(total_candidates)
+            )
+            flat_ids = torch.arange(
+                total_candidates,
+                device=prediction.device,
+                dtype=torch.long,
+            )
+            valid = flat_scores > self.candidate_confidence
+            # All integers involved are exactly representable in float32 for
+            # the fixed detector sizes used here. Keys are unique, so TopK
+            # cannot introduce an equal-key ordering ambiguity.
+            rank_keys = (
+                valid.to(torch.float32) * float(total_candidates + 1)
+                - flat_ids.to(torch.float32)
+            )
+            _rank_values, selected = torch.topk(
+                rank_keys,
+                k=self.candidate_capacity,
+                largest=True,
+                sorted=True,
+            )
+            selected_scores = flat_scores[selected]
+            selected_valid = selected_scores > self.candidate_confidence
+            anchor_ids = torch.div(
+                selected,
+                self.class_count,
+                rounding_mode="floor",
+            )
+            class_ids = torch.remainder(selected, self.class_count)
+            boxes = decoded_boxes[anchor_ids]
+            # CANN 7.0.RC1 miscompiles ReduceSum over this int32 cast as a
+            # boolean-style 0/1 result. Its float32 ReduceSum path preserves
+            # the fixed candidate count, so convert only after sum/clamp.
+            valid_total = valid.to(torch.float32).sum()
+            valid_count = torch.clamp(
+                valid_total,
+                max=float(self.candidate_capacity),
+            ).to(torch.int32).reshape(1)
+            overflow = (
+                valid_total > float(self.candidate_capacity)
+            ).to(torch.int32).reshape(1)
+            return (
+                torch.where(
+                    selected_valid[:, None], boxes, torch.zeros_like(boxes)
+                ).to(torch.float32),
+                torch.where(
+                    selected_valid,
+                    selected_scores,
+                    torch.zeros_like(selected_scores),
+                ).to(torch.float32),
+                torch.where(
+                    selected_valid,
+                    class_ids,
+                    torch.zeros_like(class_ids),
+                ).to(torch.int32),
+                torch.where(
+                    selected_valid,
+                    anchor_ids,
+                    torch.zeros_like(anchor_ids),
+                ).to(torch.int32),
+                valid_count.to(torch.int32),
+                overflow.to(torch.int32),
+                raw.to(torch.float32),
+            )
+
+    return DecodedCandidatesV1()
+
+
 def export_detections_v1_onnx(
     module: Any,
     sample: Any,
@@ -335,6 +467,53 @@ def export_detections_v1_onnx(
         "opset": int(opset),
         "input_name": str(input_name),
         "output_names": list(DETECTIONS_V1_OUTPUT_NAMES),
+    }
+
+
+def export_decoded_candidates_v1_onnx(
+    module: Any,
+    sample: Any,
+    target: str | Path,
+    *,
+    input_name: str,
+    opset: int = 17,
+) -> dict[str, Any]:
+    import torch
+
+    path = Path(target).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise FileExistsError(path)
+    module.eval()
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, suffix=".onnx", delete=False
+    ) as handle:
+        temporary = Path(handle.name)
+    try:
+        with _without_optional_onnx_postprocessing(), torch.inference_mode():
+            torch.onnx.export(
+                module,
+                sample,
+                temporary,
+                input_names=[str(input_name)],
+                output_names=list(DECODED_CANDIDATES_V1_OUTPUT_NAMES),
+                opset_version=int(opset),
+                dynamic_axes=None,
+                do_constant_folding=True,
+                dynamo=False,
+            )
+        if temporary.stat().st_size <= 0:
+            raise RuntimeError("Torch导出的decoded_candidates_v1 ONNX为空")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {
+        "path": str(path),
+        "sha256": _sha256(path),
+        "bytes": path.stat().st_size,
+        "opset": int(opset),
+        "input_name": str(input_name),
+        "output_names": list(DECODED_CANDIDATES_V1_OUTPUT_NAMES),
     }
 
 

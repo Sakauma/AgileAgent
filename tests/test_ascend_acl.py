@@ -7,6 +7,8 @@ from PIL import Image
 from fair_agent.backends.ascend_acl import (
     AscendEncodedPreprocessor,
     context_tensor,
+    decoded_candidates_v1_records,
+    decoded_output_copy_plan,
     detections_v1_records,
     detector_tensor,
     validate_dvpp_scene_resize_stages,
@@ -201,3 +203,105 @@ def test_detections_v1_rejects_contract_drift(mutate, kwargs: dict, message: str
             **options,
             candidate_confidence=0.01, contract_iou=0.7, contract_max_det=3,
         )
+
+
+def _decoded_candidates_v1_outputs(*, overflow: int = 0) -> list[np.ndarray]:
+    boxes = np.asarray(
+        [
+            [0.0, 0.0, 2.0, 2.0],
+            [0.0, 0.0, 2.0, 2.0],
+            [0.0, 0.0, 1.0, 2.0],
+            [0.0, 0.0, 2.0, 2.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    raw = np.zeros((1, 6, 3), dtype=np.float32)
+    raw[0, :4] = np.asarray(
+        [
+            [1.0, 0.5, 1.0],
+            [1.0, 1.0, 1.0],
+            [2.0, 1.0, 2.0],
+            [2.0, 2.0, 2.0],
+        ],
+        dtype=np.float32,
+    )
+    raw[0, 4:] = np.asarray(
+        [[0.80, 0.80, 0.50], [0.80, 0.01, 0.01]],
+        dtype=np.float32,
+    )
+    return [
+        boxes,
+        np.asarray([0.80, 0.80, 0.80, 0.50, 0.0], dtype=np.float32),
+        np.asarray([0, 1, 0, 0, 0], dtype=np.int32),
+        np.asarray([0, 0, 1, 2, 0], dtype=np.int32),
+        np.asarray([4], dtype=np.int32),
+        np.asarray([overflow], dtype=np.int32),
+        raw,
+    ]
+
+
+def test_decoded_candidates_v1_matches_raw_strict_sort_and_nms() -> None:
+    outputs = _decoded_candidates_v1_outputs()
+    info = {
+        "original_height": 8,
+        "original_width": 8,
+        "scale": 1.0,
+        "pad_left": 0,
+        "pad_top": 0,
+    }
+
+    decoded = decoded_candidates_v1_records(
+        outputs,
+        info,
+        confidence=0.5,
+        iou=0.5,
+        max_det=3,
+        candidate_confidence=0.01,
+        candidate_capacity=5,
+        anchor_count=3,
+        class_count=2,
+    )
+    raw = yolo_detections(
+        outputs[6], info, confidence=0.5, iou=0.5, max_det=3
+    )
+
+    assert decoded == raw
+    assert [row["class_id"] for row in decoded] == [0, 1, 0]
+
+
+def test_decoded_candidates_v1_overflow_and_low_threshold_fail_closed() -> None:
+    outputs = _decoded_candidates_v1_outputs(overflow=1)
+    kwargs = {
+        "candidate_confidence": 0.01,
+        "candidate_capacity": 5,
+        "anchor_count": 3,
+        "class_count": 2,
+    }
+    info = {
+        "original_height": 8,
+        "original_width": 8,
+        "scale": 1.0,
+        "pad_left": 0,
+        "pad_top": 0,
+    }
+
+    with pytest.raises(RuntimeError, match="溢出"):
+        decoded_candidates_v1_records(
+            outputs, info, confidence=0.5, iou=0.5, max_det=3, **kwargs
+        )
+    outputs[5][0] = 0
+    with pytest.raises(RuntimeError, match="低阈值"):
+        decoded_candidates_v1_records(
+            outputs, info, confidence=0.001, iou=0.5, max_det=3, **kwargs
+        )
+
+
+def test_decoded_output_copy_plan_selects_only_raw_for_low_threshold() -> None:
+    normal = decoded_output_copy_plan(0.5, candidate_confidence=0.01)
+    fallback = decoded_output_copy_plan(0.001, candidate_confidence=0.01)
+
+    assert normal["force_raw"] is False
+    assert normal["metadata_indices"] == (4, 5)
+    assert fallback["force_raw"] is True
+    assert fallback["raw_index"] == 6

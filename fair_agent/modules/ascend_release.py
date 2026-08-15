@@ -23,6 +23,37 @@ DETECTIONS_V1_OUTPUTS = {
 }
 
 
+def _decoded_candidates_v1_outputs(
+    candidate_capacity: int,
+    anchor_count: int,
+    class_count: int,
+) -> Dict[str, Dict[str, Any]]:
+    return {
+        "boxes": {
+            "shape": [int(candidate_capacity), 4],
+            "dtype": "float32",
+        },
+        "scores": {
+            "shape": [int(candidate_capacity)],
+            "dtype": "float32",
+        },
+        "class_ids": {
+            "shape": [int(candidate_capacity)],
+            "dtype": "int32",
+        },
+        "anchor_ids": {
+            "shape": [int(candidate_capacity)],
+            "dtype": "int32",
+        },
+        "valid_count": {"shape": [1], "dtype": "int32"},
+        "overflow": {"shape": [1], "dtype": "int32"},
+        "raw_output": {
+            "shape": [1, 4 + int(class_count), int(anchor_count)],
+            "dtype": "float32",
+        },
+    }
+
+
 def _load_json(path: Path, errors: List[str], label: str) -> Dict[str, Any]:
     if not path.is_file():
         errors.append(f"missing_{label}:{path}")
@@ -215,6 +246,28 @@ def verify_ascend_artifacts(
                     ),
                     "max_det": int((configured or {}).get("max_det", 0)),
                     "outputs": DETECTIONS_V1_OUTPUTS,
+                }
+                if contract != expected:
+                    errors.append(f"postprocess_contract_mismatch:{role}")
+            elif configured_name == "decoded_candidates_v1":
+                expected = {
+                    "candidate_confidence": float(
+                        (configured or {}).get("candidate_confidence", -1.0)
+                    ),
+                    "candidate_capacity": int(
+                        (configured or {}).get("candidate_capacity", 0)
+                    ),
+                    "anchor_count": int(
+                        (configured or {}).get("anchor_count", 0)
+                    ),
+                    "class_count": int(
+                        (configured or {}).get("class_count", 0)
+                    ),
+                    "outputs": _decoded_candidates_v1_outputs(
+                        int((configured or {}).get("candidate_capacity", 0)),
+                        int((configured or {}).get("anchor_count", 0)),
+                        int((configured or {}).get("class_count", 0)),
+                    ),
                 }
                 if contract != expected:
                     errors.append(f"postprocess_contract_mismatch:{role}")
