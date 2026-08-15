@@ -426,6 +426,98 @@ def apply_unified_class_gates(
     return kept, rejected
 
 
+def unified_incremental_class_ids(gates: Mapping[str, Any] | None) -> set[int]:
+    raw = dict(gates or {}).get("activation_thresholds") or {}
+    return {int(class_id) for class_id in raw}
+
+
+def apply_unified_record_ownership(
+    records: Iterable[Mapping[str, Any]],
+    gates: Mapping[str, Any] | None,
+) -> List[Dict[str, Any]]:
+    """Preserve logical old/new owners when one detector serves all classes."""
+
+    settings = dict(gates or {})
+    new_ids = unified_incremental_class_ids(settings)
+    protocol_id = settings.get("protocol_id")
+    owned = []
+    for raw in records:
+        row = dict(raw)
+        incremental = int(row["class_id"]) in new_ids
+        row["source"] = "incremental_model" if incremental else "frozen_base_model"
+        row["protocol_id"] = str(protocol_id) if incremental and protocol_id else None
+        owned.append(row)
+    return owned
+
+
+def unified_logical_protocol_result(
+    records: Iterable[Mapping[str, Any]],
+    rejections: Iterable[Mapping[str, Any]],
+    gates: Mapping[str, Any] | None,
+    context: Mapping[str, Any] | None,
+) -> Dict[str, Any] | None:
+    """Build the existing protocol audit row without running a second OM."""
+
+    settings = dict(gates or {})
+    new_ids = unified_incremental_class_ids(settings)
+    if not new_ids:
+        return None
+    kept = [dict(row) for row in records if int(row["class_id"]) in new_ids]
+    rejected = [dict(row) for row in rejections if int(row["class_id"]) in new_ids]
+    prototype_rejections = [
+        row for row in rejected if "prototype" in str(row.get("action", ""))
+    ]
+    threshold_rejections = [
+        row for row in rejected if row not in prototype_rejections
+    ]
+    thresholds, affinity = protocol_effective_thresholds(
+        settings,
+        dict(context or {}),
+        0.0,
+    )
+    activated_classes = sorted({str(row["class_name"]) for row in kept})
+    protocol_id = str(settings.get("protocol_id") or "unified_incremental")
+    configured_names = {
+        int(key): str(value)
+        for key, value in dict(settings.get("class_names") or {}).items()
+    }
+    class_names = [configured_names.get(class_id, str(class_id)) for class_id in sorted(new_ids)]
+    return {
+        "id": protocol_id,
+        "class_name": class_names[0] if len(class_names) == 1 else ",".join(class_names),
+        "new_class": class_names[0] if len(class_names) == 1 else class_names,
+        "incremental_mode": "class_incremental",
+        "new_map50": float(settings.get("new_map50", 0.0)),
+        "krr": float(settings.get("krr", 0.0)),
+        "status": "activated" if kept else "no_candidate",
+        "activated": bool(kept),
+        "activated_classes": activated_classes,
+        "raw_candidate_count": len(kept) + len(rejected),
+        "candidate_count": len(kept),
+        "conflict_suppressed_count": 0,
+        "prototype_rejected_count": len(prototype_rejections),
+        "activation_rejected_count": len(threshold_rejections),
+        "base_override_count": 0,
+        "activation_thresholds": {
+            str(key): round(float(value), 2) for key, value in thresholds.items()
+        },
+        "activation_threshold": (
+            round(next(iter(thresholds.values())), 2)
+            if len(thresholds) == 1
+            else None
+        ),
+        "context_affinity": round(float(affinity), 6),
+        "context_gate_policy": dict(settings.get("context_gate") or {}).get("policy"),
+        "routing_score": 1.0,
+        "activation_reason": (
+            "统一检测器新类通道通过激活门限"
+            if kept
+            else "统一检测器未产生通过门限的新类候选框"
+        ),
+        "physical_model_shared": True,
+    }
+
+
 def remap_base_records(
     records: Iterable[Dict[str, Any]],
     local_to_global: Mapping[int, int],
@@ -1139,7 +1231,19 @@ class WebInferenceEngine:
             )
             for base_records, context in zip(base_records_by_image, contexts)
         ]
-        protocol_outputs: List[List[Dict[str, Any]]] = [[] for _ in images]
+        protocol_outputs: List[List[Dict[str, Any]]] = []
+        for records, rejections, context in zip(
+            base_records_by_image,
+            unified_gate_decisions_by_image,
+            contexts,
+        ):
+            logical = unified_logical_protocol_result(
+                records,
+                rejections,
+                getattr(self, "unified_class_gates", {}),
+                context,
+            )
+            protocol_outputs.append([logical] if logical is not None else [])
         specialists_by_image: List[List[Dict[str, Any]]] = [[] for _ in images]
         conflicts_by_image: List[List[Dict[str, Any]]] = [
             list(rows) for rows in unified_gate_decisions_by_image
@@ -1290,10 +1394,10 @@ class WebInferenceEngine:
                 + detector_timing["inference_ms"]
                 + specialist_timing["inference_ms"]
             )
-            base_with_source = [
-                {**item, "source": "frozen_base_model", "protocol_id": None}
-                for item in base_records
-            ]
+            base_with_source = apply_unified_record_ownership(
+                base_records,
+                getattr(self, "unified_class_gates", {}),
+            )
             records, fusion_summary = class_aware_nms(
                 base_with_source + specialists_by_image[index], self.fusion_iou
             )
@@ -1315,7 +1419,9 @@ class WebInferenceEngine:
                 "label_aware_routing": False,
                 "scene_hard_routing": False,
                 "evaluated_specialists": len(executed),
-                "base_detection_count": len(base_records),
+                "base_detection_count": sum(
+                    row["source"] == "frozen_base_model" for row in base_with_source
+                ),
                 "final_detection_count": len(records),
                 "activated_classes": activated_classes,
                 "eligible_protocols": [
@@ -1700,7 +1806,13 @@ class WebInferenceEngine:
         )
 
         routing_started = time.perf_counter()
-        protocol_results = []
+        logical_protocol = unified_logical_protocol_result(
+            base_records,
+            unified_gate_rejections,
+            getattr(self, "unified_class_gates", {}),
+            context,
+        )
+        protocol_results = [logical_protocol] if logical_protocol is not None else []
         specialist_records: List[Dict[str, Any]] = []
         specialist_preprocess_ms = 0.0
         specialist_inference_ms = 0.0
@@ -1839,10 +1951,10 @@ class WebInferenceEngine:
             })
             routing_decision_ms += (time.perf_counter() - decision_started) * 1000
 
-        base_with_source = [
-            {**item, "source": "frozen_base_model", "protocol_id": None}
-            for item in base_records
-        ]
+        base_with_source = apply_unified_record_ownership(
+            base_records,
+            getattr(self, "unified_class_gates", {}),
+        )
         nms_started = time.perf_counter()
         records, fusion_summary = class_aware_nms(
             base_with_source + specialist_records,
@@ -1872,7 +1984,9 @@ class WebInferenceEngine:
             "label_aware_routing": False,
             "scene_hard_routing": False,
             "evaluated_specialists": len(executed_routes),
-            "base_detection_count": len(base_records),
+            "base_detection_count": sum(
+                row["source"] == "frozen_base_model" for row in base_with_source
+            ),
             "final_detection_count": len(records),
             "activated_classes": activated_classes,
             "eligible_protocols": [

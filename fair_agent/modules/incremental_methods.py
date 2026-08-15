@@ -555,6 +555,9 @@ def restore_protected_old_rows(trainer: Any) -> None:
         candidates.append(ema)
     with torch.no_grad():
         for candidate in candidates:
+            for module in candidate.modules():
+                if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                    module.eval()
             branches = getattr(candidate.model[-1], "cv3", None)
             if branches is None:
                 continue

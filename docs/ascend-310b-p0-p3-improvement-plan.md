@@ -2,7 +2,7 @@
 
 ## 1. 摘要
 
-本文记录 AgileAgent 在 Atlas 200I DK A2 / Ascend310B1 上已经完成的 P0–P3 优化，并规定 P4–P7 的后续实施顺序、接口、消融矩阵和晋级门禁。P0–P3 的详细证据保存在 `docs/ascend-310b-current-status.md`；本文以同条件端到端实测替代执行前的跨批次估计。
+本文记录 AgileAgent 在 Atlas 200I DK A2 / Ascend310B1 上完成的 P0–P7 优化、接口、消融矩阵和晋级门禁。详细设备证据保存在 `docs/ascend-310b-current-status.md`；本文以同条件端到端实测和严格类增量锁集结果替代执行前的跨批次估计。
 
 P0–P3 已全部结束，结果如下：
 
@@ -13,12 +13,21 @@ P0–P3 已全部结束，结果如下：
 | P2 | `42.043 ms` | `47.955 ms` | `49.400 ms` | profiling 完成，AOE 与固定 precision 不兼容，未生成 tuned OM |
 | P3 | `45.916 ms` | `51.700 ms` | `53.800 ms` | pinned + 统一异步编排使均值恶化 `9.21%`，拒绝晋级 |
 
-P4–P7 固定按以下顺序执行：
+P4–P7 已按以下顺序执行：
 
 1. P4：拆分 P3 的锁页内存和统一提交，建立可复现的运行时消融矩阵；
 2. P5：优化三模型提交顺序、收集顺序和可用时的 stream priority；
 3. P6：将 YOLO 解码与 NMS 移入 OM 或 Ascend 自定义算子，只回传最终框；
 4. P7：以严格类增量四类统一检测器替换 Base + Specialist，再把 Scene/Sensor 变为共享骨干轻量头。
+
+P4–P7 最终结论如下：
+
+| 阶段 | 已执行内容 | 结论 |
+| --- | --- | --- |
+| P4 | pageable/pinned × threaded/unified 四组合、两轮 890 请求 | `pageable + threaded_execute` 胜出；统一提交是 P3 回退主因，pinned 无稳定收益 |
+| P5 | 三种提交顺序、三种收集顺序、stream priority 能力探针 | 无候选同时改善 `≥1%` 和 `≥0.5 ms`；保留 Scene→Base→Specialist 同序提交/收集 |
+| P6 | 标准 ONNX NMS、`NPUNmsWithMask`、`BatchMultiClassNMS` 严格语义探针 | CANN `7.0.RC1` 无兼容实现；保留 `raw_yolo_v1`，未启动 8502 性能轮 |
+| P7 | `expanded_single_student` 与 `yolo_iod_lite` 两个四类统一检测器 | 两候选均未通过完整精度门禁；停止共享上下文头、单 OM 和性能门禁 |
 
 P4–P6 的性能参考固定为 P2 pageable 链路 `42.043/47.955/49.400 ms`。该链路仍继承 P0 的 Base 阈值边界差异，只能用于性能筛选，不能直接晋级正式 release。最终候选必须在 P7 重新通过完整精度、语义和发布门禁。
 
@@ -35,7 +44,7 @@ P4–P6 的性能参考固定为 P2 pageable 链路 `42.043/47.955/49.400 ms`。
 | P3 最大输出复制 | `2.981 ms` | P6 设备侧后处理的直接优化对象 |
 | 路由与融合 | 约 `0.374 ms` | 已不是主要瓶颈，不再投入大规模 Python 优化 |
 
-为达到完整 API 均值 `≤33.33 ms`，P7 最终候选的 Engine 均值预算固定为 `≤30 ms`。
+为达到完整 API 均值 `≤33.33 ms`，P7 最终候选的 Engine 均值预算固定为 `≤30 ms`。本轮没有产生通过 P7 精度门禁的统一检测器，因此该预算未进入板端验证，正式双检测器 release 和 `8501` 保持不变。
 
 ## 2. 统一基线与验收门禁
 
@@ -310,6 +319,22 @@ P7 是闭合至少 `8.713 ms` 缺口的主收益阶段。模型结构变化允�
 - 通过后才移除独立 Scene OM，原 Scene OM 保留为回滚。
 
 P7 固定精度门禁为 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95`、新类 precision `≥0.90`、误激活率 `≤0.05`。最终 Engine 均值必须 `≤30 ms`，完整 API 均值 `≤33.33 ms`、P95 `≤35 ms`，P99 相对 P6 或此前最快合格候选不得恶化超过 `2%`。
+
+执行结论（2026-08-15）：P7 增加了两个专用严格配置、统一检测器预检、Base/current teacher 复用、统一模型逻辑 owner/source 映射和原协议审计结构。`expanded_single_student` 与 `yolo_iod_lite` 均完整训练并在同一 89 图锁集上评分；旧类分类行在 model/EMA 中逐步恢复，冻结 BatchNorm 始终保持 eval。两个 manifest 都证明增量阶段读取旧类原始图像、标签和 feature cache 的数量为 `0/0/0`，且原始数据未修改。
+
+| 候选 | Base mAP50 | New-mAP50 | KRR | 新类 precision | 误激活率 | 结论 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `expanded_single_student` | `0.814088` | `0.016667` | `1.000000` | `0.666667` | `0.014286` | 旧知识保持，但新增通道几乎未学到，拒绝 |
+| `yolo_iod_lite` | `0.814088` | `0.598128` | `0.344506` | `0.416667` | `0.428571` | New-mAP50 仍低于门槛，且旧知识、precision 和误激活同时失败，拒绝 |
+
+`expanded_single_student` 的旧通道最大漂移和共享参数相对漂移均为 `0`。`yolo_iod_lite` 的旧通道最大漂移为 `0`，共享参数相对漂移为 `0.077112`；它复用 SHA256 `d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957` 的 current teacher，教师只在增量 student 图像上推理。其锁集得到 `TP=70`、`FP=98`、`targets=76`，70 张负样本中 30 张误激活，且统一模型没有双检测器冲突仲裁可用，`fusion decision_count=0`。
+
+| 候选 | 配置 SHA256 | metrics SHA256 | dataset manifest SHA256 |
+| --- | --- | --- | --- |
+| `p7-expanded-20260815` | `9c2800525a66f79f6a03cba2e2680b2c8b29427cc34d517678eec8f527529a2c` | `c52c3f59505e8bdab6dfdff61e28bfbef1791887a4e2e68ce1dcbad264b3adc6` | `94f3f6edd893192c06370ba80078976bf9d26093a158229bf43dc062401e23b3` |
+| `p7-yolo-iod-20260815` | `d8518910ace533797ad8e9a70d99aa86d4caadf3c5eeb45c048b96f1e7545ae3` | `545d2c6221dc9bd07eadeb39298a58b147f84c545c5aeb77f027ace79a630586` | `40bed0ec033c11134f5b4be95af2b36556f30739f64c1dce848f6f1698f90405` |
+
+按既定顺序，第一步没有胜出的四类检测器后立即停止 P7：不训练 Scene/Sensor 共享上下文头，不导出单 OM，不启动 8502，也不执行 30+890 性能门禁。不得通过读取旧类原始训练数据、降低门禁或改变阈值/融合语义绕过失败。两个配置、EMA/BN 冻结修复、严格数据隔离、single-detector 逻辑映射和失败证据保留，作为下一轮算法研究的可复现起点；被拒绝的 profile 不能被正式加载。
 
 ## 5. 接口与兼容性
 

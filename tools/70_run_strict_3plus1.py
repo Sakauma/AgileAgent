@@ -146,6 +146,17 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
         }
         if not shared_base.is_file():
             errors.append(f"共享三类基础权重不存在：{rel_path(shared_base)}")
+    shared_current_value = config.get("paths", {}).get(
+        "shared_current_teacher_checkpoint"
+    )
+    if shared_current_value:
+        shared_current = resolve_path(shared_current_value)
+        checks["shared_current_teacher_checkpoint"] = {
+            "path": rel_path(shared_current),
+            "exists": shared_current.is_file(),
+        }
+        if not shared_current.is_file():
+            errors.append(f"共享新增类教师权重不存在：{rel_path(shared_current)}")
 
     source_splits = config.get("paths", {}).get("source_splits", {})
     if set(source_splits) != {"train", "val", "lock"}:
@@ -222,10 +233,18 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
             )
             item["adaptation_mode"] = adaptation_mode
             item["build_unified_student"] = bool(protocol.get("build_unified_student", False))
-            if adaptation_mode in {"duet_yolo11s", "yolo_iod_lite"}:
+            unified_modes = {
+                "expanded_single_student",
+                "duet_yolo11s",
+                "yolo_iod_lite",
+            }
+            if adaptation_mode in unified_modes:
                 if not protocol.get("build_unified_student"):
                     raise ValueError(f"{adaptation_mode} 必须生成四类 student 数据视图")
-                if adaptation_mode not in config.get("methods", {}):
+                if (
+                    adaptation_mode in {"duet_yolo11s", "yolo_iod_lite"}
+                    and adaptation_mode not in config.get("methods", {})
+                ):
                     raise ValueError(f"缺少 methods.{adaptation_mode} 配置")
             elif adaptation_mode == "frozen_base_plus_new_specialist" and protocol.get(
                 "build_unified_student"
@@ -262,16 +281,33 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
 
     agent_structure = dict(config.get("agent_structure", {}))
     checks["agent_structure"] = agent_structure
-    expected_agent = {
-        "architecture": "parallel_base_incremental_experts",
-        "inference_scope": "every_image",
-        "old_class_owner": "frozen_base",
-        "new_class_owner": "incremental_specialist",
-        "fusion_level": "detection_boxes",
-        "scene_hard_routing": False,
-        "label_aware_routing": False,
-        "filename_class_routing": False,
-    }
+    unified_agent = bool(config.get("protocols")) and all(
+        bool(protocol.get("build_unified_student"))
+        for protocol in config.get("protocols", [])
+    )
+    expected_agent = (
+        {
+            "architecture": "unified_incremental_detector",
+            "inference_scope": "every_image",
+            "old_class_owner": "frozen_base_model",
+            "new_class_owner": "incremental_model",
+            "fusion_level": "logical_class_ownership",
+            "scene_hard_routing": False,
+            "label_aware_routing": False,
+            "filename_class_routing": False,
+        }
+        if unified_agent
+        else {
+            "architecture": "parallel_base_incremental_experts",
+            "inference_scope": "every_image",
+            "old_class_owner": "frozen_base",
+            "new_class_owner": "incremental_specialist",
+            "fusion_level": "detection_boxes",
+            "scene_hard_routing": False,
+            "label_aware_routing": False,
+            "filename_class_routing": False,
+        }
+    )
     for key, expected_value in expected_agent.items():
         if agent_structure.get(key) != expected_value:
             errors.append(f"agent_structure.{key} 必须为 {expected_value}")
@@ -285,8 +321,10 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
         )
 
     checks["training_batch"] = int(config.get("common", {}).get("batch", 0))
-    if checks["training_batch"] != 32:
-        errors.append("严格 3+1 当前基准要求 batch=32")
+    if unified_agent and checks["training_batch"] <= 0:
+        errors.append("严格 3+1 训练 batch 必须为正整数")
+    elif not unified_agent and checks["training_batch"] != 32:
+        errors.append("严格 3+1 当前双检测器基准要求 batch=32")
     training_policy = dict(config.get("training_policy", {}))
     common_train = dict(config.get("common", {}))
     effective_patience = {
@@ -319,6 +357,19 @@ def training_preflight(config: Mapping[str, Any], run_id: str) -> Dict[str, Any]
     for owner, imgsz in inference_sizes.items():
         if imgsz <= 0 or imgsz % 32:
             errors.append(f"{owner} owner 推理分辨率必须为正整数且能被32整除")
+    if unified_agent:
+        student_train = config.get("student_train")
+        if not isinstance(student_train, Mapping):
+            errors.append("统一四类检测器缺少 student_train 配置")
+        else:
+            student_imgsz = int(student_train.get("imgsz", 0))
+            checks["student_train_imgsz"] = student_imgsz
+            if student_imgsz != inference_sizes["base"]:
+                errors.append("统一四类检测器 student_train.imgsz 必须等于 Base 推理分辨率")
+        if inference_sizes["incremental"] != inference_sizes["base"]:
+            errors.append("统一四类检测器 Base/Incremental 逻辑 owner 必须共用同一推理分辨率")
+        if not config.get("paths", {}).get("shared_base_checkpoint"):
+            errors.append("统一四类检测器必须显式复用 shared_base_checkpoint")
     if bool(predict_cfg.get("augment", False)):
         errors.append("严格计分当前禁止 TTA；各 owner 仅运行一次固定尺度推理")
     acceptance = dict(config.get("acceptance", {}))
@@ -654,7 +705,13 @@ def configure_expanded_student(
         with torch.no_grad():
             torch.nn.init.normal_(classifier.weight[new_global_id], mean=0.0, std=0.01)
             classifier.bias[new_global_id].fill_(-4.5951198501)
-        old_rows.append((classifier, old_ids, classifier.weight[old_ids].detach().clone(), classifier.bias[old_ids].detach().clone()))
+        old_rows.append(
+            (
+                old_ids,
+                classifier.weight[old_ids].detach().clone(),
+                classifier.bias[old_ids].detach().clone(),
+            )
+        )
 
         def mask_gradient(gradient: Any, class_id: int = new_global_id) -> Any:
             mask = torch.zeros_like(gradient)
@@ -678,13 +735,27 @@ def restore_expanded_student(trainer: Any) -> None:
     import torch
 
     model = _trainer_model(trainer)
-    for module in model.modules():
-        if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
-            module.eval()
+    candidates = [model]
+    ema = getattr(getattr(trainer, "ema", None), "ema", None)
+    if ema is not None:
+        candidates.append(ema)
     with torch.no_grad():
-        for classifier, old_ids, weight, bias in getattr(trainer, "_clean_incremental_old_rows", []):
-            classifier.weight[old_ids].copy_(weight)
-            classifier.bias[old_ids].copy_(bias)
+        for candidate in candidates:
+            for module in candidate.modules():
+                if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                    module.eval()
+            branches = getattr(candidate.model[-1], "cv3", None)
+            if branches is None:
+                continue
+            protected = getattr(trainer, "_clean_incremental_old_rows", [])
+            for branch, (old_ids, weight, bias) in zip(branches, protected):
+                classifier = branch[-1]
+                classifier.weight[old_ids].copy_(
+                    weight.to(classifier.weight.device, classifier.weight.dtype)
+                )
+                classifier.bias[old_ids].copy_(
+                    bias.to(classifier.bias.device, classifier.bias.dtype)
+                )
 
 
 def expanded_student_old_drift(
@@ -1830,26 +1901,57 @@ def run_protocol(
             incremental_weight = final_weight
         elif adaptation_mode == "yolo_iod_lite":
             method_settings = dict(config["methods"][adaptation_mode])
-            current_model = YOLO(str(config["model"]))
-            current_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
-            current_result = current_model.train(
-                **method_train_arguments(
-                    config,
-                    adaptation_mode,
-                    "current_teacher_train",
-                    incremental_dataset,
-                    run_dir,
-                    "yolo_iod_current_teacher",
-                    device,
-                )
+            configured_current = config.get("paths", {}).get(
+                "shared_current_teacher_checkpoint"
             )
-            current_weight = best_weight(current_model, current_result)
-            incremental_histories.append(training_history(
-                current_model,
-                "yolo_iod_current_teacher",
-                int(config["methods"][adaptation_mode]["current_teacher_train"]["epochs"]),
-                require_full_epochs=bool(config["training_policy"]["require_full_epochs"]),
-            ))
+            if configured_current:
+                current_weight = resolve_path(configured_current)
+                if not current_weight.is_file():
+                    raise FileNotFoundError(
+                        f"共享新增类教师权重不存在：{current_weight}"
+                    )
+                method_audit["current_teacher_reused"] = True
+                incremental_histories.append(
+                    {
+                        "phase": "yolo_iod_current_teacher",
+                        "reused": True,
+                        "weight": rel_path(current_weight),
+                        "sha256": sha256_file(current_weight),
+                        "inference_scope": "incremental_dataset_only",
+                    }
+                )
+            else:
+                current_model = YOLO(str(config["model"]))
+                current_model.add_callback(
+                    "on_pretrain_routine_end", configure_map50_checkpointing
+                )
+                current_result = current_model.train(
+                    **method_train_arguments(
+                        config,
+                        adaptation_mode,
+                        "current_teacher_train",
+                        incremental_dataset,
+                        run_dir,
+                        "yolo_iod_current_teacher",
+                        device,
+                    )
+                )
+                current_weight = best_weight(current_model, current_result)
+                incremental_histories.append(
+                    training_history(
+                        current_model,
+                        "yolo_iod_current_teacher",
+                        int(
+                            config["methods"][adaptation_mode][
+                                "current_teacher_train"
+                            ]["epochs"]
+                        ),
+                        require_full_epochs=bool(
+                            config["training_policy"]["require_full_epochs"]
+                        ),
+                    )
+                )
+                method_audit["current_teacher_reused"] = False
             student_model = YOLO(str(config.get("adaptation", {}).get("student_init", config["model"])))
             student_model.add_callback("on_pretrain_routine_end", configure_map50_checkpointing)
             student_model.add_callback(
@@ -2395,6 +2497,8 @@ def run_protocol(
         "shared_parameter_relative_drift": shared_drift,
         "method_audit": method_audit,
         "old_raw_image_count": dataset_manifest["old_raw_image_count"],
+        "old_raw_label_count": dataset_manifest["old_raw_label_count"],
+        "old_feature_cache_count": dataset_manifest["old_feature_cache_count"],
         "old_raw_stems": dataset_manifest.get("old_raw_stems", []),
         "base_dev_map50": base_dev_map50,
         "base_dev_per_class_ap50": base_dev_metrics["per_class_ap50"],

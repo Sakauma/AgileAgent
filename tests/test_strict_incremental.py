@@ -703,9 +703,20 @@ def test_expanded_student_initializes_ema_and_freezes_batchnorm() -> None:
     for name, value in student.state_dict().items():
         assert torch.equal(value, trainer.ema.ema.state_dict()[name])
     assert trainer.ema.updates == 0
+    protected = trainer._clean_incremental_old_rows
+    with torch.no_grad():
+        for candidate in (student, trainer.ema.ema):
+            classifier = candidate.model[-1].cv3[0][-1]
+            classifier.weight[protected[0][0]].add_(1.0)
+            classifier.bias[protected[0][0]].add_(1.0)
     student.train()
     script["restore_expanded_student"](trainer)
     assert student.stem[1].training is False
+    assert trainer.ema.ema.stem[1].training is False
+    for candidate in (student, trainer.ema.ema):
+        classifier = candidate.model[-1].cv3[0][-1]
+        assert torch.equal(classifier.weight[protected[0][0]], protected[0][1])
+        assert torch.equal(classifier.bias[protected[0][0]], protected[0][2])
 
 
 def test_training_history_records_epochs_best_epoch_and_early_stop(tmp_path: Path) -> None:
@@ -778,6 +789,42 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
             "base",
             "0",
         )
+
+
+def test_p7_expanded_config_reuses_base_and_unifies_owner_resolution() -> None:
+    script = runpy.run_path("tools/70_run_strict_3plus1.py")
+    config = load_yaml("configs/strict_class_incremental_3plus1_p7_expanded.yaml")
+    protocol = config["protocols"][0]
+
+    assert config["paths"]["shared_base_checkpoint"].endswith(
+        "three_class_base_detector.pt"
+    )
+    assert config["adaptation"]["mode"] == "expanded_single_student"
+    assert protocol["adaptation_mode"] == "expanded_single_student"
+    assert protocol["build_unified_student"] is True
+    assert config["student_train"]["imgsz"] == 896
+    assert config["predict"]["base_imgsz"] == 896
+    assert config["predict"]["incremental_imgsz"] == 896
+    assert config["agent_structure"] == {
+        "architecture": "unified_incremental_detector",
+        "inference_scope": "every_image",
+        "old_class_owner": "frozen_base_model",
+        "new_class_owner": "incremental_model",
+        "fusion_level": "logical_class_ownership",
+        "scene_hard_routing": False,
+        "label_aware_routing": False,
+        "filename_class_routing": False,
+    }
+    arguments = script["train_arguments"](
+        config,
+        "student_train",
+        Path("student.yaml"),
+        Path("runs"),
+        "student",
+        "0",
+    )
+    assert arguments["imgsz"] == 896
+    assert arguments["batch"] == 4
 
 
 def test_context_class_weights_allow_a_missing_incremental_scene() -> None:
