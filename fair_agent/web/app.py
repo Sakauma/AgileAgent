@@ -39,6 +39,8 @@ STATIC_ROOT = Path(__file__).resolve().parent / "static"
 EngineProvider = Callable[[], WebInferenceEngine]
 DETECTION_UPLOAD_SPOOL_MAX_BYTES = 2 * 1024 * 1024
 DETECTION_FAST_MULTIPART_MAX_BYTES = DETECTION_UPLOAD_SPOOL_MAX_BYTES + 64 * 1024
+BATCH_FAST_MULTIPART_MAX_BYTES = 64 * 1024 * 1024
+BATCH_FAST_MULTIPART_MAX_PARTS = 256
 
 
 class BatchResultStore:
@@ -408,6 +410,72 @@ def parse_small_multipart(body: bytes, content_type: str) -> tuple[bytes, str, A
     return file_data, filename, confidence
 
 
+def parse_small_batch_multipart(
+    body: bytes, content_type: str
+) -> tuple[list[tuple[str, bytes]], Any]:
+    """Extract a bounded in-memory batch without Starlette tempfile objects."""
+
+    if len(body) > BATCH_FAST_MULTIPART_MAX_BYTES:
+        raise ValueError("批量Multipart请求超过快速解析上限。")
+    _disposition, parameters = parse_options_header(content_type)
+    boundary = parameters.get(b"boundary")
+    if not isinstance(boundary, bytes) or not boundary or len(boundary) > 200:
+        raise ValueError("Multipart请求缺少有效boundary。")
+    delimiter = b"--" + boundary
+    if not body.startswith(delimiter + b"\r\n"):
+        raise ValueError("Multipart请求起始boundary无效。")
+
+    cursor = len(delimiter) + 2
+    rows: list[tuple[str, bytes]] = []
+    confidence: Any = None
+    part_count = 0
+    while True:
+        part_count += 1
+        if part_count > BATCH_FAST_MULTIPART_MAX_PARTS:
+            raise ValueError("批量Multipart分段数量超过上限。")
+        marker = body.find(b"\r\n" + delimiter, cursor)
+        if marker < 0:
+            raise ValueError("Multipart请求缺少结束boundary。")
+        part = body[cursor:marker]
+        header_block, separator, content = part.partition(b"\r\n\r\n")
+        if not separator or len(header_block) > 16 * 1024:
+            raise ValueError("Multipart分段头无效。")
+        headers: dict[bytes, bytes] = {}
+        for line in header_block.split(b"\r\n"):
+            key, colon, value = line.partition(b":")
+            if not colon:
+                raise ValueError("Multipart分段头格式无效。")
+            headers[key.strip().lower()] = value.strip()
+        disposition, options = parse_options_header(
+            headers.get(b"content-disposition", b"")
+        )
+        if disposition != b"form-data" or b"name" not in options:
+            raise ValueError("Multipart分段缺少Content-Disposition name。")
+        field_name = options[b"name"].decode("utf-8", "replace")
+        if b"filename" in options and field_name == "files":
+            if len(content) > DETECTION_UPLOAD_SPOOL_MAX_BYTES:
+                raise ValueError("批量图像超过单文件上限。")
+            filename = options[b"filename"].decode("utf-8", "replace") or "image"
+            rows.append((filename, content))
+        elif field_name == "confidence" and confidence is None:
+            confidence = content.decode("ascii", "strict")
+
+        boundary_end = marker + 2 + len(delimiter)
+        suffix = body[boundary_end:boundary_end + 2]
+        if suffix == b"--":
+            trailing = body[boundary_end + 2:]
+            if trailing not in (b"", b"\r\n"):
+                raise ValueError("Multipart结束boundary后存在多余数据。")
+            break
+        if suffix != b"\r\n":
+            raise ValueError("Multipart分段boundary无效。")
+        cursor = boundary_end + 2
+
+    if not rows:
+        raise ValueError("请选择至少一张图像。")
+    return rows, confidence
+
+
 async def parse_detection_upload(request: Request) -> tuple[bytes, str, Any]:
     content_length = request.headers.get("content-length")
     content_type = request.headers.get("content-type", "")
@@ -646,11 +714,44 @@ async def batch_detect(request: Request) -> Response:
     decoding = settings["decoding"]
     upload_started = time.perf_counter()
     try:
-        async with request.form(max_files=float("inf"), max_fields=float("inf")) as form:
-            uploads = [item for item in form.getlist("files") if isinstance(item, UploadFile)]
-            rows = [(item.filename or "image", await item.read()) for item in uploads]
+        content_length = request.headers.get("content-length")
+        content_type = request.headers.get("content-type", "")
+        try:
+            body_size = int(content_length) if content_length is not None else -1
+        except ValueError:
+            body_size = -1
+        if (
+            content_type.lower().startswith("multipart/form-data;")
+            and 0 <= body_size <= BATCH_FAST_MULTIPART_MAX_BYTES
+        ):
+            rows, confidence_value = parse_small_batch_multipart(
+                await request.body(), content_type
+            )
             upload_ms = (time.perf_counter() - upload_started) * 1000
-            confidence = parse_confidence(form.get("confidence", settings["confidence"]["default"]), settings)
+            confidence = parse_confidence(
+                confidence_value
+                if confidence_value is not None
+                else settings["confidence"]["default"],
+                settings,
+            )
+        else:
+            async with request.form(
+                max_files=float("inf"), max_fields=float("inf")
+            ) as form:
+                uploads = [
+                    item
+                    for item in form.getlist("files")
+                    if isinstance(item, UploadFile)
+                ]
+                rows = [
+                    (item.filename or "image", await item.read())
+                    for item in uploads
+                ]
+                upload_ms = (time.perf_counter() - upload_started) * 1000
+                confidence = parse_confidence(
+                    form.get("confidence", settings["confidence"]["default"]),
+                    settings,
+                )
         provider: EngineProvider = request.app.state.engine_provider
         engine = await run_in_threadpool(provider)
         accepts_encoded = getattr(engine, "accepts_encoded", None)
