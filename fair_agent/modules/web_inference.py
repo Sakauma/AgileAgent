@@ -46,6 +46,21 @@ def _ascend_role_order(
     return tuple(str(value) for value in raw)  # type: ignore[return-value]
 
 
+def _active_specialist_backends(
+    protocols: Mapping[str, Mapping[str, Any]],
+    specialist_detectors: Mapping[str, Any],
+    *,
+    shared_dual_head: bool,
+) -> list[Any]:
+    if shared_dual_head:
+        return []
+    return [
+        specialist_detectors[protocol_id]
+        for protocol_id, protocol in protocols.items()
+        if protocol.get("available")
+    ]
+
+
 def _ordered_group_results(
     groups: Mapping[str, Sequence[tuple[str, Callable[[], Any]]]],
     submit_order: Sequence[str],
@@ -970,11 +985,11 @@ class WebInferenceEngine:
             self.backend_name == "ascend_acl"
             and self.native_options.get("encoded_preprocessing", "cpu") == "dvpp"
         ):
-            active_specialists = [
-                self.specialist_detectors[protocol_id]
-                for protocol_id, protocol in self.incremental_protocols.items()
-                if protocol.get("available")
-            ]
+            active_specialists = _active_specialist_backends(
+                self.incremental_protocols,
+                self.specialist_detectors,
+                shared_dual_head=self.shared_dual_head,
+            )
             if not self.shared_dual_head and len(active_specialists) != 1:
                 raise RuntimeError("Ascend DVPP设备预处理当前要求恰好一个活动增量模型")
             if protocol_positive_prototypes(self.unified_class_gates) or any(
