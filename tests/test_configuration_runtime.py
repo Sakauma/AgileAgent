@@ -195,6 +195,16 @@ def test_ascend_p10_shared_dual_head_contract_is_fully_owned() -> None:
         validate_config(config)
 
 
+def test_ascend_context_mode_allows_explicit_score_neutral_bypass() -> None:
+    config = clean_config()
+    config["ascend_backend"]["context_mode"] = "fixed_neutral_v1"
+    validate_config(config)
+
+    config["ascend_backend"]["context_mode"] = "filename_derived"
+    with pytest.raises(ValueError, match="context_mode"):
+        validate_config(config)
+
+
 def test_api_business_signature_ignores_only_request_timing_fields() -> None:
     payload = {
         "filename": "sample.png",

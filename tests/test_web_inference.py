@@ -32,10 +32,21 @@ from fair_agent.modules.web_inference import (
     _active_specialist_backends,
     _ascend_role_order,
     _ordered_group_results,
+    fixed_neutral_context,
 )
 
 
 ROUTING_ARGS = (4, 0.70, 0.30, 0.50, 0.50)
+
+
+def test_fixed_neutral_context_is_uniform_and_schema_compatible() -> None:
+    context = fixed_neutral_context()
+
+    assert context["sensor_confidence"] == 0.5
+    assert sum(context["sensor_probabilities"].values()) == 1.0
+    assert context["scene_confidence"] == 0.25
+    assert sum(context["scene_probabilities"].values()) == 1.0
+    assert context["_inference_ms"] == 0.0
 
 
 def test_shared_dual_head_dvpp_skips_physical_specialist_lookup() -> None:
