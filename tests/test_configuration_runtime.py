@@ -130,6 +130,29 @@ def test_ascend_p6_output_contract_is_explicit_and_fully_pinned() -> None:
         validate_config(config)
 
 
+def test_ascend_p9_decoded_contract_pins_threshold_capacity_and_layout() -> None:
+    config = clean_config()
+    entry = next(iter(config["ascend_backend"]["models"].values()))
+    entry.update(
+        {
+            "output_contract": "decoded_candidates_v1",
+            "candidate_confidence": 0.01,
+            "candidate_capacity": 4096,
+            "anchor_count": 13524,
+            "class_count": 3,
+        }
+    )
+    validate_config(config)
+
+    entry["candidate_confidence"] = 0.0101
+    with pytest.raises(ValueError, match="固定为0.01"):
+        validate_config(config)
+    entry["candidate_confidence"] = 0.01
+    entry.pop("anchor_count")
+    with pytest.raises(ValueError, match="缺少固定解码参数"):
+        validate_config(config)
+
+
 def test_api_business_signature_ignores_only_request_timing_fields() -> None:
     payload = {
         "filename": "sample.png",

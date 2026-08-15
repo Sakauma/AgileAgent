@@ -311,6 +311,7 @@ class AscendAclExecutionHandle:
         submit_ms: float,
         input_reference: np.ndarray | None,
         preloaded: bool,
+        output_copy_plan: Mapping[str, Any] | None = None,
     ) -> None:
         self.model = model
         self.submit_ms = float(submit_ms)
@@ -319,12 +320,15 @@ class AscendAclExecutionHandle:
         # allocation through the model lifetime.
         self.input_reference = input_reference
         self.preloaded = bool(preloaded)
+        self.output_copy_plan = (
+            dict(output_copy_plan) if output_copy_plan is not None else None
+        )
         self._lock = threading.Lock()
         self._completed = False
-        self._result: tuple[list[np.ndarray], dict[str, float]] | None = None
+        self._result: tuple[list[np.ndarray], dict[str, Any]] | None = None
         self._error: BaseException | None = None
 
-    def result(self) -> tuple[list[np.ndarray], dict[str, float]]:
+    def result(self) -> tuple[list[np.ndarray], dict[str, Any]]:
         with self._lock:
             if self._completed:
                 if self._error is not None:
@@ -340,6 +344,43 @@ class AscendAclExecutionHandle:
                         acl.rt.synchronize_event(self.model.output_copy_end_event),
                         "acl.rt.synchronize_event(model completion)",
                     )
+                    copied_indices = list(
+                        self.model._initial_output_indices(self.output_copy_plan)
+                    )
+                    output_copy_mode = "all"
+                    if (
+                        self.output_copy_plan is not None
+                        and not bool(self.output_copy_plan["force_raw"])
+                    ):
+                        follow_indices, output_copy_mode = (
+                            self.model._conditional_output_indices(
+                                self.output_copy_plan
+                            )
+                        )
+                        _require(
+                            acl.rt.reset_event(
+                                self.model.output_copy_end_event,
+                                self.model.stream,
+                            ),
+                            "acl.rt.reset_event(conditional output copy)",
+                        )
+                        self.model._enqueue_output_indices(follow_indices)
+                        _require(
+                            acl.rt.record_event(
+                                self.model.output_copy_end_event,
+                                self.model.stream,
+                            ),
+                            "acl.rt.record_event(conditional output copy)",
+                        )
+                        _require(
+                            acl.rt.synchronize_event(
+                                self.model.output_copy_end_event
+                            ),
+                            "acl.rt.synchronize_event(conditional output copy)",
+                        )
+                        copied_indices.extend(follow_indices)
+                    elif self.output_copy_plan is not None:
+                        output_copy_mode = "raw_fallback"
                     wait_ms = (time.perf_counter_ns() - wait_started) / 1_000_000.0
                     input_copy_ms = 0.0
                     if self.model.detailed_event_timing and not self.preloaded:
@@ -369,6 +410,8 @@ class AscendAclExecutionHandle:
                         "input_copy_ms": input_copy_ms,
                         "inference_ms": inference_ms,
                         "output_copy_ms": output_copy_ms,
+                        "output_copy_mode": output_copy_mode,
+                        "copied_output_indices": tuple(copied_indices),
                     },
                 )
             except BaseException as exc:
@@ -594,9 +637,74 @@ class AscendAclModel:
             for contract, host in zip(self.output_contracts, self.output_hosts)
         ]
 
-    def _copy_outputs_synchronous(self) -> list[np.ndarray]:
+    def _normalize_output_copy_plan(
+        self, plan: Mapping[str, Any] | None
+    ) -> dict[str, Any] | None:
+        if plan is None:
+            return None
+        required = {
+            "candidate_indices", "metadata_indices", "raw_index",
+            "overflow_index", "force_raw",
+        }
+        if set(plan) != required:
+            raise RuntimeError("Ascend条件输出复制计划字段非法")
+        normalized = {
+            "candidate_indices": tuple(int(value) for value in plan["candidate_indices"]),
+            "metadata_indices": tuple(int(value) for value in plan["metadata_indices"]),
+            "raw_index": int(plan["raw_index"]),
+            "overflow_index": int(plan["overflow_index"]),
+            "force_raw": bool(plan["force_raw"]),
+        }
+        candidate = normalized["candidate_indices"]
+        metadata = normalized["metadata_indices"]
+        raw_index = normalized["raw_index"]
+        indices = (*candidate, *metadata, raw_index)
+        if (
+            not candidate
+            or not metadata
+            or len(set(indices)) != len(indices)
+            or any(index < 0 or index >= len(self.output_contracts) for index in indices)
+            or normalized["overflow_index"] not in metadata
+        ):
+            raise RuntimeError("Ascend条件输出复制计划索引非法")
+        overflow_contract = self.output_contracts[normalized["overflow_index"]]
+        if (
+            tuple(overflow_contract["shape"]) != (1,)
+            or overflow_contract["dtype"] != np.dtype(np.int32)
+        ):
+            raise RuntimeError("Ascend overflow输出契约必须是int32[1]")
+        return normalized
+
+    def _initial_output_indices(
+        self, plan: Mapping[str, Any] | None
+    ) -> tuple[int, ...]:
+        if plan is None:
+            return tuple(range(len(self.output_contracts)))
+        if bool(plan["force_raw"]):
+            return (int(plan["raw_index"]),)
+        return tuple(int(value) for value in plan["metadata_indices"])
+
+    def _conditional_output_indices(
+        self, plan: Mapping[str, Any]
+    ) -> tuple[tuple[int, ...], str]:
+        overflow_view = self._output_views()[int(plan["overflow_index"])]
+        overflow = int(overflow_view.reshape(-1)[0])
+        if overflow not in {0, 1}:
+            raise RuntimeError(f"Ascend候选overflow非法：{overflow}")
+        if overflow:
+            return (int(plan["raw_index"]),), "raw_fallback"
+        return (
+            tuple(int(value) for value in plan["candidate_indices"]),
+            "decoded_candidates",
+        )
+
+    def _copy_output_indices_synchronous(
+        self, indices: Sequence[int]
+    ) -> list[np.ndarray]:
         acl = self.runtime.acl
-        for contract, host in zip(self.output_contracts, self.output_hosts):
+        for index in indices:
+            contract = self.output_contracts[int(index)]
+            host = self.output_hosts[int(index)]
             _require(
                 acl.rt.memcpy(
                     _numpy_pointer(acl, host),
@@ -608,6 +716,31 @@ class AscendAclModel:
                 f"acl.rt.memcpy(output {contract['index']})",
             )
         return self._output_views()
+
+    def _enqueue_output_indices(self, indices: Sequence[int]) -> None:
+        acl = self.runtime.acl
+        for index in indices:
+            contract = self.output_contracts[int(index)]
+            host = self.output_hosts[int(index)]
+            host_pointer = int(
+                contract.get("host_pointer") or _numpy_pointer(acl, host)
+            )
+            _require(
+                acl.rt.memcpy_async(
+                    host_pointer,
+                    host.nbytes,
+                    contract["device"],
+                    contract["size"],
+                    ACL_MEMCPY_DEVICE_TO_HOST,
+                    self.stream,
+                ),
+                f"acl.rt.memcpy_async(output {contract['index']})",
+            )
+
+    def _copy_outputs_synchronous(self) -> list[np.ndarray]:
+        return self._copy_output_indices_synchronous(
+            tuple(range(len(self.output_contracts)))
+        )
 
     def _event_elapsed(self, start: Any, end: Any, name: str) -> float:
         return float(
@@ -652,9 +785,11 @@ class AscendAclModel:
         self,
         batch: np.ndarray | None,
         ready_event: Any | None,
+        output_copy_plan: Mapping[str, Any] | None = None,
     ) -> AscendAclExecutionHandle:
         if self.execution_mode != "async_stream" or self.stream is None:
             raise RuntimeError("Ascend异步提交要求async_stream执行模式")
+        normalized_output_plan = self._normalize_output_copy_plan(output_copy_plan)
         self._claim_submission()
         acl = self.runtime.acl
         submit_started = time.perf_counter_ns()
@@ -724,21 +859,9 @@ class AscendAclModel:
                     acl.rt.record_event(self.inference_end_event, self.stream),
                     "acl.rt.record_event(inference end)",
                 )
-                for contract, host in zip(self.output_contracts, self.output_hosts):
-                    host_pointer = int(
-                        contract.get("host_pointer") or _numpy_pointer(acl, host)
-                    )
-                    _require(
-                        acl.rt.memcpy_async(
-                            host_pointer,
-                            host.nbytes,
-                            contract["device"],
-                            contract["size"],
-                            ACL_MEMCPY_DEVICE_TO_HOST,
-                            self.stream,
-                        ),
-                        f"acl.rt.memcpy_async(output {contract['index']})",
-                    )
+                self._enqueue_output_indices(
+                    self._initial_output_indices(normalized_output_plan)
+                )
                 _require(
                     acl.rt.record_event(self.output_copy_end_event, self.stream),
                     "acl.rt.record_event(output copy end)",
@@ -749,6 +872,7 @@ class AscendAclModel:
                 (time.perf_counter_ns() - submit_started) / 1_000_000.0,
                 input_reference,
                 ready_event is not None,
+                normalized_output_plan,
             )
             with self.execution_condition:
                 if self._outstanding is not None:
@@ -770,7 +894,11 @@ class AscendAclModel:
                 self.execution_condition.notify_all()
             raise
 
-    def submit(self, array: np.ndarray) -> AscendAclExecutionHandle:
+    def submit(
+        self,
+        array: np.ndarray,
+        output_copy_plan: Mapping[str, Any] | None = None,
+    ) -> AscendAclExecutionHandle:
         batch = np.ascontiguousarray(array, dtype=self.input_dtype)
         if tuple(batch.shape) != self.input_shape:
             raise RuntimeError(
@@ -780,16 +908,21 @@ class AscendAclModel:
             raise RuntimeError(
                 f"{self.path.name}输入字节数错误：{batch.nbytes} != {self.input_size}"
             )
-        return self._enqueue(batch, None)
+        return self._enqueue(batch, None, output_copy_plan)
 
-    def submit_preloaded(self, ready_event: Any) -> AscendAclExecutionHandle:
-        return self._enqueue(None, ready_event)
+    def submit_preloaded(
+        self,
+        ready_event: Any,
+        output_copy_plan: Mapping[str, Any] | None = None,
+    ) -> AscendAclExecutionHandle:
+        return self._enqueue(None, ready_event, output_copy_plan)
 
     def _execute_threaded_async(
         self,
         batch: np.ndarray | None,
         ready_event: Any | None,
-    ) -> tuple[list[np.ndarray], dict[str, float]]:
+        output_copy_plan: Mapping[str, Any] | None = None,
+    ) -> tuple[list[np.ndarray], dict[str, Any]]:
         """Reproduce the pre-P3 per-model execute/wait/D2H path.
 
         ThreadPool workers enqueue one model each, immediately wait for that
@@ -799,6 +932,7 @@ class AscendAclModel:
 
         if self.execution_mode != "async_stream" or self.stream is None:
             raise RuntimeError("Ascend threaded_execute要求async_stream执行模式")
+        normalized_output_plan = self._normalize_output_copy_plan(output_copy_plan)
         self._claim_submission()
         acl = self.runtime.acl
         submit_started = time.perf_counter_ns()
@@ -880,7 +1014,22 @@ class AscendAclModel:
                     "model threaded_execute",
                 )
                 output_copy_started = time.perf_counter_ns()
-                outputs = self._copy_outputs_synchronous()
+                copied_indices = list(
+                    self._initial_output_indices(normalized_output_plan)
+                )
+                outputs = self._copy_output_indices_synchronous(copied_indices)
+                output_copy_mode = "all"
+                if (
+                    normalized_output_plan is not None
+                    and not bool(normalized_output_plan["force_raw"])
+                ):
+                    follow_indices, output_copy_mode = (
+                        self._conditional_output_indices(normalized_output_plan)
+                    )
+                    self._copy_output_indices_synchronous(follow_indices)
+                    copied_indices.extend(follow_indices)
+                elif normalized_output_plan is not None:
+                    output_copy_mode = "raw_fallback"
                 output_copy_ms = (
                     time.perf_counter_ns() - output_copy_started
                 ) / 1_000_000.0
@@ -891,6 +1040,8 @@ class AscendAclModel:
                 "input_copy_ms": input_copy_ms,
                 "inference_ms": inference_ms,
                 "output_copy_ms": output_copy_ms,
+                "output_copy_mode": output_copy_mode,
+                "copied_output_indices": tuple(copied_indices),
             }
         except BaseException:
             try:
@@ -906,8 +1057,10 @@ class AscendAclModel:
                 self.execution_condition.notify_all()
 
     def execute_threaded(
-        self, array: np.ndarray
-    ) -> tuple[list[np.ndarray], dict[str, float]]:
+        self,
+        array: np.ndarray,
+        output_copy_plan: Mapping[str, Any] | None = None,
+    ) -> tuple[list[np.ndarray], dict[str, Any]]:
         batch = np.ascontiguousarray(array, dtype=self.input_dtype)
         if tuple(batch.shape) != self.input_shape:
             raise RuntimeError(
@@ -917,12 +1070,14 @@ class AscendAclModel:
             raise RuntimeError(
                 f"{self.path.name}输入字节数错误：{batch.nbytes} != {self.input_size}"
             )
-        return self._execute_threaded_async(batch, None)
+        return self._execute_threaded_async(batch, None, output_copy_plan)
 
     def execute_preloaded_threaded(
-        self, ready_event: Any
-    ) -> tuple[list[np.ndarray], dict[str, float]]:
-        return self._execute_threaded_async(None, ready_event)
+        self,
+        ready_event: Any,
+        output_copy_plan: Mapping[str, Any] | None = None,
+    ) -> tuple[list[np.ndarray], dict[str, Any]]:
+        return self._execute_threaded_async(None, ready_event, output_copy_plan)
 
     def execute(self, array: np.ndarray) -> tuple[list[np.ndarray], float]:
         if self.execution_mode == "async_stream":
@@ -1803,6 +1958,136 @@ def detections_v1_records(
     )
 
 
+def decoded_output_copy_plan(
+    confidence: float,
+    *,
+    candidate_confidence: float,
+) -> dict[str, Any]:
+    """Select raw fallback up front or stage metadata before candidate D2H."""
+
+    return {
+        "candidate_indices": (0, 1, 2, 3),
+        "metadata_indices": (4, 5),
+        "raw_index": 6,
+        "overflow_index": 5,
+        "force_raw": float(confidence) < float(candidate_confidence),
+    }
+
+
+def decoded_candidates_v1_records(
+    outputs: Sequence[np.ndarray],
+    info: Mapping[str, float | int],
+    confidence: float,
+    iou: float,
+    max_det: int,
+    *,
+    candidate_confidence: float,
+    candidate_capacity: int,
+    anchor_count: int,
+    class_count: int,
+) -> list[dict[str, Any]]:
+    """Run the existing strict Host sort/NMS over device-decoded candidates."""
+
+    if len(outputs) != 7:
+        raise RuntimeError(f"decoded_candidates_v1输出数量错误：{len(outputs)} != 7")
+    boxes, scores, class_ids, anchor_ids, valid_count, overflow = (
+        np.asarray(value) for value in outputs[:6]
+    )
+    capacity = int(candidate_capacity)
+    expected_shapes = (
+        (capacity, 4),
+        (capacity,),
+        (capacity,),
+        (capacity,),
+        (1,),
+        (1,),
+    )
+    actual_shapes = tuple(
+        tuple(value.shape)
+        for value in (boxes, scores, class_ids, anchor_ids, valid_count, overflow)
+    )
+    if actual_shapes != expected_shapes:
+        raise RuntimeError(
+            f"decoded_candidates_v1输出shape错误：{actual_shapes} != {expected_shapes}"
+        )
+    expected_dtypes = (
+        np.dtype(np.float32),
+        np.dtype(np.float32),
+        np.dtype(np.int32),
+        np.dtype(np.int32),
+        np.dtype(np.int32),
+        np.dtype(np.int32),
+    )
+    actual_dtypes = (
+        boxes.dtype,
+        scores.dtype,
+        class_ids.dtype,
+        anchor_ids.dtype,
+        valid_count.dtype,
+        overflow.dtype,
+    )
+    if actual_dtypes != expected_dtypes:
+        raise RuntimeError(
+            f"decoded_candidates_v1输出dtype错误：{actual_dtypes} != {expected_dtypes}"
+        )
+    if float(confidence) < float(candidate_confidence):
+        raise RuntimeError("decoded_candidates_v1低阈值请求必须使用raw回滚路径")
+    overflow_value = int(overflow[0])
+    if overflow_value != 0:
+        raise RuntimeError("decoded_candidates_v1溢出时必须使用raw回滚路径")
+    count = int(valid_count[0])
+    if count < 0 or count > capacity:
+        raise RuntimeError(f"decoded_candidates_v1 valid_count非法：{count}")
+    valid_boxes = boxes[:count]
+    valid_scores = scores[:count]
+    valid_classes = class_ids[:count]
+    valid_anchors = anchor_ids[:count]
+    if not (np.all(np.isfinite(valid_boxes)) and np.all(np.isfinite(valid_scores))):
+        raise RuntimeError("decoded_candidates_v1包含非有限候选")
+    if np.any(valid_scores <= float(candidate_confidence)):
+        raise RuntimeError("decoded_candidates_v1包含未通过严格候选阈值的记录")
+    if (
+        np.any(valid_classes < 0)
+        or np.any(valid_classes >= int(class_count))
+        or np.any(valid_anchors < 0)
+        or np.any(valid_anchors >= int(anchor_count))
+    ):
+        raise RuntimeError("decoded_candidates_v1候选ID越界")
+    tie_keys = valid_anchors.astype(np.int64) * int(class_count) + valid_classes
+    if len(tie_keys) > 1 and np.any(tie_keys[1:] <= tie_keys[:-1]):
+        raise RuntimeError("decoded_candidates_v1候选未按anchor-major/class-minor排序")
+
+    eligible = np.flatnonzero(valid_scores > float(confidence))
+    if not len(eligible):
+        return []
+    ordered = eligible[np.argsort(-valid_scores[eligible], kind="stable")]
+    kept: list[int] = []
+    while len(ordered) and len(kept) < int(max_det):
+        current = int(ordered[0])
+        kept.append(current)
+        if len(ordered) == 1:
+            break
+        remaining = ordered[1:]
+        same_class = valid_classes[remaining] == valid_classes[current]
+        suppressed = np.zeros(len(remaining), dtype=np.bool_)
+        if np.any(same_class):
+            suppressed[same_class] = (
+                _box_iou(
+                    valid_boxes[current],
+                    valid_boxes[remaining[same_class]],
+                )
+                > float(iou)
+            )
+        ordered = remaining[~suppressed]
+    selected = kept[: int(max_det)]
+    return _restore_detection_rows(
+        valid_boxes[selected],
+        valid_scores[selected],
+        valid_classes[selected],
+        info,
+    )
+
+
 class _ArrayView:
     def __init__(self, values: Any) -> None:
         self.values = values
@@ -1884,15 +2169,20 @@ class AscendAclBackend:
             raise RuntimeError(f"Ascend检测模型stream角色非法：{stream_role}")
         self.model = _load_model(options, entry, stream_role)
         self.output_contract = str(entry.get("output_contract", "raw_yolo_v1"))
-        if self.output_contract not in {"raw_yolo_v1", "detections_v1"}:
+        if self.output_contract not in {
+            "raw_yolo_v1", "decoded_candidates_v1", "detections_v1",
+        }:
             raise RuntimeError(f"Ascend检测输出契约非法：{self.output_contract}")
         self.candidate_confidence = float(entry.get("candidate_confidence", 0.0))
         self.contract_iou = float(entry.get("iou_threshold", 0.0))
         self.contract_max_det = int(entry.get("max_det", 0))
+        self.candidate_capacity = int(entry.get("candidate_capacity", 0))
+        self.anchor_count = int(entry.get("anchor_count", 0))
+        self.class_count = int(entry.get("class_count", 0))
         if self.output_contract == "raw_yolo_v1":
             if len(self.model.output_contracts) != 1:
                 raise RuntimeError("raw_yolo_v1 OM必须只有一个原始检测输出")
-        else:
+        elif self.output_contract == "detections_v1":
             expected = (
                 ((self.contract_max_det, 4), np.dtype(np.float32)),
                 ((self.contract_max_det,), np.dtype(np.float32)),
@@ -1905,6 +2195,36 @@ class AscendAclBackend:
             )
             if self.contract_max_det <= 0 or actual != expected:
                 raise RuntimeError(f"detections_v1 OM输出契约错误：{actual} != {expected}")
+        else:
+            if self.model.execution_mode != "async_stream":
+                raise RuntimeError("decoded_candidates_v1要求async_stream执行模式")
+            expected = (
+                ((self.candidate_capacity, 4), np.dtype(np.float32)),
+                ((self.candidate_capacity,), np.dtype(np.float32)),
+                ((self.candidate_capacity,), np.dtype(np.int32)),
+                ((self.candidate_capacity,), np.dtype(np.int32)),
+                ((1,), np.dtype(np.int32)),
+                ((1,), np.dtype(np.int32)),
+                (
+                    (1, 4 + self.class_count, self.anchor_count),
+                    np.dtype(np.float32),
+                ),
+            )
+            actual = tuple(
+                (tuple(contract["shape"]), contract["dtype"])
+                for contract in self.model.output_contracts
+            )
+            if (
+                self.candidate_confidence != 0.01
+                or self.candidate_capacity <= 0
+                or self.anchor_count <= 0
+                or self.class_count <= 0
+                or actual != expected
+            ):
+                raise RuntimeError(
+                    "decoded_candidates_v1 OM输出契约错误："
+                    f"{actual} != {expected}"
+                )
         if (
             self.model.input_dtype == np.dtype(np.uint8)
             and len(self.model.input_shape) == 4
@@ -1930,6 +2250,14 @@ class AscendAclBackend:
             )
         self._last_timings: dict[str, float] = {}
 
+    def _output_copy_plan(self, options: Mapping[str, Any]) -> dict[str, Any] | None:
+        if self.output_contract != "decoded_candidates_v1":
+            return None
+        return decoded_output_copy_plan(
+            float(options.get("conf", 0.5)),
+            candidate_confidence=self.candidate_confidence,
+        )
+
     def _result_from_outputs(
         self,
         outputs: Sequence[np.ndarray],
@@ -1944,13 +2272,36 @@ class AscendAclBackend:
         max_det = int(options.get("max_det", 300))
         if self.output_contract == "raw_yolo_v1":
             rows = yolo_detections(outputs[0], info, confidence, iou, max_det)
-        else:
+        elif self.output_contract == "detections_v1":
             rows = detections_v1_records(
                 outputs, info, confidence, iou, max_det,
                 candidate_confidence=self.candidate_confidence,
                 contract_iou=self.contract_iou,
                 contract_max_det=self.contract_max_det,
             )
+        else:
+            copy_mode = str(execution.get("output_copy_mode") or "")
+            if copy_mode == "raw_fallback":
+                rows = yolo_detections(
+                    outputs[6], info, confidence, iou, max_det
+                )
+            elif copy_mode == "decoded_candidates":
+                rows = decoded_candidates_v1_records(
+                    outputs,
+                    info,
+                    confidence,
+                    iou,
+                    max_det,
+                    candidate_confidence=self.candidate_confidence,
+                    candidate_capacity=self.candidate_capacity,
+                    anchor_count=self.anchor_count,
+                    class_count=self.class_count,
+                )
+            else:
+                raise RuntimeError(
+                    "decoded_candidates_v1缺少条件输出复制证据："
+                    f"{copy_mode or 'missing'}"
+                )
         postprocess_ms = (
             time.perf_counter_ns() - postprocess_started
         ) / 1_000_000.0
@@ -1987,7 +2338,10 @@ class AscendAclBackend:
         )
         preprocess_ms = (time.perf_counter_ns() - preprocess_started) / 1_000_000.0
         if self.model.execution_mode == "async_stream":
-            outputs, execution = self.model.execute_threaded(batch)
+            outputs, execution = self.model.execute_threaded(
+                batch,
+                self._output_copy_plan(options),
+            )
         else:
             outputs, inference_ms = self.model.execute(batch)
             execution = {"inference_ms": inference_ms}
@@ -2009,7 +2363,7 @@ class AscendAclBackend:
         ) / 1_000_000.0
         return AscendDetectorExecutionHandle(
             self,
-            self.model.submit(batch),
+            self.model.submit(batch, self._output_copy_plan(options)),
             info,
             options,
             preprocess_ms,
@@ -2023,7 +2377,10 @@ class AscendAclBackend:
     ) -> AscendResult:
         if self.model.schedule_mode == "unified_enqueue":
             return self.submit_preloaded(info, ready_event, **options).result()
-        outputs, execution = self.model.execute_preloaded_threaded(ready_event)
+        outputs, execution = self.model.execute_preloaded_threaded(
+            ready_event,
+            self._output_copy_plan(options),
+        )
         return self._result_from_outputs(outputs, info, options, 0.0, execution)
 
     def submit_preloaded(
@@ -2034,7 +2391,10 @@ class AscendAclBackend:
     ) -> AscendDetectorExecutionHandle:
         return AscendDetectorExecutionHandle(
             self,
-            self.model.submit_preloaded(ready_event),
+            self.model.submit_preloaded(
+                ready_event,
+                self._output_copy_plan(options),
+            ),
             info,
             options,
             0.0,
