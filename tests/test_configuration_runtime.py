@@ -104,6 +104,32 @@ def test_ascend_p5_order_and_priority_fields_are_validated() -> None:
         validate_config(config)
 
 
+def test_ascend_p6_output_contract_is_explicit_and_fully_pinned() -> None:
+    config = clean_config()
+    entry = next(iter(config["ascend_backend"]["models"].values()))
+    entry.update({
+        "output_contract": "detections_v1",
+        "candidate_confidence": 0.01,
+        "iou_threshold": 0.7,
+        "max_det": 300,
+    })
+    validate_config(config)
+
+    entry.pop("iou_threshold")
+    with pytest.raises(ValueError, match="缺少固定后处理参数"):
+        validate_config(config)
+
+    entry.update({"output_contract": "raw_yolo_v1", "iou_threshold": 0.7})
+    with pytest.raises(ValueError, match="禁止配置设备后处理参数"):
+        validate_config(config)
+
+    for key in ("candidate_confidence", "iou_threshold", "max_det"):
+        entry.pop(key)
+    entry["output_contract"] = "shape_guess"
+    with pytest.raises(ValueError, match="output_contract"):
+        validate_config(config)
+
+
 def test_api_business_signature_ignores_only_request_timing_fields() -> None:
     payload = {
         "filename": "sample.png",

@@ -212,9 +212,11 @@ ascend_backend:
     models/production/incremental_detection/three_class_base_detector.pt:
       path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/base_detector.om
       sha256: b78b7fa086436f1c10010f879bc4d836d23e0679fb2e189736ab337c1beb1f4d
+      output_contract: raw_yolo_v1
     models/production/incremental_detection/incremental_detector.pt:
       path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/incremental_detector.om
       sha256: ec8a321a966ddba0cdbb37d2223b8150a8dd39cd3c10752e85155d1f9ef54b27
+      output_contract: raw_yolo_v1
   context_model:
     path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/scene_sensor_net.om
     sha256: debdb9c3f550ef24d0d14d736a700d65960abcd67899e00f493e208e6d90e725

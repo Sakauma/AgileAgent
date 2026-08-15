@@ -602,9 +602,47 @@ def validate_config(
             if not isinstance(source, str) or not isinstance(entry, Mapping) or not entry.get("path"):
                 errors.append("ascend_backend.models条目非法")
                 continue
-            unknown = sorted(set(entry) - {"path", "sha256"})
+            unknown = sorted(set(entry) - {
+                "path", "sha256", "output_contract", "candidate_confidence",
+                "iou_threshold", "max_det",
+            })
             if unknown:
                 errors.append(f"ascend_backend.models.{source}包含未知字段：" + ", ".join(unknown))
+            output_contract = entry.get("output_contract", "raw_yolo_v1")
+            if output_contract not in {"raw_yolo_v1", "detections_v1"}:
+                errors.append(f"ascend_backend.models.{source}.output_contract非法")
+            contract_fields = {"candidate_confidence", "iou_threshold", "max_det"}
+            configured_contract_fields = contract_fields & set(entry)
+            if output_contract == "detections_v1":
+                if configured_contract_fields != contract_fields:
+                    errors.append(
+                        f"ascend_backend.models.{source}.detections_v1缺少固定后处理参数"
+                    )
+                candidate_confidence = entry.get("candidate_confidence")
+                iou_threshold = entry.get("iou_threshold")
+                contract_max_det = entry.get("max_det")
+                if (
+                    isinstance(candidate_confidence, bool)
+                    or not isinstance(candidate_confidence, (int, float))
+                    or not 0.0 <= float(candidate_confidence) < 1.0
+                ):
+                    errors.append(f"ascend_backend.models.{source}.candidate_confidence非法")
+                if (
+                    isinstance(iou_threshold, bool)
+                    or not isinstance(iou_threshold, (int, float))
+                    or not 0.0 < float(iou_threshold) < 1.0
+                ):
+                    errors.append(f"ascend_backend.models.{source}.iou_threshold非法")
+                if (
+                    isinstance(contract_max_det, bool)
+                    or not isinstance(contract_max_det, int)
+                    or contract_max_det <= 0
+                ):
+                    errors.append(f"ascend_backend.models.{source}.max_det非法")
+            elif configured_contract_fields:
+                errors.append(
+                    f"ascend_backend.models.{source}.raw_yolo_v1禁止配置设备后处理参数"
+                )
             digest = entry.get("sha256")
             if (ascend.get("validated") is True or ascend.get("validation_candidate") is True) and (
                 not isinstance(digest, str) or len(digest) != 64

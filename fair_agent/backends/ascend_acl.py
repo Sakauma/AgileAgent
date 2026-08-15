@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import ctypes
+import math
 import threading
 import time
 import warnings
@@ -1700,12 +1701,26 @@ def yolo_detections(
                 _box_iou(boxes[current], boxes[remaining[same_class]]) > float(iou)
             )
         candidates = remaining[~suppressed]
+    selected = kept[: int(max_det)]
+    return _restore_detection_rows(
+        boxes[selected], confidences[selected], class_ids[selected], info
+    )
+
+
+def _restore_detection_rows(
+    boxes: np.ndarray,
+    scores: np.ndarray,
+    class_ids: np.ndarray,
+    info: Mapping[str, float | int],
+) -> list[dict[str, Any]]:
     scale = float(info["scale"])
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise RuntimeError(f"Ascend检测坐标缩放非法：{scale}")
     original_width = float(info["original_width"])
     original_height = float(info["original_height"])
     rows = []
-    for index in kept[: int(max_det)]:
-        x1, y1, x2, y2 = boxes[index]
+    for box, score, class_id in zip(boxes, scores, class_ids):
+        x1, y1, x2, y2 = box
         restored = [
             min(max((float(x1) - float(info["pad_left"])) / scale, 0.0), original_width),
             min(max((float(y1) - float(info["pad_top"])) / scale, 0.0), original_height),
@@ -1714,12 +1729,78 @@ def yolo_detections(
         ]
         rows.append(
             {
-                "class_id": int(class_ids[index]),
-                "confidence": float(confidences[index]),
+                "class_id": int(class_id),
+                "confidence": float(score),
                 "xyxy": restored,
             }
         )
     return rows
+
+
+def detections_v1_records(
+    outputs: Sequence[np.ndarray],
+    info: Mapping[str, float | int],
+    confidence: float,
+    iou: float,
+    max_det: int,
+    *,
+    candidate_confidence: float,
+    contract_iou: float,
+    contract_max_det: int,
+) -> list[dict[str, Any]]:
+    """Decode the fixed P6 outputs without inferring a contract from shape."""
+    if len(outputs) != 4:
+        raise RuntimeError(f"detections_v1输出数量错误：{len(outputs)} != 4")
+    boxes, scores, class_ids, valid_count = tuple(np.asarray(value) for value in outputs)
+    expected_shapes = (
+        (int(contract_max_det), 4),
+        (int(contract_max_det),),
+        (int(contract_max_det),),
+        (1,),
+    )
+    actual_shapes = tuple(
+        tuple(value.shape) for value in (boxes, scores, class_ids, valid_count)
+    )
+    if actual_shapes != expected_shapes:
+        raise RuntimeError(f"detections_v1输出shape错误：{actual_shapes} != {expected_shapes}")
+    expected_dtypes = (
+        np.dtype(np.float32), np.dtype(np.float32),
+        np.dtype(np.int32), np.dtype(np.int32),
+    )
+    actual_dtypes = (boxes.dtype, scores.dtype, class_ids.dtype, valid_count.dtype)
+    if actual_dtypes != expected_dtypes:
+        raise RuntimeError(f"detections_v1输出dtype错误：{actual_dtypes} != {expected_dtypes}")
+    requested_confidence = float(confidence)
+    if requested_confidence < float(candidate_confidence):
+        raise RuntimeError(
+            "detections_v1运行阈值低于设备候选阈值："
+            f"{requested_confidence} < {candidate_confidence}"
+        )
+    if not math.isclose(float(iou), float(contract_iou), rel_tol=0.0, abs_tol=1e-9):
+        raise RuntimeError(f"detections_v1 IoU与设备契约不一致：{iou} != {contract_iou}")
+    requested_max_det = int(max_det)
+    if requested_max_det <= 0 or requested_max_det > int(contract_max_det):
+        raise RuntimeError(
+            f"detections_v1 max_det超出设备契约：{requested_max_det} not in [1, {contract_max_det}]"
+        )
+    count = int(valid_count[0])
+    if count < 0 or count > int(contract_max_det):
+        raise RuntimeError(f"detections_v1 valid_count非法：{count}")
+    valid_boxes = boxes[:count]
+    valid_scores = scores[:count]
+    valid_classes = class_ids[:count]
+    if not (np.all(np.isfinite(valid_boxes)) and np.all(np.isfinite(valid_scores))):
+        raise RuntimeError("detections_v1包含非有限检测值")
+    if np.any(valid_classes < 0):
+        raise RuntimeError("detections_v1包含负类别ID")
+    if np.any(valid_scores <= float(candidate_confidence)):
+        raise RuntimeError("detections_v1包含未通过严格候选阈值的记录")
+    if len(valid_scores) > 1 and np.any(valid_scores[1:] > valid_scores[:-1]):
+        raise RuntimeError("detections_v1记录没有按置信度稳定降序输出")
+    selected = np.flatnonzero(valid_scores > requested_confidence)[:requested_max_det]
+    return _restore_detection_rows(
+        valid_boxes[selected], valid_scores[selected], valid_classes[selected], info
+    )
 
 
 class _ArrayView:
@@ -1802,6 +1883,28 @@ class AscendAclBackend:
         if stream_role not in {"base", "specialist"}:
             raise RuntimeError(f"Ascend检测模型stream角色非法：{stream_role}")
         self.model = _load_model(options, entry, stream_role)
+        self.output_contract = str(entry.get("output_contract", "raw_yolo_v1"))
+        if self.output_contract not in {"raw_yolo_v1", "detections_v1"}:
+            raise RuntimeError(f"Ascend检测输出契约非法：{self.output_contract}")
+        self.candidate_confidence = float(entry.get("candidate_confidence", 0.0))
+        self.contract_iou = float(entry.get("iou_threshold", 0.0))
+        self.contract_max_det = int(entry.get("max_det", 0))
+        if self.output_contract == "raw_yolo_v1":
+            if len(self.model.output_contracts) != 1:
+                raise RuntimeError("raw_yolo_v1 OM必须只有一个原始检测输出")
+        else:
+            expected = (
+                ((self.contract_max_det, 4), np.dtype(np.float32)),
+                ((self.contract_max_det,), np.dtype(np.float32)),
+                ((self.contract_max_det,), np.dtype(np.int32)),
+                ((1,), np.dtype(np.int32)),
+            )
+            actual = tuple(
+                (tuple(contract["shape"]), contract["dtype"])
+                for contract in self.model.output_contracts
+            )
+            if self.contract_max_det <= 0 or actual != expected:
+                raise RuntimeError(f"detections_v1 OM输出契约错误：{actual} != {expected}")
         if (
             self.model.input_dtype == np.dtype(np.uint8)
             and len(self.model.input_shape) == 4
@@ -1836,13 +1939,18 @@ class AscendAclBackend:
         execution: Mapping[str, float],
     ) -> AscendResult:
         postprocess_started = time.perf_counter_ns()
-        rows = yolo_detections(
-            outputs[0],
-            info,
-            float(options.get("conf", 0.5)),
-            float(options.get("iou", 0.7)),
-            int(options.get("max_det", 300)),
-        )
+        confidence = float(options.get("conf", 0.5))
+        iou = float(options.get("iou", 0.7))
+        max_det = int(options.get("max_det", 300))
+        if self.output_contract == "raw_yolo_v1":
+            rows = yolo_detections(outputs[0], info, confidence, iou, max_det)
+        else:
+            rows = detections_v1_records(
+                outputs, info, confidence, iou, max_det,
+                candidate_confidence=self.candidate_confidence,
+                contract_iou=self.contract_iou,
+                contract_max_det=self.contract_max_det,
+            )
         postprocess_ms = (
             time.perf_counter_ns() - postprocess_started
         ) / 1_000_000.0

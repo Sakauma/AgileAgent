@@ -121,6 +121,43 @@ def test_unvalidated_candidate_can_verify_build_before_gate_reports(tmp_path: Pa
     assert result["validation_required"] is False
 
 
+def test_detections_v1_candidate_binds_fixed_postprocess_contract(tmp_path: Path) -> None:
+    options = _candidate(tmp_path)
+    manifest_path = Path(options["build_manifest"])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    base = payload["artifacts"]["base_detector"]
+    base["output_contract"] = "detections_v1"
+    base["postprocess_contract"] = {
+        "candidate_confidence": 0.01,
+        "iou_threshold": 0.7,
+        "max_det": 300,
+        "outputs": {
+            "boxes": {"shape": [300, 4], "dtype": "float32"},
+            "scores": {"shape": [300], "dtype": "float32"},
+            "class_ids": {"shape": [300], "dtype": "int32"},
+            "valid_count": {"shape": [1], "dtype": "int32"},
+        },
+    }
+    _write_json(manifest_path, payload)
+    options["build_manifest_sha256"] = sha256_file(manifest_path)
+    base_entry = next(
+        entry for entry in options["models"].values()
+        if entry["path"] == base["om"]["path"]
+    )
+    base_entry.update({
+        "output_contract": "detections_v1",
+        "candidate_confidence": 0.01,
+        "iou_threshold": 0.7,
+        "max_det": 300,
+    })
+    result = verify_ascend_artifacts(options, require_validation=False)
+    assert result["status"] == "passed", result["errors"]
+
+    base_entry["iou_threshold"] = 0.6
+    result = verify_ascend_artifacts(options, require_validation=False)
+    assert "postprocess_contract_mismatch:base" in result["errors"]
+
+
 def test_candidate_runtime_requires_explicit_process_authorization(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
