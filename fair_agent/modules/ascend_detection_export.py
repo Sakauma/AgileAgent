@@ -558,10 +558,17 @@ def export_detections_v1_onnx(
     target: str | Path,
     *,
     input_name: str,
-    opset: int = 17,
+    opset: int = 16,
 ) -> dict[str, Any]:
     import torch
 
+    if (
+        getattr(module, "nms_backend", None) == "batch_multiclass_nms"
+        and int(opset) != 16
+    ):
+        raise ValueError(
+            "CANN 7.0.RC1的BatchMultiClassNMS解析器只接受ONNX opset 16"
+        )
     path = Path(target).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():

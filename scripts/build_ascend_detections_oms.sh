@@ -35,6 +35,21 @@ test -d "$ONNX_DIR" || { printf 'ONNX目录不存在：%s\n' "$ONNX_DIR" >&2; ex
 test -f "$ONNX_DIR/export-manifest.json" || { printf '缺少导出清单：%s\n' "$ONNX_DIR" >&2; exit 1; }
 test -f "$BASE_MANIFEST" || { printf '基础构建清单不存在：%s\n' "$BASE_MANIFEST" >&2; exit 1; }
 test -x "$ASCEND_PYTHON" || { printf 'Ascend Python不存在：%s\n' "$ASCEND_PYTHON" >&2; exit 1; }
+"$ASCEND_PYTHON" - "$ONNX_DIR/export-manifest.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if manifest.get("nms_backend") != "batch_multiclass_nms":
+    raise SystemExit(
+        "score-gate构建只接受已实探可编译的batch_multiclass_nms"
+    )
+if manifest.get("opset") != 16:
+    raise SystemExit(
+        "CANN 7.0.RC1的BatchMultiClassNMS解析器只接受ONNX opset 16"
+    )
+PY
 for name in base_detector incremental_detector; do
   test -f "$ONNX_DIR/$name.onnx" || { printf '缺少P6 ONNX：%s\n' "$name" >&2; exit 1; }
   test -f "$AIPP_DIR/$name.cfg" || { printf '缺少AIPP配置：%s\n' "$name" >&2; exit 1; }
@@ -116,6 +131,8 @@ export_manifest_path = onnx_dir / "export-manifest.json"
 export_manifest = json.loads(export_manifest_path.read_text(encoding="utf-8"))
 if export_manifest.get("nms_backend") != "batch_multiclass_nms":
     raise RuntimeError("score-gate构建只接受已实探可编译的batch_multiclass_nms")
+if export_manifest.get("opset") != 16:
+    raise RuntimeError("CANN 7.0.RC1的BatchMultiClassNMS解析器只接受ONNX opset 16")
 scene = base_manifest["artifacts"]["scene_sensor_net"]
 try:
     git_sha = subprocess.check_output(

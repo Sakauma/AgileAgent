@@ -177,7 +177,12 @@ def main() -> int:
         child.add_argument("--candidate-confidence", type=float, default=0.01)
         child.add_argument("--iou-threshold", type=float, default=0.7)
         child.add_argument("--max-det", type=int, default=300)
-        child.add_argument("--opset", type=int, default=17)
+        child.add_argument(
+            "--opset",
+            type=int,
+            default=16,
+            help="CANN 7.0.RC1的BatchMultiClassNMS解析器固定使用16。",
+        )
     args = parser.parse_args()
     result = _probe(args) if args.action == "probe" else _export(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
