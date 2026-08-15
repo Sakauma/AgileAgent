@@ -132,6 +132,24 @@ def test_environment_guard_accepts_unsupported_governor_and_rejects_noise() -> N
     assert result["offenders"][0]["comm"] == "xscreensaver"
 
 
+def test_environment_guard_records_but_does_not_gate_post_run_temperature() -> None:
+    snapshot = _snapshot()
+    snapshot["npu_smi"]["devices"][0]["temperature_c"] = 67
+
+    before = evaluate_environment_snapshot(snapshot, candidate_state="ready")
+    after = evaluate_environment_snapshot(
+        snapshot,
+        candidate_state="ready",
+        require_temperature_limit=False,
+    )
+
+    assert before["passed"] is False
+    assert before["checks"]["npu_temperature_at_most_limit"] is False
+    assert after["passed"] is True
+    assert after["temperatures_c"] == [67]
+    assert after["limits"]["temperature_limit_required"] is False
+
+
 def test_environment_guard_requires_free_candidate_port_before_start() -> None:
     snapshot = _snapshot()
     result = evaluate_environment_snapshot(snapshot, candidate_state="free")
