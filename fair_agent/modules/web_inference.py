@@ -1781,6 +1781,9 @@ class WebInferenceEngine:
         ascend_collect_order = _ascend_role_order(
             self.native_options, "collect_order"
         )
+        fixed_context = getattr(self, "fixed_neutral_context", False)
+        context = fixed_neutral_context() if fixed_context else None
+        context_total_ms = 0.0
         unified_ascend_submit = (
             self.backend_name == "ascend_acl"
             and self.parallel_model_execution
@@ -1792,7 +1795,9 @@ class WebInferenceEngine:
         )
         if unified_ascend_submit:
             groups = {
-                "scene": (("context", context_submit_task),),
+                "scene": (
+                    () if fixed_context else (("context", context_submit_task),)
+                ),
                 "base": ((
                     "detector",
                     lambda: detector_submit_task(self.detector, self.imgsz),
@@ -1819,7 +1824,8 @@ class WebInferenceEngine:
                 ascend_collect_order,
                 collect_ascend_handle,
             )
-            context, context_total_ms = completed["context"]
+            if not fixed_context:
+                context, context_total_ms = completed["context"]
             prediction, detector_total_ms = completed["detector"]
             prefetched_predictions = {
                 protocol_id: completed[protocol_id]
@@ -1835,10 +1841,14 @@ class WebInferenceEngine:
             == "threaded_execute"
         ):
             groups = {
-                "scene": ((
-                    "context",
-                    lambda: self._model_executor.submit(context_task),
-                ),),
+                "scene": (
+                    ()
+                    if fixed_context
+                    else ((
+                        "context",
+                        lambda: self._model_executor.submit(context_task),
+                    ),)
+                ),
                 "base": ((
                     "detector",
                     lambda: self._model_executor.submit(
@@ -1863,7 +1873,8 @@ class WebInferenceEngine:
                 ascend_collect_order,
                 lambda future: future.result(),
             )
-            context, context_total_ms = completed["context"]
+            if not fixed_context:
+                context, context_total_ms = completed["context"]
             prediction, detector_total_ms = completed["detector"]
             prefetched_predictions = {
                 protocol_id: completed[protocol_id]
@@ -1872,7 +1883,11 @@ class WebInferenceEngine:
         elif self.parallel_model_execution and (
             physical_specialist_ids or shared_dual_head
         ):
-            context_future = self._model_executor.submit(context_task)
+            context_future = (
+                None
+                if fixed_context
+                else self._model_executor.submit(context_task)
+            )
             detector_future = self._model_executor.submit(detector_task, self.detector, self.imgsz)
             specialist_futures = {
                 protocol_id: self._model_executor.submit(
@@ -1880,19 +1895,28 @@ class WebInferenceEngine:
                 )
                 for protocol_id in physical_specialist_ids
             }
-            context, context_total_ms = context_future.result()
+            if context_future is not None:
+                context, context_total_ms = context_future.result()
             prediction, detector_total_ms = detector_future.result()
             prefetched_predictions = {
                 protocol_id: future.result() for protocol_id, future in specialist_futures.items()
             }
         elif self.parallel_context_execution:
-            context_future = self._model_executor.submit(context_task)
+            context_future = (
+                None
+                if fixed_context
+                else self._model_executor.submit(context_task)
+            )
             prediction, detector_total_ms = detector_task(self.detector, self.imgsz)
-            context, context_total_ms = context_future.result()
+            if context_future is not None:
+                context, context_total_ms = context_future.result()
         else:
-            context, context_total_ms = context_task()
+            if not fixed_context:
+                context, context_total_ms = context_task()
             prediction, detector_total_ms = detector_task(self.detector, self.imgsz)
 
+        if context is None:
+            raise RuntimeError("上下文执行未返回结果")
         if shared_dual_head:
             prediction, shared_specialist_prediction = prediction
             prefetched_predictions[prefetch_ids[0]] = (
