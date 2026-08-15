@@ -431,6 +431,7 @@ def test_batch_fast_multipart_preserves_file_order_and_confidence() -> None:
     )
 
     assert rows == [("one.bin", b"first"), ("two.bin", b"second")]
+    assert all(isinstance(data, memoryview) for _filename, data in rows)
     assert confidence == "0.31"
 
 
