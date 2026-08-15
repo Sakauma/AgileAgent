@@ -79,7 +79,11 @@ def build_detections_v1_module(
         raise ValueError("iou_threshold必须位于(0, 1)")
     if int(max_det) <= 0:
         raise ValueError("max_det必须为正整数")
-    if nms_backend not in {"nms_with_mask", "standard_onnx"}:
+    if nms_backend not in {
+        "batch_multiclass_nms",
+        "nms_with_mask",
+        "standard_onnx",
+    }:
         raise ValueError(f"nms_backend非法：{nms_backend}")
 
     class StableArgsort(torch.autograd.Function):
@@ -139,6 +143,110 @@ def build_detections_v1_module(
                 outputs=3,
             )
 
+    class BatchMultiClassNMS(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx,
+            batch_boxes,
+            batch_scores,
+            score_threshold: float,
+            iou_threshold: float,
+            max_size_per_class: int,
+            max_total_size: int,
+        ):
+            del ctx
+            boxes_value = batch_boxes[0, :, 0, :].to(torch.float32)
+            scores_value = batch_scores[0].to(torch.float32)
+            selected_boxes = []
+            selected_scores = []
+            selected_classes = []
+            for class_id in range(scores_value.shape[1]):
+                class_scores = scores_value[:, class_id]
+                valid = class_scores > float(score_threshold)
+                valid_ids = torch.nonzero(valid, as_tuple=False).reshape(-1)
+                if valid_ids.numel() == 0:
+                    continue
+                keep = nms(
+                    boxes_value[valid_ids],
+                    class_scores[valid_ids],
+                    float(iou_threshold),
+                )[: int(max_size_per_class)]
+                selected = valid_ids[keep]
+                selected_boxes.append(boxes_value[selected])
+                selected_scores.append(class_scores[selected])
+                selected_classes.append(
+                    torch.full(
+                        (selected.numel(),),
+                        class_id,
+                        device=boxes_value.device,
+                        dtype=torch.float32,
+                    )
+                )
+            output_boxes = torch.zeros(
+                (1, int(max_total_size), 4),
+                device=boxes_value.device,
+                dtype=torch.float16,
+            )
+            output_scores = torch.zeros(
+                (1, int(max_total_size)),
+                device=boxes_value.device,
+                dtype=torch.float16,
+            )
+            output_classes = torch.zeros(
+                (1, int(max_total_size)),
+                device=boxes_value.device,
+                dtype=torch.float16,
+            )
+            output_count = torch.zeros(
+                (1,), device=boxes_value.device, dtype=torch.int32
+            )
+            if selected_scores:
+                candidate_boxes = torch.cat(selected_boxes, dim=0)
+                candidate_scores = torch.cat(selected_scores, dim=0)
+                candidate_classes = torch.cat(selected_classes, dim=0)
+                order = torch.argsort(
+                    candidate_scores, descending=True, stable=True
+                )[: int(max_total_size)]
+                count = int(order.numel())
+                output_boxes[0, :count] = candidate_boxes[order].to(torch.float16)
+                output_scores[0, :count] = candidate_scores[order].to(torch.float16)
+                output_classes[0, :count] = candidate_classes[order].to(
+                    torch.float16
+                )
+                output_count[0] = count
+            return output_boxes, output_scores, output_classes, output_count
+
+        @staticmethod
+        def symbolic(
+            graph,
+            batch_boxes,
+            batch_scores,
+            score_threshold,
+            iou_threshold,
+            max_size_per_class,
+            max_total_size,
+        ):
+            return graph.op(
+                "BatchMultiClassNMS",
+                batch_boxes,
+                batch_scores,
+                change_coordinate_frame_i=0,
+                iou_threshold_f=float(
+                    symbolic_helper._parse_arg(iou_threshold, "f")
+                ),
+                max_size_per_class_i=int(
+                    symbolic_helper._parse_arg(max_size_per_class, "i")
+                ),
+                max_total_size_i=int(
+                    symbolic_helper._parse_arg(max_total_size, "i")
+                ),
+                score_threshold_f=float(
+                    symbolic_helper._parse_arg(score_threshold, "f")
+                ),
+                transpose_box_i=0,
+                outputs=4,
+            )
+
     class DetectionsV1(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -160,6 +268,27 @@ def build_detections_v1_module(
             boxes[:, 2:] = xywh[:, :2] + xywh[:, 2:] / 2.0
             class_scores = prediction[4 : 4 + self.class_count]
             anchor_count = int(prediction.shape[1])
+            if self.nms_backend == "batch_multiclass_nms":
+                batch_boxes = boxes.unsqueeze(0).unsqueeze(2).to(torch.float16)
+                batch_scores = class_scores.transpose(0, 1).unsqueeze(0).to(
+                    torch.float16
+                )
+                result_boxes, result_scores, result_classes, result_count = (
+                    BatchMultiClassNMS.apply(
+                        batch_boxes,
+                        batch_scores,
+                        self.candidate_confidence,
+                        self.iou_threshold,
+                        self.max_det,
+                        self.max_det,
+                    )
+                )
+                return (
+                    result_boxes[0].to(torch.float32),
+                    result_scores[0].to(torch.float32),
+                    result_classes[0].to(torch.int32),
+                    result_count.to(torch.int32),
+                )
             positions = torch.arange(
                 anchor_count,
                 device=prediction.device,

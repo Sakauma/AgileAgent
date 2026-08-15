@@ -150,8 +150,9 @@ def _export(args: argparse.Namespace) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "无新增依赖导出Ascend P6固定检测输出ONNX。导出物必须先通过板端"
-            "严格语义探针；当前CANN 7.0.RC1的已测NMS后端均未通过。"
+            "无新增依赖导出Ascend固定检测输出ONNX。导出物必须作为隔离的"
+            "score-gate候选重新执行89图精度与20图batch FPS，不能因构造"
+            "零差异探针失败而提前淘汰。"
         )
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
@@ -165,9 +166,13 @@ def main() -> int:
     for child in (probe, export):
         child.add_argument(
             "--nms-backend",
-            choices=["nms_with_mask", "standard_onnx"],
+            choices=[
+                "batch_multiclass_nms",
+                "nms_with_mask",
+                "standard_onnx",
+            ],
             required=True,
-            help="显式选择实验后端；该选择不代表已通过板端语义门禁。",
+            help="显式选择实验后端；该选择不代表已通过板端计分门禁。",
         )
         child.add_argument("--candidate-confidence", type=float, default=0.01)
         child.add_argument("--iou-threshold", type=float, default=0.7)
