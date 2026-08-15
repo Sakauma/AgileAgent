@@ -70,6 +70,7 @@ KNOWN_SECTION_KEYS = {
     "ascend_backend": {
         "device_id", "soc_version", "cann_version", "precision", "execution_mode",
         "encoded_preprocessing", "memory_mode", "schedule_mode", "detailed_event_timing",
+        "submit_order", "collect_order", "stream_priorities",
         "validated", "validation_candidate", "validation_report",
         "validation_report_sha256", "build_manifest", "build_manifest_sha256",
         "models", "context_model", "dvpp_scene_resize_stages",
@@ -515,6 +516,30 @@ def validate_config(
         errors.append("ascend_backend.schedule_mode非法")
     if not isinstance(ascend.get("detailed_event_timing", True), bool):
         errors.append("ascend_backend.detailed_event_timing必须为布尔值")
+    model_roles = {"scene", "base", "specialist"}
+    for key in ("submit_order", "collect_order"):
+        order = ascend.get(key, ["scene", "base", "specialist"])
+        if (
+            not isinstance(order, list)
+            or len(order) != len(model_roles)
+            or any(not isinstance(value, str) for value in order)
+            or set(order) != model_roles
+        ):
+            errors.append(
+                f"ascend_backend.{key}必须是scene/base/specialist的无重复全排列"
+            )
+    stream_priorities = ascend.get("stream_priorities")
+    if stream_priorities is not None and (
+        not isinstance(stream_priorities, Mapping)
+        or set(stream_priorities) != model_roles
+        or any(
+            value not in {"high", "normal", "low"}
+            for value in stream_priorities.values()
+        )
+    ):
+        errors.append(
+            "ascend_backend.stream_priorities必须完整映射scene/base/specialist到high/normal/low"
+        )
     scene_resize_stages = ascend.get("dvpp_scene_resize_stages", [])
     if not isinstance(scene_resize_stages, list) or len(scene_resize_stages) > 4:
         errors.append("ascend_backend.dvpp_scene_resize_stages必须是最多4级的尺寸列表")

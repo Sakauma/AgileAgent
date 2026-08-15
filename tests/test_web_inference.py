@@ -6,6 +6,7 @@ import threading
 import time
 import zipfile
 
+import pytest
 from PIL import Image
 
 from fair_agent.modules.web_inference import (
@@ -28,10 +29,94 @@ from fair_agent.modules.web_inference import (
     decode_batch_images,
     decode_image_bytes,
     WebInferenceEngine,
+    _ascend_role_order,
+    _ordered_group_results,
 )
 
 
 ROUTING_ARGS = (4, 0.70, 0.30, 0.50, 0.50)
+
+
+def test_p5_ordered_model_groups_separate_submit_and_collect_order() -> None:
+    events = []
+
+    class Pending:
+        def __init__(self, name):
+            self.name = name
+
+        def result(self):
+            events.append(f"collect:{self.name}")
+            return self.name
+
+    def submitter(name):
+        def submit():
+            events.append(f"submit:{name}")
+            return Pending(name)
+
+        return submit
+
+    groups = {
+        "scene": (("scene-result", submitter("scene")),),
+        "base": (("base-result", submitter("base")),),
+        "specialist": (("specialist-result", submitter("specialist")),),
+    }
+    completed = _ordered_group_results(
+        groups,
+        ("specialist", "base", "scene"),
+        ("base", "specialist", "scene"),
+        lambda pending: pending.result(),
+    )
+
+    assert events == [
+        "submit:specialist",
+        "submit:base",
+        "submit:scene",
+        "collect:base",
+        "collect:specialist",
+        "collect:scene",
+    ]
+    assert completed == {
+        "scene-result": "scene",
+        "base-result": "base",
+        "specialist-result": "specialist",
+    }
+
+
+def test_p5_ordered_model_groups_drain_after_collection_failure() -> None:
+    events = []
+
+    class Pending:
+        def __init__(self, name, fail=False):
+            self.name = name
+            self.fail = fail
+
+        def result(self):
+            events.append(self.name)
+            if self.fail:
+                raise RuntimeError(self.name)
+            return self.name
+
+    groups = {
+        "scene": (("scene", lambda: Pending("scene", fail=True)),),
+        "base": (("base", lambda: Pending("base")),),
+        "specialist": (("specialist", lambda: Pending("specialist")),),
+    }
+    with pytest.raises(RuntimeError, match="scene"):
+        _ordered_group_results(
+            groups,
+            ("scene", "base", "specialist"),
+            ("scene", "base", "specialist"),
+            lambda pending: pending.result(),
+        )
+    assert events == ["scene", "base", "specialist"]
+
+
+def test_p5_runtime_order_rejects_incomplete_permutation() -> None:
+    with pytest.raises(RuntimeError, match="collect_order"):
+        _ascend_role_order(
+            {"collect_order": ["scene", "base", "base"]},
+            "collect_order",
+        )
 
 
 class FakeTensor:
@@ -643,6 +728,8 @@ def test_ascend_async_path_submits_three_models_before_collecting_results() -> N
     engine.native_options = {
         "execution_mode": "async_stream",
         "schedule_mode": "unified_enqueue",
+        "submit_order": ["specialist", "base", "scene"],
+        "collect_order": ["base", "specialist", "scene"],
     }
     engine.encoded_preprocessor = None
     engine.detector = AsyncDetector(
@@ -689,12 +776,12 @@ def test_ascend_async_path_submits_three_models_before_collecting_results() -> N
     )
 
     assert events == [
-        "submit:scene",
-        "submit:base",
         "submit:specialist",
-        "result:scene",
+        "submit:base",
+        "submit:scene",
         "result:base",
         "result:specialist",
+        "result:scene",
     ]
     assert result["timings"]["dvpp_device_ms"] == 0.0
     assert result["timings"]["ascend_submit_ms"] == 0.55

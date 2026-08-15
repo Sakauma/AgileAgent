@@ -4,6 +4,7 @@ import atexit
 import ctypes
 import threading
 import time
+import warnings
 import weakref
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -23,6 +24,8 @@ ACL_MEMCPY_DEVICE_TO_DEVICE = 3
 DVPP_PIXEL_FORMAT_RGB888 = 12
 DVPP_CHANNEL_MODE_VPC = 1
 DVPP_CHANNEL_MODE_PNGD = 8
+ASCEND_MODEL_ROLES = ("scene", "base", "specialist")
+ASCEND_STREAM_PRIORITY_LABELS = ("high", "normal", "low")
 
 ACL_DTYPES = {
     0: np.dtype(np.float32),
@@ -106,6 +109,9 @@ class AscendAclRuntime:
         self.preprocessors: weakref.WeakSet[AscendEncodedPreprocessor] = (
             weakref.WeakSet()
         )
+        self.stream_priority_status: dict[str, Any] | None = None
+        self._stream_priority_request: tuple[tuple[str, str], ...] | None = None
+        self._stream_priority_warning_emitted = False
         self.closed = False
         _require(acl.init(), "acl.init")
         try:
@@ -133,6 +139,134 @@ class AscendAclRuntime:
         if self.closed:
             raise RuntimeError("Ascend ACL Runtime已经关闭")
         _require(self.acl.rt.set_context(self.context), "acl.rt.set_context")
+
+    def resolve_stream_priorities(
+        self, requested: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """Resolve a real device priority range or explicitly fall back.
+
+        CANN 7.0.RC1 on the target exposes ``create_stream_with_config`` but
+        does not expose a PyACL priority-range query; direct board probes show
+        that only priority 0 is accepted.  A create function alone is not a
+        meaningful high/normal/low capability, so configured candidates use
+        ordinary streams unless the runtime can report and successfully probe
+        three distinct priority levels.
+        """
+
+        if requested is None:
+            return {
+                "requested": False,
+                "supported": False,
+                "reason": "not_requested",
+                "values": {},
+            }
+        normalized = {str(key): str(value) for key, value in requested.items()}
+        if set(normalized) != set(ASCEND_MODEL_ROLES) or any(
+            value not in ASCEND_STREAM_PRIORITY_LABELS
+            for value in normalized.values()
+        ):
+            raise RuntimeError("Ascend stream优先级配置非法")
+        request_key = tuple(sorted(normalized.items()))
+        with self.lock:
+            if self._stream_priority_request is not None:
+                if self._stream_priority_request != request_key:
+                    raise RuntimeError("同一ACL Runtime不能混用不同stream优先级配置")
+                assert self.stream_priority_status is not None
+                return dict(self.stream_priority_status)
+
+            self._stream_priority_request = request_key
+            self.activate()
+            create_with_config = getattr(
+                self.acl.rt, "create_stream_with_config", None
+            )
+            get_priority_range = getattr(
+                self.acl.rt, "get_stream_priority_range", None
+            )
+            reason = ""
+            priority_values: dict[str, int] = {}
+            if not callable(create_with_config):
+                reason = "create_stream_with_config_unavailable"
+            elif not callable(get_priority_range):
+                reason = "priority_range_api_unavailable"
+            else:
+                range_result = get_priority_range()
+                if not isinstance(range_result, tuple) or len(range_result) != 3:
+                    reason = "priority_range_result_invalid"
+                else:
+                    first, second, result = range_result
+                    if int(result) != ACL_SUCCESS:
+                        reason = f"priority_range_failed:{int(result)}"
+                    else:
+                        minimum, maximum = sorted((int(first), int(second)))
+                        midpoint = (minimum + maximum + 1) // 2
+                        priority_values = {
+                            "high": minimum,
+                            "normal": midpoint,
+                            "low": maximum,
+                        }
+                        if len(set(priority_values.values())) != 3:
+                            reason = "priority_range_has_fewer_than_three_levels"
+
+            created: list[Any] = []
+            if not reason:
+                try:
+                    for value in dict.fromkeys(priority_values.values()):
+                        stream_result = create_with_config(int(value), 0)
+                        if (
+                            not isinstance(stream_result, tuple)
+                            or len(stream_result) < 2
+                            or int(stream_result[-1]) != ACL_SUCCESS
+                        ):
+                            error = (
+                                stream_result[-1]
+                                if isinstance(stream_result, tuple)
+                                and stream_result
+                                else "invalid_result"
+                            )
+                            reason = f"priority_probe_failed:{error}"
+                            break
+                        created.append(stream_result[0])
+                finally:
+                    for stream in reversed(created):
+                        _require(
+                            self.acl.rt.destroy_stream(stream),
+                            "acl.rt.destroy_stream(priority probe)",
+                        )
+
+            supported = not reason
+            self.stream_priority_status = {
+                "requested": True,
+                "supported": supported,
+                "reason": "supported" if supported else reason,
+                "requested_labels": normalized,
+                "values": priority_values if supported else {},
+            }
+            if not supported and not self._stream_priority_warning_emitted:
+                warnings.warn(
+                    "Ascend stream priority不受目标PyACL支持，使用普通stream并跳过优先级候选："
+                    f"{reason}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._stream_priority_warning_emitted = True
+            return dict(self.stream_priority_status)
+
+    def create_model_stream(
+        self,
+        role: str,
+        requested: Mapping[str, Any] | None,
+    ) -> Any:
+        if role not in ASCEND_MODEL_ROLES:
+            raise RuntimeError(f"Ascend模型stream角色非法：{role}")
+        status = self.resolve_stream_priorities(requested)
+        if status["supported"]:
+            label = str(status["requested_labels"][role])
+            priority = int(status["values"][label])
+            return _value(
+                self.acl.rt.create_stream_with_config(priority, 0),
+                f"acl.rt.create_stream_with_config({role}={label}:{priority})",
+            )
+        return _value(self.acl.rt.create_stream(), "acl.rt.create_stream")
 
     def register(self, model: "AscendAclModel") -> None:
         self.models.add(model)
@@ -266,6 +400,8 @@ class AscendAclModel:
         memory_mode: str = "pageable",
         schedule_mode: str = "threaded_execute",
         detailed_event_timing: bool = True,
+        stream_role: str = "base",
+        stream_priorities: Mapping[str, Any] | None = None,
     ) -> None:
         self.runtime = runtime
         self.path = path
@@ -283,6 +419,16 @@ class AscendAclModel:
         if not isinstance(detailed_event_timing, bool):
             raise RuntimeError("Ascend详细event计时开关必须是布尔值")
         self.detailed_event_timing = detailed_event_timing
+        self.stream_role = str(stream_role)
+        if self.stream_role not in ASCEND_MODEL_ROLES:
+            raise RuntimeError(f"Ascend模型stream角色非法：{self.stream_role}")
+        self.stream_priority_label = (
+            str(stream_priorities[self.stream_role])
+            if stream_priorities is not None
+            else "normal"
+        )
+        self.stream_priority_supported = False
+        self.stream_priority_value: int | None = None
         self.closed = False
         self.accepting_submissions = True
         self.close_lock = threading.Lock()
@@ -327,9 +473,20 @@ class AscendAclModel:
                 )
                 self._create_datasets()
                 if self.execution_mode == "async_stream":
-                    self.stream = _value(
-                        runtime.acl.rt.create_stream(), "acl.rt.create_stream"
+                    self.stream = runtime.create_model_stream(
+                        self.stream_role,
+                        stream_priorities,
                     )
+                    priority_status = runtime.resolve_stream_priorities(
+                        stream_priorities
+                    )
+                    self.stream_priority_supported = bool(
+                        priority_status["supported"]
+                    )
+                    if self.stream_priority_supported:
+                        self.stream_priority_value = int(
+                            priority_status["values"][self.stream_priority_label]
+                        )
                     if self.detailed_event_timing:
                         self.input_copy_start_event = self._create_event(
                             "input copy start"
@@ -889,7 +1046,11 @@ def _validated_model_entry(
     return entry
 
 
-def _load_model(options: Mapping[str, Any], entry: Mapping[str, Any]) -> AscendAclModel:
+def _load_model(
+    options: Mapping[str, Any],
+    entry: Mapping[str, Any],
+    stream_role: str,
+) -> AscendAclModel:
     from fair_agent.modules.ascend_release import require_ascend_runtime_artifacts
 
     require_ascend_runtime_artifacts(options)
@@ -903,6 +1064,10 @@ def _load_model(options: Mapping[str, Any], entry: Mapping[str, Any]) -> AscendA
     if not isinstance(detailed_event_timing, bool):
         raise RuntimeError("Ascend detailed_event_timing必须是布尔值")
     runtime = AscendAclRuntime.acquire(int(options.get("device_id", 0)))
+    stream_priorities = options.get("stream_priorities")
+    if stream_priorities is not None and not isinstance(stream_priorities, Mapping):
+        raise RuntimeError("Ascend stream_priorities必须是映射")
+    runtime.resolve_stream_priorities(stream_priorities)
     return AscendAclModel(
         runtime,
         path,
@@ -910,6 +1075,8 @@ def _load_model(options: Mapping[str, Any], entry: Mapping[str, Any]) -> AscendA
         memory_mode=str(options.get("memory_mode", "pageable")),
         schedule_mode=str(options.get("schedule_mode", "threaded_execute")),
         detailed_event_timing=detailed_event_timing,
+        stream_role=stream_role,
+        stream_priorities=stream_priorities,
     )
 
 
@@ -1631,7 +1798,10 @@ class AscendAclBackend:
         if weights is None:
             raise RuntimeError("Ascend检测后端缺少模型标识")
         entry = _validated_model_entry(options, weights)
-        self.model = _load_model(options, entry)
+        stream_role = str(options.get("_stream_role", "base"))
+        if stream_role not in {"base", "specialist"}:
+            raise RuntimeError(f"Ascend检测模型stream角色非法：{stream_role}")
+        self.model = _load_model(options, entry, stream_role)
         if (
             self.model.input_dtype == np.dtype(np.uint8)
             and len(self.model.input_shape) == 4
@@ -1814,7 +1984,7 @@ class AscendAclContextModel:
         entry = options.get("context_model")
         if not isinstance(entry, Mapping):
             raise RuntimeError("Ascend配置缺少context_model")
-        self.model = _load_model(options, entry)
+        self.model = _load_model(options, entry, "scene")
         if (
             self.model.input_dtype == np.dtype(np.uint8)
             and len(self.model.input_shape) == 4

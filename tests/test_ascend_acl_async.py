@@ -12,6 +12,7 @@ from fair_agent.backends.ascend_acl import (
     ACL_MEMCPY_DEVICE_TO_HOST,
     ACL_MEMCPY_HOST_TO_DEVICE,
     AscendAclModel,
+    AscendAclRuntime,
 )
 
 
@@ -64,6 +65,14 @@ class FakeRt:
         stream = self.next_stream
         self.next_stream += 1
         self.operations.append("create_stream")
+        return stream, 0
+
+    def create_stream_with_config(
+        self, _priority: int, _flag: int
+    ) -> tuple[int, int]:
+        stream = self.next_stream
+        self.next_stream += 1
+        self.operations.append("create_stream_with_config")
         return stream, 0
 
     def destroy_stream(self, _stream: int) -> int:
@@ -270,6 +279,12 @@ class FakeRuntime:
         self.lock = threading.RLock()
         self.closed = False
         self.models: set[AscendAclModel] = set()
+        self.stream_priority_status: dict[str, Any] | None = None
+        self._stream_priority_request: tuple[tuple[str, str], ...] | None = None
+        self._stream_priority_warning_emitted = False
+
+    resolve_stream_priorities = AscendAclRuntime.resolve_stream_priorities
+    create_model_stream = AscendAclRuntime.create_model_stream
 
     def activate(self) -> None:
         self.acl.operations.append("activate")
@@ -286,6 +301,8 @@ def create_model(
     memory_mode: str = "pinned",
     schedule_mode: str = "unified_enqueue",
     detailed_event_timing: bool = True,
+    stream_role: str = "base",
+    stream_priorities: dict[str, str] | None = None,
 ) -> tuple[FakeRuntime, AscendAclModel]:
     runtime = FakeRuntime()
     model = AscendAclModel(
@@ -295,6 +312,8 @@ def create_model(
         memory_mode=memory_mode,
         schedule_mode=schedule_mode,
         detailed_event_timing=detailed_event_timing,
+        stream_role=stream_role,
+        stream_priorities=stream_priorities,
     )
     return runtime, model
 
@@ -376,6 +395,64 @@ def test_compact_event_timing_keeps_model_time_and_skips_copy_queries() -> None:
     assert timings["output_copy_ms"] == 0.0
     assert runtime.acl.operations.count("create_event") == 3
     assert runtime.acl.operations.count("event_elapsed_time") == 1
+    model.close()
+
+
+def test_priority_request_falls_back_when_range_api_is_unavailable() -> None:
+    priorities = {
+        "scene": "normal",
+        "base": "high",
+        "specialist": "normal",
+    }
+    with pytest.warns(RuntimeWarning, match="跳过优先级候选"):
+        runtime, model = create_model(stream_priorities=priorities)
+
+    assert runtime.stream_priority_status == {
+        "requested": True,
+        "supported": False,
+        "reason": "priority_range_api_unavailable",
+        "requested_labels": priorities,
+        "values": {},
+    }
+    assert model.stream_priority_label == "high"
+    assert model.stream_priority_supported is False
+    assert model.stream_priority_value is None
+    assert runtime.acl.operations.count("create_stream") == 1
+    assert "create_stream_with_config" not in runtime.acl.operations
+    model.close()
+
+
+def test_priority_request_maps_reported_range_before_model_stream_creation() -> None:
+    runtime = FakeRuntime()
+    runtime.acl.rt.get_stream_priority_range = lambda: (0, 7, 0)
+    priorities = {
+        "scene": "normal",
+        "base": "normal",
+        "specialist": "high",
+    }
+    model = AscendAclModel(
+        runtime,  # type: ignore[arg-type]
+        Path("fake.om"),
+        execution_mode="async_stream",
+        memory_mode="pageable",
+        schedule_mode="threaded_execute",
+        detailed_event_timing=False,
+        stream_role="specialist",
+        stream_priorities=priorities,
+    )
+
+    assert runtime.stream_priority_status == {
+        "requested": True,
+        "supported": True,
+        "reason": "supported",
+        "requested_labels": priorities,
+        "values": {"high": 0, "normal": 4, "low": 7},
+    }
+    assert model.stream_priority_supported is True
+    assert model.stream_priority_value == 0
+    assert runtime.acl.operations.count("create_stream_with_config") == 4
+    assert runtime.acl.operations.count("destroy_stream") == 3
+    assert "create_stream" not in runtime.acl.operations
     model.close()
 
 
