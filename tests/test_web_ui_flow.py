@@ -407,6 +407,33 @@ def test_batch_api_returns_archive_and_summary_headers() -> None:
     assert summary["image_count"] == 2
 
 
+def test_batch_fast_multipart_preserves_file_order_and_confidence() -> None:
+    from fair_agent.web.app import parse_small_batch_multipart
+
+    boundary = "AgileAgentBatchFastPath"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="files"; filename="one.bin"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode() + b"first" + (
+        f"\r\n--{boundary}\r\n"
+        'Content-Disposition: form-data; name="files"; filename="two.bin"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode() + b"second" + (
+        f"\r\n--{boundary}\r\n"
+        'Content-Disposition: form-data; name="confidence"\r\n\r\n'
+        "0.31"
+        f"\r\n--{boundary}--\r\n"
+    ).encode()
+
+    rows, confidence = parse_small_batch_multipart(
+        body, f"multipart/form-data; boundary={boundary}"
+    )
+
+    assert rows == [("one.bin", b"first"), ("two.bin", b"second")]
+    assert confidence == "0.31"
+
+
 def test_batch_api_uses_encoded_backend_without_cpu_decode(monkeypatch) -> None:
     engine = EncodedFakeEngine()
     client = TestClient(create_app(engine_provider=lambda: engine))
