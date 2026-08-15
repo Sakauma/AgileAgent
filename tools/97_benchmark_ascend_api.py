@@ -16,6 +16,12 @@ from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlsplit
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fair_agent.modules.api_benchmark import business_payload_sha256
+
 
 ROUTING_TIMING_KEYS = (
     "routing_fusion_ms",
@@ -242,6 +248,7 @@ def request_row(
         "server_ms": float(payload["system_total_ms"]),
         "inference_ms": float(payload["inference_ms"]),
         "detection_count": int(payload.get("detection_count", len(payload.get("detections") or []))),
+        "business_sha256": business_payload_sha256(payload),
     }
     row.update({key: float(timings.get(key, 0.0)) for key in TIMING_KEYS})
     return row
