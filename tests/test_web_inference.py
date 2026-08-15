@@ -29,12 +29,30 @@ from fair_agent.modules.web_inference import (
     decode_batch_images,
     decode_image_bytes,
     WebInferenceEngine,
+    _active_specialist_backends,
     _ascend_role_order,
     _ordered_group_results,
 )
 
 
 ROUTING_ARGS = (4, 0.70, 0.30, 0.50, 0.50)
+
+
+def test_shared_dual_head_dvpp_skips_physical_specialist_lookup() -> None:
+    protocols = {"incremental_detector": {"available": True}}
+
+    assert _active_specialist_backends(
+        protocols,
+        {},
+        shared_dual_head=True,
+    ) == []
+
+    backend = object()
+    assert _active_specialist_backends(
+        protocols,
+        {"incremental_detector": backend},
+        shared_dual_head=False,
+    ) == [backend]
 
 
 def test_p5_ordered_model_groups_separate_submit_and_collect_order() -> None:
