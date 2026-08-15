@@ -69,7 +69,8 @@ KNOWN_SECTION_KEYS = {
     "native_backend": {"library", "base_engine", "engines", "context_engine", "precision", "require_exact_gpu", "validated"},
     "ascend_backend": {
         "device_id", "soc_version", "cann_version", "precision", "execution_mode",
-        "encoded_preprocessing", "memory_mode", "validated", "validation_candidate", "validation_report",
+        "encoded_preprocessing", "memory_mode", "schedule_mode", "detailed_event_timing",
+        "validated", "validation_candidate", "validation_report",
         "validation_report_sha256", "build_manifest", "build_manifest_sha256",
         "models", "context_model", "dvpp_scene_resize_stages",
     },
@@ -507,6 +508,13 @@ def validate_config(
         errors.append("ascend_backend.encoded_preprocessing非法")
     if ascend.get("memory_mode", "pageable") not in {"pageable", "pinned"}:
         errors.append("ascend_backend.memory_mode非法")
+    if ascend.get("schedule_mode", "threaded_execute") not in {
+        "threaded_execute",
+        "unified_enqueue",
+    }:
+        errors.append("ascend_backend.schedule_mode非法")
+    if not isinstance(ascend.get("detailed_event_timing", True), bool):
+        errors.append("ascend_backend.detailed_event_timing必须为布尔值")
     scene_resize_stages = ascend.get("dvpp_scene_resize_stages", [])
     if not isinstance(scene_resize_stages, list) or len(scene_resize_stages) > 4:
         errors.append("ascend_backend.dvpp_scene_resize_stages必须是最多4级的尺寸列表")

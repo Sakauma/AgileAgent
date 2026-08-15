@@ -59,6 +59,22 @@ def test_ascend_dvpp_scene_resize_stages_require_even_bounded_shapes() -> None:
         validate_config(config)
 
 
+def test_ascend_p4_runtime_ablation_fields_are_validated() -> None:
+    config = clean_config()
+    config["ascend_backend"]["schedule_mode"] = "unified_enqueue"
+    config["ascend_backend"]["detailed_event_timing"] = False
+    validate_config(config)
+
+    config["ascend_backend"]["schedule_mode"] = "serial"
+    with pytest.raises(ValueError, match="schedule_mode"):
+        validate_config(config)
+
+    config["ascend_backend"]["schedule_mode"] = "threaded_execute"
+    config["ascend_backend"]["detailed_event_timing"] = "false"
+    with pytest.raises(ValueError, match="detailed_event_timing"):
+        validate_config(config)
+
+
 def test_cli_overrides_are_typed_and_process_local() -> None:
     config = clean_config()
     effective = apply_overrides(config, ["inference.confidence_default=0.61", "ui.history_limit=7"])
