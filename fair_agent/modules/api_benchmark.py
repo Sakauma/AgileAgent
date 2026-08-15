@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import platform
@@ -17,7 +16,7 @@ from typing import Any, Dict, Mapping
 import httpx
 
 from fair_agent.core.config import config_sha256, rel_path, resolve_path
-from fair_agent.core.hashes import sha256_file
+from fair_agent.core.hashes import business_payload_sha256, sha256_file
 
 
 ROUTING_TIMING_KEYS = (
@@ -28,27 +27,6 @@ ROUTING_TIMING_KEYS = (
     "routing_nms_ms",
     "routing_decision_ms",
 )
-VOLATILE_API_FIELDS = frozenset(
-    {"inference_ms", "timings", "queue_wait_ms", "system_total_ms"}
-)
-
-
-def business_payload_sha256(payload: Mapping[str, Any]) -> str:
-    """Hash the response contract after removing request-local timing fields."""
-
-    business = {
-        key: value for key, value in payload.items() if key not in VOLATILE_API_FIELDS
-    }
-    encoded = json.dumps(
-        business,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _percentile(values: list[float], percentile: float) -> float:
     if not values:
         return 0.0

@@ -13,7 +13,7 @@ from PIL import Image
 
 from fair_agent.backends.inference import TensorRTEngineBackend, TensorRTNativeBackend
 from fair_agent.core.config import apply_overrides, load_config, redact_config, validate_config
-from fair_agent.core.hashes import sha256_file
+from fair_agent.core.hashes import business_payload_sha256, sha256_file
 from fair_agent.models.context import validate_context_input_shape
 from fair_agent.modules.configuration import set_persistent_value
 from fair_agent.modules.api_benchmark import _server_session
@@ -27,10 +27,7 @@ from fair_agent.modules.tensorrt_export import (
     prepare_calibration_manifest,
     write_export_hashes,
 )
-from fair_agent.modules.api_benchmark import (
-    _performance_assessment,
-    business_payload_sha256,
-)
+from fair_agent.modules.api_benchmark import _performance_assessment
 from fair_agent.modules.tensorrt_validation import (
     _apply_protocol_thresholds,
     _competition_accuracy_gates,

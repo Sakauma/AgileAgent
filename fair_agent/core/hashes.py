@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
+
+
+VOLATILE_API_FIELDS = frozenset(
+    {"inference_ms", "timings", "queue_wait_ms", "system_total_ms"}
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -11,6 +17,22 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def business_payload_sha256(payload: Mapping[str, Any]) -> str:
+    """Hash the API response after removing request-local timing fields."""
+
+    business = {
+        key: value for key, value in payload.items() if key not in VOLATILE_API_FIELDS
+    }
+    encoded = json.dumps(
+        business,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def hash_if_exists(path: Path) -> Dict[str, object]:

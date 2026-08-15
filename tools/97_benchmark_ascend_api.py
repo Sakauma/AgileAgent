@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fair_agent.modules.api_benchmark import business_payload_sha256
+from fair_agent.core.hashes import business_payload_sha256
 
 
 ROUTING_TIMING_KEYS = (
