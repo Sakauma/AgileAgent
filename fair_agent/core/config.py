@@ -70,7 +70,7 @@ KNOWN_SECTION_KEYS = {
     "ascend_backend": {
         "device_id", "soc_version", "cann_version", "precision", "execution_mode",
         "model_layout",
-        "encoded_preprocessing", "memory_mode", "schedule_mode", "detailed_event_timing",
+        "encoded_preprocessing", "context_mode", "memory_mode", "schedule_mode", "detailed_event_timing",
         "submit_order", "collect_order", "stream_priorities",
         "validated", "validation_candidate", "validation_report",
         "validation_report_sha256", "build_manifest", "build_manifest_sha256",
@@ -514,6 +514,11 @@ def validate_config(
         errors.append("ascend_backend.execution_mode非法")
     if ascend.get("encoded_preprocessing", "cpu") not in {"cpu", "dvpp"}:
         errors.append("ascend_backend.encoded_preprocessing非法")
+    if ascend.get("context_mode", "model") not in {
+        "model",
+        "fixed_neutral_v1",
+    }:
+        errors.append("ascend_backend.context_mode非法")
     if ascend.get("memory_mode", "pageable") not in {"pageable", "pinned"}:
         errors.append("ascend_backend.memory_mode非法")
     if ascend.get("schedule_mode", "threaded_execute") not in {

@@ -31,6 +31,30 @@ ASCEND_MODEL_ROLES = ("scene", "base", "specialist")
 T = TypeVar("T")
 
 
+def fixed_neutral_context() -> Dict[str, Any]:
+    """Return a score-neutral context payload without running a context model.
+
+    This mode is restricted to explicitly configured Ascend candidates.  It
+    preserves the public response schema while making no scene/sensor claim:
+    both sensor classes and all four scene classes receive uniform probability.
+    """
+
+    return {
+        "sensor": "ir",
+        "sensor_confidence": 0.5,
+        "sensor_probabilities": {"ir": 0.5, "sar": 0.5},
+        "scene": "air",
+        "scene_confidence": 0.25,
+        "scene_probabilities": {
+            "air": 0.25,
+            "forest": 0.25,
+            "sea": 0.25,
+            "urban": 0.25,
+        },
+        "_inference_ms": 0.0,
+    }
+
+
 def _ascend_role_order(
     options: Mapping[str, Any], key: str
 ) -> tuple[str, str, str]:
@@ -811,6 +835,16 @@ class WebInferenceEngine:
         self.shared_dual_head = bool(
             getattr(self.detector, "is_shared_dual_head", False)
         )
+        self.context_mode = str(self.native_options.get("context_mode", "model"))
+        self.fixed_neutral_context = (
+            self.backend_name == "ascend_acl"
+            and self.context_mode == "fixed_neutral_v1"
+        )
+        self.context_model_id = (
+            "fixed_neutral_context_v1"
+            if self.fixed_neutral_context
+            else "scene_sensor_net_v1"
+        )
         if self.backend_name == "ascend_acl":
             from fair_agent.backends.ascend_acl import load_ascend_context_model
 
@@ -899,7 +933,9 @@ class WebInferenceEngine:
         warmup_image = Image.new("RGB", (self.warmup_width, self.warmup_height))
         context_warmup = Image.new("RGB", (context_size, context_size))
         for _ in range(self.warmup_iterations):
-            if self.backend_name == "ascend_acl":
+            if getattr(self, "fixed_neutral_context", False):
+                pass
+            elif self.backend_name == "ascend_acl":
                 self.context_model.predict(context_warmup)
             else:
                 predict_context(
@@ -919,7 +955,9 @@ class WebInferenceEngine:
                 compile=self.compile,
             )
         warmup_batch = [warmup_image] * self.warmup_batch_size
-        if self.backend_name == "ascend_acl":
+        if getattr(self, "fixed_neutral_context", False):
+            pass
+        elif self.backend_name == "ascend_acl":
             self.context_model.predict_batch([context_warmup] * self.warmup_batch_size)
         else:
             predict_context_batch(
@@ -1197,6 +1235,8 @@ class WebInferenceEngine:
             protocol_pool = {}
 
         def context_batch_task() -> list[Dict[str, Any]]:
+            if getattr(self, "fixed_neutral_context", False):
+                return [fixed_neutral_context() for _image in images]
             if self.backend_name == "ascend_acl":
                 return self.context_model.predict_batch(images)
             return predict_context_batch(
@@ -1477,7 +1517,10 @@ class WebInferenceEngine:
                 for item in protocol_outputs[index]
                 for class_name in item.get("activated_classes", [])
             })
-            models_used = ["scene_sensor_net_v1", self.base_model_id]
+            models_used = [
+                getattr(self, "context_model_id", "scene_sensor_net_v1"),
+                self.base_model_id,
+            ]
             models_used.extend(str(route["id"]) for route in executed)
             decision = {
                 "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
@@ -1578,7 +1621,9 @@ class WebInferenceEngine:
 
         def context_task() -> tuple[Dict[str, Any], float]:
             started = time.perf_counter()
-            if self.backend_name == "ascend_acl":
+            if getattr(self, "fixed_neutral_context", False):
+                value = fixed_neutral_context()
+            elif self.backend_name == "ascend_acl":
                 value = (
                     self.context_model.predict_preloaded(
                         self.encoded_preprocessor.context_ready_event
@@ -1649,6 +1694,8 @@ class WebInferenceEngine:
 
         def context_submit_task() -> tuple[Any, float]:
             started = time.perf_counter()
+            if getattr(self, "fixed_neutral_context", False):
+                return self._model_executor.submit(fixed_neutral_context), started
             handle = (
                 self.context_model.submit_preloaded(
                     self.encoded_preprocessor.context_ready_event
@@ -2070,7 +2117,10 @@ class WebInferenceEngine:
         decision_started = time.perf_counter()
         base_model_id = self.base_model_id
         generation_id = self.generation_id
-        models_used = ["scene_sensor_net_v1", base_model_id]
+        models_used = [
+            getattr(self, "context_model_id", "scene_sensor_net_v1"),
+            base_model_id,
+        ]
         models_used.extend(str(route["id"]) for route in executed_routes)
         activated_classes = sorted({
             class_name
