@@ -7,6 +7,7 @@ from PIL import Image
 from fair_agent.backends.ascend_acl import (
     AscendEncodedPreprocessor,
     context_tensor,
+    detections_v1_records,
     detector_tensor,
     validate_dvpp_scene_resize_stages,
     yolo_detections,
@@ -136,3 +137,67 @@ def test_yolo_nms_applies_global_max_det_order() -> None:
     )
     assert [row["class_id"] for row in rows] == [1, 0]
     assert [row["confidence"] for row in rows] == pytest.approx([0.95, 0.80])
+
+
+def test_yolo_nms_keeps_strict_threshold_stable_ties_and_class_boundaries() -> None:
+    raw = np.zeros((1, 6, 3), dtype=np.float32)
+    raw[0, :4] = np.asarray([
+        [1.0, 0.5, 1.0], [1.0, 1.0, 1.0],
+        [2.0, 1.0, 2.0], [2.0, 2.0, 2.0],
+    ], dtype=np.float32)
+    raw[0, 4:] = np.asarray([
+        [0.80, 0.80, 0.50], [0.80, 0.01, 0.01],
+    ], dtype=np.float32)
+    rows = yolo_detections(
+        raw,
+        {"original_height": 8, "original_width": 8, "scale": 1.0, "pad_left": 0, "pad_top": 0},
+        confidence=0.5, iou=0.5, max_det=3,
+    )
+    assert [row["class_id"] for row in rows] == [0, 1, 0]
+    assert np.allclose(
+        [row["xyxy"] for row in rows],
+        [[0.0, 0.0, 2.0, 2.0], [0.0, 0.0, 2.0, 2.0], [0.0, 0.0, 1.0, 2.0]],
+    )
+    assert all(row["confidence"] > 0.5 for row in rows)
+
+
+def _detections_v1_outputs() -> list[np.ndarray]:
+    return [
+        np.asarray([[1.0, 2.0, 5.0, 6.0], [3.0, 4.0, 7.0, 8.0], [0.0] * 4], dtype=np.float32),
+        np.asarray([0.90, 0.50, 0.0], dtype=np.float32),
+        np.asarray([2, 1, 0], dtype=np.int32),
+        np.asarray([2], dtype=np.int32),
+    ]
+
+
+def test_detections_v1_filters_with_strict_runtime_threshold_and_restores_boxes() -> None:
+    rows = detections_v1_records(
+        _detections_v1_outputs(),
+        {"original_height": 10, "original_width": 10, "scale": 2.0, "pad_left": 1, "pad_top": 2},
+        confidence=0.5, iou=0.7, max_det=2,
+        candidate_confidence=0.01, contract_iou=0.7, contract_max_det=3,
+    )
+    assert rows == [
+        {"class_id": 2, "confidence": pytest.approx(0.9), "xyxy": [0.0, 0.0, 2.0, 2.0]}
+    ]
+
+
+@pytest.mark.parametrize(("mutate", "kwargs", "message"), [
+    (lambda values: values[:3], {}, "输出数量"),
+    (lambda values: [values[0][:2], *values[1:]], {}, "shape"),
+    (lambda values: [values[0].astype(np.float16), *values[1:]], {}, "dtype"),
+    (lambda values: values, {"confidence": 0.001}, "低于设备候选阈值"),
+    (lambda values: values, {"iou": 0.6}, "IoU"),
+    (lambda values: values, {"max_det": 4}, "max_det"),
+    (lambda values: [*values[:3], np.asarray([4], dtype=np.int32)], {}, "valid_count"),
+])
+def test_detections_v1_rejects_contract_drift(mutate, kwargs: dict, message: str) -> None:
+    options = {"confidence": 0.5, "iou": 0.7, "max_det": 3}
+    options.update(kwargs)
+    with pytest.raises(RuntimeError, match=message):
+        detections_v1_records(
+            mutate(_detections_v1_outputs()),
+            {"original_height": 10, "original_width": 10, "scale": 1.0, "pad_left": 0, "pad_top": 0},
+            **options,
+            candidate_confidence=0.01, contract_iou=0.7, contract_max_det=3,
+        )

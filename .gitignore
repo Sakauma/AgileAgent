@@ -64,6 +64,7 @@ venv/
 !/tools/100_profile_ascend_request.py
 !/tools/101_summarize_ascend_profile.py
 !/tools/102_check_ascend_aoe.py
+!/tools/103_export_ascend_detections.py
 !/scripts/start_agent_ascend310b.sh
 !/scripts/stop_agent_ascend310b.sh
 

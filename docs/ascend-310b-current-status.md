@@ -371,6 +371,36 @@ P5 继续使用 P4 胜出的 `pageable + threaded_execute + detailed_event_timin
 
 P5 仍未达到完整 API 均值 `≤33.33 ms` 和 P95 `≤35 ms`，并继续继承 P0 的阈值边界与 provenance 阻断，不能晋级正式版。测量结束后 `8502` 已停止，正式 `8501` 始终保持 `ready`。
 
+## P6 设备侧 YOLO 解码与 NMS（2026-08-15）
+
+P6 已实现 `raw_yolo_v1 | detections_v1` 显式输出契约。Ascend 后端只按配置选择路径，不依据输出 shape 猜测；`detections_v1` 固定校验 `boxes[max_det,4] float32`、`scores[max_det] float32`、`class_ids[max_det] int32` 和 `valid_count[1] int32`，并绑定设备候选阈值、IoU 和 `max_det`。发布校验同时核对配置、构建清单和设备后处理契约。原始 Host YOLO 路径保持不变，当前生产配置显式使用 `raw_yolo_v1`。
+
+本机只使用 WSL 仓库现有 `.venv` 中的 `torch 2.5.1+cu124`、`torchvision 0.20.1+cu124` 和 `ultralytics 8.4.92` 做 ONNX 导出，没有安装依赖，也没有下载 CPU PyTorch。本机环境没有 `onnx`/`onnxruntime`；导出器只跳过 Torch 用于附加 ONNXScript 自定义函数的可选 hook，仍由 Torch 写出标准 ONNX protobuf。完整 Base/Specialist 实验 ONNX 的 SHA256 分别为：
+
+| 产物 | SHA256 |
+| --- | --- |
+| `base_detector.onnx` | `ddba88c8bf25469119d0531faa2c0aec273923e372ea2d8b868b6e6dcb4535a0` |
+| `incremental_detector.onnx` | `5765b3b762ee3ff0920abdb613a4aa2dd61ff501ca8589cfb251ff3fbed2f1bb` |
+
+### CANN 7.0.RC1 严格语义探针
+
+构造输入同时覆盖三个 `0.8` 同分候选、跨类重叠、同类完全重复的 `0.7` 框、严格阈值边界 `0.01` 和应保留的 `0.01001`。Host reference 应输出三个 `0.8` 框和 `0.01001` 框：IoU 恰好等于 `0.7` 时不抑制，完全重复的低分同类框被抑制。
+
+| 探针 | 路径/实现 | 结果 |
+| --- | --- | --- |
+| v1 | 标准 ONNX `NonMaxSuppression` | ATC 映射为 `NonMaxSuppressionV7`，CANN 7.0.RC1 不支持该动态输出 shape，编译失败 |
+| v2–v5 | 版本算子 `NPUNmsWithMask`，含 8/5 列 proposals 和关闭 fusion | 可编译，但输出仍包含完全重复的 `0.7` 框，`valid_count=5`；关闭 `NMSWithMaskFusionPass` 不改变结果 |
+| v6 | ONNX 直接使用内部名 `BatchMultiClassNonMaxSuppression` | parser 未注册，ATC 明确拒绝 |
+| v7–v8 | ONNX parser `BatchMultiClassNMS` | 可编译，严格 score 边界和重复框抑制正确，但把 IoU 恰好 `0.7` 的同分框也抑制，`valid_count=3` 而不是 `4` |
+| v9 | 命令行选择 `norm_class` | CANN 7.0.RC1 的 `--op_select_implmode` 不接受该值 |
+| v10 | `--op_precision_mode` 逐算子选择隐藏 `norm_class` | 可编译，但语义输出与默认实现相同，仍为 `valid_count=3` |
+
+完整证据保存在板端 `/home/HwHiAiUser/agileagent/candidates/20260815-p6/probe-v1` 至 `probe-v10`，包括 ONNX、ATC 日志、OM、构造输入、输出 `.npy` 和报告。ATC 日志中的 `customize_impl/mrgba.py` 权限异常来自既有 root-only vendor 算子；成功探针仍明确结束为 `ATC run success` 并生成 OM，不影响上述结论。
+
+P6 不能通过“严格 `score > threshold`、稳定 tie-break、class-aware NMS 和 `IoU > threshold`”语义门禁。工程没有用 epsilon 改阈值、没有升级 CANN、没有启动 8502，也没有运行板端 Web pytest。`scripts/build_ascend_detections_oms.sh` 只有在存在已保存的通过报告并显式设置 `AGILE_AGENT_P6_SEMANTIC_GATE=passed` 时才允许构建，防止把已证伪的实验图误作发布候选。
+
+P6 结论为：**双契约和回滚基础设施保留，但设备后处理候选拒绝晋级，P7 继续从 P5 的 `pageable + threaded_execute + Scene→Base→Specialist` 原始输出链路开始。** 因语义门禁先失败，本阶段不执行 89 图业务零差异和 30+890 性能轮；正式 `8501` 未停止、未替换。
+
 ## 环境迁移记录
 
 板端 Python 环境已迁移到命名环境 `agileagent`。迁移前后使用固定 PNG 执行响应语义对照，检测数量、类别、框和置信度保持一致；切换后 health 返回 `ready`。
@@ -391,7 +421,7 @@ python -m pytest -q
 python scripts/verify_release.py
 ```
 
-当前本地 WSL 仓库既有 `.venv` 全量回归为 `241 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
+当前本地 WSL 仓库既有 `.venv` 全量回归为 `254 passed, 1 skipped`。正式 release 的既有发布校验状态仍为 `passed`，P0/P1/P2/P3/P4/P5/P6 候选因上述门禁失败保持未验收。板端各阶段验证按操作者要求只执行真实 API 端到端时长，没有运行 Web pytest。
 
 ## 运行态检查
 

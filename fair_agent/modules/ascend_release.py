@@ -15,6 +15,12 @@ EXPECTED_CONTRACTS = {
     "context": [1, 160, 160, 3],
 }
 REQUIRED_VALIDATION_REPORTS = ("golden", "accuracy", "performance")
+DETECTIONS_V1_OUTPUTS = {
+    "boxes": {"shape": [300, 4], "dtype": "float32"},
+    "scores": {"shape": [300], "dtype": "float32"},
+    "class_ids": {"shape": [300], "dtype": "int32"},
+    "valid_count": {"shape": [1], "dtype": "int32"},
+}
 
 
 def _load_json(path: Path, errors: List[str], label: str) -> Dict[str, Any]:
@@ -64,6 +70,19 @@ def _configured_om_rows(options: Mapping[str, Any]) -> tuple[set[tuple[str, str]
         str(context.get("sha256") or ""),
     )
     return detector_rows, context_row
+
+
+def _configured_detector_contracts(
+    options: Mapping[str, Any],
+) -> Dict[tuple[str, str], Mapping[str, Any]]:
+    return {
+        (
+            str(resolve_path(str(entry["path"]))),
+            str(entry.get("sha256") or ""),
+        ): entry
+        for entry in dict(options.get("models") or {}).values()
+        if isinstance(entry, Mapping) and entry.get("path")
+    }
 
 
 def verify_ascend_artifacts(
@@ -153,6 +172,7 @@ def verify_ascend_artifacts(
             errors.append(f"artifact_role_count_invalid:{role}:{len(rows)}")
 
     configured_detectors, configured_context = _configured_om_rows(options)
+    configured_contracts = _configured_detector_contracts(options)
     manifest_detectors = {
         (
             str(resolve_path(str(row.get("om", {}).get("path") or ""))),
@@ -170,6 +190,36 @@ def verify_ascend_artifacts(
     }
     if configured_detectors != manifest_detectors:
         errors.append("configured_detector_oms_do_not_match_manifest")
+    for role in ("base", "specialist"):
+        for row in by_role[role]:
+            key = (
+                str(resolve_path(str(row.get("om", {}).get("path") or ""))),
+                str(row.get("om", {}).get("sha256") or ""),
+            )
+            configured = configured_contracts.get(key)
+            configured_name = str(
+                (configured or {}).get("output_contract", "raw_yolo_v1")
+            )
+            manifest_name = str(row.get("output_contract", "raw_yolo_v1"))
+            if manifest_name != configured_name:
+                errors.append(f"output_contract_mismatch:{role}")
+                continue
+            contract = row.get("postprocess_contract")
+            if configured_name == "detections_v1":
+                expected = {
+                    "candidate_confidence": float(
+                        (configured or {}).get("candidate_confidence", -1.0)
+                    ),
+                    "iou_threshold": float(
+                        (configured or {}).get("iou_threshold", -1.0)
+                    ),
+                    "max_det": int((configured or {}).get("max_det", 0)),
+                    "outputs": DETECTIONS_V1_OUTPUTS,
+                }
+                if contract != expected:
+                    errors.append(f"postprocess_contract_mismatch:{role}")
+            elif contract is not None:
+                errors.append(f"raw_output_has_postprocess_contract:{role}")
     if manifest_context != {configured_context}:
         errors.append("configured_context_om_does_not_match_manifest")
 
