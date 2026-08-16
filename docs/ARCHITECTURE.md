@@ -30,34 +30,34 @@ AgileAgent 将配置、模型代际、在线推理、增量学习、审计和设
 
 每张图像使用同一 production 代际。基础检测器负责 soldier、small_aircraft 和 tank，当前增量检测器负责 warship。Scene-SensorNet 输出场景与传感器概率，融合阶段把这些概率转换为逐类软阈值证据。
 
-Ascend 满分候选保留相同的三个逻辑职责，但物理执行不同：Base backbone/neck 只运行一次，一个 `shared_backbone_dual_head_v1` OM 同时返回 old/new raw head；`fixed_neutral_v1` 用 Sensor `0.5/0.5`、Scene 四类各 `0.25` 的均匀上下文保持响应和审计结构。context OM 仍加载用于回滚，但正常路径不执行其前向推理；old/new 仍分别记录为 `frozen_base_model` 和 `incremental_model`。
+Ascend 正式满分主线保留相同的三个逻辑职责，但物理执行不同：Base backbone/neck 只运行一次，一个 `shared_backbone_dual_head_v1` OM 同时返回 old/new raw head；`fixed_neutral_v1` 用 Sensor `0.5/0.5`、Scene 四类各 `0.25` 的均匀上下文保持响应和审计结构。context OM 仍加载用于资产回滚，但正常路径不执行其前向推理；old/new 仍分别记录为 `frozen_base_model` 和 `incremental_model`。
 
-### 正式链路与满分候选拓扑
+### 正式主线、回滚与候选拓扑
 
 ```text
-                         POST /api/detect 或 /api/batch
-                                      |
-                              FastAPI / Engine
-                                      |
-                 +--------------------+--------------------+
-                 |                                         |
-          正式 8501（三 OM）                         候选 8502（比赛评分）
-                 |                                         |
-      +----------+-----------+                    DVPP encoded batch
-      |          |           |                             |
-    Base    Incremental    Scene                  shared backbone/neck
-      |          |           |                      /             \
-      +----------+-----------+                  old head       new head
-                 |                                |                |
-            融合与 NMS                    frozen_base_model  incremental_model
-                 |                                \                /
-                 |                          fixed_neutral_v1
-                 +--------------------+------------+------------+
-                                      |
-                         同一响应 schema、owner 和审计证据
+                    POST /api/detect 或 /api/batch
+                                  |
+                     公共入口 127.0.0.1:8501
+                                  |
+                 loopback NAT 精确原子路由（新连接）
+                    /                              \
+        无规则：即时回滚                       有规则：正式主线
+              |                                      |
+    三 OM 监听器 :8501                     满分实例 :18501
+    Base + Incremental + Scene                DVPP encoded batch
+                                                    |
+                                           shared backbone/neck
+                                             /             \
+                                         old head       new head
+                                            |                |
+                                  frozen_base_model  incremental_model
+                                             \              /
+                                           fixed_neutral_v1
+
+                    :8502 始终留给下一轮隔离候选
 ```
 
-候选结构的“物理合并”不改变逻辑责任：
+主线结构的“物理合并”不改变逻辑责任：
 
 | 逻辑功能 | 物理实现 | owner/输出语义 |
 | --- | --- | --- |
@@ -108,15 +108,15 @@ Web 服务启动时加载 production 代际，代际切换时构建并预热新�
 `fair_agent/backends/ascend_acl.py` 使用 PyACL/AscendCL 完成：
 
 - CANN 初始化与设备上下文；
-- 正式三 OM 或共享双逻辑头候选的加载和静态输入契约校验；
+- 三 OM 回滚或共享双逻辑头主线/候选的加载和静态输入契约校验；
 - 图像预处理与输入缓冲区管理；
 - Base、Incremental、Scene 三模型执行，或单次共享骨干双 head 执行；
 - YOLO 输出解码、类别映射和耗时统计；
 - Web 健康状态与请求级指标。
 
-正式板端配置记录三个回滚 OM 的路径和 SHA256。满分候选使用 `raw_dual_head_v1`、DVPP encoded batch、pageable memory、threaded execution 和固定中性上下文；build manifest 同时登记 dual OM 与 context 回滚资产。结构、阈值搜索和评分门禁见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
+正式板端配置已切换为 `raw_dual_head_v1`、DVPP encoded batch、pageable memory、threaded execution 和固定中性上下文；release manifest 同时登记 dual OM 与 context 回滚资产。原三 OM release 由独立 systemd 服务保留，公共 `8501` 通过精确 loopback NAT 路由到满分实例 `18501`。结构、阈值搜索和评分门禁见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
 
-### 满分候选的资产与控制流
+### 满分方案的候选到正式控制流
 
 ```text
 full_score_method.yaml
@@ -126,6 +126,8 @@ full_score_method.yaml
   -> tools/109：注入 owner/class map/Host 阈值并生成 8502 配置
   -> run_ascend310b_score_gate.sh：冻结预测 -> 三项精度 -> 三轮 batch
   -> tools/110：按精度余量、FPS 波动、中位 FPS 选择候选
+  -> tools/111：物化 validated release 与不可变证据
+  -> systemd 双实例 + loopback NAT：8501 原子提升/即时回滚
 ```
 
 构建阶段把方法配置、training report、export manifest、source checkpoint、ONNX、AIPP、OM、ATC 命令和 context 回滚资产通过 SHA256 串成一条证据链。新 training report schema v2 授权同轮 best/last 且要求二者共享参数漂移均为零；2026-08-16 参考候选因为历史报告是 schema v1，只允许方法配置中固定的 report/export/`last.pt` 哈希组合兼容。

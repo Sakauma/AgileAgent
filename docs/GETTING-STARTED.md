@@ -110,7 +110,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-服务启动时完成 OM 哈希校验、三模型加载、预热和健康状态登记。
+公共 `8501` 当前返回正式共享双头主线；主实例实际监听 `18501`，原三 OM 服务保留为即时回滚监听器。健康响应应包含 `validated: true`、`model_layout: shared_backbone_dual_head_v1` 和 `context_mode: fixed_neutral_v1`。x86 本机服务仍使用自己的 `8501`，与板端端口互不影响。
 
 ## 8. 复现 Ascend 满分候选
 
@@ -121,16 +121,18 @@ curl -fsS -F "file=@sample.png;type=image/png" \
 .venv/bin/python tools/108_export_ascend_dual_head.py --help
 .venv/bin/python tools/109_materialize_ascend_full_score_candidate.py --help
 .venv/bin/python tools/110_select_ascend_full_score_candidate.py --help
+.venv/bin/python tools/111_promote_ascend_full_score_release.py --help
 ```
 
 开始新数据集前先阅读 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)，并确认以下边界：
 
-1. 正式 `8501` 继续运行三 OM 回滚链路；候选只能使用 `8502`。
+1. 公共 `8501` 已路由到正式共享双头主线 `18501`；三 OM 监听器继续作为即时回滚，候选只能使用 `8502`。
 2. Base backbone、neck/FPN、old head、BN 统计和 EMA 必须冻结；训练输入只来自新增类数据。
 3. 先训练并记录 best/last，再选择一个 checkpoint 导出双输出 ONNX；当前历史满分参考实际使用 `last.pt`。
 4. OM 只在板端 CANN `7.0.RC1` 下以 `mixed_float16` 构建，不升级 CANN、不用 INT8、不降分辨率。
 5. 每个阈值候选依次执行无标签预测冻结、Base/New/KRR 评分、30 次预热和三轮 20 图 batch。
 6. 只有四项比赛指标同时满分才可宣称满分候选；其他检测和时延指标只作诊断。
+7. 胜出候选由 `tools/111` 物化并通过正式 release 校验后，才允许使用 systemd 双实例和精确路由脚本提升；不要手工把 `validated` 改为 `true`。
 
 候选配置由方法 YAML、基础 Ascend 配置、dual/context OM 和 build manifest 生成，不手工复制板端绝对路径到 `full_score_method.yaml`。
 

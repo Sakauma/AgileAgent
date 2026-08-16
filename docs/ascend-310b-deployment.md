@@ -1,8 +1,8 @@
 # Ascend 310B 部署实现
 
-AgileAgent 已在 Atlas 200I DK A2 上完成正式三模型 OM 推理，以及隔离的共享双逻辑头满分候选验证。本页区分当前正式回滚服务和比赛候选，避免把候选误写成已经发布。
+AgileAgent 已在 Atlas 200I DK A2 上把共享双逻辑头满分方案提升为正式主线，同时保留原三模型 OM 作为即时回滚。本页区分公共入口、主实例、回滚 listener 和下一轮候选。
 
-## 当前正式回滚结构
+## 三 OM 即时回滚结构
 
 ```text
 真实 PNG 请求
@@ -19,7 +19,7 @@ AgileAgent 已在 Atlas 200I DK A2 上完成正式三模型 OM 推理，以及�
 
 Python 编排层位于 `fair_agent/modules/web_inference.py`，Ascend 运行时位于 `fair_agent/backends/ascend_acl.py`，Web 服务位于 `fair_agent/web/app.py`。
 
-## 满分候选结构
+## 正式满分主线结构
 
 ```text
 20 图 multipart batch
@@ -31,7 +31,7 @@ Python 编排层位于 `fair_agent/modules/web_inference.py`，Ascend 运行时�
   -> 原融合、审计与 API schema
 ```
 
-候选固定使用 `8502`、`896×736` AIPP、`raw_dual_head_v1`、pageable memory 和 threaded execution。old/new 当前参考阈值为 `0.05/0.30`，但更换数据集后必须重新搜索。完整方法见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
+正式主实例使用内部 `18501`、`896×736` AIPP、`raw_dual_head_v1`、pageable memory 和 threaded execution，公共请求通过 `8501` 的精确 loopback NAT 进入。`8502` 继续专用于隔离候选。old/new 当前参考阈值为 `0.05/0.30`，但更换数据集后必须重新搜索。完整方法见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
 
 ## 设备与运行环境
 
@@ -41,24 +41,26 @@ Python 编排层位于 `fair_agent/modules/web_inference.py`，Ascend 运行时�
 | SoC | Ascend310B1 |
 | CANN | `7.0.RC1` |
 | Python | `/usr/local/miniconda3/envs/agileagent/bin/python` |
-| 配置 | `configs/agent_pipeline_ascend310b.yaml` |
-| 服务地址 | `127.0.0.1:8501` |
+| 正式配置 | `configs/agent_pipeline_ascend310b.yaml` |
+| 公共地址 | `127.0.0.1:8501` |
+| 主实例内部地址 | `127.0.0.1:18501` |
+| 回滚 listener | 原三 OM，物理监听 `127.0.0.1:8501` |
+| 后续候选 | `127.0.0.1:8502` |
 
 ## 模型契约
 
-| 模型 | 输入张量 | 输出 |
+| 正式主线模型 | 输入张量 | 输出 |
 | --- | --- | --- |
-| Base Detector | `1,3,736,896` FP32 | `1,7,13524` YOLO 原始输出 |
-| Incremental Detector | `1,3,512,640` FP32 | `1,5,6720` YOLO 原始输出 |
-| Scene-SensorNet | `1,3,160,160` FP32 | sensor logits 与 scene logits |
+| Shared dual detector | `1,3,736,896` FP32/AIPP | old `[1,7,13524]`、new `[1,5,13524]` |
+| Context 回滚资产 | `1,3,160,160` FP32/AIPP | 正常 fixed-neutral 路径不执行前向 |
 
-正式三个模型使用固定 `batch=1`，ATC 以 `mixed_float16` 生成 OM。候选单个 dual OM 输出 old `[1,7,13524]` 和 new `[1,5,13524]`；context OM 会加载并登记为回滚资产，但 `fixed_neutral_v1` 正常路径不执行它的前向推理。配置和 build manifest 都记录路径、SHA256、logical owner 和类别映射。
+主线单个 dual OM 输出两个 logical head；context OM 会加载并登记为回滚资产，但 `fixed_neutral_v1` 正常路径不执行它的前向推理。配置和 release manifest 都记录路径、SHA256、logical owner 和类别映射。原 Base/Incremental/Scene 三 OM 的输入输出契约保持不变，由独立回滚 service 使用。
 
 ## 图像预处理
 
 基础图像尺寸为 `640×512` PNG。
 
-Base Detector 预处理：
+正式 shared detector 预处理：
 
 1. RGB 解码；
 2. 等比例缩放到 `896×717`；
@@ -66,7 +68,7 @@ Base Detector 预处理：
 4. 转换为 `1×3×736×896` FP32；
 5. 将数值归一化到 `[0,1]`。
 
-Incremental Detector 使用 `640×512` 固定输入并转换为 `1×3×512×640` FP32。Scene-SensorNet 将图像缩放与中心裁剪为 `160×160`，随后执行标准化。
+old/new logical head 共享同一个 `896×736` 输入和特征金字塔。回滚链路的 Incremental Detector 仍使用 `640×512`，Scene-SensorNet 仍使用 `160×160`。
 
 ## 后处理与融合
 
@@ -81,27 +83,48 @@ Base Detector 的局部类别 `0/1/2` 映射到全局 `0/1/3`，Incremental Dete
 7. class-aware NMS；
 8. 生成检测记录与模型轨迹。
 
-## Release 目录
+## Release 目录与服务
 
 ```text
-/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/
+/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/
 ├── src/
 ├── om/
-│   ├── base_detector.om
-│   ├── incremental_detector.om
+│   ├── shared_backbone_dual_head.om
 │   └── scene_sensor_net.om
+├── provenance/
+│   ├── release-build-manifest.json
+│   ├── training_report.json
+│   └── export_manifest.json
+├── configs/agent_pipeline_ascend310b.yaml
 ├── validation/
+│   ├── score.json
+│   ├── benchmark.json
+│   └── validation-summary.json
+├── release.json
 └── agent-web.pid
 ```
 
-## 启动服务
+原三 OM release 仍位于 `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2`。
+
+## 服务状态与回滚
 
 ```bash
-cd /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/src
-./scripts/start_agent_ascend310b.sh
+systemctl status agileagent-ascend310b-main.service
+systemctl status agileagent-ascend310b-rollback.service
+systemctl status agileagent-ascend310b-route.service
+curl -fsS http://127.0.0.1:8501/api/health
 ```
 
-启动脚本加载 CANN 环境、登记配置路径、写入 PID 文件并启动 Uvicorn。
+健康响应应包含 `validated:true`、`validation_candidate:false`、`model_layout:"shared_backbone_dual_head_v1"` 和 `context_mode:"fixed_neutral_v1"`。
+
+即时回滚与重新提升：
+
+```bash
+sudo /usr/local/sbin/agileagent-ascend310b-primary-route remove 18501
+sudo /usr/local/sbin/agileagent-ascend310b-primary-route apply 18501
+```
+
+规则只匹配 `127.0.0.1:8501` 并带 comment `AGILE_AGENT_ASCEND310B_PRIMARY`。删除规则后新连接直接进入仍在监听的三 OM 服务；已有连接按内核连接状态自然结束。
 
 ## 构建与验收满分候选
 
@@ -154,6 +177,34 @@ AGILE_AGENT_ASCEND_PYTHON=/usr/local/miniconda3/envs/agileagent/bin/python \
 
 score gate 在启动候选前检查正式 `8501 ready`、`8502` 未占用、CANN 版本、PNG 输入契约和 build manifest。它先在短生命周期引擎中冻结无标签预测，再打开标签评分，最后启动 HTTP 候选执行 30 次预热和三轮 20 图 batch；板端不运行 Web pytest。
 
+## 满分候选提升为正式主线
+
+候选四项满分后，先物化不可变正式 release；不得直接编辑候选 YAML 的 `validated`：
+
+```bash
+/usr/local/miniconda3/envs/agileagent/bin/python \
+  tools/111_promote_ascend_full_score_release.py \
+  --candidate-config /path/to/candidate-8502.yaml \
+  --score /path/to/score-v2.json \
+  --benchmark /path/to/benchmark.json \
+  --repeat-benchmark /path/to/benchmark-repeat.json \
+  --release-root /home/HwHiAiUser/agileagent/releases/RELEASE_ID \
+  --internal-port 18501
+```
+
+工具重新验证 Base/New/KRR/batch FPS、预测冻结、增量数据隔离、Base 零漂移及资产哈希，并复制 OM、training/export/build/method/score/benchmark 证据，生成 `validated: true` 的 release-local 配置。逐框/业务 JSON、precision、误激活率、Scene/Sensor 和单请求时延仍记录为诊断，不参与正式淘汰。
+
+随后由 root 安装主/回滚/路由三个 systemd unit：
+
+```bash
+sudo /home/HwHiAiUser/agileagent/releases/RELEASE_ID/src/scripts/install_ascend310b_primary_services.sh \
+  /home/HwHiAiUser/agileagent/releases/RELEASE_ID \
+  /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2 \
+  18501
+```
+
+脚本先在 `18501` 启动并验证主实例，确认 ready 后才插入原子路由；任一步失败都会删除规则并恢复旧服务。`8502` 不会被 systemd 或正式路由占用。
+
 ## API
 
 健康检查：
@@ -193,27 +244,28 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   --output reports/ascend310b/score.json
 ```
 
-正式 release 结果：
+当前正式满分 release 结果：
 
 | 指标 | 数值 |
 | --- | ---: |
-| Base mAP50 | `0.819407` |
-| New-mAP50 | `0.728761` |
+| Base mAP50 | `0.804901` |
+| New-mAP50 | `0.605033` |
 | KRR | `1.000000` |
-| 新类 precision | `0.933333` |
-| 误激活率 | `0.014286` |
+| 新类 precision（诊断） | `0.792453` |
+| 误激活率（诊断） | `0.242857` |
 
 ## 性能记录
 
 | 测量 | 样本量 | 已记录结果 |
 | --- | ---: | --- |
-| 正式 release 完整 89 图 | 89 | 墙钟均值 `71.491 ms`、`13.99 FPS` |
+| 三 OM 回滚 release 完整 89 图 | 89 | 墙钟均值 `71.491 ms`、`13.99 FPS` |
 | 已解码 Agent 核心 | 200 | 均值 `32.148 ms`、P95 `33.193 ms`、`31.11 FPS` |
 | AIPP staging 真实 PNG API | 1,068 | 均值 `51.203 ms`、P95 `63.9 ms`、`19.53 FPS` |
 | DVPP 编码输入 | 240 | 均值 `37.124 ms`、P95 `38.154 ms`、`26.94 FPS` |
-| 共享双头满分候选 | 两组 3×20 batch | 中位 `30.066/30.080 FPS`；Base/New/KRR 同时满分 |
+| 共享双头候选 | 两组 3×20 batch | 中位 `30.066/30.080 FPS`；Base/New/KRR 同时满分 |
+| 公共 `8501` 发布后复核 | 30 次预热 + 3×20 batch | `30.234/30.243/30.294 FPS`，中位 `30.243 FPS` |
 
-满分候选尚未替换 `8501`。其单请求均值/P95/P99 和逐框差异继续留作诊断，但正式计分只使用 Base mAP50、New-mAP50、KRR 和三轮 20 图 batch 中位 FPS。
+共享双头已成为正式主线。其单请求均值/P95/P99、逐框差异、precision 和误激活率继续留作诊断；正式计分与 release 提升只阻断 Base mAP50、New-mAP50、KRR、三轮 20 图 batch 中位 FPS，以及数据隔离/零漂移/资产哈希等结果有效性前置条件。
 
 ## 运行监测
 

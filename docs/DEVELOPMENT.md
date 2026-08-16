@@ -90,6 +90,7 @@ Ascend 相关变更使用：
 | 候选配置 | `tools/109_materialize_ascend_full_score_candidate.py`、`8501` 保护和 `validated: false` 测试 |
 | 比赛门禁或排序 | `tools/94_score_ascend_agent.py`、`tools/97_benchmark_ascend_api.py`、`tools/110_select_ascend_full_score_candidate.py` |
 | 板端评分协议 | `scripts/run_ascend310b_score_gate.sh`、score/benchmark schema 和正式服务健康检查 |
+| 正式发布与回滚 | `tools/111_promote_ascend_full_score_release.py`、双 systemd service、精确 loopback NAT 和失败撤销测试 |
 
 开发约束：
 
@@ -98,7 +99,7 @@ Ascend 相关变更使用：
 - 不在候选流程停止、替换或复用未知的 `8501`/`8502` 进程。
 - 不以逐框/业务 JSON、precision、误激活率或单请求 P95/P99 否决四项比赛指标已满分的候选。
 - 数据隔离、预测先冻结、共享参数零漂移和资产哈希仍是结果有效性的前置条件。
-- P7/P10 历史实验保存在本地 ignored archive；活动代码只维护共享双头满分路径和正式三 OM 回滚路径。
+- P7/P10 历史实验保存在本地 ignored archive；活动代码以共享双头满分 release 为 Ascend 主线，同时维护三 OM 即时回滚和 `8502` 后续候选路径。
 
 修改后优先运行：
 
@@ -113,9 +114,12 @@ Ascend 相关变更使用：
   tools/107_train_shared_dual_head.py \
   tools/108_export_ascend_dual_head.py \
   tools/109_materialize_ascend_full_score_candidate.py \
-  tools/110_select_ascend_full_score_candidate.py
+  tools/110_select_ascend_full_score_candidate.py \
+  tools/111_promote_ascend_full_score_release.py
 bash -n scripts/build_ascend_dual_head_om.sh
 bash -n scripts/run_ascend310b_score_gate.sh
+bash -n scripts/manage_ascend310b_primary_route.sh
+bash -n scripts/install_ascend310b_primary_services.sh
 ```
 
 板端只运行探针、预测冻结、三项精度评分和 `30 + 3×20` batch 验收，不运行 Web pytest。完整操作顺序见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
