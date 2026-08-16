@@ -13,29 +13,31 @@
 手动安装方式：
 
 ```bash
-python -m pip install -c constraints-agent.txt -e ".[dev,workbench,inference]"
+.venv/bin/python -m pip install -c constraints-agent.txt -e ".[dev,workbench,inference]"
 ```
 
 ## 日常开发循环
 
 ```bash
-python -m pytest -q
-python scripts/verify_release.py
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/verify_release.py
 ./scripts/start_agent.sh
 ```
 
 模型与推理变更同时执行：
 
 ```bash
-python scripts/smoke_models.py
+.venv/bin/python scripts/smoke_models.py
 ```
 
 Ascend 相关变更使用：
 
 ```bash
-python -m pytest -q tests/test_ascend_acl.py tests/test_runtime_maturity.py
-python tools/91_smoke_ascend_contract.py
+.venv/bin/python -m pytest -q tests/test_ascend_acl.py tests/test_runtime_maturity.py
+.venv/bin/python tools/91_smoke_ascend_contract.py
 ```
+
+已有 `.venv` 的满分方法维护任务不得重新安装依赖或下载 CPU PyTorch；直接使用 `.venv/bin/python`。只有初始化一台全新的开发机时才运行 bootstrap 或手动安装命令。
 
 ## 代码组织
 
@@ -75,6 +77,48 @@ python tools/91_smoke_ascend_contract.py
 ## 配置与资产变更
 
 配置变更同步更新 schema 校验、两套主配置、测试和配置文档。模型变更同步更新 manifest、generation registry、SHA256、指标证据和发布校验。
+
+## Ascend 满分方法维护
+
+`configs/ascend310b/full_score_method.yaml` 是满分流程的单一方法源。修改共享双头训练、导出、运行时或评分逻辑时，至少同步检查：
+
+| 变更范围 | 必须同步的实现/证据 |
+| --- | --- |
+| 训练参数或冻结范围 | `tools/107_train_shared_dual_head.py`、training report schema、best/last 零漂移测试 |
+| 输入、输出或 logical head | `tools/108_export_ascend_dual_head.py`、build 脚本、Ascend release 校验、owner/class map 测试 |
+| CANN/ATC/AIPP | `scripts/build_ascend_dual_head_om.sh`、build manifest 哈希契约；CANN 仍固定 `7.0.RC1` |
+| 候选配置 | `tools/109_materialize_ascend_full_score_candidate.py`、`8501` 保护和 `validated: false` 测试 |
+| 比赛门禁或排序 | `tools/94_score_ascend_agent.py`、`tools/97_benchmark_ascend_api.py`、`tools/110_select_ascend_full_score_candidate.py` |
+| 板端评分协议 | `scripts/run_ascend310b_score_gate.sh`、score/benchmark schema 和正式服务健康检查 |
+
+开发约束：
+
+- 不把阈值写入 OM/build manifest 身份；old/new 阈值由 logical head 的 Host 参数承载。
+- 不把板端绝对路径、密码、候选产物或数据集写入方法 YAML 或 Git。
+- 不在候选流程停止、替换或复用未知的 `8501`/`8502` 进程。
+- 不以逐框/业务 JSON、precision、误激活率或单请求 P95/P99 否决四项比赛指标已满分的候选。
+- 数据隔离、预测先冻结、共享参数零漂移和资产哈希仍是结果有效性的前置条件。
+- P7/P10 历史实验保存在本地 ignored archive；活动代码只维护共享双头满分路径和正式三 OM 回滚路径。
+
+修改后优先运行：
+
+```bash
+.venv/bin/python -m pytest -q \
+  tests/test_ascend_full_score_workflow.py \
+  tests/test_shared_dual_head.py \
+  tests/test_configuration_runtime.py \
+  tests/test_ascend_release.py \
+  tests/test_strict_incremental.py
+.venv/bin/python -m ruff check \
+  tools/107_train_shared_dual_head.py \
+  tools/108_export_ascend_dual_head.py \
+  tools/109_materialize_ascend_full_score_candidate.py \
+  tools/110_select_ascend_full_score_candidate.py
+bash -n scripts/build_ascend_dual_head_om.sh
+bash -n scripts/run_ascend310b_score_gate.sh
+```
+
+板端只运行探针、预测冻结、三项精度评分和 `30 + 3×20` batch 验收，不运行 Web pytest。完整操作顺序见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
 
 ## 提交
 

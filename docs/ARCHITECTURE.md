@@ -32,6 +32,41 @@ AgileAgent 将配置、模型代际、在线推理、增量学习、审计和设
 
 Ascend 满分候选保留相同的三个逻辑职责，但物理执行不同：Base backbone/neck 只运行一次，一个 `shared_backbone_dual_head_v1` OM 同时返回 old/new raw head；`fixed_neutral_v1` 用 Sensor `0.5/0.5`、Scene 四类各 `0.25` 的均匀上下文保持响应和审计结构。context OM 仍加载用于回滚，但正常路径不执行其前向推理；old/new 仍分别记录为 `frozen_base_model` 和 `incremental_model`。
 
+### 正式链路与满分候选拓扑
+
+```text
+                         POST /api/detect 或 /api/batch
+                                      |
+                              FastAPI / Engine
+                                      |
+                 +--------------------+--------------------+
+                 |                                         |
+          正式 8501（三 OM）                         候选 8502（比赛评分）
+                 |                                         |
+      +----------+-----------+                    DVPP encoded batch
+      |          |           |                             |
+    Base    Incremental    Scene                  shared backbone/neck
+      |          |           |                      /             \
+      +----------+-----------+                  old head       new head
+                 |                                |                |
+            融合与 NMS                    frozen_base_model  incremental_model
+                 |                                \                /
+                 |                          fixed_neutral_v1
+                 +--------------------+------------+------------+
+                                      |
+                         同一响应 schema、owner 和审计证据
+```
+
+候选结构的“物理合并”不改变逻辑责任：
+
+| 逻辑功能 | 物理实现 | owner/输出语义 |
+| --- | --- | --- |
+| 旧类检测 | 冻结 Base backbone、neck/FPN 和 old Detect head | `frozen_base_model`，局部 `0/1/2` 映射全局 `0/1/3` |
+| 新类检测 | 共享特征上的 residual `1×1` adapter 与 new Detect head | `incremental_model`，当前局部 `0` 映射全局 `2` |
+| Scene/Sensor | `fixed_neutral_v1`；context OM 作为回滚资产加载但不前向 | Sensor `0.5/0.5`、Scene 四类各 `0.25` |
+
+old/new 的 `candidate_confidence` 是 Host 运行时参数，不参与 ONNX/OM 身份。更换数据集时可以复用同一 build manifest 搜索阈值，但不能改变 logical owner、class map、anchor 数或 output contract。
+
 ## 增量学习流程
 
 ```text
@@ -80,6 +115,22 @@ Web 服务启动时加载 production 代际，代际切换时构建并预热新�
 - Web 健康状态与请求级指标。
 
 正式板端配置记录三个回滚 OM 的路径和 SHA256。满分候选使用 `raw_dual_head_v1`、DVPP encoded batch、pageable memory、threaded execution 和固定中性上下文；build manifest 同时登记 dual OM 与 context 回滚资产。结构、阈值搜索和评分门禁见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
+
+### 满分候选的资产与控制流
+
+```text
+full_score_method.yaml
+  -> tools/107：训练 best/last + 数据隔离/零漂移报告
+  -> tools/108：dual-head ONNX + export manifest
+  -> build_ascend_dual_head_om.sh：CANN 7.0.RC1 OM + build manifest
+  -> tools/109：注入 owner/class map/Host 阈值并生成 8502 配置
+  -> run_ascend310b_score_gate.sh：冻结预测 -> 三项精度 -> 三轮 batch
+  -> tools/110：按精度余量、FPS 波动、中位 FPS 选择候选
+```
+
+构建阶段把方法配置、training report、export manifest、source checkpoint、ONNX、AIPP、OM、ATC 命令和 context 回滚资产通过 SHA256 串成一条证据链。新 training report schema v2 授权同轮 best/last 且要求二者共享参数漂移均为零；2026-08-16 参考候选因为历史报告是 schema v1，只允许方法配置中固定的 report/export/`last.pt` 哈希组合兼容。
+
+评分阶段只把 Base mAP50、New-mAP50、KRR 与三轮 20 图 batch 中位 FPS 作为比赛门禁。数据隔离、预测先冻结和资产哈希是结果有效性的前置条件；precision、误激活率、逐框/JSON 差异和单请求时延继续记录，但不改变四项满分判定。
 
 ## 审计与证据
 

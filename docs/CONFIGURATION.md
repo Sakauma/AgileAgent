@@ -103,14 +103,57 @@ agile-agent generation rollback --to GENERATION_ID
 
 Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1`，并登记三个正式 OM 的路径与 SHA256。
 
-`full_score_method.yaml` 不是可直接启动的 schema 3 服务配置，也不保存板端绝对路径。它是数据集无关的方法源：双头导出、ATC 构建、候选生成、score gate 和候选选择均读取其中的结构、映射或评分协议；`tools/109_materialize_ascend_full_score_candidate.py` 再把方法源、基础配置、dual/context OM 和 build manifest 合成为只监听 `8502` 的候选配置。当前 `old=0.05`、`new=0.30` 是 Host 运行时搜索种子，不是永久阈值，也不属于 OM 构建身份。
+## Ascend 满分方法配置
+
+`configs/ascend310b/full_score_method.yaml` 不是可直接启动的 schema 3 服务配置，也不保存本机或板端绝对路径。它是比赛方法的单一配置源，结构如下：
+
+| 章节 | 固化内容 | 主要消费者 |
+| --- | --- | --- |
+| `target` | `Ascend310B1`、CANN `7.0.RC1`、`mixed_float16`、正式/候选端口 | build、materialize、score gate |
+| `competition` | Base/New/KRR 与 20 图三轮 batch 满分门槛；诊断项和有效性前置条件 | score、benchmark、selector |
+| `training` | residual adapter、冻结范围、输入尺寸、优化器、增强、best/last 策略 | `tools/107_train_shared_dual_head.py` |
+| `export` | `shared_backbone_dual_head_v1`、`raw_dual_head_v1`、输入/输出 shape、AIPP、owner/class map | `tools/108`、build、materialize |
+| `runtime` | DVPP encoded、pageable、threaded execution、fixed-neutral 与 fast path | materialize、Ascend backend |
+| `threshold_search` | 评分请求阈值、old/new 搜索序列与确定性选优顺序 | materialize、selector、操作手册 |
+| `benchmark` | `30` 次预热、`3×20` batch、PNG 输入契约、端口 URL | score gate、benchmark |
+| `reference_result` | 当前满分指标、提交和核心资产 SHA256 | 文档事实核验、历史 schema v1 兼容 |
+
+关键不可变约束：
+
+- `target.candidate_port` 必须为 `8502`，`target.formal_port` 必须为 `8501`；
+- `export.model_layout/output_contract` 必须为 `shared_backbone_dual_head_v1/raw_dual_head_v1`；
+- 输入固定为 NCHW `[1,3,736,896]`，AIPP 输入为 NHWC `[1,736,896,3]`；
+- old owner 为 `frozen_base_model`，new owner 为 `incremental_model`；
+- training report 必须证明增量数据隔离和共享参数零漂移；
+- 候选配置必须保持 `validation_candidate: true`、`validated: false`，正式切换另走发布流程。
+
+当前 `old=0.05`、`new=0.30` 是 Host 运行时搜索种子，不是永久阈值，也不属于 ONNX/OM 身份。更换数据集时先更新类别映射和训练输入，再按方法中的搜索序列生成多份候选 YAML；同一 dual OM 可用于不同 Host 阈值。
+
+### 方法配置到候选配置
+
+`tools/109_materialize_ascend_full_score_candidate.py` 合并四类输入：
+
+1. `configs/agent_pipeline_ascend310b.yaml` 基础 schema 3 配置；
+2. `full_score_method.yaml` 方法契约；
+3. dual/context OM 与 SHA256；
+4. build manifest 中的 training/export/method 证据。
+
+生成结果会写入 `ascend_backend.model_layout`、单一 dual model、`logical_heads`、Host 阈值、context 回滚资产、运行时快路径和 `8502` 端口。生成器拒绝指向 `8501`、哈希不一致、owner/class map 不一致或已标记 validated 的候选。
+
+相关环境变量只用于选择已有解释器或方法文件，不会写回方法 YAML：
+
+| 环境变量 | 默认值/用途 |
+| --- | --- |
+| `AGILE_AGENT_FULL_SCORE_METHOD` | 覆盖方法 YAML 路径；默认使用仓库内 `full_score_method.yaml` |
+| `AGILE_AGENT_ASCEND_PYTHON` | 板端构建/评分解释器；默认 `/usr/local/miniconda3/envs/agileagent/bin/python` |
+| `AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION` | 仅由受控评分链路设置为 `1`，授权加载未发布候选 |
 
 ## 配置验证
 
 ```bash
-python -m fair_agent.cli --config configs/agent_pipeline.yaml config validate
-python -m fair_agent.cli --config configs/agent_pipeline_ascend310b.yaml config validate
-python scripts/verify_release.py
+.venv/bin/python -m fair_agent.cli --config configs/agent_pipeline.yaml config validate
+.venv/bin/python -m fair_agent.cli --config configs/agent_pipeline_ascend310b.yaml config validate
+.venv/bin/python scripts/verify_release.py
 ```
 
 发布校验同时核对主配置、模型资产、模型 manifest、功能模型注册表和 production 代际。
@@ -118,6 +161,12 @@ python scripts/verify_release.py
 满分候选生成和选优入口：
 
 ```bash
+.venv/bin/python tools/107_train_shared_dual_head.py --help
+.venv/bin/python tools/108_export_ascend_dual_head.py --help
 .venv/bin/python tools/109_materialize_ascend_full_score_candidate.py --help
 .venv/bin/python tools/110_select_ascend_full_score_candidate.py --help
+bash -n scripts/build_ascend_dual_head_om.sh
+bash -n scripts/run_ascend310b_score_gate.sh
 ```
+
+完整参数顺序和候选索引格式见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
