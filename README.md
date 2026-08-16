@@ -188,7 +188,9 @@ AGILE_AGENT_ASCEND_PORT=8501 \
 | 正式 release 物化 | `tools/111_promote_ascend_full_score_release.py` | 不可变 OM/provenance/validation/config 包 |
 | 原子提升与回滚 | `scripts/install_ascend310b_primary_services.sh`、`scripts/manage_ascend310b_primary_route.sh` | `8501 → 18501` 切换、双 systemd 服务和一条精确回滚规则 |
 
-更换数据集后不直接沿用 `old=0.05/new=0.30`。先固定 old 搜索 new，再固定胜出 new 搜索 old，最后交叉复核前两名。只有 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 且三轮 20 图 batch 中位 FPS `≥30` 才能标记满分；逐框差异、业务 JSON、precision、误激活率和单请求 P95/P99 仅作为诊断。完整命令、哈希和停止条件见[满分方法与复现手册](docs/ascend-310b-full-score-method.md)。
+更换数据集后不直接沿用 `old=0.05/new=0.30`。先固定 old 搜索 new，再固定胜出 new 搜索 old，最后交叉复核前两名。只有 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 且三轮 20 图 batch 中位 FPS `≥30` 才能标记满分；逐框差异、业务 JSON、precision、误激活率和单请求 P95/P99 仅作为诊断。
+
+[满分方法与复现手册第 4 节](docs/ascend-310b-full-score-method.md#4-更换数据集后的完整训练构建与评分流程)现已给出从原始 PNG/YOLO 标签生成 base/increment/mixed/lock、自动生成 dataset audit、重训 Base/Specialist、训练 residual adapter、WSL→板端 SHA256 同步、ATC 构建、恢复 `8501 ready`、批量阈值矩阵和汇总 `candidates.json` 的完整命令。现有数据工具只直接支持固定命名和单轮单新增类 3+1；类别数量或增量轮次变化时必须按手册的迁移清单同步修改训练 head、输出 shape、阈值和评分器，不能只改 `class_map`。
 
 ## 快速开始
 

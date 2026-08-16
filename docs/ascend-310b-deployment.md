@@ -194,7 +194,7 @@ sudo /usr/local/sbin/agileagent-ascend310b-primary-route apply 18501
 
 ## 新数据集：构建与验收满分候选
 
-本节只用于更换数据集或训练新 release，不是部署仓库内当前正式模型的前置步骤。候选不复用正式配置，也不直接启动在 `8501`。完整顺序为：
+本节只用于更换数据集或训练新 release，不是部署仓库内当前正式模型的前置步骤。候选不复用正式配置，也不直接启动在 `8501`。从原始数据生成 base/increment/mixed/lock、训练 `BASE.pt/SPECIALIST.pt`、生成 dataset audit、训练 residual adapter、分阶段阈值矩阵和类别数量变化的完整命令，统一见[满分方法手册第 4 节](ascend-310b-full-score-method.md#4-更换数据集后的完整训练构建与评分流程)。部署侧顺序为：
 
 1. 在 WSL 既有 `.venv` 中训练 residual adapter/new head，生成同时登记 best/last 的 training report；
 2. 选择一个已授权 checkpoint 导出 dual-head ONNX 和 export manifest；
@@ -203,18 +203,52 @@ sudo /usr/local/sbin/agileagent-ascend310b-primary-route apply 18501
 5. 由 `tools/109` 生成只监听 `8502` 的候选配置；
 6. 运行 score gate，结束后只停止其启动的精确 `8502` 进程，并再次确认 `8501 ready`。
 
+### WSL 到板端的资产同步
+
+本机只使用 WSL 仓库现有 `.venv` 完成训练和 ONNX 导出。把 ONNX、实际导出 checkpoint、schema v2 training report 和 export manifest 放入同一临时目录，先生成 SHA256，再同步：
+
+```bash
+cd "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent"
+DATA_ID=newdata-YYYYMMDD
+SYNC_DIR="artifacts/ascend310b/$DATA_ID/board-sync"
+mkdir -p "$SYNC_DIR"
+cp /path/to/shared_backbone_dual_head.onnx "$SYNC_DIR/"
+cp /path/to/export-checkpoint.pt "$SYNC_DIR/"
+cp /path/to/training-report.json "$SYNC_DIR/"
+cp /path/to/export-manifest.json "$SYNC_DIR/"
+(cd "$SYNC_DIR" && sha256sum \
+  shared_backbone_dual_head.onnx export-checkpoint.pt \
+  training-report.json export-manifest.json > SHA256SUMS)
+
+BOARD=HwHiAiUser@192.168.137.100
+REMOTE_INCOMING="/home/HwHiAiUser/agileagent/candidates/$DATA_ID/incoming"
+ssh "$BOARD" "mkdir -p '$REMOTE_INCOMING'"
+scp "$SYNC_DIR"/* "$BOARD:$REMOTE_INCOMING/"
+ssh "$BOARD" "cd '$REMOTE_INCOMING' && sha256sum -c SHA256SUMS"
+```
+
+不要从 WSL 生成一个新的 `FORMAL_CONTEXT_BUILD_MANIFEST.json`。它的明确来源是现有正式 release：
+
+```text
+/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/release-build-manifest.json
+```
+
+该文件恰好登记一个 `role: context` 的完整 context 资产组，并使用板端绝对路径。仓库中的对应证据副本位于 `models/ascend310b/full-score/20260816-full-score-1493b04/provenance/release-build-manifest.json`；新板须先物化正式 release，构建时仍传 release 内的副本。
+
 板端构建示例：
 
 ```bash
-cd /home/HwHiAiUser/agileagent
+cd /home/HwHiAiUser/agileagent/repo
+DATA_ID=newdata-YYYYMMDD
+REMOTE_INCOMING="/home/HwHiAiUser/agileagent/candidates/$DATA_ID/incoming"
 AGILE_AGENT_ASCEND_PYTHON=/usr/local/miniconda3/envs/agileagent/bin/python \
 ./scripts/build_ascend_dual_head_om.sh \
-  /path/to/shared_backbone_dual_head.onnx \
-  /path/to/EXPORT_CHECKPOINT.pt \
-  /path/to/training-report.json \
-  /path/to/export-manifest.json \
-  /path/to/formal-context-build-manifest.json \
-  /path/to/build-output
+  "$REMOTE_INCOMING/shared_backbone_dual_head.onnx" \
+  "$REMOTE_INCOMING/export-checkpoint.pt" \
+  "$REMOTE_INCOMING/training-report.json" \
+  "$REMOTE_INCOMING/export-manifest.json" \
+  /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/release-build-manifest.json \
+  "/home/HwHiAiUser/agileagent/candidates/$DATA_ID/build"
 ```
 
 生成候选配置时必须同时提供 build manifest 中登记的 dual/context OM；生成器会核对方法配置、training/export manifest 和 OM 哈希：
@@ -241,7 +275,31 @@ AGILE_AGENT_ASCEND_PYTHON=/usr/local/miniconda3/envs/agileagent/bin/python \
   /path/to/score-gate-output
 ```
 
-score gate 在启动候选前检查正式 `8501 ready`、`8502` 未占用、CANN 版本、PNG 输入契约和 build manifest。它先在短生命周期引擎中冻结无标签预测，再打开标签评分，最后启动 HTTP 候选执行 30 次预热和三轮 20 图 batch；板端不运行 Web pytest。
+### 服务停止后的恢复和 score gate
+
+score gate 不会自动启动正式服务。若三个 unit 曾被临时停止，在运行任何候选前恢复：
+
+```bash
+sudo systemctl start agileagent-ascend310b-main.service
+sudo systemctl start agileagent-ascend310b-rollback.service
+
+for i in $(seq 1 180); do
+  curl -fsS http://127.0.0.1:18501/api/health >/dev/null 2>&1 && \
+  curl -fsS http://127.0.0.1:8501/api/health >/dev/null 2>&1 && break
+  sleep 1
+done
+
+sudo systemctl start agileagent-ascend310b-route.service
+sudo /usr/local/sbin/agileagent-ascend310b-primary-route status 18501
+curl -fsS http://127.0.0.1:8501/api/health
+ss -H -ltn 'sport = :8501 or sport = :18501 or sport = :8502'
+```
+
+公共 `8501` 必须返回 `status:"ready"`、`validated:true`、`model_layout:"shared_backbone_dual_head_v1"`，且 `8502` 无监听。然后再执行上面的 score gate 命令。score gate 会检查正式 `8501 ready`、`8502` 未占用、CANN 版本、PNG 输入契约和 build manifest；它先在短生命周期引擎中冻结无标签预测，再打开标签评分，最后启动 HTTP 候选执行 30 次预热和三轮 20 图 batch。板端不运行 Web pytest，退出时只停止它自己启动且命令行匹配 `--port 8502` 的进程。
+
+### 类别数量变化不是配置小改
+
+当前自动化是单轮、单新增类 3+1。Ascend raw dual-head 后端虽然按 `class_count` 动态计算通道，但数据物化、训练 adapter、`tools/94 --new-class-id` 和 score gate 的单 new-head 检查仍是固定 3+1。类别数量变化时必须同步修改数据协议、Base/Specialist `nc`、old/new `class_map/class_count/output_shape`、ONNX、ATC build manifest、阈值表示和评分集合；固定 `896×736` 时输出公式为 old `[1,4+N_old,13524]`、new `[1,4+N_new,13524]`。在[满分方法手册 4.8](ascend-310b-full-score-method.md#48-类别数量类别名称或增量轮次变化时的迁移清单)列出的代码和测试完成前，不得只改 `class_map` 或复用旧 OM。
 
 ## 满分候选提升为正式主线
 

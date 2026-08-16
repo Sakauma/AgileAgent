@@ -68,122 +68,501 @@ curl -fsS http://127.0.0.1:8501/api/health
 
 当前剩余瓶颈仍是 20 图 batch 的 Engine；候选阶段约 `656.3–657.8 ms`，发布后约 `651.7–653.2 ms`，而解析仅约 `6.8–7.2 ms`、cache 约 `0.4 ms`。发布后中位相对 30 FPS 约有 `0.81%` 余量，仍不宽裕，因此新数据集必须重新搜索阈值并复测，不能只验证服务可启动。
 
-## 4. 新数据集训练与复现流程
+## 4. 更换数据集后的完整训练、构建与评分流程
 
-### 4.1 数据和训练前置
+### 4.1 先判断能否直接使用现有 3+1 工具
 
-1. 生成新的 base、increment、mixed/lock 划分和增量数据审计 manifest。
-2. 在查看 lock 标签前固定划分、训练参数和候选编号。
-3. 审计必须满足：旧类原始图像、旧类标签、旧类 feature cache 均为 `0`，原始数据未修改。
-4. 若全局类别编号变化，只修改方法配置中的 old/new `class_map`；导出、构建、候选生成和 score gate 都从该配置继承映射，owner 语义不得改变。
+现有活动工具不是任意数据集转换器。只有同时满足下列条件时，才能原样执行本节 4.2–4.7：
 
-本机训练和导出只使用 WSL 仓库既有 `.venv`，禁止安装依赖或下载 CPU PyTorch：
+- 原始数据平铺在仓库根目录的 `datasets_r1_base_train/`，每张 `640×512`、8-bit RGB/RGBA PNG 有同 stem 的 YOLO TXT，另有 `classes.txt`；
+- 文件名恰好为五段 `sensor_round_base_scene_id`，例如 `ir_r1_base_air_000001.png`；sensor 只能是 `ir/sar`，scene 只能是 `air/forest/sea/urban`；
+- 总图片数恰好为 `750`，类别恰好为四类，当前全局顺序仍为 `soldier/small_aircraft/warship/tank`；
+- 只模拟一轮“三个旧类 + 一个新类”，新增类训练/验证图不能与旧类共现。
 
-```bash
-.venv/bin/python tools/107_train_shared_dual_head.py \
-  --base-weight BASE.pt \
-  --specialist-weight SPECIALIST.pt \
-  --method-config configs/ascend310b/full_score_method.yaml \
-  --data INCREMENT_DATASET.yaml \
-  --dataset-manifest DATASET_AUDIT.json \
-  --artifact-dir artifacts/ascend310b/TRAIN_ID \
-  --run-root runs/detect \
-  --run-name TRAIN_ID \
-  --device 0
-```
+这些限制分别来自 `fair_agent/dataset_utils.py`、`tools/02_split_dataset.py`、`fair_agent/modules/strict_incremental.py` 和 `fair_agent/modules/incremental_experiment.py`，不是文档约定。只更换同协议图像时走“兼容路径”；图片数量、命名、sensor/scene、类别名称、类别数量、新增类数量或增量轮数变化时，先执行 4.8 的代码迁移，不能只改 `class_map` 后继续训练。
 
-训练工具从方法 YAML 读取 residual adapter、输入尺寸、优化器、epoch/batch/seed/增强和 checkpoint 策略；同名 CLI 参数仅可作为相等断言，不能静默覆盖方法配置。报告同时登记 `best.pt` 和 `last.pt` 的 SHA256、New-mAP50 与共享参数漂移，两者都必须 `shared_max_drift=0`。训练阶段的 New-mAP50 可以用于提前停止明显失败项，但正式晋级仍以冻结后的 Agent 评分为准。
+### 4.2 从兼容原始数据生成 base/increment/mixed/lock
 
-当前参考满分链路导出的是同一训练 run 的 `last.pt`，不是 training report 中旧格式唯一登记的 `best.pt`。新训练报告采用 schema v2 并显式授权 best/last；构建脚本只接受被报告授权且与 export manifest 一致的 checkpoint。旧 schema v1 只对本文件上方固定的 training report、export manifest 和 `last.pt` 哈希组合保留兼容，不形成通用旁路。
-
-### 4.2 导出和板端构建
+以下命令必须在 WSL 的仓库根目录运行，只使用仓库现有 `.venv`：
 
 ```bash
-.venv/bin/python tools/108_export_ascend_dual_head.py \
-  --base-weight BASE.pt \
-  --new-head-weight EXPORT_CHECKPOINT.pt \
-  --output-dir artifacts/ascend310b/EXPORT_ID \
-  --device cuda:0
+cd "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent"
+PY=.venv/bin/python
+test -x "$PY"
+test -f datasets_r1_base_train/classes.txt
+
+"$PY" tools/00_check_dataset.py
+"$PY" tools/01_build_metadata.py
+
+DATA_ID=newdata-YYYYMMDD
+WORK="artifacts/ascend310b/$DATA_ID"
+SPLIT_ROOT="$WORK/splits"
+mkdir -p "$WORK"
+"$PY" tools/02_split_dataset.py \
+  --increment-class warship \
+  --output-dir "$SPLIT_ROOT"
 ```
 
-将 ONNX、训练权重和 export manifest 以 SHA256 校验方式同步到板端，然后在 CANN `7.0.RC1` 环境执行：
+`00` 生成 `reports/data_audit_report.md` 和 `reports/data_audit_summary.json`，`01` 生成 `reports/metadata.csv`；`02` 的目标必须不存在或为空，它生成：
+
+| 产物 | 作用 |
+| --- | --- |
+| `pool_train.txt` / `pool_dev.txt` | 后续再次按 owner 物化 Base 和 Increment 数据视图 |
+| `mixed_test.txt` | 固定 mixed/lock 清单；训练前只允许读取图像清单，不允许读取其标签做调参 |
+| `strict_3plus1/base_train.txt` / `base_dev.txt` | Base 训练/开发清单证据 |
+| `strict_3plus1/increment_train.txt` / `increment_dev.txt` | Specialist 训练/开发清单证据 |
+| `strict_3plus1/base_test.txt` | Base mAP50 的评分子集 |
+| 两级 `manifest.json` | 源池分配和严格 3+1 协议审计 |
+
+不要覆盖仓库活动配置。下面从模板生成本轮专用配置，并把实际 split 数量写回 `expected_incremental_counts`：
 
 ```bash
-./scripts/build_ascend_dual_head_om.sh \
-  shared_backbone_dual_head.onnx \
-  EXPORT_CHECKPOINT.pt \
-  training-report.json \
-  export-manifest.json \
-  FORMAL_CONTEXT_BUILD_MANIFEST.json \
-  artifacts/ascend310b/BUILD_ID
+RUN_ID="$DATA_ID-strict"
+PROTOCOL=warship-incremental
+RUN_CONFIG="$WORK/strict-3plus1.yaml"
+
+"$PY" - "$SPLIT_ROOT" "$WORK" "$RUN_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+import yaml
+
+split_root = Path(sys.argv[1]).resolve()
+work = Path(sys.argv[2]).resolve()
+output = Path(sys.argv[3]).resolve()
+config = yaml.safe_load(
+    Path("configs/strict_class_incremental_3plus1.yaml").read_text(encoding="utf-8")
+)
+strict = json.loads(
+    (split_root / "strict_3plus1" / "manifest.json").read_text(encoding="utf-8")
+)
+config["paths"]["source_splits"] = {
+    "train": str(split_root / "pool_train.txt"),
+    "val": str(split_root / "pool_dev.txt"),
+    "lock": str(split_root / "mixed_test.txt"),
+}
+config["paths"]["base_test_split"] = str(
+    split_root / "strict_3plus1" / "base_test.txt"
+)
+config["paths"]["dataset_root"] = str(work / "protocol-data")
+config["paths"]["run_root"] = str(work / "strict-runs")
+config["paths"]["report_root"] = str(work / "strict-reports")
+config["paths"]["freeze_root"] = str(work / "profiles")
+config["protocols"][0]["expected_incremental_counts"] = {
+    "train": strict["counts"]["increment_train"],
+    "val": strict["counts"]["increment_dev"],
+}
+config["protocols"][0]["expected_base_test_count"] = strict["counts"]["base_test"]
+output.write_text(
+    yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8"
+)
+PY
+
+"$PY" tools/70_run_strict_3plus1.py \
+  --config "$RUN_CONFIG" --run-id "$RUN_ID" --check-only
+"$PY" tools/70_run_strict_3plus1.py \
+  --config "$RUN_CONFIG" --run-id "$RUN_ID"
 ```
 
-构建脚本从 `full_score_method.yaml` 读取 SoC、精度、输入 shape、logical head、输出 shape 和 AIPP 契约，并从 CANN 版本文件或 `atc --version` 确认实际环境为 `7.0.RC1`；无法确认时拒绝生成 manifest。新 manifest 记录 dual/context、ATC 命令、Git SHA、方法配置和所有资产 SHA256。输出目录非空时拒绝覆盖。
+`tools/70` 要求 WSL 的 NVIDIA GPU 可用。它先调用 `build_protocol_dataset()` 创建隔离数据视图和初始审计，再训练并冻结预测，最后才调用 `materialize_lock_data()` 物化 lock 标签。当前模板中的真实初始化关系是：
 
-### 4.3 阈值候选和评分
+- `BASE.pt`：从 `models/pretrained/yolo11s.pt` 初始化、在 Base 数据上微调后的 `best.pt`；
+- `SPECIALIST.pt`：独立从 `models/pretrained/yolo11s.pt` 初始化，只在新增类数据上训练后的 `best.pt`；它不是从 `BASE.pt` 初始化；
+- shared dual-head 初始化：`tools/107` 把 `BASE.pt` 的 backbone/neck 复制进混合 checkpoint，同时保留 `SPECIALIST.pt` 的 Detect head，然后只训练 residual adapter 和 new head。
 
-当前 `old=0.05`、`new=0.30` 只是搜索种子。新数据集按以下顺序执行，避免直接跑完整笛卡尔积：
-
-1. old 固定 `0.05`，new 测试 `0.20/0.25/0.30/0.35/0.40`。
-2. 第一阶段候选按最终确定性规则（最小精度余量、FPS 波动、中位 FPS）排名，固定胜出的 new 后，old 测试 `0.03/0.05/0.10/0.20/0.30`。
-3. 对两个最优 old/new 组合做交叉复核。
-4. 精度不满分的组合不再浪费板端 batch 测量时间。
-
-每个组合先生成独立候选配置：
+本轮实际输入路径不是字面量 `BASE.pt/SPECIALIST.pt/DATASET_AUDIT.json`，而是：
 
 ```bash
-.venv/bin/python tools/109_materialize_ascend_full_score_candidate.py \
-  --dual-om shared_backbone_dual_head.om \
-  --context-om scene_sensor_net.om \
-  --build-manifest build-manifest.json \
-  --old-threshold 0.05 --new-threshold 0.30 \
-  --output artifacts/ascend310b/CANDIDATE_ID/candidate.yaml
+DATASET_AUDIT="$WORK/protocol-data/$RUN_ID/$PROTOCOL/manifest.json"
+INCREMENT_DATASET="$WORK/protocol-data/$RUN_ID/$PROTOCOL/incremental/dataset.yaml"
+BASE_PT="$WORK/strict-runs/$RUN_ID/$PROTOCOL/base/weights/best.pt"
+SPECIALIST_PT="$WORK/strict-runs/$RUN_ID/$PROTOCOL/specialist/weights/best.pt"
+
+test -f "$DATASET_AUDIT"
+test -f "$INCREMENT_DATASET"
+test -f "$BASE_PT"
+test -f "$SPECIALIST_PT"
 ```
 
-生成器会强制端口 `8502`、核对 OM/manifest SHA256，并拒绝 logical head 结构与构建清单不一致。old/new 阈值是 Host 运行时参数，不属于 OM 身份，因此同一个 OM/build manifest 可用于完整阈值搜索。随后执行：
+### 4.3 `DATASET_AUDIT.json` 的来源和完整 schema
 
-```bash
-./scripts/run_ascend310b_score_gate.sh \
-  artifacts/ascend310b/CANDIDATE_ID/candidate.yaml \
-  MIXED_IMAGES \
-  MIXED_SPLIT.txt \
-  BASE_SPLIT.txt \
-  artifacts/ascend310b/CANDIDATE_ID/score-gate
-```
-
-脚本检查 `8501 ready`，并以受控候选环境变量授权预测冻结和精确的 `8502` 进程，按“无标签预测冻结 → 读取标签评分 → 30 次预热 → 三轮 20 图 batch”执行；它不运行板端 Web pytest，也不执行单请求诊断。输出目录和预测文件均拒绝覆盖。
-
-评分图片有硬输入契约：仅读取 `MIXED_IMAGES` 根目录的 `*.png`，每张必须为 `640×512`、8-bit RGB（PNG color type 2）或 RGBA（color type 6），且文件 stem 唯一。新数据集需先完成该转换；不符合时 score gate 在加载候选前停止。
-
-### 4.4 自动选优
-
-为每个候选建立索引：
+`DATASET_AUDIT.json` 是文档中的角色名；真实文件就是上面的 `manifest.json`，不应手工拼一个四字段文件冒充。schema v1 的全部顶层字段如下，JSON 中整数 map 的键会序列化为字符串；为保持示例可读，stem/hash/path 数组用空数组表示类型，实际生成器会写入完整逐项值：
 
 ```json
 {
   "schema_version": 1,
-  "candidates": [
-    {
-      "id": "old005-new030",
-      "score": "old005-new030/score.json",
-      "benchmark": "old005-new030/benchmark.json",
-      "repeat_benchmarks": [],
-      "prerequisites": {
-        "incremental_data_isolation": true,
-        "asset_hashes_verified": true
-      }
-    }
-  ]
+  "protocol": "warship-incremental",
+  "incremental_mode": "class_incremental",
+  "learning_data_scope": "incremental_dataset_only",
+  "base_classes": ["soldier", "small_aircraft", "tank"],
+  "new_class": "warship",
+  "new_global_id": 2,
+  "base_local_to_global": {"0": 0, "1": 1, "2": 3},
+  "specialist_local_to_global": {"0": 2},
+  "source_split_sha256": {"train": "...", "val": "...", "lock": "..."},
+  "source_split_stems": {"train": [], "val": [], "lock": []},
+  "source_split_intersections": {"train_val": [], "train_lock": [], "val_lock": []},
+  "counts": {
+    "base": {"train": 441, "val": 70, "test": 89},
+    "incremental": {"train": 132, "val": 18, "test": 89}
+  },
+  "source_stems": {
+    "base": {"train": [], "val": [], "test": []},
+    "incremental": {"train": [], "val": [], "test": []}
+  },
+  "intersections": {
+    "base_incremental_train": [],
+    "base_incremental_val": [],
+    "incremental_train_val": []
+  },
+  "base_nc": 3,
+  "specialist_nc": 1,
+  "student_nc": null,
+  "unified_student_enabled": false,
+  "old_raw_stems": [],
+  "old_raw_content_hashes": [],
+  "old_raw_label_hashes": [],
+  "old_raw_image_paths": [],
+  "old_raw_label_paths": [],
+  "old_raw_image_count": 0,
+  "old_raw_label_count": 0,
+  "old_feature_cache_count": 0,
+  "feature_cache_files": [],
+  "original_data_modified": false,
+  "lock_materialized_after_freeze": true,
+  "base_dataset": ".../base/dataset.yaml",
+  "incremental_dataset": ".../incremental/dataset.yaml",
+  "student_dataset": null
 }
 ```
 
+生成器同时用 stem、图像 SHA256 和标签 SHA256 检查旧数据泄漏，并扫描 `.cache/.npy/.npz/.pt` feature cache。`tools/107` 当前机器强制的最小隔离门禁是 `old_raw_image_count=0`、`old_raw_label_count=0`、`old_feature_cache_count=0`、`original_data_modified=false`；其余字段用于重建来源、类别映射、集合互斥和 lock 解封时序，仍应完整保留。
+
+### 4.4 训练 residual adapter/new head 并导出 ONNX
+
 ```bash
-.venv/bin/python tools/110_select_ascend_full_score_candidate.py \
-  --candidates candidates.json \
-  --output selection.json
+TRAIN_ID="$DATA_ID-dual-head"
+TRAIN_ARTIFACT="$WORK/shared-training"
+TRAIN_RUN_ROOT="$WORK/shared-runs"
+
+"$PY" tools/107_train_shared_dual_head.py \
+  --base-weight "$BASE_PT" \
+  --specialist-weight "$SPECIALIST_PT" \
+  --method-config configs/ascend310b/full_score_method.yaml \
+  --data "$INCREMENT_DATASET" \
+  --dataset-manifest "$DATASET_AUDIT" \
+  --artifact-dir "$TRAIN_ARTIFACT" \
+  --run-root "$TRAIN_RUN_ROOT" \
+  --run-name "$TRAIN_ID" \
+  --device 0
+
+EXPORT_CHECKPOINT="$TRAIN_RUN_ROOT/$TRAIN_ID/weights/last.pt"
+EXPORT_DIR="$WORK/export"
+"$PY" tools/108_export_ascend_dual_head.py \
+  --base-weight "$BASE_PT" \
+  --new-head-weight "$EXPORT_CHECKPOINT" \
+  --method-config configs/ascend310b/full_score_method.yaml \
+  --output-dir "$EXPORT_DIR" \
+  --device cuda:0
 ```
 
-选择器只用 Base mAP50、New-mAP50、KRR 和主 benchmark 的 20 图中位 FPS 判定满分。多个满分候选依次比较最小精度余量、batch FPS 波动和中位 FPS。若没有候选达到 30 FPS，最高 FPS 的精度通过项只标记为 `intermediate_only`。
+训练参数只能来自 `full_score_method.yaml`；对应 CLI 参数即使提供，也只能与配置相等。schema v2 training report 同时登记 `best.pt/last.pt`、New-mAP50 和共享参数漂移，两份 checkpoint 都必须 `shared_max_drift=0`。当前固定方法选择 `last.pt` 导出，不能看 lock 结果后在 best/last 之间临时挑选。构建脚本只接受 training report 已授权且与 export manifest 哈希一致的 checkpoint。
+
+### 4.5 从 WSL 同步到板端并构建 OM
+
+先在 WSL 建立只包含四个构建输入的传输目录和校验清单：
+
+```bash
+SYNC_DIR="$WORK/board-sync"
+mkdir -p "$SYNC_DIR"
+cp "$EXPORT_DIR/shared_backbone_dual_head.onnx" "$SYNC_DIR/"
+cp "$EXPORT_CHECKPOINT" "$SYNC_DIR/export-checkpoint.pt"
+cp "$TRAIN_ARTIFACT/training-report.json" "$SYNC_DIR/"
+cp "$EXPORT_DIR/export-manifest.json" "$SYNC_DIR/"
+(cd "$SYNC_DIR" && sha256sum \
+  shared_backbone_dual_head.onnx export-checkpoint.pt \
+  training-report.json export-manifest.json > SHA256SUMS)
+
+BOARD=HwHiAiUser@192.168.137.100
+REMOTE_INCOMING="/home/HwHiAiUser/agileagent/candidates/$DATA_ID/incoming"
+ssh "$BOARD" "mkdir -p '$REMOTE_INCOMING'"
+scp "$SYNC_DIR"/* "$BOARD:$REMOTE_INCOMING/"
+ssh "$BOARD" "cd '$REMOTE_INCOMING' && sha256sum -c SHA256SUMS"
+```
+
+`FORMAL_CONTEXT_BUILD_MANIFEST.json` 不是新训练生成的文件，也不是 WSL 侧 export manifest。它必须是板端已物化正式 release 的：
+
+```text
+/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/release-build-manifest.json
+```
+
+该清单的 `artifacts` 中恰好有一个 `role: context`，并登记 context weight/ONNX/AIPP/OM/ATC log 的板端绝对路径与 SHA256；构建脚本会逐项复核。仓库副本位于 `models/ascend310b/full-score/20260816-full-score-1493b04/provenance/release-build-manifest.json`，但其中同样保存板端路径，因此实际构建应使用已物化 release 内的文件。
+
+登录板端后，在已同步到同一 `main` HEAD 的仓库中构建：
+
+```bash
+cd /home/HwHiAiUser/agileagent/repo
+git fetch origin main
+git merge --ff-only origin/main
+
+DATA_ID=newdata-YYYYMMDD
+REMOTE_INCOMING="/home/HwHiAiUser/agileagent/candidates/$DATA_ID/incoming"
+REMOTE_BUILD="/home/HwHiAiUser/agileagent/candidates/$DATA_ID/build"
+FORMAL_CONTEXT_BUILD_MANIFEST="/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/release-build-manifest.json"
+AGILE_AGENT_ASCEND_PYTHON=/usr/local/miniconda3/envs/agileagent/bin/python \
+./scripts/build_ascend_dual_head_om.sh \
+  "$REMOTE_INCOMING/shared_backbone_dual_head.onnx" \
+  "$REMOTE_INCOMING/export-checkpoint.pt" \
+  "$REMOTE_INCOMING/training-report.json" \
+  "$REMOTE_INCOMING/export-manifest.json" \
+  "$FORMAL_CONTEXT_BUILD_MANIFEST" \
+  "$REMOTE_BUILD"
+```
+
+输出为 `$REMOTE_BUILD/shared_backbone_dual_head.om` 和 `$REMOTE_BUILD/build-manifest.json`。脚本固定 CANN `7.0.RC1`、`mixed_float16`、`[1,3,736,896]` 输入、AIPP 和双输出契约；无法确认 CANN 版本、输入哈希、checkpoint 授权、context 资产或 ATC 成功标志时都会停止。
+
+### 4.6 score gate 前恢复正式 `8501 ready`
+
+`run_ascend310b_score_gate.sh` 不会替用户启动正式服务。若此前临时停止了三个 unit，先在板端恢复主实例、回滚 listener 和精确路由：
+
+```bash
+sudo systemctl start agileagent-ascend310b-main.service
+sudo systemctl start agileagent-ascend310b-rollback.service
+
+for i in $(seq 1 180); do
+  curl -fsS http://127.0.0.1:18501/api/health >/dev/null 2>&1 && \
+  curl -fsS http://127.0.0.1:8501/api/health >/dev/null 2>&1 && break
+  sleep 1
+done
+
+sudo systemctl start agileagent-ascend310b-route.service
+sudo /usr/local/sbin/agileagent-ascend310b-primary-route status 18501
+curl -fsS http://127.0.0.1:8501/api/health
+ss -H -ltn 'sport = :8501 or sport = :18501 or sport = :8502'
+```
+
+公共 health 必须是 `status:"ready"`，并应显示 `validated:true`、`model_layout:"shared_backbone_dual_head_v1"`；`8502` 此时必须没有监听器。当前板端服务是人工停止状态时，不要为了阅读文档而执行这组命令；只在真正开始 score gate 前恢复。
+
+### 4.7 阈值矩阵、`candidates.json` 和自动选优
+
+当前 `old=0.05/new=0.30` 只是种子。下面的板端函数会为每个组合生成独立 `8502` 配置并运行完整“无标签预测冻结 → 三项精度评分 → 30 次预热 → 三轮 20 图 batch”：
+
+```bash
+PY=/usr/local/miniconda3/envs/agileagent/bin/python
+SEARCH="/home/HwHiAiUser/agileagent/candidates/$DATA_ID/threshold-search"
+DUAL_OM="$REMOTE_BUILD/shared_backbone_dual_head.om"
+BUILD_MANIFEST="$REMOTE_BUILD/build-manifest.json"
+CONTEXT_OM="/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/om/scene_sensor_net.om"
+MIXED_IMAGES=/path/to/new-mixed-png
+MIXED_SPLIT=/path/to/new-mixed-test.txt
+BASE_SPLIT=/path/to/new-base-test.txt
+
+run_pair() {
+  local stage="$1" id="$2" old="$3" new="$4"
+  local root="$SEARCH/$stage/$id"
+  mkdir -p "$root"
+  "$PY" tools/109_materialize_ascend_full_score_candidate.py \
+    --dual-om "$DUAL_OM" \
+    --context-om "$CONTEXT_OM" \
+    --build-manifest "$BUILD_MANIFEST" \
+    --old-threshold "$old" --new-threshold "$new" \
+    --report-root "reports/ascend310b/$DATA_ID/$stage/$id" \
+    --output "$root/candidate.yaml"
+  ./scripts/run_ascend310b_score_gate.sh \
+    "$root/candidate.yaml" "$MIXED_IMAGES" "$MIXED_SPLIT" "$BASE_SPLIT" \
+    "$root/gate"
+}
+
+for new in 0.20 0.25 0.30 0.35 0.40; do
+  tag=${new/./}
+  run_pair stage1 "old005-new$tag" 0.05 "$new"
+done
+```
+
+每完成一个阶段，用下面的命令从真实 `score.json/benchmark.json` 和 candidate YAML 汇总索引；它不会伪造结果：
+
+```bash
+make_index() {
+  local stage="$1"
+  SEARCH_STAGE="$SEARCH/$stage" "$PY" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+import yaml
+
+root = Path(os.environ["SEARCH_STAGE"])
+rows = []
+for gate in sorted(root.glob("*/gate")):
+    candidate = yaml.safe_load((gate.parent / "candidate.yaml").read_text(encoding="utf-8"))
+    model = next(iter(candidate["ascend_backend"]["models"].values()))
+    heads = model["logical_heads"]
+    rows.append({
+        "id": gate.parent.name,
+        "old_threshold": float(heads["old"]["candidate_confidence"]),
+        "new_threshold": float(heads["new"]["candidate_confidence"]),
+        "score": str((gate / "score.json").relative_to(root)),
+        "benchmark": str((gate / "benchmark.json").relative_to(root)),
+        "repeat_benchmarks": [],
+        "prerequisites": {
+            "incremental_data_isolation": True,
+            "asset_hashes_verified": True
+        }
+    })
+(root / "candidates.json").write_text(
+    json.dumps({"schema_version": 1, "candidates": rows}, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
+  "$PY" tools/110_select_ascend_full_score_candidate.py \
+    --candidates "$SEARCH/$stage/candidates.json" \
+    --output "$SEARCH/$stage/selection.json" || true
+}
+
+make_index stage1
+NEW_WIN=$("$PY" - "$SEARCH/stage1/selection.json" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1], encoding="utf-8"))
+winner = p["selected_candidate"]
+if winner is None:
+    raise SystemExit("stage1没有同时通过有效性与精度门禁的候选")
+print(next(row["source"]["new_threshold"] for row in p["candidates"] if row["id"] == winner))
+PY
+)
+
+for old in 0.03 0.05 0.10 0.20 0.30; do
+  tag=${old/./}
+  run_pair stage2 "old$tag-new${NEW_WIN/./}" "$old" "$NEW_WIN"
+done
+make_index stage2
+```
+
+合并两个阶段并按选择器的正式规则产生待复核前两名：
+
+```bash
+mkdir -p "$SEARCH/final"
+"$PY" - "$SEARCH" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+rows = []
+for stage in ("stage1", "stage2"):
+    payload = json.loads((root / stage / "candidates.json").read_text(encoding="utf-8"))
+    for row in payload["candidates"]:
+        copied = dict(row)
+        copied["id"] = f"{stage}-{row['id']}"
+        copied["score"] = f"../{stage}/{row['score']}"
+        copied["benchmark"] = f"../{stage}/{row['benchmark']}"
+        copied["repeat_benchmarks"] = []
+        rows.append(copied)
+(root / "final" / "precheck-candidates.json").write_text(
+    json.dumps({"schema_version": 1, "candidates": rows}, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
+
+"$PY" tools/110_select_ascend_full_score_candidate.py \
+  --candidates "$SEARCH/final/precheck-candidates.json" \
+  --output "$SEARCH/final/precheck-selection.json" || true
+
+"$PY" - "$SEARCH/final/precheck-selection.json" "$SEARCH/final/top2.tsv" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+full = [row for row in payload["candidates"] if row["full_score"]]
+accuracy_pass = [
+    row for row in payload["candidates"]
+    if row["validity_passed"] and row["accuracy_passed"]
+]
+if full:
+    ranked = sorted(
+        full,
+        key=lambda row: (
+            -row["minimum_accuracy_headroom"],
+            row["batch_fps_spread"],
+            -row["batch_median_fps"],
+            row["id"],
+        ),
+    )
+else:
+    ranked = sorted(
+        accuracy_pass,
+        key=lambda row: (
+            -row["batch_median_fps"],
+            -row["minimum_accuracy_headroom"],
+            row["batch_fps_spread"],
+            row["id"],
+        ),
+    )
+lines = [
+    f"{row['id']}\t{row['source']['old_threshold']}\t{row['source']['new_threshold']}"
+    for row in ranked[:2]
+]
+Path(sys.argv[2]).write_text(
+    "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
+)
+PY
+
+while IFS=$'\t' read -r source_id old new; do
+  test -n "$source_id" || continue
+  run_pair crosscheck "$source_id-repeat" "$old" "$new"
+done < "$SEARCH/final/top2.tsv"
+```
+
+把交叉复核的 benchmark 作为原候选的 `repeat_benchmarks`，再执行最终选择：
+
+```bash
+"$PY" - "$SEARCH" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+payload = json.loads(
+    (root / "final" / "precheck-candidates.json").read_text(encoding="utf-8")
+)
+top2 = {}
+for line in (root / "final" / "top2.tsv").read_text(encoding="utf-8").splitlines():
+    candidate_id, old, new = line.split("\t")
+    top2[candidate_id] = f"../crosscheck/{candidate_id}-repeat/gate/benchmark.json"
+for row in payload["candidates"]:
+    row["repeat_benchmarks"] = [top2[row["id"]]] if row["id"] in top2 else []
+(root / "final" / "candidates.json").write_text(
+    json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+)
+PY
+
+"$PY" tools/110_select_ascend_full_score_candidate.py \
+  --candidates "$SEARCH/final/candidates.json" \
+  --output "$SEARCH/final/selection.json"
+```
+
+不要复用非空 gate 目录。完整索引条目必须包含 `id`、`score`、`benchmark`、`repeat_benchmarks` 和两个为真的 prerequisites；额外保存的 `old_threshold/new_threshold` 会原样进入 selection 的 `source`，便于复核。`tools/110` 在尚无满分项时会以退出码 `1` 返回 `intermediate_only/no_eligible_candidate`，所以仅生成前两名复核清单的 precheck 调用显式使用 `|| true`，最终正式选择不得忽略退出码。
+
+选择器只以 Base mAP50、New-mAP50、KRR 和主 benchmark 的 20 图中位 FPS 判定满分。多个满分候选依次按最小精度余量、所有主/复核轮次 FPS 波动和主 benchmark 中位 FPS 排名；没有效率满分项时，最高 FPS 的精度通过项只能是 `intermediate_only`。
+
+评分图片仍有硬输入契约：`MIXED_IMAGES` 根目录只能有 stem 唯一的 `*.png`，每张必须为 `640×512`、8-bit RGB（color type 2）或 RGBA（color type 6）。score gate 只停止它自己启动且命令行明确含 `--port 8502` 的进程，不运行板端 Web pytest，并在退出时再次确认 `8501 ready`。
+
+### 4.8 类别数量、类别名称或增量轮次变化时的迁移清单
+
+当前完整自动链路实质上是单轮、单新增类的 3+1。Ascend raw dual-head 运行时会按 `class_count` 计算通道，但数据、训练和评分入口尚未全部通用；因此下面所有项目必须在一次专门代码变更中同步完成并通过测试：
+
+1. 数据入口：去除 `dataset_utils.py` 的固定数据目录、五段文件名、sensor/scene 和 `EXPECTED_IMAGE_COUNT=750`；把 `tools/02` 的“恰好四类”和单新增类共现规则改为显式数据协议配置。
+2. 全局类别：把 `strict_incremental.py` 的 `GLOBAL_CLASS_NAMES` 从硬编码改为配置；`base_local_to_global` 的本地键仍须从 `0` 连续编号，old/new 全局 ID 必须互斥。
+3. 训练适配器：`compile_training_adapter()` 当前明确拒绝非“三旧类、一轮、一个新类”；多新增类要生成 `specialist_local_to_global={0..N_new-1}` 和对应 YOLO dataset `names/nc`，多轮增量还需定义每一轮是新增 logical head、合并进 old head，还是重新蒸馏，不能复用双 head 假装多轮已支持。
+4. checkpoint 结构：Base Detect head 的 `nc=N_old`，Specialist/new head 的 `nc=N_new`；`build_shared_head_training_checkpoint()`、residual adapter 冻结检查和 EMA 零漂移必须用这两个真实 checkpoint 复测。
+5. 方法配置：同步更新 old/new `class_map`、`class_count`、`output_shape` 和评分类别集合。固定 `896×736` 时 anchor count 仍为 `13524`，raw 输出 shape 必须分别为 `[1,4+N_old,13524]`、`[1,4+N_new,13524]`。
+6. 导出与构建：重新导出 ONNX，让实际两个输出 shape 与方法 YAML 完全一致；随后重跑 ATC，生成新的 export/build manifest 和哈希。只编辑 YAML 或复用旧 OM 会被结构校验拒绝。
+7. 阈值：`tools/109` 当前每个 logical head 只有一个 scalar threshold。若一个 new head 含多个新增类，必须决定并实现“共用阈值”或“逐类阈值”，并同步候选 schema、矩阵生成和排名证据。
+8. 评分：`tools/94` 目前只有单数 `--new-class-id`，score gate 还显式要求 new `class_map` 只有一个值。多新增类必须改为 `--new-class-ids`（或方法配置集合），定义 New-mAP50 的多类平均口径，并更新 KRR、预测冻结和 score schema v2 兼容逻辑。
+9. 测试：更新 strict split、训练 adapter、shared dual head、配置校验、score gate、selector、release/promote 和模型 package 测试；至少加入 `N_old!=3`、`N_new>1`、类别重排和不支持多轮时 fail-closed 的用例。
+
+完成以上迁移前，类别数量变化的数据只能停在“待适配”状态，不能声称现有命令可以重训或达到满分。owner 语义仍保持 old=`frozen_base_model`、new=`incremental_model`；四项评分门禁不变，具体类别集合从新协议读取。
 
 ## 5. 验收边界
 
