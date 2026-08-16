@@ -74,7 +74,8 @@ cleanup_failure() {
         env AGILE_AGENT_ASCEND_RELEASE="$ROLLBACK_ROOT" \
           AGILE_AGENT_CONFIG="$ROLLBACK_CONFIG" \
           AGILE_AGENT_ASCEND_PORT="$PUBLIC_PORT" \
-          "$ROLLBACK_ROOT/src/scripts/start_agent_ascend310b.sh" >/dev/null 2>&1 &
+          /usr/bin/bash "$ROLLBACK_ROOT/src/scripts/start_agent_ascend310b.sh" \
+          >/dev/null 2>&1 &
     fi
     printf '正式提升失败，已尝试恢复三OM回滚服务；status=%s\n' "$status" >&2
   fi
@@ -100,8 +101,8 @@ Environment=AGILE_AGENT_ASCEND_RELEASE=$MAIN_ROOT
 Environment=AGILE_AGENT_CONFIG=$MAIN_CONFIG
 Environment=AGILE_AGENT_ASCEND_PORT=$MAIN_PORT
 Environment=AGILE_AGENT_ASCEND_PID_FILE=$MAIN_ROOT/agent-web.pid
-ExecStart=$MAIN_ROOT/src/scripts/start_agent_ascend310b.sh
-ExecStop=$MAIN_ROOT/src/scripts/stop_agent_ascend310b.sh
+ExecStart=/usr/bin/bash $MAIN_ROOT/src/scripts/start_agent_ascend310b.sh
+ExecStop=/usr/bin/bash $MAIN_ROOT/src/scripts/stop_agent_ascend310b.sh
 Restart=on-failure
 RestartSec=2
 
@@ -121,8 +122,8 @@ Environment=AGILE_AGENT_ASCEND_RELEASE=$ROLLBACK_ROOT
 Environment=AGILE_AGENT_CONFIG=$ROLLBACK_CONFIG
 Environment=AGILE_AGENT_ASCEND_PORT=$PUBLIC_PORT
 Environment=AGILE_AGENT_ASCEND_PID_FILE=$ROLLBACK_ROOT/agent-web.pid
-ExecStart=$ROLLBACK_ROOT/src/scripts/start_agent_ascend310b.sh
-ExecStop=$ROLLBACK_ROOT/src/scripts/stop_agent_ascend310b.sh
+ExecStart=/usr/bin/bash $ROLLBACK_ROOT/src/scripts/start_agent_ascend310b.sh
+ExecStop=/usr/bin/bash $ROLLBACK_ROOT/src/scripts/stop_agent_ascend310b.sh
 Restart=on-failure
 RestartSec=2
 
@@ -167,7 +168,7 @@ ROUTE_APPLIED=1
 # 新连接已进入满分主实例；此后重管旧进程不会影响公共8501。
 env AGILE_AGENT_ASCEND_RELEASE="$ROLLBACK_ROOT" \
   AGILE_AGENT_ASCEND_PID_FILE="$ROLLBACK_ROOT/agent-web.pid" \
-  "$ROLLBACK_ROOT/src/scripts/stop_agent_ascend310b.sh"
+  /usr/bin/bash "$ROLLBACK_ROOT/src/scripts/stop_agent_ascend310b.sh"
 systemctl enable --now agileagent-ascend310b-rollback.service
 systemctl enable agileagent-ascend310b-route.service
 systemctl start agileagent-ascend310b-route.service
