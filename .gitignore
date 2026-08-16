@@ -77,11 +77,14 @@ venv/
 !/tools/108_export_ascend_dual_head.py
 !/tools/109_materialize_ascend_full_score_candidate.py
 !/tools/110_select_ascend_full_score_candidate.py
+!/tools/111_promote_ascend_full_score_release.py
 !/scripts/start_agent_ascend310b.sh
 !/scripts/stop_agent_ascend310b.sh
 !/scripts/prepare_ascend310b_benchmark_env.sh
 !/scripts/build_ascend_dual_head_om.sh
 !/scripts/run_ascend310b_score_gate.sh
+!/scripts/manage_ascend310b_primary_route.sh
+!/scripts/install_ascend310b_primary_services.sh
 
 /configs/*
 !/configs/incremental/
