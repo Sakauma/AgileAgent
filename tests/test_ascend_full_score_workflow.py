@@ -465,3 +465,29 @@ def test_score_gate_authorizes_candidates_and_uses_method_contract() -> None:
     assert "fixed_reference_evidence_compatibility" in build
     assert 'training_report.get("checkpoints")' in build
     assert '"passed": len(records) == args.expected_images' in freeze
+
+
+def test_primary_route_and_installer_preserve_service_boundaries() -> None:
+    route = (ROOT / "scripts/manage_ascend310b_primary_route.sh").read_text(
+        encoding="utf-8"
+    )
+    installer = (ROOT / "scripts/install_ascend310b_primary_services.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'PUBLIC_PORT=8501' in route
+    assert 'MAIN_PORT="${2:-18501}"' in route
+    assert 'MAIN_PORT == PUBLIC_PORT || MAIN_PORT == 8502' in route
+    assert 'COMMENT="AGILE_AGENT_ASCEND310B_PRIMARY"' in route
+    assert 'rollback=not_ready' in route
+    assert "rollback=not_ready" in route.split('remove)')[1].split(';;', 1)[0]
+    assert "exit 1" not in route.split('remove)')[1].split(';;', 1)[0]
+
+    assert 'MAIN_PORT="${3:-18501}"' in installer
+    assert 'PUBLIC_PORT=8501' in installer
+    assert 'MAIN_PORT == 8501 || MAIN_PORT == 8502' in installer
+    assert 'require_loopback_listener "$PUBLIC_PORT"' in installer
+    assert 'require_loopback_listener "$MAIN_PORT"' in installer
+    assert "ss -ltn | grep -q" not in installer
+    assert 'step="%s" status="%s"' not in installer
+    assert 'step=%s status=%s' in installer
