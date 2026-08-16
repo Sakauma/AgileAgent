@@ -83,11 +83,14 @@ case "$ACTION" in
     ;;
   remove)
     remove_all
-    health_ready "$PUBLIC_PORT" || {
-      printf '已删除主线路由，但三OM回滚服务未ready。\n' >&2
-      exit 1
-    }
-    printf 'public=%s route=removed rollback=ready\n' "$PUBLIC_PORT"
+    if health_ready "$PUBLIC_PORT"; then
+      printf 'public=%s route=removed rollback=ready\n' "$PUBLIC_PORT"
+    else
+      # 规则删除是remove的原子职责。回滚监听器可能正在systemd重启，
+      # 这不应让ExecStop被标记为failed；严格健康验收由status或安装器执行。
+      printf '已删除主线路由，但三OM回滚服务尚未ready，请检查rollback service。\n' >&2
+      printf 'public=%s route=removed rollback=not_ready\n' "$PUBLIC_PORT"
+    fi
     ;;
   status)
     if has_rule; then

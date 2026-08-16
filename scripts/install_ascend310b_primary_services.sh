@@ -38,7 +38,47 @@ ROUTE_UNIT=/etc/systemd/system/agileagent-ascend310b-route.service
 CANONICAL_LINK=/home/HwHiAiUser/agileagent/releases/ascend310b-main
 ROUTE_APPLIED=0
 SUCCESS=0
+CURRENT_STEP="preflight"
 
+step() {
+  CURRENT_STEP="$1"
+  printf '[ascend310b-primary] %s\n' "$CURRENT_STEP"
+}
+
+fail() {
+  printf '[ascend310b-primary] %s：%s\n' "$CURRENT_STEP" "$1" >&2
+  return 1
+}
+
+require_active() {
+  local unit="$1"
+  systemctl is-active --quiet "$unit" || fail "systemd unit未active：${unit}"
+}
+
+health_has_field() {
+  local port="$1"
+  local expected="$2"
+  local payload
+  payload="$(curl -fsS --max-time 5 "http://127.0.0.1:${port}/api/health")" || return 1
+  [[ "$payload" == *"$expected"* ]]
+}
+
+require_health_field() {
+  local port="$1"
+  local expected="$2"
+  health_has_field "$port" "$expected" || \
+    fail "健康检查未包含 ${expected}：http://127.0.0.1:${port}/api/health"
+}
+
+require_loopback_listener() {
+  local port="$1"
+  local sockets
+  # 不使用`ss | grep -q`：pipefail下grep提前退出会使ss因SIGPIPE误报失败。
+  sockets="$(ss -H -ltn "sport = :${port}")" || fail "无法读取端口${port}的监听状态"
+  [[ "$sockets" == *"127.0.0.1:${port}"* ]] || fail "127.0.0.1:${port}没有监听器"
+}
+
+step "检查发布输入"
 for path in \
   "$MAIN_ROOT/src/scripts/start_agent_ascend310b.sh" \
   "$MAIN_ROOT/src/scripts/stop_agent_ascend310b.sh" \
@@ -56,7 +96,7 @@ if [[ ! "$MAIN_PORT" =~ ^[0-9]+$ ]] || (( MAIN_PORT == 8501 || MAIN_PORT == 8502
 fi
 id "$APP_USER" >/dev/null
 test -x "$PYTHON" || { printf '板端Python不可执行：%s\n' "$PYTHON" >&2; exit 1; }
-curl -fsS --max-time 5 "http://127.0.0.1:${PUBLIC_PORT}/api/health" | grep -q '"status":"ready"'
+require_health_field "$PUBLIC_PORT" '"status":"ready"'
 
 runuser -u "$APP_USER" -- env AGILE_AGENT_CONFIG="$MAIN_CONFIG" \
   "$PYTHON" "$MAIN_ROOT/src/tools/95_verify_ascend_release.py" \
@@ -77,12 +117,14 @@ cleanup_failure() {
           /usr/bin/bash "$ROLLBACK_ROOT/src/scripts/start_agent_ascend310b.sh" \
           >/dev/null 2>&1 &
     fi
-    printf '正式提升失败，已尝试恢复三OM回滚服务；status=%s\n' "$status" >&2
+    printf '正式提升失败，已尝试恢复三OM回滚服务；step=%s status=%s\n' \
+      "$CURRENT_STEP" "$status" >&2
   fi
   exit "$status"
 }
 trap cleanup_failure EXIT
 
+step "安装路由管理器和systemd units"
 install -o root -g root -m 0755 "$ROUTE_SOURCE" "$ROUTE_INSTALL"
 
 main_tmp="$(mktemp)"
@@ -151,21 +193,22 @@ install -o root -g root -m 0644 "$route_tmp" "$ROUTE_UNIT"
 rm -f -- "$main_tmp" "$rollback_tmp" "$route_tmp"
 systemctl daemon-reload
 
+step "启动并验证共享双头主实例"
 systemctl enable --now agileagent-ascend310b-main.service
 for _ in $(seq 1 180); do
-  if curl -fsS --max-time 5 "http://127.0.0.1:${MAIN_PORT}/api/health" \
-    | grep -q '"model_layout":"shared_backbone_dual_head_v1"'; then
+  if health_has_field "$MAIN_PORT" '"model_layout":"shared_backbone_dual_head_v1"'; then
     break
   fi
   sleep 1
 done
-curl -fsS --max-time 5 "http://127.0.0.1:${MAIN_PORT}/api/health" \
-  | grep -q '"model_layout":"shared_backbone_dual_head_v1"'
+require_health_field "$MAIN_PORT" '"model_layout":"shared_backbone_dual_head_v1"'
 
+step "原子切换公共8501新连接"
 "$ROUTE_INSTALL" apply "$MAIN_PORT"
 ROUTE_APPLIED=1
 
 # 新连接已进入满分主实例；此后重管旧进程不会影响公共8501。
+step "将三OM监听器纳入回滚service"
 env AGILE_AGENT_ASCEND_RELEASE="$ROLLBACK_ROOT" \
   AGILE_AGENT_ASCEND_PID_FILE="$ROLLBACK_ROOT/agent-web.pid" \
   /usr/bin/bash "$ROLLBACK_ROOT/src/scripts/stop_agent_ascend310b.sh"
@@ -173,17 +216,19 @@ systemctl enable --now agileagent-ascend310b-rollback.service
 systemctl enable agileagent-ascend310b-route.service
 systemctl start agileagent-ascend310b-route.service
 
+step "更新正式release链接"
 link_tmp="${CANONICAL_LINK}.tmp.$$"
 ln -s "$MAIN_ROOT" "$link_tmp"
 mv -Tf "$link_tmp" "$CANONICAL_LINK"
 
-systemctl is-active --quiet agileagent-ascend310b-main.service
-systemctl is-active --quiet agileagent-ascend310b-rollback.service
-systemctl is-active --quiet agileagent-ascend310b-route.service
-curl -fsS --max-time 5 "http://127.0.0.1:${PUBLIC_PORT}/api/health" \
-  | grep -q '"model_layout":"shared_backbone_dual_head_v1"'
-ss -ltn | grep -q "127.0.0.1:${PUBLIC_PORT}"
-ss -ltn | grep -q "127.0.0.1:${MAIN_PORT}"
+step "执行正式发布收尾验收"
+require_active agileagent-ascend310b-main.service
+require_active agileagent-ascend310b-rollback.service
+require_active agileagent-ascend310b-route.service
+require_health_field "$MAIN_PORT" '"model_layout":"shared_backbone_dual_head_v1"'
+require_health_field "$PUBLIC_PORT" '"model_layout":"shared_backbone_dual_head_v1"'
+require_loopback_listener "$PUBLIC_PORT"
+require_loopback_listener "$MAIN_PORT"
 
 SUCCESS=1
 trap - EXIT
