@@ -5,7 +5,8 @@ runtime:
   local_python: /usr/local/miniconda3/envs/agileagent/bin/python
   default_device: "0"
   server_host: 127.0.0.1
-  server_port: 8501
+  # 板端公共入口仍为8501；正式共享双头进程监听18501，由精确loopback规则原子路由。
+  server_port: 18501
 
 web:
   generation_registry: models/generations.json
@@ -15,8 +16,8 @@ web:
 inference:
   backend: ascend_acl
   imgsz: 896
-  specialist_imgsz: 640
-  iou: 0.70
+  specialist_imgsz: 896
+  iou: 0.60
   max_det: 300
   batch_size: 1
   confidence_min: 0.01
@@ -117,19 +118,19 @@ ui:
 
 performance:
   target_api_fps: 30
-  target_p95_ms: 50
-  auto_start_server: true
+  target_p95_ms: 35.0
+  auto_start_server: false
   server_start_timeout_seconds: 180
   request_timeout_seconds: 180
-  benchmark_rounds: 3
-  warmup_requests: 3
+  benchmark_rounds: 10
+  warmup_requests: 30
   benchmark_split: splits/strict_3plus1/mixed_test.txt
-  report_root: reports/api_performance
-  concurrent_requests: 8
-  batch_probe_size: 20
+  report_root: /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/reports
+  concurrent_requests: 1
+  batch_probe_size: 1
 
 generation:
-  registry: models/generations.json
+  registry: /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/generations.json
   runtime_registry: data/generation_registry/runtime.json
   # 代际复核以当前70张基础测试清单作为旧类基准；新增类lock由当轮增量批次提供。
   recheck_lock_split: splits/strict_3plus1/base_test.txt
@@ -187,39 +188,52 @@ native_backend:
   require_exact_gpu: true
   validated: false
 
-# Ascend 310B1正式推理配置。OM由板端当前CANN编译，禁止CUDA/TensorRT/CPU模型回退。
-# 部署时通过Ascend专用配置覆盖这些路径与SHA256；默认配置保持NVIDIA开发链不变。
+# Ascend 310B1正式满分主线。公共8501经内核路由到内部18501；8502只用于后续候选。
+# 原三OM release继续监听8501作为即时回滚，删除精确路由规则即可恢复。
 ascend_backend:
   device_id: 0
   soc_version: Ascend310B1
   cann_version: 7.0.RC1
   precision: mixed_float16
   execution_mode: async_stream
-  encoded_preprocessing: cpu
+  model_layout: shared_backbone_dual_head_v1
+  encoded_preprocessing: dvpp
+  context_mode: fixed_neutral_v1
   memory_mode: pageable
   schedule_mode: threaded_execute
   detailed_event_timing: false
   submit_order: [scene, base, specialist]
   collect_order: [scene, base, specialist]
-  dvpp_scene_resize_stages: []
+  dvpp_scene_resize_stages: [[208, 192], [288, 230]]
   validated: true
   validation_candidate: false
-  validation_report: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/validation/agent_smoke_summary.json
-  validation_report_sha256: null
-  build_manifest: null
-  build_manifest_sha256: null
+  validation_report: /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/validation/validation-summary.json
+  validation_report_sha256: 62234e2aba8921c07b8c8e0d66c87f912ffba8b00d8b43245a908524c3a56891
+  build_manifest: /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/release-build-manifest.json
+  build_manifest_sha256: ffca93c54aa600a268acc31cdee82e14a040f6313427a180c3597e07db5fc2dd
   models:
     models/production/incremental_detection/three_class_base_detector.pt:
-      path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/base_detector.om
-      sha256: b78b7fa086436f1c10010f879bc4d836d23e0679fb2e189736ab337c1beb1f4d
-      output_contract: raw_yolo_v1
-    models/production/incremental_detection/incremental_detector.pt:
-      path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/incremental_detector.om
-      sha256: ec8a321a966ddba0cdbb37d2223b8150a8dd39cd3c10752e85155d1f9ef54b27
-      output_contract: raw_yolo_v1
+      path: /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/om/shared_backbone_dual_head.om
+      sha256: 3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89
+      output_contract: raw_dual_head_v1
+      logical_heads:
+        old:
+          owner: frozen_base_model
+          class_map: {"0": 0, "1": 1, "2": 3}
+          class_count: 3
+          anchor_count: 13524
+          output_index: 0
+          candidate_confidence: 0.05
+        new:
+          owner: incremental_model
+          class_map: {"0": 2}
+          class_count: 1
+          anchor_count: 13524
+          output_index: 1
+          candidate_confidence: 0.30
   context_model:
-    path: /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/om/scene_sensor_net.om
-    sha256: debdb9c3f550ef24d0d14d736a700d65960abcd67899e00f493e208e6d90e725
+    path: /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/om/scene_sensor_net.om
+    sha256: c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9
 
 # x86/NVIDIA TensorRT engine 后端，由 inference.backend=tensorrt_engine 启用。
 tensorrt_backend:

@@ -90,6 +90,8 @@ Ascend 契约：
   tests/test_strict_incremental.py
 bash -n scripts/build_ascend_dual_head_om.sh
 bash -n scripts/run_ascend310b_score_gate.sh
+bash -n scripts/manage_ascend310b_primary_route.sh
+bash -n scripts/install_ascend310b_primary_services.sh
 ```
 
 ### 满分工作流覆盖范围
@@ -102,7 +104,8 @@ bash -n scripts/run_ascend310b_score_gate.sh
 | 候选生成 | `8501` 保护、强制 `8502`、哈希不匹配拒绝、`validated: false` |
 | 评分 | score schema v2、benchmark schema v5、三项精度和三轮 batch FPS |
 | 选择器 | 四项门禁、诊断项不阻断、确定性排名、无满分候选分支 |
-| 回滚 | raw dual head、context 回滚资产、异常清理和正式服务健康状态 |
+| 正式物化 | `tools/111`、release-local 资产、验证摘要、诊断项不阻断 |
+| 原子提升/回滚 | 主/回滚 systemd service、精确 iptables rule、失败自动撤销和 `8502` 保留 |
 
 评分报告的阻断边界：
 
@@ -117,7 +120,9 @@ bash -n scripts/run_ascend310b_score_gate.sh
 | --- | --- | --- |
 | WSL 现有 `.venv` | Pytest、Ruff、配置/文档/哈希校验、训练与 ONNX 导出 | 不安装依赖，不下载 CPU PyTorch |
 | Ascend 候选 `8502` | 探针、无标签预测冻结、三项精度评分、30 次预热、三轮 20 图 batch | 不运行 Web pytest，不停止或替换 `8501` |
-| 正式 `8501` | score gate 开始和结束时检查 `/api/health` 为 `ready` | 整理和候选验收阶段不切换发布资产 |
+| 正式公共 `8501` | 检查 `/api/health` 的 `validated/model_layout/context_mode`，执行发布后 `30 + 3×20` batch | 不直接停止旧监听器，不把 `8502` 纳入正式路由 |
+
+正式板端还应确认 `8501` 三 OM 回滚监听器、`18501` 共享双头主实例和三个 systemd unit 同时存在；公共 `8501` 健康请求应经精确路由返回共享双头身份。执行 `manage_ascend310b_primary_route.sh remove 18501` 时应恢复旧服务，重新 `apply` 后回到主线。正式验收不需要在板端运行 Web pytest。
 
 板端输入必须是评分目录根层的 `640×512`、8-bit RGB/RGBA PNG，stem 唯一。任一输入契约、CANN 版本、候选端口或 manifest 哈希不一致时，score gate 在正式测量前停止并保留已有报告。
 

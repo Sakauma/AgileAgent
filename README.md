@@ -1,6 +1,6 @@
 # AgileAgent 灵动智能体
 
-AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工作台、CLI、模型代际管理、数据审计和 Ascend 310B 推理链路。当前 production 由冻结基础检测器、增量检测器和 Scene-SensorNet 组成，每张无标签图像都经过完整模型组合与框级融合。
+AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工作台、CLI、模型代际管理、数据审计和 Ascend 310B 推理链路。production 保留冻结基础检测、增量检测和 Scene/Sensor 三个逻辑职责；x86 使用独立模型组合，Ascend 正式主线以共享双逻辑头和固定中性上下文实现同一 owner、融合与审计语义。
 
 ## 已实现能力
 
@@ -11,7 +11,7 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 | 场景与传感器认知 | Scene-SensorNet 输出 IR/SAR 与 air/forest/sea/urban 概率，并作为逐类软阈值证据。 |
 | 模型代际管理 | `models/generations.json` 记录父子代际、类别所有权、权重身份、阈值和评测指标。 |
 | Web 与 CLI | Web 支持检测、批量检测和增量工作台；CLI 支持状态、检测、配置、日志、实验与代际操作。 |
-| Ascend 310B | 正式 `8501` 保留三 OM 回滚链路；比赛候选在 `8502` 使用共享骨干双逻辑头、DVPP batch 快路径和固定中性上下文。 |
+| Ascend 310B | 公共 `8501` 已原子路由到共享骨干双逻辑头满分主线；原三 OM 监听器保留为即时回滚，`8502` 专用于后续候选。 |
 | 审计证据 | 数据血缘、任务状态、模型哈希、预测记录、指标和运行事件形成可追踪证据链。 |
 
 ## Production 模型组合
@@ -113,7 +113,7 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 | 新类 precision | `0.924528` |
 | 旧类图误激活率 | `0.014286` |
 
-Ascend 310B 正式 release 已完成三模型 OM 推理与 89 图复核：
+Ascend 310B 原三模型 OM release 已完成 89 图复核，现保留为即时回滚：
 
 | 指标 | 板端正式 release |
 | --- | ---: |
@@ -127,18 +127,20 @@ Ascend 310B 正式 release 已完成三模型 OM 推理与 89 图复核：
 
 AIPP staging 已完成 1,068 次真实 multipart PNG 请求，服务端均值为 `51.203 ms`，P95 为 `63.9 ms`，吞吐为 `19.53 FPS`。
 
-Ascend 310B 的隔离满分候选进一步使用共享骨干双逻辑头、固定中性上下文和 batch fast path，在四项机器评分中得到 Base mAP50 `0.804901`、New-mAP50 `0.605033`、KRR `1.0`，20 图 batch 两次复核中位为 `30.066/30.080 FPS`。该候选尚未替换正式 `8501`；复现和新数据集阈值选择见 [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md)。
+共享双逻辑头、固定中性上下文和 batch fast path 在四项机器评分中得到 Base mAP50 `0.804901`、New-mAP50 `0.605033`、KRR `1.0`，候选阶段两次 20 图 batch 中位为 `30.066/30.080 FPS`。2026-08-16 已提升为板端正式主线；经公共 `8501` 的发布后三轮为 `30.234/30.243/30.294 FPS`、中位 `30.243 FPS`。复现和新数据集阈值选择见 [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md)。
 
 ## Ascend 310B 比赛满分方案
 
-当前仓库同时保留“正式回滚链路”和“满分候选链路”，两者不能混用：
+当前板端同时保留主线、即时回滚和后续候选三个职责：
 
-| 链路 | 端口 | 物理模型 | 用途 |
+| 职责 | 端口 | 物理模型 | 用途 |
 | --- | ---: | --- | --- |
-| 正式回滚 | `8501` | Base、Incremental、Scene 三个 OM | 已发布服务，候选评分期间不得停止或替换 |
-| 满分候选 | `8502` | `shared_backbone_dual_head_v1` dual OM；context OM 仅作为回滚资产加载 | 新数据集训练、阈值搜索和比赛评分 |
+| 正式公共入口 | `8501` | 内核原子路由到内部 `18501` | 客户端稳定地址；当前返回满分主线 |
+| 满分主实例 | `18501` | `shared_backbone_dual_head_v1` dual OM；context OM 仅作资产回滚 | `validated: true` 的正式 Ascend 服务 |
+| 三 OM 即时回滚 | 物理监听 `8501` | Base、Incremental、Scene 三个 OM | 正常被精确路由规则旁路；删除规则立即恢复 |
+| 后续候选 | `8502` | 新数据集训练或结构候选 | 评分完成即停止，不参与正式路由 |
 
-满分候选保留三个逻辑功能模型及审计语义，但把检测计算合并为一次共享骨干执行：
+满分主线保留三个逻辑功能模型及审计语义，但把检测计算合并为一次共享骨干执行：
 
 ```text
 640×512 PNG batch
@@ -160,6 +162,8 @@ Ascend 310B 的隔离满分候选进一步使用共享骨干双逻辑头、固�
 | 生成隔离候选 | `tools/109_materialize_ascend_full_score_candidate.py` | 强制 `8502`、`validated: false` 的候选 YAML |
 | 板端评分 | `scripts/run_ascend310b_score_gate.sh` | 冻结预测、score schema v2、benchmark schema v5 |
 | 确定性选优 | `tools/110_select_ascend_full_score_candidate.py` | 全候选排名、胜者或 `intermediate_only` |
+| 正式 release 物化 | `tools/111_promote_ascend_full_score_release.py` | 不可变 OM/provenance/validation/config 包 |
+| 原子提升与回滚 | `scripts/install_ascend310b_primary_services.sh`、`scripts/manage_ascend310b_primary_route.sh` | `8501 → 18501` 切换、双 systemd 服务和一条精确回滚规则 |
 
 更换数据集后不直接沿用 `old=0.05/new=0.30`。先固定 old 搜索 new，再固定胜出 new 搜索 old，最后交叉复核前两名。只有 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 且三轮 20 图 batch 中位 FPS `≥30` 才能标记满分；逐框差异、业务 JSON、precision、误激活率和单请求 P95/P99 仅作为诊断。完整命令、哈希和停止条件见[满分方法与复现手册](docs/ascend-310b-full-score-method.md)。
 
@@ -292,7 +296,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-正式板端模型产物位于 release 目录的 `om/`，配置记录三个回滚 OM 的路径与 SHA256。满分候选由一个共享双逻辑头 OM 和一个已加载但在 fixed-neutral 正常路径不执行前向推理的 context 回滚 OM 组成，候选始终使用 `8502`。
+正式板端模型产物位于 `releases/20260816-full-score-1493b04/`，包含共享双逻辑头 OM、context 回滚 OM、训练/导出/build provenance、score/benchmark 与正式配置。公共 `8501` 路由到内部 `18501`；原三 OM release 保持运行用于即时回滚，`8502` 始终留给后续候选。x86 本机继续使用独立的 `configs/agent_pipeline.yaml` 和本机 `8501`，不受板端路由影响。
 
 ## 验证
 

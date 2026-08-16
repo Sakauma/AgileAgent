@@ -101,7 +101,7 @@ agile-agent generation rollback --to GENERATION_ID
 | `incremental_workbench.split_seed` | `20260705` |
 | `web.generation_channel` | `production` |
 
-Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1`，并登记三个正式 OM 的路径与 SHA256。
+Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1`，并登记正式共享双逻辑头 OM、context 回滚 OM、release manifest 和验证摘要。板端进程监听内部 `18501`，公共 `8501` 由精确 loopback 路由提供；x86 的 `configs/agent_pipeline.yaml` 仍独立监听本机 `8501`。
 
 ## Ascend 满分方法配置
 
@@ -125,7 +125,7 @@ Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1
 - 输入固定为 NCHW `[1,3,736,896]`，AIPP 输入为 NHWC `[1,736,896,3]`；
 - old owner 为 `frozen_base_model`，new owner 为 `incremental_model`；
 - training report 必须证明增量数据隔离和共享参数零漂移；
-- 候选配置必须保持 `validation_candidate: true`、`validated: false`，正式切换另走发布流程。
+- 候选配置必须保持 `validation_candidate: true`、`validated: false`；只有 `tools/111` 验证四项满分和有效性前置条件后才能生成 `validated: true` 的正式 release。
 
 当前 `old=0.05`、`new=0.30` 是 Host 运行时搜索种子，不是永久阈值，也不属于 ONNX/OM 身份。更换数据集时先更新类别映射和训练输入，再按方法中的搜索序列生成多份候选 YAML；同一 dual OM 可用于不同 Host 阈值。
 
@@ -139,6 +139,19 @@ Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1
 4. build manifest 中的 training/export/method 证据。
 
 生成结果会写入 `ascend_backend.model_layout`、单一 dual model、`logical_heads`、Host 阈值、context 回滚资产、运行时快路径和 `8502` 端口。生成器拒绝指向 `8501`、哈希不一致、owner/class map 不一致或已标记 validated 的候选。
+
+### 候选到正式配置
+
+`tools/111_promote_ascend_full_score_release.py` 读取胜出候选、score schema v2、benchmark schema v5 和可选复轮报告，将 OM、训练/导出证据、原始 build manifest、方法配置及评分报告复制到不可变 release，重写 release-local 资产路径并生成验证摘要。正式配置具有以下边界：
+
+- `runtime.server_port: 18501` 是板端主实例的实际监听端口；
+- 客户端仍访问公共 `127.0.0.1:8501`；
+- `ascend_backend.validated: true`、`validation_candidate: false`；
+- `model_layout: shared_backbone_dual_head_v1`、`context_mode: fixed_neutral_v1`；
+- 原三 OM release 不写入主配置，由独立回滚 service 继续监听 `8501`；
+- `8502` 不进入正式路由，继续作为下一轮候选端口。
+
+正式提升由 `scripts/install_ascend310b_primary_services.sh` 安装主/回滚两个 systemd service，并通过 `scripts/manage_ascend310b_primary_route.sh` 管理一条带固定 comment 的精确 loopback NAT 规则。删除该规则即可把新连接立即恢复到三 OM 监听器。
 
 相关环境变量只用于选择已有解释器或方法文件，不会写回方法 YAML：
 
@@ -165,8 +178,11 @@ Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1
 .venv/bin/python tools/108_export_ascend_dual_head.py --help
 .venv/bin/python tools/109_materialize_ascend_full_score_candidate.py --help
 .venv/bin/python tools/110_select_ascend_full_score_candidate.py --help
+.venv/bin/python tools/111_promote_ascend_full_score_release.py --help
 bash -n scripts/build_ascend_dual_head_om.sh
 bash -n scripts/run_ascend310b_score_gate.sh
+bash -n scripts/manage_ascend310b_primary_route.sh
+bash -n scripts/install_ascend310b_primary_services.sh
 ```
 
 完整参数顺序和候选索引格式见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。

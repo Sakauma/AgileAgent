@@ -4,7 +4,7 @@
 
 本手册是 Ascend310B1 比赛链路的活动入口。P0–P11 的逐阶段消融已经归档；更换数据集后应复用这里记录的结构、冻结约束、阈值搜索和四项评分门禁，而不是把 `0.05/0.30` 当成新数据集的固定答案。
 
-2026-08-16 参考候选在提交 `bc8def938523bb5856d96aa90f397468f208a4b6` 上得到：
+2026-08-16 参考候选在运行时提交 `bc8def938523bb5856d96aa90f397468f208a4b6` 上得到：
 
 | 评分项 | 结果 | 满分门槛 |
 | --- | ---: | ---: |
@@ -13,7 +13,9 @@
 | KRR | `1.0000000000` | `≥0.95` |
 | 20 图 batch | 首轮 `30.066 FPS`，复轮 `30.080 FPS` | `≥30 FPS` |
 
-这是“候选达到满分评分门槛”，不是“正式服务已经切换”。正式 `127.0.0.1:8501` 仍保留原三 OM 发布链路；训练、构建和评分候选只能使用 `127.0.0.1:8502`。
+该候选随后由发布工具提交 `1493b04161f6fbe052636a838a6baabcf6d9b9b8` 物化为正式 release，并于 2026-08-16 原子提升。公共 `127.0.0.1:8501` 当前路由到内部 `18501` 的共享双头主实例；原三 OM 监听器继续保留为即时回滚，训练、构建和后续评分候选仍只使用 `127.0.0.1:8502`。
+
+发布后经公共 `8501` 执行 `30 + 3×20`，三轮为 `30.234/30.243/30.294 FPS`、中位 `30.243 FPS`。正式 release 为 `/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04`；配置、release manifest、validation summary 和发布后 benchmark SHA256 分别为 `39f6472094b3e7f61950a903a0ff914d1e620c557d9b9b747151fd9a502be490`、`ffca93c54aa600a268acc31cdee82e14a040f6313427a180c3597e07db5fc2dd`、`62234e2aba8921c07b8c8e0d66c87f912ffba8b00d8b43245a908524c3a56891`、`bb011d96b62f627d36388f4237017570afd4195e6327522162ab6a0fab15b4e5`。
 
 机器可读的固定方法位于 [`configs/ascend310b/full_score_method.yaml`](../configs/ascend310b/full_score_method.yaml)，轻量证据位于 [`2026-08-16-full-score-evidence.json`](archive/ascend310b/2026-08-16-full-score-evidence.json)。
 
@@ -37,7 +39,7 @@
 - 保留有界 multipart 解析、neutral batch/schedule elision 和 image-copy elision。
 - 正式计分关闭详细 event 插桩，避免测量扰动。
 
-当前剩余瓶颈是 20 图 batch 中约 `656.3–657.8 ms` 的 Engine；解析约 `6.2–7.1 ms`，cache 约 `0.4–0.8 ms`。首轮距离 30 FPS 边界只有约 `0.22%`，因此新数据集必须重新搜索阈值并复测，不能只验证服务可启动。
+当前剩余瓶颈仍是 20 图 batch 的 Engine；候选阶段约 `656.3–657.8 ms`，发布后约 `651.7–653.2 ms`，而解析仅约 `6.8–7.2 ms`、cache 约 `0.4 ms`。发布后中位相对 30 FPS 约有 `0.81%` 余量，仍不宽裕，因此新数据集必须重新搜索阈值并复测，不能只验证服务可启动。
 
 ## 3. 新数据集复现流程
 
@@ -172,8 +174,11 @@
 ## 5. 回滚和正式切换
 
 - score gate 的 trap 只停止其启动且命令行明确包含 `--port 8502` 的进程。
-- `8501` 在候选开始和结束时都必须返回 `ready`；否则本轮无效。
-- 当前 `configs/agent_pipeline_ascend310b.yaml` 和正式三 OM 继续作为回滚链路。
-- 满分候选仍保持 `validated: false`。正式切换必须另行生成发布验证摘要并执行 release 校验，不在本手册的整理范围内。
+- `8501` 在候选开始和结束时都必须返回 `ready`；候选不得停止主线或回滚 listener。
+- `tools/111_promote_ascend_full_score_release.py` 只接受 `8502`、`validation_candidate: true`、`validated: false` 的胜出配置，并核对 score schema v2、benchmark schema v5、训练隔离、Base 零漂移和全部资产哈希。
+- 工具把所有必要资产复制到不可变 release，生成 `validated: true` 的正式配置和 validation summary；不得手工翻转验证状态。
+- `scripts/install_ascend310b_primary_services.sh` 让满分主实例监听内部 `18501`，原三 OM service 继续监听 `8501`，随后以带固定 comment 的精确 iptables loopback 规则原子切换新连接。
+- `scripts/manage_ascend310b_primary_route.sh remove 18501` 删除该唯一规则并立即恢复三 OM；`apply 18501` 仅在满分主实例健康且布局正确时重新提升。
+- 三个 systemd unit 分别管理主实例、回滚 listener 和持久路由；`8502` 从不写入正式路由。
 
 历史消融和板端执行记录见 [`docs/archive/ascend310b/`](archive/ascend310b/)。本地已有的胜出 ONNX、training/export manifest、P10 中间 candidate/build manifest、冻结预测和评分摘要保存在被忽略的 `artifacts/archive/ascend310b/`；误归到 rejected 的两组必要输入已迁到 `2026-08-16-full-score/method-inputs/`，并由本地 archive manifest 标记为 `required_by_full_score`。胜出 OM、对应的 last checkpoint、与轻量证据哈希完全对应的最终 candidate/build manifest 以及两份 benchmark 原始报告没有同步回本机，本仓库只保留其 SHA256 和执行记录，不宣称这些板端独有资产已完成本地归档。
