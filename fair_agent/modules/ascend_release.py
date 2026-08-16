@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
+import yaml
+
 from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
 
@@ -16,6 +18,15 @@ EXPECTED_CONTRACTS = {
     "context": [1, 160, 160, 3],
 }
 REQUIRED_VALIDATION_REPORTS = ("golden", "accuracy", "performance")
+FULL_SCORE_VALIDATION_REPORTS = ("accuracy", "performance")
+FULL_SCORE_ACCURACY_GATES = {
+    "base_map50": 0.80,
+    "new_map50": 0.60,
+    "krr": 0.95,
+}
+FULL_SCORE_BATCH_IMAGE_COUNT = 20
+FULL_SCORE_BATCH_ROUNDS = 3
+FULL_SCORE_BATCH_FPS_MIN = 30.0
 DETECTIONS_V1_OUTPUTS = {
     "boxes": {"shape": [300, 4], "dtype": "float32"},
     "scores": {"shape": [300], "dtype": "float32"},
@@ -88,6 +99,109 @@ def _verify_file_entry(
     elif sha256_file(path) != digest:
         errors.append(f"sha256_mismatch:{label}:{path}")
     return path
+
+
+def _verify_full_score_method_entry(
+    entry: Any,
+    errors: List[str],
+) -> None:
+    path = _verify_file_entry(entry, errors, "full_score_method")
+    if path is None or not path.is_file():
+        return
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        errors.append(f"invalid_full_score_method:{path}:{exc}")
+        return
+    if not isinstance(payload, Mapping) or payload.get("kind") != "ascend310b_full_score_method":
+        errors.append("full_score_method_kind_invalid")
+        return
+    accuracy = (payload.get("competition") or {}).get("accuracy_gates") or {}
+    performance = (payload.get("competition") or {}).get("performance_gate") or {}
+    expected_accuracy = {
+        "base_map50_min": FULL_SCORE_ACCURACY_GATES["base_map50"],
+        "new_map50_min": FULL_SCORE_ACCURACY_GATES["new_map50"],
+        "krr_min": FULL_SCORE_ACCURACY_GATES["krr"],
+    }
+    try:
+        accuracy_matches = all(
+            float(accuracy.get(name, -1.0)) == minimum
+            for name, minimum in expected_accuracy.items()
+        )
+        performance_matches = (
+            int(performance.get("batch_image_count", 0))
+            == FULL_SCORE_BATCH_IMAGE_COUNT
+            and int(performance.get("batch_rounds", 0))
+            == FULL_SCORE_BATCH_ROUNDS
+            and float(performance.get("median_fps_min", -1.0))
+            == FULL_SCORE_BATCH_FPS_MIN
+        )
+    except (TypeError, ValueError):
+        accuracy_matches = False
+        performance_matches = False
+    if not accuracy_matches or not performance_matches:
+        errors.append("full_score_method_gate_contract_invalid")
+
+
+def _verify_full_score_accuracy_report(
+    report: Mapping[str, Any],
+    errors: List[str],
+) -> None:
+    if report.get("schema_version") != 2:
+        errors.append("full_score_accuracy_schema_invalid")
+    if report.get("unlabeled_predictions_frozen_before_labels") is not True:
+        errors.append("full_score_predictions_not_frozen_before_labels")
+    metrics = report.get("metrics") or {}
+    try:
+        for name, minimum in FULL_SCORE_ACCURACY_GATES.items():
+            if float(metrics.get(name, -1.0)) < minimum:
+                errors.append(f"full_score_accuracy_gate_failed:{name}")
+    except (TypeError, ValueError):
+        errors.append("full_score_accuracy_metrics_invalid")
+    gates = report.get("competition_gates")
+    if not isinstance(gates, Mapping) or set(gates) != set(FULL_SCORE_ACCURACY_GATES):
+        errors.append("full_score_accuracy_gates_invalid")
+    elif any(value is not True for value in gates.values()):
+        errors.append("full_score_accuracy_gate_report_failed")
+    if report.get("score_passed", report.get("passed")) is not True:
+        errors.append("full_score_accuracy_report_not_passed")
+
+
+def _verify_full_score_performance_report(
+    report: Mapping[str, Any],
+    errors: List[str],
+) -> None:
+    if report.get("schema_version") != 5:
+        errors.append("full_score_performance_schema_invalid")
+    protocol = report.get("protocol") or {}
+    competition = report.get("competition") or {}
+    rounds = competition.get("batch_rounds")
+    try:
+        contract_matches = (
+            int(protocol.get("batch_probe_size", 0))
+            == FULL_SCORE_BATCH_IMAGE_COUNT
+            and int(protocol.get("batch_rounds", 0)) == FULL_SCORE_BATCH_ROUNDS
+            and float(protocol.get("target_batch_fps", -1.0))
+            == FULL_SCORE_BATCH_FPS_MIN
+            and int(competition.get("batch_image_count", 0))
+            == FULL_SCORE_BATCH_IMAGE_COUNT
+            and isinstance(rounds, list)
+            and len(rounds) == FULL_SCORE_BATCH_ROUNDS
+        )
+    except (TypeError, ValueError):
+        contract_matches = False
+    if not contract_matches:
+        errors.append("full_score_performance_contract_invalid")
+    try:
+        if float(competition.get("batch_fps", -1.0)) < FULL_SCORE_BATCH_FPS_MIN:
+            errors.append("full_score_performance_gate_failed")
+    except (TypeError, ValueError):
+        errors.append("full_score_performance_metric_invalid")
+    if competition.get("batch_fps_passed") is not True:
+        errors.append("full_score_performance_report_not_passed")
+    gates = report.get("gates")
+    if isinstance(gates, Mapping) and any(value is not True for value in gates.values()):
+        errors.append("full_score_performance_aux_gate_failed")
 
 
 def _configured_om_rows(options: Mapping[str, Any]) -> tuple[set[tuple[str, str]], tuple[str, str]]:
@@ -329,7 +443,33 @@ def verify_ascend_artifacts(
         if validation_summary:
             if validation_summary.get("build_manifest_sha256") != manifest_digest:
                 errors.append("validation_build_manifest_sha256_mismatch")
-            for name in REQUIRED_VALIDATION_REPORTS:
+            required_reports = (
+                FULL_SCORE_VALIDATION_REPORTS
+                if shared_dual_head
+                else REQUIRED_VALIDATION_REPORTS
+            )
+            if shared_dual_head:
+                if (
+                    validation_summary.get("kind")
+                    != "ascend310b_full_score_release_validation"
+                ):
+                    errors.append("full_score_validation_kind_invalid")
+                _verify_full_score_method_entry(
+                    validation_summary.get("method_config"), errors
+                )
+                validity = validation_summary.get("validity")
+                required_validity = {
+                    "incremental_data_isolation",
+                    "shared_max_drift_zero",
+                    "asset_hashes_verified",
+                    "predictions_frozen_before_labels",
+                }
+                if (
+                    not isinstance(validity, Mapping)
+                    or any(validity.get(name) is not True for name in required_validity)
+                ):
+                    errors.append("full_score_validity_prerequisites_failed")
+            for name in required_reports:
                 entry = validation_summary.get(name)
                 report = _load_json(
                     resolve_path(str(entry.get("path") or ""))
@@ -345,6 +485,10 @@ def verify_ascend_artifacts(
                     report_path = resolve_path(str(entry["path"]))
                     if len(digest) != 64 or sha256_file(report_path) != digest:
                         errors.append(f"validation_report_link_sha256_mismatch:{name}")
+                    elif shared_dual_head and name == "accuracy":
+                        _verify_full_score_accuracy_report(report, errors)
+                    elif shared_dual_head and name == "performance":
+                        _verify_full_score_performance_report(report, errors)
             if validation_summary.get("passed") is not True:
                 errors.append("validation_summary_not_passed")
 

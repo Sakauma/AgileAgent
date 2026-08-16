@@ -26,6 +26,7 @@ MATERIALIZE = load_tool("109_materialize_ascend_full_score_candidate.py")
 SELECT = load_tool("110_select_ascend_full_score_candidate.py")
 SCORE = load_tool("94_score_ascend_agent.py")
 TRAIN = load_tool("107_train_shared_dual_head.py")
+PROMOTE = load_tool("111_promote_ascend_full_score_release.py")
 
 
 def digest(path: Path) -> str:
@@ -275,6 +276,57 @@ def benchmark_payload(round_fps: list[float]) -> dict:
             ],
         },
     }
+
+
+def test_formal_promotion_uses_only_score_gates_but_keeps_validity_prerequisites() -> None:
+    score = score_payload(
+        0.8049006528,
+        0.6050327631,
+        1.0,
+        ["business_json_equivalence", "lock_precision"],
+    )
+    score.update(
+        {
+            "competition_gates": {
+                "base_map50": True,
+                "new_map50": True,
+                "krr": True,
+            },
+            "score_passed": True,
+        }
+    )
+    metrics = PROMOTE.validate_score(score)
+    assert metrics["base_map50"] == pytest.approx(0.8049006528)
+
+    benchmark = benchmark_payload([30.066, 30.071, 30.039])
+    benchmark["gates"] = {
+        "sample_count": True,
+        "request_failures": True,
+        "batch_fps": True,
+    }
+    assert PROMOTE.validate_benchmark(benchmark, "primary") == pytest.approx(30.066)
+
+    validity = PROMOTE.validate_training_report(
+        {
+            "kind": "shared_backbone_dual_head_training",
+            "shared_max_drift": 0.0,
+            "dataset_audit": {
+                "old_raw_image_count": 0,
+                "old_raw_label_count": 0,
+                "old_feature_cache_count": 0,
+                "original_data_modified": False,
+            },
+        }
+    )
+    assert validity == {
+        "incremental_data_isolation": True,
+        "shared_max_drift_zero": True,
+    }
+
+    invalid = copy.deepcopy(score)
+    invalid["metrics"]["new_map50"] = 0.59
+    with pytest.raises(ValueError, match="new_map50"):
+        PROMOTE.validate_score(invalid)
 
 
 def write_json(path: Path, payload: dict) -> str:

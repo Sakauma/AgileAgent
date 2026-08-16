@@ -274,6 +274,156 @@ def test_shared_dual_head_manifest_uses_one_physical_detector(
     assert "logical_heads_contract_mismatch:dual_detector" in result["errors"]
 
 
+def test_shared_dual_head_formal_release_uses_competition_gates(
+    tmp_path: Path,
+) -> None:
+    options = _candidate(tmp_path)
+    manifest_path = Path(options["build_manifest"])
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    artifacts = payload["artifacts"]
+    dual = artifacts.pop("base_detector")
+    artifacts.pop("incremental_detector")
+    logical_heads = {
+        "old": {
+            "owner": "frozen_base_model",
+            "class_map": {"0": 0, "1": 1, "2": 3},
+            "class_count": 3,
+            "anchor_count": 13524,
+            "output_index": 0,
+            "candidate_confidence": 0.05,
+        },
+        "new": {
+            "owner": "incremental_model",
+            "class_map": {"0": 2},
+            "class_count": 1,
+            "anchor_count": 13524,
+            "output_index": 1,
+            "candidate_confidence": 0.30,
+        },
+    }
+    dual.update(
+        {
+            "role": "dual_detector",
+            "output_contract": "raw_dual_head_v1",
+            "logical_heads": logical_heads,
+        }
+    )
+    artifacts["shared_backbone_dual_head"] = dual
+    _write_json(manifest_path, payload)
+    manifest_digest = sha256_file(manifest_path)
+
+    accuracy = tmp_path / "full-score-accuracy.json"
+    _write_json(
+        accuracy,
+        {
+            "schema_version": 2,
+            "unlabeled_predictions_frozen_before_labels": True,
+            "metrics": {
+                "base_map50": 0.8049,
+                "new_map50": 0.6050,
+                "krr": 1.0,
+            },
+            "competition_gates": {
+                "base_map50": True,
+                "new_map50": True,
+                "krr": True,
+            },
+            "diagnostic_warnings": [
+                "business_json_equivalence",
+                "lock_precision",
+            ],
+            "score_passed": True,
+            "passed": True,
+        },
+    )
+    performance = tmp_path / "full-score-performance.json"
+    _write_json(
+        performance,
+        {
+            "schema_version": 5,
+            "protocol": {
+                "batch_probe_size": 20,
+                "batch_rounds": 3,
+                "target_batch_fps": 30.0,
+            },
+            "competition": {
+                "batch_image_count": 20,
+                "batch_fps": 30.066,
+                "batch_fps_passed": True,
+                "batch_rounds": [
+                    {"round": 1, "fps": 30.066},
+                    {"round": 2, "fps": 30.071},
+                    {"round": 3, "fps": 30.039},
+                ],
+            },
+            "gates": {
+                "sample_count": True,
+                "request_failures": True,
+                "batch_fps": True,
+            },
+        },
+    )
+    method = Path("configs/ascend310b/full_score_method.yaml").resolve()
+    validation = tmp_path / "full-score-validation.json"
+    _write_json(
+        validation,
+        {
+            "schema_version": 1,
+            "kind": "ascend310b_full_score_release_validation",
+            "build_manifest_sha256": manifest_digest,
+            "method_config": {
+                "path": str(method),
+                "sha256": sha256_file(method),
+            },
+            "accuracy": {
+                "path": str(accuracy),
+                "sha256": sha256_file(accuracy),
+                "passed": True,
+            },
+            "performance": {
+                "path": str(performance),
+                "sha256": sha256_file(performance),
+                "passed": True,
+            },
+            "validity": {
+                "incremental_data_isolation": True,
+                "shared_max_drift_zero": True,
+                "asset_hashes_verified": True,
+                "predictions_frozen_before_labels": True,
+            },
+            "passed": True,
+        },
+    )
+    options.update(
+        {
+            "model_layout": "shared_backbone_dual_head_v1",
+            "build_manifest_sha256": manifest_digest,
+            "validation_report": str(validation),
+            "validation_report_sha256": sha256_file(validation),
+            "models": {
+                "base.pt": {
+                    **dual["om"],
+                    "output_contract": "raw_dual_head_v1",
+                    "logical_heads": logical_heads,
+                }
+            },
+        }
+    )
+
+    result = verify_ascend_artifacts(options, require_validation=True)
+    assert result["status"] == "passed", result["errors"]
+
+    score_payload = json.loads(accuracy.read_text(encoding="utf-8"))
+    score_payload["metrics"]["new_map50"] = 0.59
+    _write_json(accuracy, score_payload)
+    validation_payload = json.loads(validation.read_text(encoding="utf-8"))
+    validation_payload["accuracy"]["sha256"] = sha256_file(accuracy)
+    _write_json(validation, validation_payload)
+    options["validation_report_sha256"] = sha256_file(validation)
+    result = verify_ascend_artifacts(options, require_validation=True)
+    assert "full_score_accuracy_gate_failed:new_map50" in result["errors"]
+
+
 def test_candidate_runtime_requires_explicit_process_authorization(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
