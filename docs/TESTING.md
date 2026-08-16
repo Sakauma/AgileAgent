@@ -146,6 +146,13 @@ bash -n scripts/materialize_ascend310b_full_score_release.sh
 
 测试使用 `tmp_path` 创建临时配置、注册表、批次目录和模型占位文件；使用 Pillow 生成小型 PNG；使用 ZIP 构造增量上传包；使用假引擎验证 Web 与代际切换。所有测试状态保留在测试临时目录中。
 
-## CI
+## 本地发布门禁
 
-GitHub Actions 在 Python 3.10 与 3.12 上安装 `.[dev,workbench]` 并运行完整 Pytest。发布前本地执行完整回归、发布校验和模型冒烟，形成与 CI 一致的验证链。
+仓库不启用 GitHub Actions。发布前必须在 WSL 仓库现有 `.venv` 中执行完整回归与发布校验，不安装依赖，也不下载 CPU 版 PyTorch：
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/verify_release.py
+```
+
+模型冒烟、Ascend 包哈希和 Shell 语法检查仍按本文前述流程执行；本地验证记录是发布判断依据。
