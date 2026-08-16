@@ -1,8 +1,8 @@
 # Ascend 310B 部署实现
 
-AgileAgent 已在 Atlas 200I DK A2 上完成三模型 OM 推理、Web API、精度复核和性能测量。本页说明当前部署结构与实际操作。
+AgileAgent 已在 Atlas 200I DK A2 上完成正式三模型 OM 推理，以及隔离的共享双逻辑头满分候选验证。本页区分当前正式回滚服务和比赛候选，避免把候选误写成已经发布。
 
-## 部署结构
+## 当前正式回滚结构
 
 ```text
 真实 PNG 请求
@@ -18,6 +18,20 @@ AgileAgent 已在 Atlas 200I DK A2 上完成三模型 OM 推理、Web API、精�
 ```
 
 Python 编排层位于 `fair_agent/modules/web_inference.py`，Ascend 运行时位于 `fair_agent/backends/ascend_acl.py`，Web 服务位于 `fair_agent/web/app.py`。
+
+## 满分候选结构
+
+```text
+20 图 multipart batch
+  -> 有界解析与 DVPP encoded 预处理
+  -> shared_backbone_dual_head_v1 OM
+     -> old head / frozen_base_model
+     -> new head / incremental_model
+  -> fixed_neutral_v1（不执行 Scene OM）
+  -> 原融合、审计与 API schema
+```
+
+候选固定使用 `8502`、`896×736` AIPP、`raw_dual_head_v1`、pageable memory 和 threaded execution。old/new 当前参考阈值为 `0.05/0.30`，但更换数据集后必须重新搜索。完整方法见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
 
 ## 设备与运行环境
 
@@ -38,7 +52,7 @@ Python 编排层位于 `fair_agent/modules/web_inference.py`，Ascend 运行时�
 | Incremental Detector | `1,3,512,640` FP32 | `1,5,6720` YOLO 原始输出 |
 | Scene-SensorNet | `1,3,160,160` FP32 | sensor logits 与 scene logits |
 
-三个模型使用固定 `batch=1`，ATC 以 `mixed_float16` 生成 OM。配置中的 `ascend_backend.models` 与 `context_model` 记录正式路径和 SHA256。
+正式三个模型使用固定 `batch=1`，ATC 以 `mixed_float16` 生成 OM。候选单个 dual OM 输出 old `[1,7,13524]` 和 new `[1,5,13524]`；context OM 会加载并登记为回滚资产，但 `fixed_neutral_v1` 正常路径不执行它的前向推理。配置和 build manifest 都记录路径、SHA256、logical owner 和类别映射。
 
 ## 图像预处理
 
@@ -145,6 +159,9 @@ python tools/94_score_ascend_agent.py \
 | 已解码 Agent 核心 | 200 | 均值 `32.148 ms`、P95 `33.193 ms`、`31.11 FPS` |
 | AIPP staging 真实 PNG API | 1,068 | 均值 `51.203 ms`、P95 `63.9 ms`、`19.53 FPS` |
 | DVPP 编码输入 | 240 | 均值 `37.124 ms`、P95 `38.154 ms`、`26.94 FPS` |
+| 共享双头满分候选 | 两组 3×20 batch | 中位 `30.066/30.080 FPS`；Base/New/KRR 同时满分 |
+
+满分候选尚未替换 `8501`。其单请求均值/P95/P99 和逐框差异继续留作诊断，但正式计分只使用 Base mAP50、New-mAP50、KRR 和三轮 20 图 batch 中位 FPS。
 
 ## 运行监测
 

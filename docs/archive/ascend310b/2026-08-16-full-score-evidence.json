@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "kind": "ascend310b_full_score_reference",
+  "date": "2026-08-16",
+  "status": "competition_full_score_candidate_not_formally_promoted",
+  "runtime_commit": "bc8def938523bb5856d96aa90f397468f208a4b6",
+  "packaging_parent_commit": "f7309a9b849c0c6f70ada8a9f512ff0a13e237dc",
+  "runtime": {
+    "soc_version": "Ascend310B1",
+    "cann_version": "7.0.RC1",
+    "model_layout": "shared_backbone_dual_head_v1",
+    "output_contract": "raw_dual_head_v1",
+    "input_aipp": [1, 736, 896, 3],
+    "context_mode": "fixed_neutral_v1",
+    "memory_mode": "pageable",
+    "schedule_mode": "threaded_execute",
+    "old_candidate_confidence": 0.05,
+    "new_candidate_confidence": 0.30,
+    "scoring_request_confidence": 0.01,
+    "export_checkpoint": "last"
+  },
+  "competition_metrics": {
+    "base_map50": 0.8049006527998962,
+    "new_map50": 0.6050327630685391,
+    "krr": 1.0,
+    "first_batch_round_fps": [30.066, 30.071, 30.039],
+    "first_batch_median_fps": 30.066,
+    "repeat_batch_round_fps": [30.062, 30.080, 30.093],
+    "repeat_batch_median_fps": 30.080,
+    "full_score_achieved": true
+  },
+  "diagnostics_only": {
+    "lock_precision": 0.7924528301886793,
+    "false_activation_rate": 0.24285714285714285,
+    "single_request_engine_mean_ms": 34.640,
+    "single_request_engine_p95_ms": 38.405,
+    "single_request_engine_p99_ms": 39.043
+  },
+  "integrity": {
+    "old_raw_image_count": 0,
+    "old_raw_label_count": 0,
+    "old_feature_cache_count": 0,
+    "original_data_modified": false,
+    "shared_max_drift": 0.0
+  },
+  "sha256": {
+    "training_best_checkpoint": "fb44299eb6ad070e5330e88db975e1bebc1389cba229cd49466406dcf475b15d",
+    "export_last_checkpoint": "6d1e7098015134615b32a7cedeeab9352bb83adf812f227b85044a3e64da9c6a",
+    "training_report": "ce094cf5493ff76da92a62638292334126f4d39057a03499a52fcfd3ed1552dc",
+    "export_manifest": "a97fae923f997beeea9b22df920cb4be058da196039a8317d2f36f18b9e4e5d1",
+    "dual_head_onnx": "5d6651a25cdc227a6feaf3135d754f1d132f0740117156f9b6d0651c32104c5e",
+    "candidate_config": "73fb8c56f0139be0af2ef489c3ebabcbe3da494dba1e40be5625dcf58640d0d7",
+    "build_manifest": "44583627b870e372a852a36f69d55464df6fc7ca4d745fd859285c0d5e3389a3",
+    "dual_head_om": "3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89",
+    "frozen_predictions": "86d79a1b11a7ca0f0924346acde289f2b1e291b2038f2798980a00d0010d88c4",
+    "prediction_summary": "9d52316096215a3bb7c9c66599fad127fa3881ae2bd2a553299e0c6c9d1dfd28",
+    "accuracy_score": "5b0e471fd1929dd6ba238e6de75e8ccc1511189735627d2bdffc65c93f25c7af",
+    "first_benchmark": "1dd80ce96276a3ec07adfdf504ebffc6b9a0f356bbbfbd9e5b081ea6b171faa2",
+    "repeat_benchmark": "603c5646a706fd895480292f59ab808c1417a1764c942dd042f1e7b97766f320"
+  },
+  "provenance": {
+    "source": "docs/archive/ascend310b/p0-p11-execution-record.md",
+    "formal_8501_untouched": true,
+    "candidate_8502_stopped_after_measurement": true,
+    "new_measurement_claimed_by_archive_operation": false
+  }
+}

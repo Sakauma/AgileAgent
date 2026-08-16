@@ -127,6 +127,8 @@ Ascend 310B 正式 release 已完成三模型 OM 推理与 89 图复核：
 
 AIPP staging 已完成 1,068 次真实 multipart PNG 请求，服务端均值为 `51.203 ms`，P95 为 `63.9 ms`，吞吐为 `19.53 FPS`。
 
+Ascend 310B 的隔离满分候选进一步使用共享骨干双逻辑头、固定中性上下文和 batch fast path，在四项机器评分中得到 Base mAP50 `0.804901`、New-mAP50 `0.605033`、KRR `1.0`，20 图 batch 两次复核中位为 `30.066/30.080 FPS`。该候选尚未替换正式 `8501`；复现和新数据集阈值选择见 [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md)。
+
 ## 快速开始
 
 在 WSL/Linux 仓库根目录执行：
@@ -256,7 +258,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-板端模型产物位于 release 目录的 `om/`，配置记录三个 OM 的路径与 SHA256。服务启动时完成资产校验、模型加载、预热和健康检查。
+正式板端模型产物位于 release 目录的 `om/`，配置记录三个回滚 OM 的路径与 SHA256。满分候选由一个共享双逻辑头 OM 和一个已加载但在 fixed-neutral 正常路径不执行前向推理的 context 回滚 OM 组成，候选始终使用 `8502`。
 
 ## 验证
 
@@ -266,7 +268,7 @@ python scripts/verify_release.py
 python scripts/smoke_models.py
 ```
 
-当前完整回归结果为 `214 passed`，发布校验状态为 `passed`。
+发布校验状态为 `passed`；当前改动的实际回归结果以提交时的测试输出为准。
 
 ## 文档
 
@@ -278,7 +280,8 @@ python scripts/smoke_models.py
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发流程与代码规范 |
 | [`docs/TESTING.md`](docs/TESTING.md) | 测试范围与运行方式 |
 | [`docs/ascend-310b-deployment.md`](docs/ascend-310b-deployment.md) | Ascend 310B 部署实现 |
-| [`docs/ascend-310b-current-status.md`](docs/ascend-310b-current-status.md) | 板端环境、指标与性能记录 |
+| [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md) | 满分候选结构、新数据集复现与阈值选优 |
+| [`docs/ascend-310b-current-status.md`](docs/ascend-310b-current-status.md) | 当前状态与历史证据索引 |
 | [`docs/ascend-310b-ssh-environment.md`](docs/ascend-310b-ssh-environment.md) | 板端环境与服务操作 |
 
 ## 项目结构

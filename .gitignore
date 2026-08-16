@@ -18,6 +18,10 @@ venv/
 /datasets_r1_base_train
 /runs/
 /reports/
+/artifacts/
+/candidates/
+/incremental_strict_3plus1_p7/
+/incremental_strict_3plus1_p7_iod/
 *.pt
 *.pth
 *.onnx
@@ -27,6 +31,7 @@ venv/
 *.trt
 *.zip
 *.pdf
+*.bundle
 
 # Versioned release weights. Other checkpoints remain ignored.
 !/models/
@@ -65,9 +70,18 @@ venv/
 !/tools/101_summarize_ascend_profile.py
 !/tools/102_check_ascend_aoe.py
 !/tools/103_export_ascend_detections.py
+!/tools/104_export_ascend_decoded_candidates.py
+!/tools/105_verify_ascend_decoded_candidates.py
+!/tools/106_compare_ascend_benchmark_business.py
+!/tools/107_train_shared_dual_head.py
+!/tools/108_export_ascend_dual_head.py
+!/tools/109_materialize_ascend_full_score_candidate.py
+!/tools/110_select_ascend_full_score_candidate.py
 !/scripts/start_agent_ascend310b.sh
 !/scripts/stop_agent_ascend310b.sh
 !/scripts/prepare_ascend310b_benchmark_env.sh
+!/scripts/build_ascend_dual_head_om.sh
+!/scripts/run_ascend310b_score_gate.sh
 
 /configs/*
 !/configs/incremental/
@@ -91,7 +105,15 @@ venv/
 !/docs/ascend-310b-p0-p3-improvement-plan.md
 !/docs/ascend-310b-deployment.md
 !/docs/ascend-310b-current-status.md
+!/docs/ascend-310b-full-score-method.md
 !/docs/ascend-310b-ssh-environment.md
+!/docs/archive/
+/docs/archive/*
+!/docs/archive/ascend310b/
+/docs/archive/ascend310b/*
+!/docs/archive/ascend310b/2026-08-16-full-score-evidence.json
+!/docs/archive/ascend310b/p0-p11-execution-record.md
+!/docs/archive/ascend310b/p0-p11-improvement-history.md
 !/docs/ARCHITECTURE.md
 !/docs/CONFIGURATION.md
 !/docs/DEVELOPMENT.md

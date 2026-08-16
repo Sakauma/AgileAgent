@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from pathlib import Path
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,11 +32,30 @@ def main() -> int:
     parser.add_argument("--base-weight", required=True)
     parser.add_argument("--new-head-weight", required=True)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument(
+        "--method-config",
+        default=str(ROOT / "configs/ascend310b/full_score_method.yaml"),
+    )
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--opset", type=int, default=17)
+    parser.add_argument("--opset", type=int)
     args = parser.parse_args()
 
     import torch
+
+    method = yaml.safe_load(
+        resolve_path(args.method_config).read_text(encoding="utf-8")
+    )
+    if not isinstance(method, dict):
+        raise ValueError("满分方法配置必须是YAML mapping")
+    export = method.get("export") or {}
+    input_shape = list(export.get("input_shape_nchw") or [])
+    expected = [
+        list((export.get("logical_heads") or {})[name]["output_shape"])
+        for name in ("old", "new")
+    ]
+    method_opset = int(export["opset"])
+    if args.opset is not None and int(args.opset) != method_opset:
+        raise ValueError("--opset必须与满分方法配置一致")
 
     output_dir = resolve_path(args.output_dir)
     if output_dir.exists() and any(output_dir.iterdir()):
@@ -44,10 +66,9 @@ def main() -> int:
         resolve_path(args.new_head_weight),
         str(args.device),
     )
-    sample = torch.zeros((1, 3, 736, 896), device=str(args.device))
+    sample = torch.zeros(tuple(input_shape), device=str(args.device))
     with torch.inference_mode():
         outputs = module(sample)
-    expected = [[1, 7, 13524], [1, 5, 13524]]
     actual = model_output_shapes(outputs)
     if actual != expected:
         raise RuntimeError(f"P10双head输出shape错误：{actual} != {expected}")
@@ -55,31 +76,31 @@ def main() -> int:
         module,
         sample,
         output_dir / "shared_backbone_dual_head.onnx",
-        opset=int(args.opset),
+        opset=method_opset,
     )
+    logical_heads = copy.deepcopy(export.get("logical_heads"))
+    if not isinstance(logical_heads, dict) or set(logical_heads) != {"old", "new"}:
+        raise ValueError("满分方法配置必须定义old/new logical_heads")
+    for head in logical_heads.values():
+        head.pop("output_shape", None)
+    if (
+        logical_heads["old"].get("owner") != "frozen_base_model"
+        or logical_heads["new"].get("owner") != "incremental_model"
+        or {
+            logical_heads["old"].get("output_index"),
+            logical_heads["new"].get("output_index"),
+        }
+        != {0, 1}
+    ):
+        raise ValueError("满分方法logical head owner/output_index非法")
     payload = {
         "schema_version": 1,
-        "kind": "shared_backbone_dual_head_v1",
+        "kind": export["model_layout"],
         "device": str(args.device),
-        "opset": int(args.opset),
-        "input_shape": [1, 3, 736, 896],
+        "opset": method_opset,
+        "input_shape": input_shape,
         "output_shapes": actual,
-        "logical_heads": {
-            "old": {
-                "owner": "frozen_base_model",
-                "class_map": {"0": 0, "1": 1, "2": 3},
-                "class_count": 3,
-                "anchor_count": 13524,
-                "output_index": 0,
-            },
-            "new": {
-                "owner": "incremental_model",
-                "class_map": {"0": 2},
-                "class_count": 1,
-                "anchor_count": 13524,
-                "output_index": 1,
-            },
-        },
+        "logical_heads": logical_heads,
         "provenance": provenance,
         "onnx": exported,
     }

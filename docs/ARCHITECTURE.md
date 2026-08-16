@@ -30,6 +30,8 @@ AgileAgent 将配置、模型代际、在线推理、增量学习、审计和设
 
 每张图像使用同一 production 代际。基础检测器负责 soldier、small_aircraft 和 tank，当前增量检测器负责 warship。Scene-SensorNet 输出场景与传感器概率，融合阶段把这些概率转换为逐类软阈值证据。
 
+Ascend 满分候选保留相同的三个逻辑职责，但物理执行不同：Base backbone/neck 只运行一次，一个 `shared_backbone_dual_head_v1` OM 同时返回 old/new raw head；`fixed_neutral_v1` 用 Sensor `0.5/0.5`、Scene 四类各 `0.25` 的均匀上下文保持响应和审计结构。context OM 仍加载用于回滚，但正常路径不执行其前向推理；old/new 仍分别记录为 `frozen_base_model` 和 `incremental_model`。
+
 ## 增量学习流程
 
 ```text
@@ -71,13 +73,13 @@ Web 服务启动时加载 production 代际，代际切换时构建并预热新�
 `fair_agent/backends/ascend_acl.py` 使用 PyACL/AscendCL 完成：
 
 - CANN 初始化与设备上下文；
-- 三个 OM 的加载和静态输入契约校验；
+- 正式三 OM 或共享双逻辑头候选的加载和静态输入契约校验；
 - 图像预处理与输入缓冲区管理；
-- Base、Incremental、Scene 三模型执行；
+- Base、Incremental、Scene 三模型执行，或单次共享骨干双 head 执行；
 - YOLO 输出解码、类别映射和耗时统计；
 - Web 健康状态与请求级指标。
 
-板端配置记录三个 OM 的路径和 SHA256，启动脚本使用命名环境 `agileagent` 启动 Uvicorn。
+正式板端配置记录三个回滚 OM 的路径和 SHA256。满分候选使用 `raw_dual_head_v1`、DVPP encoded batch、pageable memory、threaded execution 和固定中性上下文；build manifest 同时登记 dual OM 与 context 回滚资产。结构、阈值搜索和评分门禁见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
 
 ## 审计与证据
 

@@ -347,12 +347,22 @@ def main() -> int:
     parser.add_argument("--batch-probe-size", type=int, default=20)
     parser.add_argument("--batch-rounds", type=int, default=3)
     parser.add_argument("--target-batch-fps", type=float, default=30.0)
+    parser.add_argument(
+        "--skip-single-requests",
+        action="store_true",
+        help="score门禁只执行30次预热和三轮20图batch，不采集单请求诊断。",
+    )
     args = parser.parse_args()
 
     if args.output.exists():
         raise FileExistsError(f"性能报告已存在，拒绝覆盖：{args.output}")
-    if args.warmup_requests < 0 or args.rounds <= 0:
-        raise ValueError("warmup_requests必须非负且rounds必须为正数。")
+    if args.warmup_requests < 0 or args.rounds < 0:
+        raise ValueError("warmup_requests和rounds必须为非负数。")
+    if args.skip_single_requests:
+        if args.gate_profile != "score" or args.rounds != 0:
+            raise ValueError("--skip-single-requests仅允许score门禁且要求--rounds=0。")
+    elif args.rounds <= 0:
+        raise ValueError("未跳过单请求诊断时rounds必须为正数。")
     if (
         args.batch_probe_size <= 0
         or args.batch_rounds <= 0
@@ -412,17 +422,21 @@ def main() -> int:
             raise RuntimeError(f"基准服务不是ascend_acl：{health}")
         for index in range(args.warmup_requests):
             client.detect(bodies[paths[index % len(paths)]], boundary)
-        rows = [
-            request_row(
-                client,
-                bodies[path],
-                boundary,
-                round_index=round_index + 1,
-                path=path,
-            )
-            for round_index in range(args.rounds)
-            for path in paths
-        ]
+        rows = (
+            []
+            if args.skip_single_requests
+            else [
+                request_row(
+                    client,
+                    bodies[path],
+                    boundary,
+                    round_index=round_index + 1,
+                    path=path,
+                )
+                for round_index in range(args.rounds)
+                for path in paths
+            ]
+        )
         batch_paths = paths[: min(args.batch_probe_size, len(paths))]
         batch_boundary = boundary + "Batch"
         batch_body = batch_multipart_body(
@@ -608,6 +622,7 @@ def main() -> int:
             "image_count": len(paths),
             "warmup_requests": args.warmup_requests,
             "rounds": args.rounds,
+            "single_requests_skipped": bool(args.skip_single_requests),
             "sample_count": len(rows),
             "concurrency": 1,
             "gate_profile": args.gate_profile,
