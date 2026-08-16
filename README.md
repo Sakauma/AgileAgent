@@ -16,6 +16,8 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 
 ## Production 模型组合
 
+仓库同时交付两套可直接运行的 production 资产：x86/CUDA 使用下列三个 `.pt`，Ascend310B1 使用仓库内预构建的共享双头 `.om` 发布包。部署现有满分 Ascend 方案不需要重新训练、导出 ONNX 或运行 ATC。
+
 | 成员 | 职责 | 当前绑定 |
 | --- | --- | --- |
 | Scene-SensorNet | 传感器与已知场景认知 | `models/context/scene_sensor_net.pt` |
@@ -23,6 +25,8 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 | 增量检测器 | warship，全局类别 ID 2 | `models/production/incremental_detection/incremental_detector.pt` |
 
 在线推理按 production 代际解析模型成员。基础检测器与增量检测器共同处理每张图像，Scene-SensorNet 提供软上下文，最终结果经过类别所有权映射、逐类阈值、冲突仲裁和 class-aware NMS。
+
+Ascend 正式模型包位于 [`models/ascend310b/full-score/20260816-full-score-1493b04/`](models/ascend310b/full-score/20260816-full-score-1493b04/README.md)，包含可直接加载的 OM、完整构建 provenance、正式配置和原始验收报告。其共享双头仍分别输出 `frozen_base_model` 与 `incremental_model` 两个逻辑结果；`fixed_neutral_v1` 保留第三个 Scene/Sensor 逻辑职责和审计字段，但满分快路径不执行 context OM 前向。
 
 ## 赛题评选标准
 
@@ -130,6 +134,25 @@ AIPP staging 已完成 1,068 次真实 multipart PNG 请求，服务端均值为
 共享双逻辑头、固定中性上下文和 batch fast path 在四项机器评分中得到 Base mAP50 `0.804901`、New-mAP50 `0.605033`、KRR `1.0`，候选阶段两次 20 图 batch 中位为 `30.066/30.080 FPS`。2026-08-16 已提升为板端正式主线；经公共 `8501` 的发布后三轮为 `30.234/30.243/30.294 FPS`、中位 `30.243 FPS`。复现和新数据集阈值选择见 [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md)。
 
 ## Ascend 310B 比赛满分方案
+
+### 新板零训练部署
+
+默认板端已经配置好 CANN `7.0.RC1` 和 `/usr/local/miniconda3/envs/agileagent`。克隆仓库后可直接校验并物化正式发布包：
+
+```bash
+git clone https://github.com/Sakauma/AgileAgent.git
+cd AgileAgent
+chmod +x scripts/materialize_ascend310b_full_score_release.sh
+./scripts/materialize_ascend310b_full_score_release.sh
+
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
+AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
+AGILE_AGENT_ASCEND_PORT=8501 \
+  "$RELEASE/src/scripts/start_agent_ascend310b.sh"
+```
+
+该流程不训练、不运行 ATC、不安装依赖，也不升级 CANN。新板可直接监听公共 `8501`；已有旧三 OM 正式服务的板，按部署文档安装 `18501` 主实例和 `8501` 回滚 listener，以精确路由实现无缝提升/即时回滚。
 
 当前板端同时保留主线、即时回滚和后续候选三个职责：
 
@@ -296,7 +319,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-正式板端模型产物位于 `releases/20260816-full-score-1493b04/`，包含共享双逻辑头 OM、context 回滚 OM、训练/导出/build provenance、score/benchmark 与正式配置。公共 `8501` 路由到内部 `18501`；原三 OM release 保持运行用于即时回滚，`8502` 始终留给后续候选。x86 本机继续使用独立的 `configs/agent_pipeline.yaml` 和本机 `8501`，不受板端路由影响。
+仓库内模型产物位于 `models/ascend310b/full-score/20260816-full-score-1493b04/`，物化后的板端目录为 `releases/20260816-full-score-1493b04/`。包内包含共享双逻辑头 OM、context 回滚 OM、源 checkpoint、ONNX、训练/导出/build provenance、score/benchmark 与正式配置。公共 `8501` 可由新板主实例直接监听；带即时回滚的既有板则路由到内部 `18501`。`8502` 始终留给后续候选。x86 本机继续使用独立的 `configs/agent_pipeline.yaml` 和本机 `8501`，不受板端路由影响。
 
 ## 验证
 

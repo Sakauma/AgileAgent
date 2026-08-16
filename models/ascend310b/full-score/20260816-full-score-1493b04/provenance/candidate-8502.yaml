@@ -1,0 +1,419 @@
+schema_version: 3
+runtime:
+  mode: local
+  local_python: /usr/local/miniconda3/envs/agileagent/bin/python
+  default_device: '0'
+  server_host: 127.0.0.1
+  server_port: 8502
+web:
+  generation_registry: models/generations.json
+  generation_channel: production
+  functional_registry: configs/functional_models.yaml
+inference:
+  backend: ascend_acl
+  imgsz: 896
+  specialist_imgsz: 896
+  iou: 0.6
+  max_det: 300
+  batch_size: 1
+  confidence_min: 0.01
+  confidence_max: 1.0
+  confidence_default: 0.5
+  warmup_iterations: 1
+  warmup_batch_size: 1
+  warmup_width: 896
+  warmup_height: 896
+  preload_specialists: true
+  quantize: null
+  cudnn_benchmark: false
+  compile: false
+routing:
+  incremental_enabled: true
+  require_acceptance_passed: true
+  consensus_iou: 0.3
+  fusion_iou: 0.6
+  max_specialists_per_image: 1
+  conflict_iou: 0.5
+  conflict_base_confidence: 0.5
+  specialist_margin: 0.15
+  preserve_base_class_owners: true
+  detection_evidence_weight: 0.7
+  context_evidence_weight: 0.3
+  neutral_context_score: 0.5
+  default_routing_prior: 0.5
+  parallel_model_execution: true
+  parallel_context_execution: true
+  parallel_context_batch_execution: false
+  max_model_workers: 3
+decoding:
+  backend: opencv
+  workers: 1
+  opencv_threads: 1
+storage:
+  max_items: 4
+  ttl_seconds: 1800
+  max_bytes: 536870912
+logging:
+  root: reports/agent_logs
+  max_file_bytes: 10485760
+  retained_files: 14
+  request_bodies: false
+incremental_workbench:
+  root: data/incremental_batches
+  max_archive_bytes: 2147483648
+  max_extracted_bytes: 5368709120
+  max_extracted_files: 20000
+  max_image_pixels: 25000000
+  allowed_image_extensions:
+  - .png
+  - .jpg
+  - .jpeg
+  - .bmp
+  - .tif
+  - .tiff
+  validation_fraction: 0.2
+  lock_fraction: 0.2
+  split_seed: 20260705
+  minimum_images: 2
+  preview_limit: 12
+  job_log_tail_lines: 300
+  poll_interval_ms: 2000
+  lineage:
+    required: true
+    root: data/incremental_lineage
+    base_manifest: data/incremental_lineage/base_dataset.json
+    base_experiment_config: configs/incremental/warship_3plus1.yaml
+    auto_initialize_base: true
+    cache_roots: []
+  lifecycle:
+    auto_continue: true
+    calibration_target_precision: 0.95
+    threshold_min: 0.01
+    threshold_max: 0.99
+    threshold_step: 0.01
+  training:
+    python: null
+    initial_weights: models/production/incremental_detection/three_class_base_detector.pt
+    device: '0'
+    imgsz: 640
+    batch: 32
+    epochs: 80
+    patience: 0
+    workers: 8
+    optimizer: AdamW
+    lr0: 0.001
+    seed: 20260705
+    deterministic: true
+    amp: true
+ui:
+  history_limit: 20
+  result_cache_limit: 10
+  health_poll_ms: 15000
+  toast_duration_ms: 4200
+  default_view: detect
+performance:
+  target_api_fps: 30
+  target_p95_ms: 35.0
+  auto_start_server: false
+  server_start_timeout_seconds: 180
+  request_timeout_seconds: 180
+  benchmark_rounds: 10
+  warmup_requests: 30
+  benchmark_split: splits/strict_3plus1/mixed_test.txt
+  report_root: /home/HwHiAiUser/agileagent/candidates/20260814-wave0-p0-7c61f2b/validation/api-performance
+  concurrent_requests: 1
+  batch_probe_size: 1
+generation:
+  registry: /home/HwHiAiUser/agileagent/candidates/20260815-p10b-shared-dual-v2/p10b-generations-score.json
+  runtime_registry: data/generation_registry/runtime.json
+  recheck_lock_split: splits/strict_3plus1/base_test.txt
+  report_root: reports/generation_rechecks
+  candidate_id: incremental_detection_generation
+  calibrated_threshold: 0.63
+  auto_promote: true
+  shadow_smoke_images: 1
+gates:
+  official_hard:
+    base_map50_min: 0.8
+    new_map50_min: 0.6
+    krr_min: 0.95
+    old_data_overlap_max: 0
+  advisory:
+    cumulative_map50_min: 0.8
+    lock_precision_min: 0.9
+    false_activation_rate_max: 0.05
+    latency_proxy_ms_max: 33.3
+incremental_guardian:
+  enabled: true
+  dynamic_confusion:
+    enabled: true
+    match_iou: 0.5
+    min_support: 1
+    specialist_deficit_padding: 0.02
+    specialist_deficit_cap: 0.25
+  recovery_actions:
+    DATA_COMPLIANCE_FAILED:
+    - block_training
+    - rebuild_lineage_audit
+    OLD_DATA_LEAKAGE:
+    - block_training
+    - isolate_incremental_view
+    BASE_FULL_SCORE_NOT_REACHED:
+    - keep_parent_generation
+    - review_base_evidence
+    NEW_KNOWLEDGE_UNDERFIT:
+    - audit_sample_quality
+    - rebalance_incremental_classes
+    - retry_training_on_dev
+    KNOWLEDGE_RETENTION_REGRESSION:
+    - restore_class_owners
+    - enable_teacher_consistency
+    - rebuild_fusion_policy
+    CROSS_CLASS_CONFLICT_RISK:
+    - learn_confusion_graph
+    - replay_dev_fusion
+    - shadow_compare
+    LOW_DEPLOYMENT_PRECISION:
+    - recalibrate_per_class_thresholds
+    FALSE_ACTIVATION_RISK:
+    - recalibrate_per_class_thresholds
+    - strengthen_conflict_arbitration
+    LATENCY_OPTIMIZATION_REQUIRED:
+    - reduce_specialist_budget
+    - enable_batch_inference
+    - evaluate_quantization
+native_backend:
+  library: build/native/libagile_agent_tensorrt.so
+  base_engine: runs/engines/local/three_class_base_detector.engine
+  context_engine: runs/engines/local/scene_sensor_net.engine
+  engines:
+    models/production/incremental_detection/three_class_base_detector.pt:
+      path: runs/engines/local/three_class_base_detector.engine
+      sha256: null
+    models/production/incremental_detection/incremental_detector.pt:
+      path: runs/engines/local/incremental_detector.engine
+      sha256: null
+  precision: fp16
+  require_exact_gpu: true
+  validated: false
+ascend_backend:
+  model_layout: shared_backbone_dual_head_v1
+  device_id: 0
+  soc_version: Ascend310B1
+  cann_version: 7.0.RC1
+  precision: mixed_float16
+  execution_mode: async_stream
+  encoded_preprocessing: dvpp
+  context_mode: fixed_neutral_v1
+  memory_mode: pageable
+  schedule_mode: threaded_execute
+  detailed_event_timing: false
+  submit_order:
+  - scene
+  - base
+  - specialist
+  collect_order:
+  - scene
+  - base
+  - specialist
+  dvpp_scene_resize_stages:
+  - - 208
+    - 192
+  - - 288
+    - 230
+  validated: false
+  validation_candidate: true
+  validation_report: null
+  validation_report_sha256: null
+  build_manifest: /home/HwHiAiUser/agileagent/candidates/20260815-p10b-shared-dual-v2/build/build-manifest-p11-oldt005.json
+  build_manifest_sha256: 44583627b870e372a852a36f69d55464df6fc7ca4d745fd859285c0d5e3389a3
+  models:
+    models/production/incremental_detection/three_class_base_detector.pt:
+      path: /home/HwHiAiUser/agileagent/candidates/20260815-p10b-shared-dual-v2/build/shared_backbone_dual_head_last.om
+      sha256: 3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89
+      output_contract: raw_dual_head_v1
+      logical_heads:
+        old:
+          owner: frozen_base_model
+          class_map:
+            '0': 0
+            '1': 1
+            '2': 3
+          class_count: 3
+          anchor_count: 13524
+          output_index: 0
+          candidate_confidence: 0.05
+        new:
+          owner: incremental_model
+          class_map:
+            '0': 2
+          class_count: 1
+          anchor_count: 13524
+          output_index: 1
+          candidate_confidence: 0.3
+  context_model:
+    path: /home/HwHiAiUser/agileagent/candidates/20260814-wave0-p0-7c61f2b/build/p0-aipp-r3/scene_sensor_net.om
+    sha256: c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9
+tensorrt_backend:
+  expected_version: null
+  expected_compute_capability: null
+  require_exact_gpu: true
+  validated: false
+  validation_report: null
+  precision: fp16
+  workspace_gib: 4
+  dynamic: true
+  minimum_spatial_size: 32
+  mixed_precision:
+    enabled: false
+    constraint: obey
+    fp16_layer_patterns:
+    - /model.[2-9]/*
+    - /model.1[0-9]/*
+    - /model.2[0-3]/*
+    minimum_matched_layers: 269
+  validation:
+    max_overall_map50_delta_warning: 0.005
+    max_per_class_map50_delta_warning: 0.01
+    evaluation_batch_size: 8
+  int8_calibration:
+    enabled: true
+    auto_quantize_incremental: true
+    representative_split: splits/strict_3plus1/increment_train.txt
+    threshold_split: splits/strict_3plus1/increment_dev.txt
+    cache_root: runs/tensorrt_calibration
+    batch_size: 8
+    max_images: 256
+    minimum_images_per_class: 8
+    seed: 20260705
+  export:
+    device: '0'
+    overwrite: false
+    onnx_opset: 17
+    simplify: true
+    context_checkpoint: models/context/scene_sensor_net.pt
+  context_engine:
+    path: runs/engines/local/scene_sensor_net.engine
+    sha256: null
+    imgsz: 160
+    min_batch_size: 1
+    opt_batch_size: 8
+    batch_size: 20
+  engines:
+    models/production/incremental_detection/three_class_base_detector.pt:
+      path: runs/engines/local/three_class_base_detector.engine
+      sha256: null
+      imgsz: 896
+      opt_height: 896
+      opt_width: 896
+      min_batch_size: 1
+      opt_batch_size: 8
+      batch_size: 20
+    models/production/incremental_detection/incremental_detector.pt:
+      path: runs/engines/local/incremental_detector.engine
+      sha256: null
+      imgsz: 640
+      opt_height: 640
+      opt_width: 640
+      min_batch_size: 1
+      opt_batch_size: 8
+      batch_size: 20
+model:
+  weights: models/production/incremental_detection/three_class_base_detector.pt
+  expected_sha256: 6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119
+assets:
+  manifest: models/manifest.json
+  generation_registry: models/generations.json
+  checksums: models/SHA256SUMS.txt
+  required:
+  - models/pretrained/yolo11s.pt
+  - models/production/incremental_detection/three_class_base_detector.pt
+  - models/production/incremental_detection/incremental_detector.pt
+  - models/production/incremental_detection/calibration.json
+  - models/production/incremental_detection/context_prior.json
+  - models/production/incremental_detection/metrics.json
+  - models/production/incremental_detection/profile.json
+  - models/context/scene_sensor_net.pt
+  - models/context/scene_sensor_metrics.json
+  - models/manifest.json
+  - models/generations.json
+  - demo_artifacts/agent_demo_state.json
+automation:
+  audit_before_execute: true
+  run_root: reports/agent_runs
+  forbid_overwrite_fixed_reports: true
+  allowed_risk_levels:
+  - low
+  allowed_actions:
+  - refresh_blackboard
+  max_steps_per_run: 8
+  default_timeout_seconds: 300
+  allowed_output_roots:
+  - reports/agent_runs
+  - reports/agent_blackboard
+  - runs/submission
+submission:
+  official_test_ready: false
+  official_format_confirmed: false
+  official_format: null
+  official_test_dir: datasets_r1_base_test
+blackboard:
+  output_dir: reports/agent_blackboard
+  state_json: blackboard_state.json
+  report_md: agent_preparation_report.md
+  demo_evidence: demo_artifacts/agent_demo_state.json
+detector:
+  name: three_class_base_yolo11s_imgsz896
+  weights: models/production/incremental_detection/three_class_base_detector.pt
+  config: configs/submission_infer_base_3class.yaml
+  candidate_status: verified
+  metric: mAP50
+  base_test_map50: 0.8141423771111025
+  evaluation_split: splits/strict_3plus1/base_test.txt
+functional_models:
+  registry: configs/functional_models.yaml
+  required_count: 3
+inputs:
+  data_audit: reports/data_audit_summary.json
+  metadata: reports/metadata.csv
+incremental:
+  task_type: incremental_object_detection
+  primary_mode: class_incremental
+  supported_modes:
+  - class_incremental
+  - target_incremental
+  learning_data_scope: incremental_dataset_only
+  policy: configs/incremental_detection_policy.yaml
+  expected_protocols:
+  - incremental_detector
+  require_compliant_no_old_data: true
+decision:
+  default_context:
+    sensor: sar
+    scene: all
+    class_focus: soldier
+    official_test_ready: false
+    official_format_confirmed: false
+  outputs:
+    decision_json: reports/agent_blackboard/agent_decision.json
+    decision_md: reports/agent_blackboard/agent_decision_report.md
+  actions:
+    formal_submission:
+      module: detector
+      handler: formal_submission_pending_official_spec
+      risk_level: high
+      timeout_seconds: 0
+      inputs:
+      - models/generations.json
+      - models/production/incremental_detection
+      outputs:
+      - runs/submission
+    refresh_blackboard:
+      module: report_writer
+      handler: refresh_blackboard
+      risk_level: low
+      timeout_seconds: 60
+      inputs:
+      - configs/agent_pipeline_ascend310b.yaml
+      outputs:
+      - reports/agent_blackboard/blackboard_state.json

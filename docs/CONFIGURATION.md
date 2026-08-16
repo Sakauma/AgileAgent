@@ -8,6 +8,7 @@ AgileAgent 使用 UTF-8 YAML 配置。主运行配置采用 schema 3，并由 `f
 | --- | --- |
 | `configs/agent_pipeline.yaml` | x86/CUDA 开发、训练和 Web 服务 |
 | `configs/agent_pipeline_ascend310b.yaml` | Ascend 310B OM 推理服务 |
+| `models/ascend310b/full-score/20260816-full-score-1493b04/configs/agent_pipeline_ascend310b.yaml` | 已验证满分 release 的字节级正式配置；由物化脚本复制，不手工修改 |
 | `configs/ascend310b/full_score_method.yaml` | Ascend 310B 满分结构、阈值搜索、评分门禁和参考证据 |
 | `configs/functional_models.yaml` | 三个功能模型及发布资产 |
 | `configs/incremental_detection_policy.yaml` | 增量数据范围与评测策略 |
@@ -103,6 +104,8 @@ agile-agent generation rollback --to GENERATION_ID
 
 Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1`，并登记正式共享双逻辑头 OM、context 回滚 OM、release manifest 和验证摘要。板端进程监听内部 `18501`，公共 `8501` 由精确 loopback 路由提供；x86 的 `configs/agent_pipeline.yaml` 仍独立监听本机 `8501`。
 
+仓库根部的 `configs/agent_pipeline_ascend310b.yaml` 是开发和候选生成的源配置；零训练部署必须使用预构建模型包内的正式配置。该配置中的固定 release 绝对路径、资产 SHA256、`validated: true` 和 validation summary 构成同一验证链，不能复制 OM 后手工改路径。执行 `scripts/materialize_ascend310b_full_score_release.sh` 会把整包安装到固定路径，并在启动前完成正式 release 校验。
+
 ## Ascend 满分方法配置
 
 `configs/ascend310b/full_score_method.yaml` 不是可直接启动的 schema 3 服务配置，也不保存本机或板端绝对路径。它是比赛方法的单一配置源，结构如下：
@@ -170,6 +173,17 @@ Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1
 ```
 
 发布校验同时核对主配置、模型资产、模型 manifest、功能模型注册表和 production 代际。
+
+预构建 Ascend 发布包校验：
+
+```bash
+cd models/ascend310b/full-score/20260816-full-score-1493b04
+sha256sum -c SHA256SUMS
+cd ../../../..
+./scripts/materialize_ascend310b_full_score_release.sh --verify-existing
+```
+
+这两步均不训练、不运行 ATC，也不启动或停止 `8501/8502`。
 
 满分候选生成和选优入口：
 

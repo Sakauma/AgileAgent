@@ -48,6 +48,7 @@ AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代�
 | Web API 与 UI | `test_agent_workbench.py`、`test_web_ui_flow.py` |
 | Ascend | `test_ascend_acl.py`、`test_ascend_preflight.py` |
 | Ascend 满分方法 | `test_ascend_full_score_workflow.py`、`test_shared_dual_head.py`、`test_ascend_release.py` |
+| Ascend 预构建发布包 | `test_ascend_packaged_release.py` |
 | 多批次增量 | `test_incremental_guardian.py`、`test_incremental_experiment.py` |
 
 ## 聚焦运行
@@ -94,6 +95,19 @@ bash -n scripts/manage_ascend310b_primary_route.sh
 bash -n scripts/install_ascend310b_primary_services.sh
 ```
 
+克隆后零训练部署包：
+
+```bash
+.venv/bin/python -m pytest -q tests/test_ascend_packaged_release.py
+bash -n scripts/materialize_ascend310b_full_score_release.sh
+(
+  cd models/ascend310b/full-score/20260816-full-score-1493b04
+  sha256sum -c SHA256SUMS
+)
+```
+
+该测试核对完整文件清单、全部 SHA256、正式配置到 OM/manifest/report 的路径映射、满分指标、`ready_without_training` 标记和物化脚本的端口无副作用。它不加载 PyTorch、不连接板卡，也不重新运行 ATC。
+
 ### 满分工作流覆盖范围
 
 | 契约 | 覆盖内容 |
@@ -105,6 +119,7 @@ bash -n scripts/install_ascend310b_primary_services.sh
 | 评分 | score schema v2、benchmark schema v5、三项精度和三轮 batch FPS |
 | 选择器 | 四项门禁、诊断项不阻断、确定性排名、无满分候选分支 |
 | 正式物化 | `tools/111`、release-local 资产、验证摘要、诊断项不阻断 |
+| 仓库发布包 | OM/ONNX/checkpoint/AIPP/ATC/报告齐全、26 项 SHA256、固定 release 路径、零训练物化和 `8501/8502` 无副作用 |
 | 原子提升/回滚 | 主/回滚 systemd service、精确 iptables rule、失败自动撤销和 `8502` 保留 |
 
 评分报告的阻断边界：
@@ -119,6 +134,7 @@ bash -n scripts/install_ascend310b_primary_services.sh
 | 环境 | 执行内容 | 禁止事项 |
 | --- | --- | --- |
 | WSL 现有 `.venv` | Pytest、Ruff、配置/文档/哈希校验、训练与 ONNX 导出 | 不安装依赖，不下载 CPU PyTorch |
+| 新 310B（环境已配置） | 校验仓库模型包、物化 release、运行 `tools/95 --require-validation`、启动 health/冒烟 | 不训练，不运行 ATC，不安装依赖 |
 | Ascend 候选 `8502` | 探针、无标签预测冻结、三项精度评分、30 次预热、三轮 20 图 batch | 不运行 Web pytest，不停止或替换 `8501` |
 | 正式公共 `8501` | 检查 `/api/health` 的 `validated/model_layout/context_mode`，执行发布后 `30 + 3×20` batch | 不直接停止旧监听器，不把 `8502` 纳入正式路由 |
 

@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "provider": "Ascend ACL",
+  "unlabeled_predictions_frozen_before_labels": true,
+  "image_count": 89,
+  "base_image_count": 70,
+  "prediction_count": 640,
+  "class_contract": {
+    "old_class_ids": [
+      0,
+      1,
+      3
+    ],
+    "new_class_id": 2
+  },
+  "metrics": {
+    "base_map50": 0.8049006527998962,
+    "new_map50": 0.6050327630685391,
+    "krr": 1.0,
+    "old_map50_before": 0.7848657722202775,
+    "old_map50_after": 0.7848657722202775,
+    "old_prediction_equivalent": true,
+    "full_map50": 0.7399075199323429,
+    "per_class_ap50": {
+      "0": 0.5807259576518555,
+      "1": 0.9723297293368807,
+      "2": 0.6050327630685391,
+      "3": 0.8015416296720965
+    },
+    "lock_precision": 0.7924528301886793,
+    "lock_recall": 0.5526315789473685,
+    "false_activation_rate": 0.24285714285714285
+  },
+  "competition_gates": {
+    "base_map50": true,
+    "new_map50": true,
+    "krr": true
+  },
+  "competition_gate_thresholds": {
+    "base_map50": 0.8,
+    "new_map50": 0.6,
+    "krr": 0.95
+  },
+  "diagnostic_checks": {
+    "lock_precision": false,
+    "false_activation_rate": false
+  },
+  "diagnostic_warnings": [
+    "lock_precision",
+    "false_activation_rate"
+  ],
+  "score_passed": true,
+  "passed": true
+}

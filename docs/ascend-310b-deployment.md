@@ -1,6 +1,6 @@
 # Ascend 310B 部署实现
 
-AgileAgent 已在 Atlas 200I DK A2 上把共享双逻辑头满分方案提升为正式主线，同时保留原三模型 OM 作为即时回滚。本页区分公共入口、主实例、回滚 listener 和下一轮候选。
+AgileAgent 已在 Atlas 200I DK A2 上把共享双逻辑头满分方案提升为正式主线，同时保留原三模型 OM 作为即时回滚。仓库现已包含该正式 release 的预构建模型与验证证据；在 CANN/Python 环境已配置好的 310B 上可零训练、零 ATC 部署。本页区分新板直启、公共入口、主实例、回滚 listener 和下一轮候选。
 
 ## 三 OM 即时回滚结构
 
@@ -46,6 +46,72 @@ Python 编排层位于 `fair_agent/modules/web_inference.py`，Ascend 运行时�
 | 主实例内部地址 | `127.0.0.1:18501` |
 | 回滚 listener | 原三 OM，物理监听 `127.0.0.1:8501` |
 | 后续候选 | `127.0.0.1:8502` |
+
+## 从仓库零训练部署
+
+仓库模型包位于：
+
+```text
+models/ascend310b/full-score/20260816-full-score-1493b04/
+```
+
+它包含两个正式 OM、source checkpoint、ONNX、AIPP、ATC 日志、training/export/build manifest、正式配置和原始 validation 报告。单文件均小于 GitHub 100 MB 限制，使用普通 Git 版本化；克隆后不需要 Git LFS。
+
+在已安装 CANN `7.0.RC1` 和命名环境 `agileagent` 的新板上执行：
+
+```bash
+git clone https://github.com/Sakauma/AgileAgent.git
+cd AgileAgent
+chmod +x scripts/materialize_ascend310b_full_score_release.sh
+./scripts/materialize_ascend310b_full_score_release.sh
+```
+
+脚本依次校验包内 `SHA256SUMS`、复制 Git 跟踪的运行源码和预构建资产、调用 `tools/95_verify_ascend_release.py --require-validation`。它不训练、不导出 ONNX、不运行 ATC、不安装依赖，也不操作任何服务端口。固定安装目录是：
+
+```text
+/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+```
+
+目标已存在时默认拒绝覆盖；只读验证已有副本：
+
+```bash
+./scripts/materialize_ascend310b_full_score_release.sh --verify-existing
+```
+
+新板没有旧回滚服务时，可直接让满分 release 监听 `8501`：
+
+```bash
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
+AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
+AGILE_AGENT_ASCEND_PORT=8501 \
+  "$RELEASE/src/scripts/start_agent_ascend310b.sh"
+```
+
+配置文件内部的 `runtime.server_port: 18501` 是正式双实例拓扑的身份字段；启动脚本通过显式 `AGILE_AGENT_ASCEND_PORT=8501` 决定新板监听端口。已有旧三 OM release 的板不要停止旧 listener，继续使用后文的 systemd 双实例安装：满分主实例监听 `18501`，公共 `8501` 经精确路由进入主实例，删除规则即回滚。两种拓扑使用相同模型、配置和验证身份。
+
+启动后验证：
+
+```bash
+curl -fsS http://127.0.0.1:8501/api/health
+curl -fsS -F "file=@sample.png;type=image/png" \
+  http://127.0.0.1:8501/api/detect
+```
+
+健康响应必须包含 `status:"ready"`、`validated:true`、`validation_candidate:false`、`model_layout:"shared_backbone_dual_head_v1"` 和 `context_mode:"fixed_neutral_v1"`。
+
+### 指标复现所需数据
+
+仓库不分发受授权约束的竞赛原始图像和标签，因此“核对原始证据”和“重新计算指标”必须区分：
+
+| 可用输入 | 可完成的复现 |
+| --- | --- |
+| 仅克隆仓库 | 校验所有模型/证据 SHA256，验证 release，启动服务，查看包内原始 score/benchmark 报告 |
+| 20 张符合契约的 PNG | 重新执行 30 次预热和三轮 20 图 batch，复测 FPS |
+| 合法取得的 89 图与标签 | 重新冻结预测并计算 Base mAP50、New-mAP50、KRR |
+| 仅取得同版 89 图标签 | 直接对包内 `validation/frozen-predictions.jsonl` 重新评分，无需再次推理或训练 |
+
+原始报告位于模型包 `validation/`，记录 Base `0.8049006528`、New `0.6050327631`、KRR `1.0`，候选两次 batch 中位 `30.066/30.080 FPS`，发布后公共 `8501` 三轮 `30.234/30.243/30.294 FPS`。
 
 ## 模型契约
 
@@ -126,9 +192,9 @@ sudo /usr/local/sbin/agileagent-ascend310b-primary-route apply 18501
 
 规则只匹配 `127.0.0.1:8501` 并带 comment `AGILE_AGENT_ASCEND310B_PRIMARY`。删除规则后新连接直接进入仍在监听的三 OM 服务；已有连接按内核连接状态自然结束。
 
-## 构建与验收满分候选
+## 新数据集：构建与验收满分候选
 
-候选不复用正式配置，也不直接启动在 `8501`。完整顺序为：
+本节只用于更换数据集或训练新 release，不是部署仓库内当前正式模型的前置步骤。候选不复用正式配置，也不直接启动在 `8501`。完整顺序为：
 
 1. 在 WSL 既有 `.venv` 中训练 residual adapter/new head，生成同时登记 best/last 的 training report；
 2. 选择一个已授权 checkpoint 导出 dual-head ONNX 和 export manifest；

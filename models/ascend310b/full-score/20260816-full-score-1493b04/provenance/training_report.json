@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "kind": "shared_backbone_dual_head_training",
+  "method": "residual_adapter",
+  "formal_specialist_weight": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent/models/production/incremental_detection/incremental_detector.pt",
+  "formal_specialist_weight_sha256": "d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957",
+  "initialization": {
+    "path": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent/candidates/20260815-p10b-residual-adapter-v2/head-training-init.pt",
+    "sha256": "9267277e2728d24bcdc7da52c92d68d7e1a0ee675da80fc66738b185efb0be0b",
+    "base_weight": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent/models/production/incremental_detection/three_class_base_detector.pt",
+    "base_weight_sha256": "6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119",
+    "head_init_weight": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/runs/detect/strict_3plus1_p10/p10b-head-only-20260815/weights/best.pt",
+    "head_init_weight_sha256": "bc9c9480a239c3f855aacade9f1ac65d4ed2940106cd3ac07e32f113f89652ca",
+    "residual_adapter": null,
+    "shared_tensor_count": 378,
+    "shared_max_drift": 0.0
+  },
+  "residual_adapter": {
+    "channels": [
+      128,
+      256,
+      512
+    ],
+    "parameter_count": 344960,
+    "zero_initialized": true
+  },
+  "dataset": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent/incremental_strict_3plus1_p7/p7-expanded-20260815/warship-incremental-p7-expanded/incremental/dataset.yaml",
+  "dataset_audit": {
+    "path": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent/incremental_strict_3plus1_p7/p7-expanded-20260815/warship-incremental-p7-expanded/manifest.json",
+    "sha256": "94f3f6edd893192c06370ba80078976bf9d26093a158229bf43dc062401e23b3",
+    "old_raw_image_count": 0,
+    "old_raw_label_count": 0,
+    "old_feature_cache_count": 0,
+    "original_data_modified": false
+  },
+  "run_root": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent/../runs/detect/strict_3plus1_p10",
+  "run_name": "p10b-residual-adapter-v2-20260815",
+  "epochs": 100,
+  "lr0": 0.001,
+  "warmup_epochs": 0.0,
+  "imgsz": 896,
+  "best_weight": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/runs/detect/strict_3plus1_p10/p10b-residual-adapter-v2-20260815/weights/best.pt",
+  "best_weight_sha256": "fb44299eb6ad070e5330e88db975e1bebc1389cba229cd49466406dcf475b15d",
+  "shared_max_drift": 0.0,
+  "new_map50": 0.6035489336640809,
+  "new_map50_passed": true,
+  "diagnostics": {
+    "map50_95": 0.3370778325688166,
+    "precision": 0.4396439867976196,
+    "recall": 0.7631578947368421
+  }
+}
