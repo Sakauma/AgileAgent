@@ -71,8 +71,8 @@ datasets_r1_base_train/
 数据体检与固定划分生成：
 
 ```bash
-python tools/00_check_dataset.py
-python tools/02_split_dataset.py --increment-class warship
+.venv/bin/python tools/00_check_dataset.py
+.venv/bin/python tools/02_split_dataset.py --increment-class warship
 ```
 
 数据体检输出写入 `reports/`，固定清单写入 `splits/`。
@@ -92,12 +92,12 @@ Web 工作台的“注入并训练”调用同一生命周期，并实时展示�
 ## 6. 运行验证
 
 ```bash
-python -m pytest -q
-python scripts/verify_release.py
-python scripts/smoke_models.py
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/verify_release.py
+.venv/bin/python scripts/smoke_models.py
 ```
 
-当前完整回归确认 `214` 项通过，发布资产校验状态为 `passed`。
+测试数量随功能增长，不在本页固定计数；提交说明记录当次实际结果。发布资产校验状态为 `passed`。
 
 ## 7. Ascend 310B 服务
 
@@ -111,3 +111,31 @@ curl -fsS -F "file=@sample.png;type=image/png" \
 ```
 
 服务启动时完成 OM 哈希校验、三模型加载、预热和健康状态登记。
+
+## 8. 复现 Ascend 满分候选
+
+满分方法开发使用当前 WSL 仓库已有 `.venv`，不要为了运行这些入口重新安装依赖或下载 CPU 版 PyTorch：
+
+```bash
+.venv/bin/python tools/107_train_shared_dual_head.py --help
+.venv/bin/python tools/108_export_ascend_dual_head.py --help
+.venv/bin/python tools/109_materialize_ascend_full_score_candidate.py --help
+.venv/bin/python tools/110_select_ascend_full_score_candidate.py --help
+```
+
+开始新数据集前先阅读 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)，并确认以下边界：
+
+1. 正式 `8501` 继续运行三 OM 回滚链路；候选只能使用 `8502`。
+2. Base backbone、neck/FPN、old head、BN 统计和 EMA 必须冻结；训练输入只来自新增类数据。
+3. 先训练并记录 best/last，再选择一个 checkpoint 导出双输出 ONNX；当前历史满分参考实际使用 `last.pt`。
+4. OM 只在板端 CANN `7.0.RC1` 下以 `mixed_float16` 构建，不升级 CANN、不用 INT8、不降分辨率。
+5. 每个阈值候选依次执行无标签预测冻结、Base/New/KRR 评分、30 次预热和三轮 20 图 batch。
+6. 只有四项比赛指标同时满分才可宣称满分候选；其他检测和时延指标只作诊断。
+
+候选配置由方法 YAML、基础 Ascend 配置、dual/context OM 和 build manifest 生成，不手工复制板端绝对路径到 `full_score_method.yaml`。
+
+## 下一步
+
+- 日常开发和提交规范见 [`DEVELOPMENT.md`](DEVELOPMENT.md)。
+- 测试矩阵与板端验收边界见 [`TESTING.md`](TESTING.md)。
+- 正式/候选部署职责见 [`ascend-310b-deployment.md`](ascend-310b-deployment.md)。

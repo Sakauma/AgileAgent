@@ -11,7 +11,7 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 | 场景与传感器认知 | Scene-SensorNet 输出 IR/SAR 与 air/forest/sea/urban 概率，并作为逐类软阈值证据。 |
 | 模型代际管理 | `models/generations.json` 记录父子代际、类别所有权、权重身份、阈值和评测指标。 |
 | Web 与 CLI | Web 支持检测、批量检测和增量工作台；CLI 支持状态、检测、配置、日志、实验与代际操作。 |
-| Ascend 310B | PyACL/AscendCL 后端加载三个 OM，完成预处理、三模型编排、后处理、融合和 API 响应。 |
+| Ascend 310B | 正式 `8501` 保留三 OM 回滚链路；比赛候选在 `8502` 使用共享骨干双逻辑头、DVPP batch 快路径和固定中性上下文。 |
 | 审计证据 | 数据血缘、任务状态、模型哈希、预测记录、指标和运行事件形成可追踪证据链。 |
 
 ## Production 模型组合
@@ -129,6 +129,40 @@ AIPP staging 已完成 1,068 次真实 multipart PNG 请求，服务端均值为
 
 Ascend 310B 的隔离满分候选进一步使用共享骨干双逻辑头、固定中性上下文和 batch fast path，在四项机器评分中得到 Base mAP50 `0.804901`、New-mAP50 `0.605033`、KRR `1.0`，20 图 batch 两次复核中位为 `30.066/30.080 FPS`。该候选尚未替换正式 `8501`；复现和新数据集阈值选择见 [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md)。
 
+## Ascend 310B 比赛满分方案
+
+当前仓库同时保留“正式回滚链路”和“满分候选链路”，两者不能混用：
+
+| 链路 | 端口 | 物理模型 | 用途 |
+| --- | ---: | --- | --- |
+| 正式回滚 | `8501` | Base、Incremental、Scene 三个 OM | 已发布服务，候选评分期间不得停止或替换 |
+| 满分候选 | `8502` | `shared_backbone_dual_head_v1` dual OM；context OM 仅作为回滚资产加载 | 新数据集训练、阈值搜索和比赛评分 |
+
+满分候选保留三个逻辑功能模型及审计语义，但把检测计算合并为一次共享骨干执行：
+
+```text
+640×512 PNG batch
+  -> bounded multipart + DVPP encoded preprocessing
+  -> shared backbone / neck / FPN（冻结）
+     -> old head  -> frozen_base_model
+     -> residual adapter + new head -> incremental_model
+  -> fixed_neutral_v1（Sensor 0.5/0.5，Scene 各 0.25）
+  -> 原类别 owner、融合、NMS、审计和 API schema
+```
+
+唯一机器可读方法源是 [`configs/ascend310b/full_score_method.yaml`](configs/ascend310b/full_score_method.yaml)。它固定训练、导出、ATC、运行时和评分协议；生成的候选配置仍是普通 schema 3 配置。维护入口为：
+
+| 阶段 | 入口 | 关键输出 |
+| --- | --- | --- |
+| 冻结 Base 并训练 residual adapter/new head | `tools/107_train_shared_dual_head.py` | 同时登记 best/last、零漂移和数据隔离的 training report |
+| 导出共享双头 | `tools/108_export_ascend_dual_head.py` | 双输出 ONNX 与 export manifest |
+| CANN `7.0.RC1` 构建 | `scripts/build_ascend_dual_head_om.sh` | `mixed_float16` OM 与 build manifest |
+| 生成隔离候选 | `tools/109_materialize_ascend_full_score_candidate.py` | 强制 `8502`、`validated: false` 的候选 YAML |
+| 板端评分 | `scripts/run_ascend310b_score_gate.sh` | 冻结预测、score schema v2、benchmark schema v5 |
+| 确定性选优 | `tools/110_select_ascend_full_score_candidate.py` | 全候选排名、胜者或 `intermediate_only` |
+
+更换数据集后不直接沿用 `old=0.05/new=0.30`。先固定 old 搜索 new，再固定胜出 new 搜索 old，最后交叉复核前两名。只有 Base mAP50 `≥0.80`、New-mAP50 `≥0.60`、KRR `≥0.95` 且三轮 20 图 batch 中位 FPS `≥30` 才能标记满分；逐框差异、业务 JSON、precision、误激活率和单请求 P95/P99 仅作为诊断。完整命令、哈希和停止条件见[满分方法与复现手册](docs/ascend-310b-full-score-method.md)。
+
 ## 快速开始
 
 在 WSL/Linux 仓库根目录执行：
@@ -231,7 +265,7 @@ agile-agent incremental-data jobs --batch-id BATCH_ID
 重新生成：
 
 ```bash
-python tools/02_split_dataset.py \
+.venv/bin/python tools/02_split_dataset.py \
   --increment-class warship \
   --output-dir reports/splits_check
 ```
@@ -263,9 +297,9 @@ curl -fsS -F "file=@sample.png;type=image/png" \
 ## 验证
 
 ```bash
-python -m pytest -q
-python scripts/verify_release.py
-python scripts/smoke_models.py
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/verify_release.py
+.venv/bin/python scripts/smoke_models.py
 ```
 
 发布校验状态为 `passed`；当前改动的实际回归结果以提交时的测试输出为准。

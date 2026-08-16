@@ -103,6 +103,57 @@ cd /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2
 
 启动脚本加载 CANN 环境、登记配置路径、写入 PID 文件并启动 Uvicorn。
 
+## 构建与验收满分候选
+
+候选不复用正式配置，也不直接启动在 `8501`。完整顺序为：
+
+1. 在 WSL 既有 `.venv` 中训练 residual adapter/new head，生成同时登记 best/last 的 training report；
+2. 选择一个已授权 checkpoint 导出 dual-head ONNX 和 export manifest；
+3. 将 ONNX、source checkpoint、training/export manifest 与 context build manifest 按 SHA256 同步到板端；
+4. 在 CANN `7.0.RC1` 环境构建 OM 和新的 build manifest；
+5. 由 `tools/109` 生成只监听 `8502` 的候选配置；
+6. 运行 score gate，结束后只停止其启动的精确 `8502` 进程，并再次确认 `8501 ready`。
+
+板端构建示例：
+
+```bash
+cd /home/HwHiAiUser/agileagent
+AGILE_AGENT_ASCEND_PYTHON=/usr/local/miniconda3/envs/agileagent/bin/python \
+./scripts/build_ascend_dual_head_om.sh \
+  /path/to/shared_backbone_dual_head.onnx \
+  /path/to/EXPORT_CHECKPOINT.pt \
+  /path/to/training-report.json \
+  /path/to/export-manifest.json \
+  /path/to/formal-context-build-manifest.json \
+  /path/to/build-output
+```
+
+生成候选配置时必须同时提供 build manifest 中登记的 dual/context OM；生成器会核对方法配置、training/export manifest 和 OM 哈希：
+
+```bash
+/usr/local/miniconda3/envs/agileagent/bin/python \
+  tools/109_materialize_ascend_full_score_candidate.py \
+  --dual-om /path/to/shared_backbone_dual_head.om \
+  --context-om /path/to/scene_sensor_net.om \
+  --build-manifest /path/to/build-manifest.json \
+  --old-threshold 0.05 \
+  --new-threshold 0.30 \
+  --output /path/to/candidate-8502.yaml
+```
+
+评分命令：
+
+```bash
+./scripts/run_ascend310b_score_gate.sh \
+  /path/to/candidate-8502.yaml \
+  /path/to/mixed-images \
+  /path/to/mixed-test.txt \
+  /path/to/base-test.txt \
+  /path/to/score-gate-output
+```
+
+score gate 在启动候选前检查正式 `8501 ready`、`8502` 未占用、CANN 版本、PNG 输入契约和 build manifest。它先在短生命周期引擎中冻结无标签预测，再打开标签评分，最后启动 HTTP 候选执行 30 次预热和三轮 20 图 batch；板端不运行 Web pytest。
+
 ## API
 
 健康检查：
@@ -125,7 +176,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
 单 OM 静态输入复核：
 
 ```bash
-python tools/92_run_ascend_om.py \
+/usr/local/miniconda3/envs/agileagent/bin/python tools/92_run_ascend_om.py \
   --model /path/to/model.om \
   --input /path/to/input.npy \
   --output-dir reports/ascend310b/om_output
@@ -134,8 +185,9 @@ python tools/92_run_ascend_om.py \
 89 图 Agent 预测冻结后执行评分：
 
 ```bash
-python tools/94_score_ascend_agent.py \
+/usr/local/miniconda3/envs/agileagent/bin/python tools/94_score_ascend_agent.py \
   --predictions reports/ascend310b/predictions_frozen \
+  --method-config configs/ascend310b/full_score_method.yaml \
   --mixed-split splits/strict_3plus1/mixed_test.txt \
   --base-split splits/strict_3plus1/base_test.txt \
   --output reports/ascend310b/score.json
