@@ -793,7 +793,9 @@ def test_strict_training_arguments_disable_early_stopping() -> None:
 
 def test_p7_expanded_config_reuses_base_and_unifies_owner_resolution() -> None:
     script = runpy.run_path("tools/70_run_strict_3plus1.py")
-    config = load_yaml("configs/strict_class_incremental_3plus1_p7_expanded.yaml")
+    config = load_yaml(
+        "configs/ascend310b/archive/p7/strict_class_incremental_3plus1_p7_expanded.yaml"
+    )
     protocol = config["protocols"][0]
 
     assert config["paths"]["shared_base_checkpoint"].endswith(

@@ -258,6 +258,15 @@ def test_shared_dual_head_manifest_uses_one_physical_detector(
     assert result["status"] == "passed", result["errors"]
     assert result["artifact_count"] == 2
 
+    options["models"]["base.pt"]["logical_heads"]["old"][
+        "candidate_confidence"
+    ] = 0.03
+    options["models"]["base.pt"]["logical_heads"]["new"][
+        "candidate_confidence"
+    ] = 0.20
+    result = verify_ascend_artifacts(options, require_validation=False)
+    assert result["status"] == "passed", result["errors"]
+
     options["models"]["base.pt"]["logical_heads"]["new"][
         "owner"
     ] = "frozen_base_model"

@@ -8,6 +8,7 @@ AgileAgent 使用 UTF-8 YAML 配置。主运行配置采用 schema 3，并由 `f
 | --- | --- |
 | `configs/agent_pipeline.yaml` | x86/CUDA 开发、训练和 Web 服务 |
 | `configs/agent_pipeline_ascend310b.yaml` | Ascend 310B OM 推理服务 |
+| `configs/ascend310b/full_score_method.yaml` | Ascend 310B 满分结构、阈值搜索、评分门禁和参考证据 |
 | `configs/functional_models.yaml` | 三个功能模型及发布资产 |
 | `configs/incremental_detection_policy.yaml` | 增量数据范围与评测策略 |
 | `configs/strict_class_incremental_3plus1.yaml` | 固定 3+1 训练和评分参数 |
@@ -102,6 +103,8 @@ agile-agent generation rollback --to GENERATION_ID
 
 Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1`，并登记三个正式 OM 的路径与 SHA256。
 
+`full_score_method.yaml` 不是可直接启动的 schema 3 服务配置，也不保存板端绝对路径。它是数据集无关的方法源：双头导出、ATC 构建、候选生成、score gate 和候选选择均读取其中的结构、映射或评分协议；`tools/109_materialize_ascend_full_score_candidate.py` 再把方法源、基础配置、dual/context OM 和 build manifest 合成为只监听 `8502` 的候选配置。当前 `old=0.05`、`new=0.30` 是 Host 运行时搜索种子，不是永久阈值，也不属于 OM 构建身份。
+
 ## 配置验证
 
 ```bash
@@ -111,3 +114,10 @@ python scripts/verify_release.py
 ```
 
 发布校验同时核对主配置、模型资产、模型 manifest、功能模型注册表和 production 代际。
+
+满分候选生成和选优入口：
+
+```bash
+.venv/bin/python tools/109_materialize_ascend_full_score_candidate.py --help
+.venv/bin/python tools/110_select_ascend_full_score_candidate.py --help
+```

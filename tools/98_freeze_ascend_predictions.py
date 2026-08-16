@@ -17,8 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fair_agent.core.config import load_config
-from fair_agent.web.app import AtomicEngineProvider, build_web_settings
+from fair_agent.core.config import load_config  # noqa: E402
+from fair_agent.web.app import AtomicEngineProvider, build_web_settings  # noqa: E402
 
 
 def sha256(path: Path) -> str:
@@ -46,13 +46,14 @@ def public_record(result: Dict[str, Any]) -> Dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="在隔离进程中冻结89图Ascend候选响应，用于数值/语义对齐。"
+        description="在隔离进程中冻结指定图集的Ascend候选响应，用于评分与诊断。"
     )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--image-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--confidence", type=float, default=0.5)
+    parser.add_argument("--expected-images", type=int, default=89)
     parser.add_argument(
         "--encoded",
         action="store_true",
@@ -77,9 +78,14 @@ def main() -> int:
 
     if args.output.exists() or args.summary.exists():
         raise FileExistsError("冻结预测或摘要已存在，拒绝覆盖。")
+    if args.expected_images <= 0:
+        raise ValueError("expected-images必须为正整数。")
     paths = sorted(args.image_root.glob("*.png"))
-    if len(paths) != 89 or len({path.stem for path in paths}) != 89:
-        raise RuntimeError("冻结输入必须是89张stem唯一PNG。")
+    if (
+        len(paths) != args.expected_images
+        or len({path.stem for path in paths}) != args.expected_images
+    ):
+        raise RuntimeError(f"冻结输入必须是{args.expected_images}张stem唯一PNG。")
 
     config = copy.deepcopy(load_config(args.config))
     model_overrides = {}
@@ -175,7 +181,7 @@ def main() -> int:
         "mean_wall_ms": sum(wall_ms) / len(wall_ms),
         "predictions": str(args.output.resolve()),
         "predictions_sha256": sha256(args.output),
-        "passed": len(records) == 89,
+        "passed": len(records) == args.expected_images,
     }
     args.summary.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

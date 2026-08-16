@@ -117,6 +117,22 @@ def _configured_detector_contracts(
     }
 
 
+def _structural_logical_heads(value: Any) -> Dict[str, Any]:
+    """Return the OM-bound dual-head contract without Host-only thresholds."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    normalized: Dict[str, Any] = {}
+    for name, raw in value.items():
+        if not isinstance(raw, Mapping):
+            normalized[str(name)] = raw
+            continue
+        head = dict(raw)
+        head.pop("candidate_confidence", None)
+        normalized[str(name)] = head
+    return normalized
+
+
 def verify_ascend_artifacts(
     options: Mapping[str, Any],
     *,
@@ -254,7 +270,9 @@ def verify_ascend_artifacts(
                 configured_heads = dict(
                     (configured or {}).get("logical_heads") or {}
                 )
-                if row.get("logical_heads") != configured_heads:
+                if _structural_logical_heads(
+                    row.get("logical_heads")
+                ) != _structural_logical_heads(configured_heads):
                     errors.append(f"logical_heads_contract_mismatch:{role}")
                 if contract is not None:
                     errors.append(f"raw_output_has_postprocess_contract:{role}")
