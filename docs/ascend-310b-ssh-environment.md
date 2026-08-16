@@ -18,8 +18,11 @@
 | 正式 Python 解释器 | `/usr/local/miniconda3/envs/agileagent/bin/python` |
 | Python 版本 | `3.9.2` |
 | 已删除的旧环境 | `<release>/conda-env`；不得继续使用或写入配置 |
-| 正式 release | `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2` |
-| 服务 | `127.0.0.1:8501` |
+| 正式满分 release | `/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04` |
+| 旧三 OM 回滚 release | `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2` |
+| 公共服务 | `127.0.0.1:8501` |
+| 满分主实例（双实例拓扑） | `127.0.0.1:18501` |
+| 隔离候选 | `127.0.0.1:8502` |
 
 ## 官方系统账户
 
@@ -77,7 +80,7 @@ Invoke-RestMethod http://127.0.0.1:8501/api/health
 | AgileAgent 正式命名环境的 Conda prefix | `/usr/local/miniconda3/envs/agileagent` |
 | 正式服务实际调用的 Python | `/usr/local/miniconda3/envs/agileagent/bin/python` |
 
-原 release-local 环境 `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/conda-env` 已在命名环境迁移验收后删除。配置、脚本和人工命令都不得再引用该旧路径。
+原三 OM 回滚 release 曾使用的 release-local 环境 `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/conda-env` 已在命名环境迁移验收后删除。配置、脚本和人工命令都不得再引用该旧环境路径。
 
 登录板端后先核对 Miniconda 和环境注册信息：
 
@@ -126,12 +129,25 @@ npu-smi info
 ## Release 目录
 
 ```text
-/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/
+/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/
 ├── src/
-├── om/
+├── om/shared_backbone_dual_head.om
+├── om/scene_sensor_net.om
+├── provenance/
+├── configs/agent_pipeline_ascend310b.yaml
 ├── validation/
+├── release.json
 └── agent-web.pid
 ```
+
+该 release 的可版本化源包已放入仓库 `models/ascend310b/full-score/20260816-full-score-1493b04/`。在已配置好 CANN/Python 的 310B 上，克隆后运行：
+
+```bash
+chmod +x scripts/materialize_ascend310b_full_score_release.sh
+./scripts/materialize_ascend310b_full_score_release.sh
+```
+
+脚本核对所有 SHA256 并执行正式 release 验证，不训练、不运行 ATC、不安装依赖，也不启动或停止服务。目标已存在时使用 `--verify-existing` 只读复核。旧三 OM release 仍保留在 `/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2`，只承担即时回滚。
 
 正式解释器：
 
@@ -147,13 +163,20 @@ npu-smi info
 
 ## 启动服务
 
+新板未安装旧回滚 listener 时，直接把满分 release 启动到公共 `8501`：
+
 ```bash
-cd /home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/src
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
 AGILE_AGENT_ASCEND_ENV=/usr/local/miniconda3/envs/agileagent \
-  ./scripts/start_agent_ascend310b.sh
+AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
+AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
+AGILE_AGENT_ASCEND_PORT=8501 \
+  "$RELEASE/src/scripts/start_agent_ascend310b.sh"
 ```
 
 `AGILE_AGENT_ASCEND_ENV` 可以省略，因为脚本默认值就是 `/usr/local/miniconda3/envs/agileagent`；这里显式写出是为了让人工复核时没有路径歧义。脚本加载 CANN 环境，使用命名环境 Python 启动 Uvicorn，并将 PID 写入 `<release>/agent-web.pid`。
+
+已有旧三 OM 回滚服务的正式板使用双实例拓扑，不执行上面的直接启动命令：满分实例由 `agileagent-ascend310b-main.service` 监听 `18501`，旧 listener 由 `agileagent-ascend310b-rollback.service` 继续物理监听 `8501`，`agileagent-ascend310b-route.service` 将公共 `8501` 精确路由到主实例。`8502` 只留给下一轮候选。安装、检查和原子回滚命令见 [`ascend-310b-deployment.md`](ascend-310b-deployment.md)。
 
 ## 运行状态
 
@@ -164,7 +187,7 @@ ps -ef | grep 'uvicorn fair_agent.web.app:app'
 npu-smi info
 ```
 
-健康响应包含 `status: ready`、`backend: ascend_acl` 和 `device: ascend:0`。
+健康响应包含 `status: ready`、`backend: ascend_acl`、`device: ascend:0`、`validated: true`、`model_layout: shared_backbone_dual_head_v1` 和 `context_mode: fixed_neutral_v1`。
 
 ## 真实图像冒烟
 
@@ -173,4 +196,4 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-环境迁移使用固定 PNG 完成切换前后语义对照，检测数量、类别、框和置信度保持一致，三模型均完成执行。
+当前满分 release 已用固定 PNG 完成服务冒烟；其正式评分和性能原始报告随仓库模型包一同交付。没有竞赛数据集时可核对哈希、release、health 和历史报告；重新测量 FPS 需要 20 张契约 PNG，重新计算 Base/New/KRR 需要合法取得的 89 图和标签。

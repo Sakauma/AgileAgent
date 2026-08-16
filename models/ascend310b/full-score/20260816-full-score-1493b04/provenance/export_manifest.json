@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "kind": "shared_backbone_dual_head_v1",
+  "device": "cuda:0",
+  "opset": 17,
+  "input_shape": [
+    1,
+    3,
+    736,
+    896
+  ],
+  "output_shapes": [
+    [
+      1,
+      7,
+      13524
+    ],
+    [
+      1,
+      5,
+      13524
+    ]
+  ],
+  "logical_heads": {
+    "old": {
+      "owner": "frozen_base_model",
+      "class_map": {
+        "0": 0,
+        "1": 1,
+        "2": 3
+      },
+      "class_count": 3,
+      "anchor_count": 13524,
+      "output_index": 0
+    },
+    "new": {
+      "owner": "incremental_model",
+      "class_map": {
+        "0": 2
+      },
+      "class_count": 1,
+      "anchor_count": 13524,
+      "output_index": 1
+    }
+  },
+  "provenance": {
+    "base_weight": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent/models/production/incremental_detection/three_class_base_detector.pt",
+    "base_weight_sha256": "6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119",
+    "new_head_weight": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/runs/detect/strict_3plus1_p10/p10b-residual-adapter-v2-20260815/weights/last.pt",
+    "new_head_weight_sha256": "6d1e7098015134615b32a7cedeeab9352bb83adf812f227b85044a3e64da9c6a",
+    "shared_max_drift": 0.0
+  },
+  "onnx": {
+    "path": "/mnt/d/Ajax Mao/研二/近期工作/研二下/tiaozhanbei/AgileAgent/candidates/20260815-p10b-shared-dual-last/shared_backbone_dual_head.onnx",
+    "sha256": "5d6651a25cdc227a6feaf3135d754f1d132f0740117156f9b6d0651c32104c5e",
+    "bytes": 42951078,
+    "opset": 17,
+    "input_name": "images",
+    "output_names": [
+      "old_raw_output",
+      "new_raw_output"
+    ]
+  }
+}

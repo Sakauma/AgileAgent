@@ -5,3 +5,4 @@
 *.sh text eol=lf
 *.json text eol=lf
 *.yaml text eol=lf
+models/ascend310b/full-score/**/provenance/*-atc_log.log binary

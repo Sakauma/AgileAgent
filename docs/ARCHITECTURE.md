@@ -116,7 +116,22 @@ Web 服务启动时加载 production 代际，代际切换时构建并预热新�
 
 正式板端配置已切换为 `raw_dual_head_v1`、DVPP encoded batch、pageable memory、threaded execution 和固定中性上下文；release manifest 同时登记 dual OM 与 context 回滚资产。原三 OM release 由独立 systemd 服务保留，公共 `8501` 通过精确 loopback NAT 路由到满分实例 `18501`。结构、阈值搜索和评分门禁见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
 
-### 满分方案的候选到正式控制流
+### 可移植正式模型包
+
+`models/ascend310b/full-score/20260816-full-score-1493b04/` 是正式 release 的版本化副本，不是需要继续加工的训练目录。它把两个 OM 与其 source checkpoint、ONNX、AIPP、ATC 日志、训练/导出/build manifest、字节级配置和原始验收报告绑定在同一 SHA256 清单中。
+
+```text
+Git clone
+  -> SHA256SUMS 校验
+  -> materialize_ascend310b_full_score_release.sh
+  -> 固定 release 根 /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+  -> tools/95 --require-validation
+  -> 新板直接 :8501，或既有板主实例 :18501 + :8501 回滚 listener
+```
+
+这条消费路径只加载已构建资产，不调用训练、ONNX 导出或 ATC。固定绝对 release 根是正式配置和 manifest 身份的一部分；物化器拒绝覆盖已有目录，避免把不同字节伪装成同一 release。
+
+### 新数据集的候选到正式控制流
 
 ```text
 full_score_method.yaml

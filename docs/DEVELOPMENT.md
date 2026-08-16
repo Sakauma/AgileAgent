@@ -76,9 +76,13 @@ Ascend 相关变更使用：
 
 ## 配置与资产变更
 
-配置变更同步更新 schema 校验、两套主配置、测试和配置文档。模型变更同步更新 manifest、generation registry、SHA256、指标证据和发布校验。
+配置变更同步更新 schema 校验、两套主配置、测试和配置文档。模型变更同步更新 manifest、generation registry、SHA256、指标证据和发布校验。Ascend 正式资产还必须同步更新 `models/ascend310b/` 包、包内 `SHA256SUMS`、`models/SHA256SUMS.txt`、`models/manifest.json` 和 `tests/test_ascend_packaged_release.py`；不得只更新板端 release。
+
+当前 `20260816-full-score-1493b04` 是不可变发布包。普通功能开发不得覆盖其中任一文件；新模型先生成新的 release ID 和目录，完成哈希及评分验证后再更新 manifest 的 production 指针。`.om/.onnx/.pt` 通常被忽略，只有正式包路径允许精确白名单，提交前必须用 `git check-ignore -v` 和 `git ls-files` 确认二进制确实进入版本控制。
 
 ## Ascend 满分方法维护
+
+部署或复核当前满分模型优先使用 `scripts/materialize_ascend310b_full_score_release.sh`，不运行本节的训练/构建入口。本节用于比赛更换数据集或形成新 release。
 
 `configs/ascend310b/full_score_method.yaml` 是满分流程的单一方法源。修改共享双头训练、导出、运行时或评分逻辑时，至少同步检查：
 

@@ -99,22 +99,36 @@ Web 工作台的“注入并训练”调用同一生命周期，并实时展示�
 
 测试数量随功能增长，不在本页固定计数；提交说明记录当次实际结果。发布资产校验状态为 `passed`。
 
-## 7. Ascend 310B 服务
+## 7. Ascend 310B 零训练部署
 
-板端使用 `configs/agent_pipeline_ascend310b.yaml` 和命名环境 `agileagent`：
+以下步骤假定板端已经配置好 CANN `7.0.RC1` 和命名环境 `/usr/local/miniconda3/envs/agileagent`。仓库已经包含通过满分门禁的 OM、源 checkpoint、ONNX、构建证据和原始验收报告；部署当前方案不需要训练、ATC 或联网安装依赖。
 
 ```bash
-./scripts/start_agent_ascend310b.sh
+git clone https://github.com/Sakauma/AgileAgent.git
+cd AgileAgent
+chmod +x scripts/materialize_ascend310b_full_score_release.sh
+./scripts/materialize_ascend310b_full_score_release.sh
+
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
+AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
+AGILE_AGENT_ASCEND_PORT=8501 \
+  "$RELEASE/src/scripts/start_agent_ascend310b.sh"
+
 curl -fsS http://127.0.0.1:8501/api/health
 curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-公共 `8501` 当前返回正式共享双头主线；主实例实际监听 `18501`，原三 OM 服务保留为即时回滚监听器。健康响应应包含 `validated: true`、`model_layout: shared_backbone_dual_head_v1` 和 `context_mode: fixed_neutral_v1`。x86 本机服务仍使用自己的 `8501`，与板端端口互不影响。
+物化脚本先用包内 `SHA256SUMS` 校验全部资产，再生成固定 release 并执行 `tools/95_verify_ascend_release.py --require-validation`。目标目录已存在时默认拒绝覆盖；可用 `--verify-existing` 做只读复核。脚本本身不启动或停止服务。
 
-## 8. 复现 Ascend 满分候选
+新板可以让满分 release 直接监听 `8501`。已有旧三 OM 回滚服务的板使用双实例拓扑：公共 `8501` 精确路由到满分主实例 `18501`，旧 listener 仍物理监听 `8501`，删除路由即可即时回滚；`8502` 永远只用于下一轮候选。健康响应应包含 `validated: true`、`model_layout: shared_backbone_dual_head_v1` 和 `context_mode: fixed_neutral_v1`。
 
-满分方法开发使用当前 WSL 仓库已有 `.venv`，不要为了运行这些入口重新安装依赖或下载 CPU 版 PyTorch：
+无竞赛数据集时仍可完成模型包哈希、release 校验、服务启动和历史报告核对。重新测量 batch FPS 需要 20 张符合契约的 PNG；重新计算 Base/New/KRR 需要合法取得的 89 图和标签。包内已带同一候选的冻结预测，因此有标签后无需重新推理或训练即可重新评分。
+
+## 8. 为新数据集重新训练与选优
+
+本节只适用于比赛更换数据集、需要重新训练和搜索阈值的情况，不是部署当前满分模型的前置步骤。满分方法开发使用当前 WSL 仓库已有 `.venv`，不要为了运行这些入口重新安装依赖或下载 CPU 版 PyTorch：
 
 ```bash
 .venv/bin/python tools/107_train_shared_dual_head.py --help

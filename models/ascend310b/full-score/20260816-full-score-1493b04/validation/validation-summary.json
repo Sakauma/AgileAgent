@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "kind": "ascend310b_full_score_release_validation",
+  "build_manifest_sha256": "ffca93c54aa600a268acc31cdee82e14a040f6313427a180c3597e07db5fc2dd",
+  "method_config": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/full_score_method.yaml",
+    "sha256": "9433e6d710a80dd556ce1050fd59ec8256d9d8d99ae3c7d121944958f558ce32"
+  },
+  "source_candidate": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/candidate-8502.yaml",
+    "sha256": "73fb8c56f0139be0af2ef489c3ebabcbe3da494dba1e40be5625dcf58640d0d7"
+  },
+  "accuracy": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/validation/score.json",
+    "sha256": "4b78a853203824d5a272f485d1bf6c1db67f7cd2b25d7db6cd123d99a8f43b38",
+    "passed": true,
+    "metrics": {
+      "base_map50": 0.8049006527998962,
+      "new_map50": 0.6050327630685391,
+      "krr": 1.0
+    }
+  },
+  "performance": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/validation/benchmark.json",
+    "sha256": "1dd80ce96276a3ec07adfdf504ebffc6b9a0f356bbbfbd9e5b081ea6b171faa2",
+    "passed": true,
+    "batch_fps": 30.066145520144314
+  },
+  "repeat_performance": [
+    {
+      "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/validation/benchmark-repeat-1.json",
+      "sha256": "603c5646a706fd895480292f59ab808c1417a1764c942dd042f1e7b97766f320",
+      "passed": true,
+      "batch_fps": 30.079711234772148
+    }
+  ],
+  "validity": {
+    "incremental_data_isolation": true,
+    "shared_max_drift_zero": true,
+    "asset_hashes_verified": true,
+    "predictions_frozen_before_labels": true
+  },
+  "diagnostics_block_release": false,
+  "passed": true
+}
