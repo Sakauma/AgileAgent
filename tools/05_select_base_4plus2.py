@@ -53,7 +53,10 @@ def candidate_paths(project: Path, tags: list[str], seeds: list[int]) -> list[di
     ]
 
 
-def queue_failures(project: Path, tags: list[str]) -> list[str]:
+def queue_state(
+    project: Path, tags: list[str]
+) -> tuple[set[tuple[str, int]], list[str]]:
+    completed: set[tuple[str, int]] = set()
     failures: list[str] = []
     for tag in tags:
         path = project / f"{tag}_queue_summary.json"
@@ -61,11 +64,15 @@ def queue_failures(project: Path, tags: list[str]) -> list[str]:
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         for row in payload.get("runs", []):
-            if row.get("status") == "failed":
+            status = row.get("status")
+            seed = int(row.get("seed"))
+            if status in {"complete", "already_complete"}:
+                completed.add((tag, seed))
+            elif status == "failed":
                 failures.append(
-                    f"{tag}/seed={row.get('seed')}: {row.get('error', 'unknown error')}"
+                    f"{tag}/seed={seed}: {row.get('error', 'unknown error')}"
                 )
-    return failures
+    return completed, failures
 
 
 def wait_for_candidates(
@@ -79,13 +86,15 @@ def wait_for_candidates(
     started = time.monotonic()
     last_ready = -1
     while True:
-        failures = queue_failures(project, tags)
+        completed, failures = queue_state(project, tags)
         if failures:
             raise RuntimeError("Base 训练队列失败：" + "; ".join(failures))
         ready = [
             row
             for row in candidates
-            if row["weight"].is_file() and row["results"].is_file()
+            if (row["model_tag"], row["seed"]) in completed
+            and row["weight"].is_file()
+            and row["results"].is_file()
         ]
         if len(ready) != last_ready:
             print(
