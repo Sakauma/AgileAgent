@@ -31,6 +31,19 @@ def parse_seeds(value: str) -> list[int]:
     return seeds
 
 
+def parse_batch(value: str) -> int | float:
+    """Accept either an explicit batch size or an AutoBatch memory fraction."""
+    try:
+        batch = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("batch 必须是正整数或 0 到 1 的显存占比") from exc
+    if 0.0 < batch < 1.0:
+        return batch
+    if batch >= 1.0 and batch.is_integer():
+        return int(batch)
+    raise argparse.ArgumentTypeError("batch 必须是正整数或 0 到 1 的显存占比")
+
+
 def resolve_split(data_root: Path, split_name: str) -> list[Path]:
     split_path = data_root / "splits" / "strict_4plus2" / split_name
     if not split_path.is_file():
@@ -178,9 +191,10 @@ def main() -> int:
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--seeds", type=parse_seeds, default=parse_seeds("3407,20260821,8675309"))
     parser.add_argument("--device", default="0")
-    parser.add_argument("--imgsz", type=int, default=896)
-    parser.add_argument("--batch", type=int, required=True)
-    parser.add_argument("--epochs", type=int, default=180)
+    parser.add_argument("--imgsz", type=int, default=1280)
+    parser.add_argument("--batch", type=parse_batch, required=True)
+    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--patience", type=int, default=50)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()
@@ -222,6 +236,7 @@ def main() -> int:
             "imgsz": args.imgsz,
             "batch": args.batch,
             "epochs": args.epochs,
+            "patience": args.patience,
             "workers": args.workers,
             "optimizer": "AdamW",
             "selection_primary": "Base dev metrics/mAP50(B)",
@@ -258,6 +273,8 @@ def main() -> int:
                     "seed": seed,
                     "imgsz": args.imgsz,
                     "batch": args.batch,
+                    "epochs": args.epochs,
+                    "patience": args.patience,
                 },
                 ensure_ascii=False,
             ),
@@ -285,7 +302,7 @@ def main() -> int:
                     cos_lr=True,
                     warmup_epochs=3.0,
                     weight_decay=0.0005,
-                    patience=0,
+                    patience=args.patience,
                     cache="ram",
                     amp=True,
                     deterministic=True,
@@ -307,7 +324,7 @@ def main() -> int:
                     multi_scale=0.0,
                     plots=True,
                     save=True,
-                    save_period=10,
+                    save_period=25,
                     val=True,
                     verbose=True,
                 )

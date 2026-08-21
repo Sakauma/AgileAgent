@@ -215,11 +215,11 @@ def main() -> int:
     parser.add_argument("--tags", type=parse_csv, default=list(DEFAULT_TAGS))
     parser.add_argument("--seeds", type=parse_seeds, default=parse_seeds("3407,20260821,8675309"))
     parser.add_argument("--device", default="0")
-    parser.add_argument("--imgsz", type=int, default=896)
+    parser.add_argument("--imgsz", type=int, default=1280)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--poll-seconds", type=int, default=60)
-    parser.add_argument("--timeout-seconds", type=int, default=86400)
+    parser.add_argument("--timeout-seconds", type=int, default=604800)
     args = parser.parse_args()
 
     project = args.project.expanduser().resolve()
