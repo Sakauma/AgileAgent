@@ -55,6 +55,7 @@ venv/
 !/tools/02_split_dataset.py
 !/tools/03_split_r2_4plus2.py
 !/tools/04_train_base_4plus2.py
+!/tools/05_select_base_4plus2.py
 !/tools/42_predict_submission.py
 !/tools/60_train_scene_sensor.py
 !/tools/70_run_strict_3plus1.py
