@@ -1,0 +1,472 @@
+{
+  "schema_version": 1,
+  "protocol": "competition_score_priority_strict_4plus2_partition",
+  "created_on": "2026-08-21",
+  "source_git_commit": "550c650e1e72bf2f1e0d7ee024ebf6a524fdd5fb",
+  "class_map": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "warship",
+    "3": "tank",
+    "4": "patrol_boat",
+    "5": "armored_vehicle"
+  },
+  "owners": {
+    "frozen_base_model": {
+      "global_class_ids": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "incremental_model": {
+      "global_class_ids": [
+        4,
+        5
+      ],
+      "local_to_global": {
+        "0": 4,
+        "1": 5
+      }
+    }
+  },
+  "allocation_policy": {
+    "objective": "competition_score_priority",
+    "ratios": {
+      "train": 0.8,
+      "dev": 0.1,
+      "lock": 0.1
+    },
+    "method": "sensor_scene_stratified_frame_level_random",
+    "temporal_isolation": false,
+    "temporal_buffer_count": 0,
+    "adjacent_frame_leakage_intentional": true,
+    "seed_selection": {
+      "range_start_inclusive": 20260821,
+      "range_end_exclusive": 20270821,
+      "lexicographic_objectives": [
+        "R2 new-only armored_vehicle coverage in both dev and lock",
+        "maximize minimum dev/lock count with an adjacent train frame",
+        "maximize total dev/lock count with an adjacent train frame",
+        "maximize evaluation frames sandwiched by train frames",
+        "minimize dev/lock object-count imbalance"
+      ]
+    }
+  },
+  "base_dataset": {
+    "source": "datasets_r1_base_train",
+    "source_images": 750,
+    "global_class_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "counts": {
+      "train": 600,
+      "dev": 75,
+      "lock": 75
+    },
+    "selected_seed": 20262898,
+    "selection_score": [
+      1,
+      74,
+      148,
+      90,
+      -19
+    ],
+    "sequence_quotas": {
+      "ir|air": {
+        "train": 140,
+        "dev": 18,
+        "lock": 17
+      },
+      "ir|forest": {
+        "train": 104,
+        "dev": 13,
+        "lock": 13
+      },
+      "ir|sea": {
+        "train": 84,
+        "dev": 11,
+        "lock": 10
+      },
+      "ir|urban": {
+        "train": 104,
+        "dev": 13,
+        "lock": 13
+      },
+      "sar|forest": {
+        "train": 59,
+        "dev": 7,
+        "lock": 7
+      },
+      "sar|sea": {
+        "train": 51,
+        "dev": 6,
+        "lock": 7
+      },
+      "sar|urban": {
+        "train": 58,
+        "dev": 7,
+        "lock": 8
+      }
+    },
+    "distribution": {
+      "train": {
+        "images": 600,
+        "sensor": {
+          "ir": 432,
+          "sar": 168
+        },
+        "scene": {
+          "air": 140,
+          "forest": 163,
+          "sea": 135,
+          "urban": 162
+        },
+        "sensor_scene": {
+          "ir|air": 140,
+          "ir|forest": 104,
+          "ir|sea": 84,
+          "ir|urban": 104,
+          "sar|forest": 59,
+          "sar|sea": 51,
+          "sar|urban": 58
+        },
+        "class_images": {
+          "0": 325,
+          "1": 140,
+          "2": 135,
+          "3": 325
+        },
+        "class_objects": {
+          "0": 494,
+          "1": 557,
+          "2": 553,
+          "3": 746
+        }
+      },
+      "dev": {
+        "images": 75,
+        "sensor": {
+          "ir": 55,
+          "sar": 20
+        },
+        "scene": {
+          "air": 18,
+          "forest": 20,
+          "sea": 17,
+          "urban": 20
+        },
+        "sensor_scene": {
+          "ir|air": 18,
+          "ir|forest": 13,
+          "ir|sea": 11,
+          "ir|urban": 13,
+          "sar|forest": 7,
+          "sar|sea": 6,
+          "sar|urban": 7
+        },
+        "class_images": {
+          "0": 40,
+          "1": 18,
+          "2": 17,
+          "3": 40
+        },
+        "class_objects": {
+          "0": 63,
+          "1": 72,
+          "2": 82,
+          "3": 96
+        }
+      },
+      "lock": {
+        "images": 75,
+        "sensor": {
+          "ir": 53,
+          "sar": 22
+        },
+        "scene": {
+          "air": 17,
+          "forest": 20,
+          "sea": 17,
+          "urban": 21
+        },
+        "sensor_scene": {
+          "ir|air": 17,
+          "ir|forest": 13,
+          "ir|sea": 10,
+          "ir|urban": 13,
+          "sar|forest": 7,
+          "sar|sea": 7,
+          "sar|urban": 8
+        },
+        "class_images": {
+          "0": 41,
+          "1": 17,
+          "2": 17,
+          "3": 41
+        },
+        "class_objects": {
+          "0": 62,
+          "1": 70,
+          "2": 67,
+          "3": 95
+        }
+      }
+    },
+    "temporal_leakage": {
+      "dev": {
+        "count": 75,
+        "adjacent_train_frame_count": 74,
+        "adjacent_train_frame_ratio": 0.986667,
+        "sandwiched_by_train_frames_count": 46,
+        "within_two_train_frames_count": 75,
+        "maximum_nearest_train_distance": 2
+      },
+      "lock": {
+        "count": 75,
+        "adjacent_train_frame_count": 74,
+        "adjacent_train_frame_ratio": 0.986667,
+        "sandwiched_by_train_frames_count": 44,
+        "within_two_train_frames_count": 75,
+        "maximum_nearest_train_distance": 2
+      }
+    }
+  },
+  "increment_dataset": {
+    "source": "datasets_r2_inc_train",
+    "source_images": 140,
+    "source_objects": 1006,
+    "new_global_class_ids": [
+      4,
+      5
+    ],
+    "old_labels_retained_for_audit": true,
+    "new_head_label_projection_required": true,
+    "counts": {
+      "train": 112,
+      "dev": 14,
+      "lock": 14
+    },
+    "selected_seed": 20269064,
+    "selection_score": [
+      1,
+      14,
+      28,
+      27,
+      -1
+    ],
+    "sequence_quotas": {
+      "ir|forest": {
+        "train": 20,
+        "dev": 3,
+        "lock": 2
+      },
+      "ir|sea": {
+        "train": 40,
+        "dev": 5,
+        "lock": 5
+      },
+      "ir|urban": {
+        "train": 20,
+        "dev": 2,
+        "lock": 3
+      },
+      "sar|forest": {
+        "train": 8,
+        "dev": 1,
+        "lock": 1
+      },
+      "sar|sea": {
+        "train": 16,
+        "dev": 2,
+        "lock": 2
+      },
+      "sar|urban": {
+        "train": 8,
+        "dev": 1,
+        "lock": 1
+      }
+    },
+    "distribution": {
+      "train": {
+        "images": 112,
+        "sensor": {
+          "ir": 80,
+          "sar": 32
+        },
+        "scene": {
+          "forest": 28,
+          "sea": 56,
+          "urban": 28
+        },
+        "sensor_scene": {
+          "ir|forest": 20,
+          "ir|sea": 40,
+          "ir|urban": 20,
+          "sar|forest": 8,
+          "sar|sea": 16,
+          "sar|urban": 8
+        },
+        "class_images": {
+          "2": 56,
+          "3": 54,
+          "4": 56,
+          "5": 56
+        },
+        "class_objects": {
+          "2": 56,
+          "3": 54,
+          "4": 335,
+          "5": 362
+        }
+      },
+      "dev": {
+        "images": 14,
+        "sensor": {
+          "ir": 10,
+          "sar": 4
+        },
+        "scene": {
+          "forest": 4,
+          "sea": 7,
+          "urban": 3
+        },
+        "sensor_scene": {
+          "ir|forest": 3,
+          "ir|sea": 5,
+          "ir|urban": 2,
+          "sar|forest": 1,
+          "sar|sea": 2,
+          "sar|urban": 1
+        },
+        "class_images": {
+          "2": 7,
+          "3": 6,
+          "4": 7,
+          "5": 7
+        },
+        "class_objects": {
+          "2": 7,
+          "3": 6,
+          "4": 42,
+          "5": 45
+        }
+      },
+      "lock": {
+        "images": 14,
+        "sensor": {
+          "ir": 10,
+          "sar": 4
+        },
+        "scene": {
+          "forest": 3,
+          "sea": 7,
+          "urban": 4
+        },
+        "sensor_scene": {
+          "ir|forest": 2,
+          "ir|sea": 5,
+          "ir|urban": 3,
+          "sar|forest": 1,
+          "sar|sea": 2,
+          "sar|urban": 1
+        },
+        "class_images": {
+          "2": 7,
+          "3": 5,
+          "4": 7,
+          "5": 7
+        },
+        "class_objects": {
+          "2": 7,
+          "3": 5,
+          "4": 42,
+          "5": 45
+        }
+      }
+    },
+    "temporal_leakage": {
+      "dev": {
+        "count": 14,
+        "adjacent_train_frame_count": 14,
+        "adjacent_train_frame_ratio": 1.0,
+        "sandwiched_by_train_frames_count": 14,
+        "within_two_train_frames_count": 14,
+        "maximum_nearest_train_distance": 1
+      },
+      "lock": {
+        "count": 14,
+        "adjacent_train_frame_count": 14,
+        "adjacent_train_frame_ratio": 1.0,
+        "sandwiched_by_train_frames_count": 13,
+        "within_two_train_frames_count": 14,
+        "maximum_nearest_train_distance": 1
+      }
+    }
+  },
+  "lists": {
+    "base_all": {
+      "path": "splits/strict_4plus2/base_all.txt",
+      "count": 750
+    },
+    "base_dev": {
+      "path": "splits/strict_4plus2/base_dev.txt",
+      "count": 75
+    },
+    "base_lock": {
+      "path": "splits/strict_4plus2/base_lock.txt",
+      "count": 75
+    },
+    "base_train": {
+      "path": "splits/strict_4plus2/base_train.txt",
+      "count": 600
+    },
+    "base_train_plus_dev": {
+      "path": "splits/strict_4plus2/base_train_plus_dev.txt",
+      "count": 675
+    },
+    "increment_all": {
+      "path": "splits/strict_4plus2/increment_all.txt",
+      "count": 140
+    },
+    "increment_dev": {
+      "path": "splits/strict_4plus2/increment_dev.txt",
+      "count": 14
+    },
+    "increment_lock": {
+      "path": "splits/strict_4plus2/increment_lock.txt",
+      "count": 14
+    },
+    "increment_train": {
+      "path": "splits/strict_4plus2/increment_train.txt",
+      "count": 112
+    },
+    "increment_train_plus_dev": {
+      "path": "splits/strict_4plus2/increment_train_plus_dev.txt",
+      "count": 126
+    },
+    "mixed_dev": {
+      "path": "splits/strict_4plus2/mixed_dev.txt",
+      "count": 89
+    },
+    "mixed_lock": {
+      "path": "splits/strict_4plus2/mixed_lock.txt",
+      "count": 89
+    }
+  },
+  "release_refit_policy": {
+    "development": "train only; dev for selection; lock opened after prediction freeze",
+    "competition_refit": "train_plus_dev after hyperparameters and thresholds are frozen",
+    "official_hidden_test_only": "all may be used, but local lock is then training data and not independent evidence"
+  },
+  "legacy_archive": {
+    "path": "splits/archive/2026-08-21_strict_3plus1",
+    "source_protocol": "full_coverage_strict_3plus1_dataset_partition",
+    "file_count": 21
+  },
+  "training_started": false
+}

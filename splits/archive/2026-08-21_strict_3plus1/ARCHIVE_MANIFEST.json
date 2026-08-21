@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "archive_id": "2026-08-21_strict_3plus1",
+  "source_protocol": "full_coverage_strict_3plus1_dataset_partition",
+  "source_git_commit": "550c650e1e72bf2f1e0d7ee024ebf6a524fdd5fb",
+  "archived_on": "2026-08-21",
+  "copy_policy": "dated_snapshot_with_compatibility_copy_retained",
+  "file_count": 21,
+  "files": [
+    "README.md",
+    "manifest.json",
+    "pool_train.txt",
+    "pool_train_ir.txt",
+    "pool_train_sar.txt",
+    "pool_dev.txt",
+    "pool_dev_ir.txt",
+    "pool_dev_sar.txt",
+    "mixed_test.txt",
+    "mixed_test_ir.txt",
+    "mixed_test_sar.txt",
+    "strict_3plus1/base_dev.txt",
+    "strict_3plus1/base_test.txt",
+    "strict_3plus1/base_train.txt",
+    "strict_3plus1/increment_dev.txt",
+    "strict_3plus1/increment_train.txt",
+    "strict_3plus1/manifest.json",
+    "strict_3plus1/mixed_test.txt",
+    "strict_3plus1/scene_dev.txt",
+    "strict_3plus1/scene_test.txt",
+    "strict_3plus1/scene_train.txt"
+  ]
+}
