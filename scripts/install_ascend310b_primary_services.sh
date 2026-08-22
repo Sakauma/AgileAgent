@@ -229,23 +229,27 @@ for _ in $(seq 1 180); do
 done
 require_health_field "$MAIN_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""
 
+# rollback unit在安装unit前可能已经active；`enable --now`不会重启它，也不能
+# 证明新unit已接管进程。显式restart并在路由切换前等待8501真正ready，保证
+# 任意后续失败都仍有可立即恢复的监听器。
+step "启动并验证三OM回滚service"
+systemctl enable agileagent-ascend310b-rollback.service
+systemctl restart agileagent-ascend310b-rollback.service
+for _ in $(seq 1 180); do
+  if health_has_field "$PUBLIC_PORT" '"status":"ready"'; then
+    break
+  fi
+  sleep 1
+done
+require_health_field "$PUBLIC_PORT" '"status":"ready"'
+require_loopback_listener "$PUBLIC_PORT"
+
 step "原子切换公共8501新连接"
 "$ROUTE_INSTALL" apply "$MAIN_PORT"
 ROUTE_APPLIED=1
 
-# 新连接已进入满分主实例；此后重管旧进程不会影响公共8501。
-step "将三OM监听器纳入回滚service"
-env AGILE_AGENT_ASCEND_RELEASE="$ROLLBACK_ROOT" \
-  AGILE_AGENT_ASCEND_PID_FILE="$ROLLBACK_ROOT/agent-web.pid" \
-  /usr/bin/bash "$ROLLBACK_ROOT/src/scripts/stop_agent_ascend310b.sh"
-systemctl enable --now agileagent-ascend310b-rollback.service
 systemctl enable agileagent-ascend310b-route.service
 systemctl start agileagent-ascend310b-route.service
-
-step "更新正式release链接"
-link_tmp="${CANONICAL_LINK}.tmp.$$"
-ln -s "$MAIN_ROOT" "$link_tmp"
-mv -Tf "$link_tmp" "$CANONICAL_LINK"
 
 step "执行正式发布收尾验收"
 require_active agileagent-ascend310b-main.service
@@ -255,6 +259,11 @@ require_health_field "$MAIN_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""
 require_health_field "$PUBLIC_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""
 require_loopback_listener "$PUBLIC_PORT"
 require_loopback_listener "$MAIN_PORT"
+
+step "更新正式release链接"
+link_tmp="${CANONICAL_LINK}.tmp.$$"
+ln -s "$MAIN_ROOT" "$link_tmp"
+mv -Tf "$link_tmp" "$CANONICAL_LINK"
 
 SUCCESS=1
 trap - EXIT
