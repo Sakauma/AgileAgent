@@ -1,0 +1,38 @@
+{
+  "schema_version": 2,
+  "source_split": "incremental_train_only",
+  "dimensions": [
+    "scene"
+  ],
+  "online_inputs": [
+    "scene_probabilities"
+  ],
+  "label_aware_online_routing": false,
+  "filename_aware_online_routing": false,
+  "per_class": {
+    "4": {
+      "schema_version": 1,
+      "class_id": 4,
+      "class_name": "patrol_boat",
+      "sample_count": 56,
+      "scene": {
+        "air": 0.12243071165448241,
+        "forest": 0.16440275625333164,
+        "sea": 1.0,
+        "urban": 0.16303575719315921
+      }
+    },
+    "5": {
+      "schema_version": 1,
+      "class_id": 5,
+      "class_name": "armored_vehicle",
+      "sample_count": 56,
+      "scene": {
+        "air": 0.09149927230400841,
+        "forest": 0.93914792299818,
+        "sea": 0.48745347124642435,
+        "urban": 1.0
+      }
+    }
+  }
+}

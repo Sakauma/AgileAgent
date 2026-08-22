@@ -1,0 +1,62 @@
+{
+  "schema_version": 2,
+  "source_split": "base_train_only",
+  "dimensions": [
+    "scene"
+  ],
+  "online_inputs": [
+    "scene_probabilities"
+  ],
+  "label_aware_online_routing": false,
+  "filename_aware_online_routing": false,
+  "per_class": {
+    "0": {
+      "schema_version": 1,
+      "class_id": 0,
+      "class_name": "soldier",
+      "sample_count": 325,
+      "scene": {
+        "air": 0.06128439777485654,
+        "forest": 0.9979443790133301,
+        "sea": 0.2738924374932772,
+        "urban": 1.0
+      }
+    },
+    "1": {
+      "schema_version": 1,
+      "class_id": 1,
+      "class_name": "small_aircraft",
+      "sample_count": 140,
+      "scene": {
+        "air": 1.0,
+        "forest": 0.11706548199290176,
+        "sea": 0.38214474773146034,
+        "urban": 0.09168219262778911
+      }
+    },
+    "2": {
+      "schema_version": 1,
+      "class_id": 2,
+      "class_name": "warship",
+      "sample_count": 135,
+      "scene": {
+        "air": 0.15167115437245876,
+        "forest": 0.21613975749385161,
+        "sea": 1.0,
+        "urban": 0.15047797052544387
+      }
+    },
+    "3": {
+      "schema_version": 1,
+      "class_id": 3,
+      "class_name": "tank",
+      "sample_count": 325,
+      "scene": {
+        "air": 0.06128439777485654,
+        "forest": 0.9979443790133301,
+        "sea": 0.2738924374932772,
+        "urban": 1.0
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "incremental-detection",
-  "run_id": "strict-4plus2-20260822-054120",
+  "run_id": "strict-4plus2-scene-aware-20260822-091112",
   "acceptance": "passed",
   "competition_accepted": true,
   "deployment_accepted": true,
@@ -15,7 +15,8 @@
     "fusion_level": "detection_boxes",
     "scene_hard_routing": false,
     "label_aware_routing": false,
-    "filename_class_routing": false
+    "filename_class_routing": false,
+    "scene_soft_gating": true
   },
   "base_weight": "models/production/incremental_detection/four_class_base_detector.pt",
   "base_sha256": "105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd",
@@ -49,10 +50,13 @@
     "4": "patrol_boat",
     "5": "armored_vehicle"
   },
-  "new_global_ids": [4, 5],
+  "new_global_ids": [
+    4,
+    5
+  ],
   "activation_thresholds": {
-    "4": 0.18,
-    "5": 0.08
+    "4": 0.57,
+    "5": 0.82
   },
   "calibration_source": "models/production/incremental_detection/calibration.json",
   "calibration_sources": {
@@ -61,52 +65,191 @@
   },
   "metrics_source": "models/production/incremental_detection/metrics.json",
   "evidence_level": "verified",
-  "evaluation_semantics": "all_owners_on_mixed_dev_then_frozen_mixed_lock_v1",
-  "rechecked_at": "2026-08-22T13:41:20+08:00",
+  "evaluation_semantics": "all_owners_scene_probability_gated_on_mixed_dev_then_frozen_mixed_lock_v2",
+  "rechecked_at": "2026-08-22T09:11:12.363783+00:00",
   "base_imgsz": 1280,
   "specialist_imgsz": 1280,
-  "base_test_map50": 0.8875500761448091,
-  "base_dev_map50": 0.9134543086202153,
+  "base_test_map50": 0.8560669777957763,
+  "base_dev_map50": 0.8899785910691257,
   "old_map50_before": 0.8280599094822771,
-  "old_map50_after": 0.8280599094822771,
-  "new_map50": 0.8122485978175054,
-  "full_map50": 0.8227894722606865,
-  "krr": 1.0,
-  "lock_precision": 0.28378378378378377,
-  "lock_recall": 1.0,
-  "lock_false_activation_rate": 0.4268292682926829,
+  "old_map50_after": 0.8058064769386335,
+  "new_map50": 0.7733677094868956,
+  "full_map50": 0.7949935544547209,
+  "krr": 0.9731258182061283,
+  "lock_precision": 0.8163265306122449,
+  "lock_recall": 0.6904761904761905,
+  "lock_false_activation_rate": 0.08536585365853659,
   "lock_precision_by_class": {
-    "4": 0.28378378378378377,
-    "5": 0.3879310344827586
+    "4": 0.9666666666666667,
+    "5": 0.8163265306122449
   },
   "lock_recall_by_class": {
-    "4": 1.0,
-    "5": 1.0
+    "4": 0.6904761904761905,
+    "5": 0.8888888888888888
   },
   "lock_false_activation_rate_by_class": {
-    "4": 0.4268292682926829,
-    "5": 0.34146341463414637
+    "4": 0.012195121951219513,
+    "5": 0.08536585365853659
   },
   "fusion_policy": {
-    "enabled": true,
+    "enabled": false,
     "iou": 1.0,
     "base_confidence": 0.01,
     "incremental_margin": 0.0,
-    "preserve_base_class_owners": true
+    "preserve_base_class_owners": true,
+    "class_aware_nms_iou": 0.6
   },
-  "context_prior": {},
+  "context_prior": {
+    "schema_version": 2,
+    "source_split": "incremental_train_only",
+    "dimensions": [
+      "scene"
+    ],
+    "online_inputs": [
+      "scene_probabilities"
+    ],
+    "label_aware_online_routing": false,
+    "filename_aware_online_routing": false,
+    "per_class": {
+      "4": {
+        "schema_version": 1,
+        "class_id": 4,
+        "class_name": "patrol_boat",
+        "sample_count": 56,
+        "scene": {
+          "air": 0.12243071165448241,
+          "forest": 0.16440275625333164,
+          "sea": 1.0,
+          "urban": 0.16303575719315921
+        }
+      },
+      "5": {
+        "schema_version": 1,
+        "class_id": 5,
+        "class_name": "armored_vehicle",
+        "sample_count": 56,
+        "scene": {
+          "air": 0.09149927230400841,
+          "forest": 0.93914792299818,
+          "sea": 0.48745347124642435,
+          "urban": 1.0
+        }
+      }
+    }
+  },
   "context_gate": {
-    "enabled": false,
-    "policy": "disabled_for_first_4plus2_release",
-    "hard_routing": false
+    "enabled": true,
+    "policy": "soft_threshold_penalty",
+    "hard_routing": false,
+    "learning_data_scope": "incremental_train_only",
+    "dimensions": [
+      "scene"
+    ],
+    "max_threshold_penalty": 0.65,
+    "max_threshold_penalties": {
+      "4": 0.65,
+      "5": 0.0
+    },
+    "prior_source": "models/production/incremental_detection/incremental_context_prior.json",
+    "prior_sha256": "c102f4b6d1a7de7b712ce117239c3fe20f77fe991f85b6d82b1d15b3e3eb3f29",
+    "online_input": "scene_sensor_net_probabilities"
   },
-  "context_prior_source": null,
-  "context_prior_sha256": null,
+  "context_prior_source": "models/production/incremental_detection/incremental_context_prior.json",
+  "context_prior_sha256": "c102f4b6d1a7de7b712ce117239c3fe20f77fe991f85b6d82b1d15b3e3eb3f29",
   "positive_prototype": null,
   "positive_prototype_source": null,
   "positive_prototype_sha256": null,
   "diagnostic_warnings": [
-    "lock_precision_below_0_70",
-    "false_activation_rate_above_0_15"
-  ]
+    "lock_precision_below_0_90",
+    "false_activation_rate_above_0_05"
+  ],
+  "base_activation_thresholds": {
+    "0": 0.21,
+    "1": 0.14,
+    "2": 0.36,
+    "3": 0.05
+  },
+  "base_context_prior": {
+    "schema_version": 2,
+    "source_split": "base_train_only",
+    "dimensions": [
+      "scene"
+    ],
+    "online_inputs": [
+      "scene_probabilities"
+    ],
+    "label_aware_online_routing": false,
+    "filename_aware_online_routing": false,
+    "per_class": {
+      "0": {
+        "schema_version": 1,
+        "class_id": 0,
+        "class_name": "soldier",
+        "sample_count": 325,
+        "scene": {
+          "air": 0.06128439777485654,
+          "forest": 0.9979443790133301,
+          "sea": 0.2738924374932772,
+          "urban": 1.0
+        }
+      },
+      "1": {
+        "schema_version": 1,
+        "class_id": 1,
+        "class_name": "small_aircraft",
+        "sample_count": 140,
+        "scene": {
+          "air": 1.0,
+          "forest": 0.11706548199290176,
+          "sea": 0.38214474773146034,
+          "urban": 0.09168219262778911
+        }
+      },
+      "2": {
+        "schema_version": 1,
+        "class_id": 2,
+        "class_name": "warship",
+        "sample_count": 135,
+        "scene": {
+          "air": 0.15167115437245876,
+          "forest": 0.21613975749385161,
+          "sea": 1.0,
+          "urban": 0.15047797052544387
+        }
+      },
+      "3": {
+        "schema_version": 1,
+        "class_id": 3,
+        "class_name": "tank",
+        "sample_count": 325,
+        "scene": {
+          "air": 0.06128439777485654,
+          "forest": 0.9979443790133301,
+          "sea": 0.2738924374932772,
+          "urban": 1.0
+        }
+      }
+    }
+  },
+  "base_context_gate": {
+    "enabled": true,
+    "policy": "soft_threshold_penalty",
+    "hard_routing": false,
+    "learning_data_scope": "base_train_only",
+    "dimensions": [
+      "scene"
+    ],
+    "max_threshold_penalty": 0.88,
+    "max_threshold_penalties": {
+      "0": 0.15,
+      "1": 0.88,
+      "2": 0.26,
+      "3": 0.19
+    },
+    "prior_source": "models/production/incremental_detection/base_context_prior.json",
+    "prior_sha256": "496e838aaec2d45c58a4d4814a948468d31926413bd6b97c642dbaf979db32ae",
+    "online_input": "scene_sensor_net_probabilities"
+  },
+  "base_context_prior_source": "models/production/incremental_detection/base_context_prior.json",
+  "base_context_prior_sha256": "496e838aaec2d45c58a4d4814a948468d31926413bd6b97c642dbaf979db32ae"
 }

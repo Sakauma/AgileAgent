@@ -1,8 +1,8 @@
 {
-  "schema_version": 3,
-  "run_id": "strict-4plus2-20260822-054120",
-  "created_at": "2026-08-22T05:41:20.285529+00:00",
-  "protocol": "strict-4plus2-parallel-specialist",
+  "schema_version": 4,
+  "run_id": "strict-4plus2-scene-aware-20260822-091112",
+  "created_at": "2026-08-22T09:11:12.363783+00:00",
+  "protocol": "strict-4plus2-parallel-specialist-class-specific-scene-gate",
   "incremental_mode": "class_incremental",
   "learning_data_scope": "incremental_dataset_only",
   "old_raw_image_count": 0,
@@ -36,11 +36,32 @@
     "prediction_confidence": 0.01,
     "iou": 0.7,
     "max_det": 300,
-    "fusion": "disjoint_class_owner_concatenation",
-    "context_gate_enabled": false,
+    "fusion": "fixed_class_owners_with_class_specific_scene_soft_gate",
+    "context_gate_enabled": true,
     "per_class_thresholds": {
-      "4": 0.18,
-      "5": 0.08
+      "0": 0.21,
+      "1": 0.14,
+      "2": 0.36,
+      "3": 0.05,
+      "4": 0.57,
+      "5": 0.82
+    },
+    "fusion_iou": 0.6,
+    "hard_scene_routing": false,
+    "max_threshold_penalties": {
+      "0": 0.15,
+      "1": 0.88,
+      "2": 0.26,
+      "3": 0.19,
+      "4": 0.65,
+      "5": 0.0
+    },
+    "conflict_policy": {
+      "enabled": false,
+      "iou": 1.0,
+      "base_confidence": 0.01,
+      "specialist_margin": 0.0,
+      "preserve_base_class_owners": true
     }
   },
   "splits": {
@@ -54,147 +75,361 @@
   "dev": {
     "image_count": 89,
     "base_image_count": 75,
-    "base_map50": 0.9099861564974971,
+    "base_map50": 0.8899785910691257,
     "base_per_class_ap50": {
-      "0": 0.7272379416186865,
-      "1": 0.991253622190331,
+      "0": 0.6597434213173061,
+      "1": 0.9848611111111111,
       "2": 0.97357177804595,
-      "3": 0.947881284135021
+      "3": 0.9417380538021356
     },
     "old_map50_before": 0.8779488460839137,
-    "old_map50_after": 0.8779488460839137,
-    "krr": 1.0,
-    "old_prediction_equivalent": true,
-    "new_map50": 0.828702450727242,
+    "old_map50_after": 0.8605059313129718,
+    "krr": 0.9801321969397808,
+    "old_prediction_equivalent": false,
+    "new_map50": 0.7808441558441559,
     "new_per_class_ap50": {
-      "4": 0.7516805522153804,
-      "5": 0.9057243492391035
+      "4": 0.735,
+      "5": 0.8266883116883117
     },
-    "full_map50": 0.8615333809650231,
+    "full_map50": 0.8339520061566998,
     "full_per_class_ap50": {
-      "0": 0.7234991484271543,
-      "1": 0.9753211582408463,
-      "2": 0.9272856225814732,
-      "3": 0.8856894550861807,
-      "4": 0.7516805522153804,
-      "5": 0.9057243492391035
+      "0": 0.6581082935848444,
+      "1": 0.9749329784329782,
+      "2": 0.9274817384562601,
+      "3": 0.8815007147778046,
+      "4": 0.735,
+      "5": 0.8266883116883117
     },
     "new_class_quality": {
       "4": {
         "class_name": "patrol_boat",
-        "map50": 0.7516805522153804,
-        "precision": 0.2857142857142857,
-        "recall": 1.0,
-        "f1": 0.4444444444444445,
-        "tp": 42,
-        "fp": 105,
+        "map50": 0.735,
+        "precision": 1.0,
+        "recall": 0.7380952380952381,
+        "f1": 0.8493150684931507,
+        "tp": 31,
+        "fp": 0,
         "targets": 42,
-        "threshold": 0.18
+        "threshold": 0.57,
+        "max_scene_penalty": 0.65
       },
       "5": {
         "class_name": "armored_vehicle",
-        "map50": 0.9057243492391035,
-        "precision": 0.4230769230769231,
-        "recall": 0.9777777777777777,
-        "f1": 0.5906040268456376,
-        "tp": 44,
-        "fp": 60,
+        "map50": 0.8266883116883117,
+        "precision": 0.9285714285714286,
+        "recall": 0.8666666666666667,
+        "f1": 0.896551724137931,
+        "tp": 39,
+        "fp": 3,
         "targets": 45,
-        "threshold": 0.08
+        "threshold": 0.82,
+        "max_scene_penalty": 0.0
       }
     },
     "false_activation": {
       "4": {
         "class_name": "patrol_boat",
         "negative_image_count": 82,
-        "false_activation_image_count": 36,
-        "false_activation_rate": 0.43902439024390244
+        "false_activation_image_count": 0,
+        "false_activation_rate": 0.0
       },
       "5": {
         "class_name": "armored_vehicle",
         "negative_image_count": 82,
-        "false_activation_image_count": 26,
-        "false_activation_rate": 0.3170731707317073
+        "false_activation_image_count": 3,
+        "false_activation_rate": 0.036585365853658534
       }
     },
+    "all_class_quality": {
+      "0": {
+        "class_name": "soldier",
+        "map50": 0.6581082935848444,
+        "precision": 0.6025641025641025,
+        "recall": 0.746031746031746,
+        "f1": 0.6666666666666666,
+        "tp": 47,
+        "fp": 31,
+        "targets": 63,
+        "false_activation_image_count": 1,
+        "negative_image_count": 49,
+        "false_activation_rate": 0.02040816326530612,
+        "threshold": 0.21,
+        "max_scene_penalty": 0.15
+      },
+      "1": {
+        "class_name": "small_aircraft",
+        "map50": 0.9749329784329782,
+        "precision": 0.9594594594594594,
+        "recall": 0.9861111111111112,
+        "f1": 0.9726027397260274,
+        "tp": 71,
+        "fp": 3,
+        "targets": 72,
+        "false_activation_image_count": 1,
+        "negative_image_count": 71,
+        "false_activation_rate": 0.014084507042253521,
+        "threshold": 0.14,
+        "max_scene_penalty": 0.88
+      },
+      "2": {
+        "class_name": "warship",
+        "map50": 0.9274817384562601,
+        "precision": 0.7586206896551724,
+        "recall": 0.9887640449438202,
+        "f1": 0.8585365853658535,
+        "tp": 88,
+        "fp": 28,
+        "targets": 89,
+        "false_activation_image_count": 0,
+        "negative_image_count": 65,
+        "false_activation_rate": 0.0,
+        "threshold": 0.36,
+        "max_scene_penalty": 0.26
+      },
+      "3": {
+        "class_name": "tank",
+        "map50": 0.8815007147778046,
+        "precision": 0.5975609756097561,
+        "recall": 0.9607843137254902,
+        "f1": 0.7368421052631579,
+        "tp": 98,
+        "fp": 66,
+        "targets": 102,
+        "false_activation_image_count": 1,
+        "negative_image_count": 43,
+        "false_activation_rate": 0.023255813953488372,
+        "threshold": 0.05,
+        "max_scene_penalty": 0.19
+      },
+      "4": {
+        "class_name": "patrol_boat",
+        "map50": 0.735,
+        "precision": 1.0,
+        "recall": 0.7380952380952381,
+        "f1": 0.8493150684931507,
+        "tp": 31,
+        "fp": 0,
+        "targets": 42,
+        "false_activation_image_count": 0,
+        "negative_image_count": 82,
+        "false_activation_rate": 0.0,
+        "threshold": 0.57,
+        "max_scene_penalty": 0.65
+      },
+      "5": {
+        "class_name": "armored_vehicle",
+        "map50": 0.8266883116883117,
+        "precision": 0.9285714285714286,
+        "recall": 0.8666666666666667,
+        "f1": 0.896551724137931,
+        "tp": 39,
+        "fp": 3,
+        "targets": 45,
+        "false_activation_image_count": 3,
+        "negative_image_count": 82,
+        "false_activation_rate": 0.036585365853658534,
+        "threshold": 0.82,
+        "max_scene_penalty": 0.0
+      }
+    },
+    "overall_quality": {
+      "tp": 374,
+      "fp": 131,
+      "precision": 0.7405940594059406,
+      "false_activation_image_count": 6
+    },
+    "new_class_summary": {
+      "tp": 70,
+      "fp": 3,
+      "precision": 0.958904109589041
+    },
     "prediction_counts": {
-      "base": 1246,
-      "specialist_before_threshold": 489,
-      "specialist_after_threshold": 251,
-      "fused": 1497
+      "base_before": 1246,
+      "base_after": 432,
+      "new_before": 489,
+      "new_after": 73,
+      "fused": 505,
+      "conflict_rejected": 0
     }
   },
   "lock": {
     "image_count": 89,
     "base_image_count": 75,
-    "base_map50": 0.8875500761448091,
+    "base_map50": 0.8560669777957763,
     "base_per_class_ap50": {
-      "0": 0.6998841417632502,
-      "1": 0.9641117058186911,
-      "2": 0.9816443381180223,
-      "3": 0.9045601188792728
+      "0": 0.6357225502020711,
+      "1": 0.9235247674670128,
+      "2": 0.9746969696969696,
+      "3": 0.8903236238170515
     },
     "old_map50_before": 0.8280599094822771,
-    "old_map50_after": 0.8280599094822771,
-    "krr": 1.0,
-    "old_prediction_equivalent": true,
-    "new_map50": 0.8122485978175054,
+    "old_map50_after": 0.8058064769386335,
+    "krr": 0.9731258182061283,
+    "old_prediction_equivalent": false,
+    "new_map50": 0.7733677094868956,
     "new_per_class_ap50": {
-      "4": 0.7070824343807792,
-      "5": 0.9174147612542315
+      "4": 0.6910000000000001,
+      "5": 0.855735418973791
     },
-    "full_map50": 0.8227894722606865,
+    "full_map50": 0.7949935544547209,
     "full_per_class_ap50": {
-      "0": 0.6867181589124706,
-      "1": 0.9361108364397858,
-      "2": 0.932856444201782,
-      "3": 0.7565541983750703,
-      "4": 0.7070824343807792,
-      "5": 0.9174147612542315
+      "0": 0.6294990679583363,
+      "1": 0.9182654936974791,
+      "2": 0.9291695755149133,
+      "3": 0.746291770583805,
+      "4": 0.6910000000000001,
+      "5": 0.855735418973791
     },
     "new_class_quality": {
       "4": {
         "class_name": "patrol_boat",
-        "map50": 0.7070824343807792,
-        "precision": 0.28378378378378377,
-        "recall": 1.0,
-        "f1": 0.4421052631578947,
-        "tp": 42,
-        "fp": 106,
+        "map50": 0.6910000000000001,
+        "precision": 0.9666666666666667,
+        "recall": 0.6904761904761905,
+        "f1": 0.8055555555555556,
+        "tp": 29,
+        "fp": 1,
         "targets": 42,
-        "threshold": 0.18
+        "threshold": 0.57,
+        "max_scene_penalty": 0.65
       },
       "5": {
         "class_name": "armored_vehicle",
-        "map50": 0.9174147612542315,
-        "precision": 0.3879310344827586,
-        "recall": 1.0,
-        "f1": 0.5590062111801242,
-        "tp": 45,
-        "fp": 71,
+        "map50": 0.855735418973791,
+        "precision": 0.8163265306122449,
+        "recall": 0.8888888888888888,
+        "f1": 0.851063829787234,
+        "tp": 40,
+        "fp": 9,
         "targets": 45,
-        "threshold": 0.08
+        "threshold": 0.82,
+        "max_scene_penalty": 0.0
       }
     },
     "false_activation": {
       "4": {
         "class_name": "patrol_boat",
         "negative_image_count": 82,
-        "false_activation_image_count": 35,
-        "false_activation_rate": 0.4268292682926829
+        "false_activation_image_count": 1,
+        "false_activation_rate": 0.012195121951219513
       },
       "5": {
         "class_name": "armored_vehicle",
         "negative_image_count": 82,
-        "false_activation_image_count": 28,
-        "false_activation_rate": 0.34146341463414637
+        "false_activation_image_count": 7,
+        "false_activation_rate": 0.08536585365853659
       }
     },
+    "all_class_quality": {
+      "0": {
+        "class_name": "soldier",
+        "map50": 0.6294990679583363,
+        "precision": 0.575,
+        "recall": 0.7419354838709677,
+        "f1": 0.6478873239436619,
+        "tp": 46,
+        "fp": 34,
+        "targets": 62,
+        "false_activation_image_count": 4,
+        "negative_image_count": 48,
+        "false_activation_rate": 0.08333333333333333,
+        "threshold": 0.21,
+        "max_scene_penalty": 0.15
+      },
+      "1": {
+        "class_name": "small_aircraft",
+        "map50": 0.9182654936974791,
+        "precision": 0.8904109589041096,
+        "recall": 0.9285714285714286,
+        "f1": 0.9090909090909091,
+        "tp": 65,
+        "fp": 8,
+        "targets": 70,
+        "false_activation_image_count": 1,
+        "negative_image_count": 72,
+        "false_activation_rate": 0.013888888888888888,
+        "threshold": 0.14,
+        "max_scene_penalty": 0.88
+      },
+      "2": {
+        "class_name": "warship",
+        "map50": 0.9291695755149133,
+        "precision": 0.7128712871287128,
+        "recall": 0.972972972972973,
+        "f1": 0.8228571428571428,
+        "tp": 72,
+        "fp": 29,
+        "targets": 74,
+        "false_activation_image_count": 0,
+        "negative_image_count": 65,
+        "false_activation_rate": 0.0,
+        "threshold": 0.36,
+        "max_scene_penalty": 0.26
+      },
+      "3": {
+        "class_name": "tank",
+        "map50": 0.746291770583805,
+        "precision": 0.5027932960893855,
+        "recall": 0.9,
+        "f1": 0.6451612903225807,
+        "tp": 90,
+        "fp": 89,
+        "targets": 100,
+        "false_activation_image_count": 3,
+        "negative_image_count": 43,
+        "false_activation_rate": 0.06976744186046512,
+        "threshold": 0.05,
+        "max_scene_penalty": 0.19
+      },
+      "4": {
+        "class_name": "patrol_boat",
+        "map50": 0.6910000000000001,
+        "precision": 0.9666666666666667,
+        "recall": 0.6904761904761905,
+        "f1": 0.8055555555555556,
+        "tp": 29,
+        "fp": 1,
+        "targets": 42,
+        "false_activation_image_count": 1,
+        "negative_image_count": 82,
+        "false_activation_rate": 0.012195121951219513,
+        "threshold": 0.57,
+        "max_scene_penalty": 0.65
+      },
+      "5": {
+        "class_name": "armored_vehicle",
+        "map50": 0.855735418973791,
+        "precision": 0.8163265306122449,
+        "recall": 0.8888888888888888,
+        "f1": 0.851063829787234,
+        "tp": 40,
+        "fp": 9,
+        "targets": 45,
+        "false_activation_image_count": 7,
+        "negative_image_count": 82,
+        "false_activation_rate": 0.08536585365853659,
+        "threshold": 0.82,
+        "max_scene_penalty": 0.0
+      }
+    },
+    "overall_quality": {
+      "tp": 342,
+      "fp": 170,
+      "precision": 0.66796875,
+      "false_activation_image_count": 14
+    },
+    "new_class_summary": {
+      "tp": 69,
+      "fp": 10,
+      "precision": 0.8734177215189873
+    },
     "prediction_counts": {
-      "base": 1387,
-      "specialist_before_threshold": 501,
-      "specialist_after_threshold": 264,
-      "fused": 1651
+      "base_before": 1387,
+      "base_after": 433,
+      "new_before": 501,
+      "new_after": 79,
+      "fused": 512,
+      "conflict_rejected": 0
     }
   },
   "context_lock": {
@@ -238,5 +473,7 @@
   "competition_accepted": true,
   "context_accepted": true,
   "accepted": true,
-  "predictions_frozen_before_lock_labels": true
+  "predictions_frozen_before_lock_labels": true,
+  "deployment_accepted": true,
+  "candidate_frozen_before_lock_labels": true
 }

@@ -3,34 +3,44 @@
   "verified_profiles": [
     {
       "profile_id": "incremental-detection",
-      "run_id": "strict-4plus2-20260822-054120",
+      "run_id": "strict-4plus2-scene-aware-20260822-091112",
       "incremental_mode": "class_incremental",
       "new_classes": {
         "4": "patrol_boat",
         "5": "armored_vehicle"
       },
-      "new_global_ids": [4, 5],
+      "new_global_ids": [
+        4,
+        5
+      ],
       "active_profile": "models/profiles/incremental-detection/active.json",
-      "evaluation_semantics": "all_owners_on_mixed_dev_then_frozen_mixed_lock_v1",
-      "rechecked_at": "2026-08-22T13:41:20+08:00",
-      "base_test_map50": 0.8875500761448091,
-      "new_map50": 0.8122485978175054,
+      "evaluation_semantics": "all_owners_scene_probability_gated_on_mixed_dev_then_frozen_mixed_lock_v2",
+      "rechecked_at": "2026-08-22T09:11:12.363783+00:00",
+      "base_test_map50": 0.8560669777957763,
+      "new_map50": 0.7733677094868956,
       "new_per_class_ap50": {
-        "4": 0.7070824343807792,
-        "5": 0.9174147612542315
+        "4": 0.6910000000000001,
+        "5": 0.855735418973791
       },
-      "krr": 1.0,
+      "krr": 0.9731258182061283,
       "activation_thresholds": {
-        "4": 0.18,
-        "5": 0.08
+        "4": 0.57,
+        "5": 0.82
       },
       "competition_accepted": true,
       "deployment_accepted": true,
       "acceptance_status": "passed",
       "diagnostic_warnings": [
-        "lock_precision_below_0_70",
-        "false_activation_rate_above_0_15"
-      ]
+        "lock_precision_below_0_90",
+        "false_activation_rate_above_0_05"
+      ],
+      "base_activation_thresholds": {
+        "0": 0.21,
+        "1": 0.14,
+        "2": 0.36,
+        "3": 0.05
+      },
+      "scene_soft_gating": true
     }
   ]
 }
