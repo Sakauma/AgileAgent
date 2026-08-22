@@ -458,27 +458,30 @@ def verify_ascend_artifacts(
         if validation_summary:
             if validation_summary.get("build_manifest_sha256") != manifest_digest:
                 errors.append("validation_build_manifest_sha256_mismatch")
+            full_score_release = (
+                validation_summary.get("kind")
+                == "ascend310b_full_score_release_validation"
+            )
             required_reports = (
                 FULL_SCORE_VALIDATION_REPORTS
-                if shared_dual_head
+                if full_score_release
                 else REQUIRED_VALIDATION_REPORTS
             )
-            if shared_dual_head:
-                if (
-                    validation_summary.get("kind")
-                    != "ascend310b_full_score_release_validation"
-                ):
-                    errors.append("full_score_validation_kind_invalid")
+            if full_score_release:
                 _verify_full_score_method_entry(
                     validation_summary.get("method_config"), errors
                 )
                 validity = validation_summary.get("validity")
                 required_validity = {
                     "incremental_data_isolation",
-                    "shared_max_drift_zero",
                     "asset_hashes_verified",
                     "predictions_frozen_before_labels",
                 }
+                required_validity.add(
+                    "shared_max_drift_zero"
+                    if shared_dual_head
+                    else "base_model_frozen"
+                )
                 if (
                     not isinstance(validity, Mapping)
                     or any(validity.get(name) is not True for name in required_validity)
@@ -500,9 +503,9 @@ def verify_ascend_artifacts(
                     report_path = resolve_path(str(entry["path"]))
                     if len(digest) != 64 or sha256_file(report_path) != digest:
                         errors.append(f"validation_report_link_sha256_mismatch:{name}")
-                    elif shared_dual_head and name == "accuracy":
+                    elif full_score_release and name == "accuracy":
                         _verify_full_score_accuracy_report(report, errors)
-                    elif shared_dual_head and name == "performance":
+                    elif full_score_release and name == "performance":
                         _verify_full_score_performance_report(report, errors)
             if validation_summary.get("passed") is not True:
                 errors.append("validation_summary_not_passed")

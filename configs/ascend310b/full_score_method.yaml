@@ -57,7 +57,6 @@ training:
   lrf: 0.01
   weight_decay: 0.0005
   deterministic: true
-  patience: 0
   cache: false
   plots: true
   amp: true
@@ -104,25 +103,37 @@ export:
 runtime:
   encoded_preprocessing: dvpp
   memory_mode: pageable
-  schedule_mode: threaded_execute
+  schedule_mode: unified_enqueue
   execution_mode: async_stream
-  context_mode: fixed_neutral_v1
+  context_mode: model
   neutral_context_score: 0.5
+  content_execution_gate:
+    enabled: true
+    policy: skip_specialist_on_scene_and_base_evidence_v1
+    action: skip_specialist
+    scene: air
+    scene_probability_min: 0.5
+    base_evidence_class_ids: [1]
+    base_evidence_mode: any
+    online_inputs: [scene_probabilities, base_detections]
+    label_aware_online_routing: false
+    filename_aware_online_routing: false
+    learning_data_scope: frozen_system_calibration
   detailed_event_timing: false
   fast_bounded_multipart: true
   neutral_scheduling_elision: true
   image_copy_elision: true
 
 threshold_search:
-  scoring_request_confidence: 0.001
+  scoring_request_confidence: 0.10
   current_seed:
-    old: 0.001
-    new: 0.001
+    old: 0.10
+    new: 0.10
   stage_1_new:
-    fixed_old: 0.001
-    values: [0.001, 0.003, 0.005, 0.01, 0.02]
+    fixed_old: 0.10
+    values: [0.05, 0.075, 0.10, 0.125, 0.15]
   stage_2_old:
-    values: [0.001, 0.003, 0.005, 0.01, 0.02]
+    values: [0.05, 0.075, 0.10, 0.125, 0.15]
   cross_check_top_pairs: 2
   selection_order:
     - largest_minimum_accuracy_headroom

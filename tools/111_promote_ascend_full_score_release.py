@@ -183,6 +183,88 @@ def validate_training_report(report: Mapping[str, Any]) -> dict[str, bool]:
     }
 
 
+def validate_independent_generation(
+    registry: Mapping[str, Any],
+    build_manifest: Mapping[str, Any],
+) -> dict[str, bool]:
+    channels = registry.get("channels") or {}
+    generation_id = str(channels.get("production") or "")
+    generations = {
+        str(row.get("id")): row
+        for row in registry.get("generations", [])
+        if isinstance(row, Mapping)
+    }
+    generation = generations.get(generation_id)
+    if not isinstance(generation, Mapping) or generation.get("status") != "active":
+        raise ValueError("独立YOLO26候选缺少active production代际")
+    compliance = generation.get("data_compliance") or {}
+    phase = generation.get("phase_contract") or {}
+    incremental = phase.get("incremental_learning") or {}
+    isolated = (
+        compliance.get("compliance") == "passed"
+        and int(compliance.get("old_raw_image_count", -1)) == 0
+        and int(compliance.get("old_raw_label_count", -1)) == 0
+        and int(compliance.get("old_cache_count", -1)) == 0
+        and int(compliance.get("unverified_cache_count", -1)) == 0
+        and incremental.get("training_data_scope") == "incremental_dataset_only"
+        and incremental.get("validation_data_scope")
+        == "incremental_dataset_only"
+        and incremental.get("base_detector_weights_frozen") is True
+    )
+    if not isolated:
+        raise ValueError("独立YOLO26代际未证明增量数据隔离或Base冻结")
+
+    models = {
+        str(row.get("id")): row
+        for row in registry.get("models", [])
+        if isinstance(row, Mapping)
+    }
+    artifacts = build_manifest.get("artifacts") or {}
+    expected_roles = {
+        "base": "four_class_base_detector",
+        "specialist": "incremental_detector",
+    }
+    for role, model_id in expected_roles.items():
+        model = models.get(model_id)
+        rows = [
+            row
+            for row in artifacts.values()
+            if isinstance(row, Mapping) and row.get("role") == role
+        ]
+        if not isinstance(model, Mapping) or len(rows) != 1:
+            raise ValueError(f"独立YOLO26缺少{role}模型代际或构建资产")
+        source_weight = rows[0].get("source_weight") or {}
+        if source_weight.get("sha256") != model.get("sha256"):
+            raise ValueError(f"独立YOLO26 {role}源权重与代际注册表不一致")
+    return {
+        "incremental_data_isolation": True,
+        "base_model_frozen": True,
+        "phase_separated_training": True,
+    }
+
+
+def copy_runtime_source(release_root: Path) -> None:
+    source_root = release_root / "src"
+    if source_root.exists():
+        raise FileExistsError(f"release源码目标已存在，拒绝覆盖：{source_root}")
+    source_root.mkdir(parents=True, exist_ok=False)
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT
+    ).split(b"\0")
+    for encoded in tracked:
+        if not encoded:
+            continue
+        relative = Path(encoded.decode("utf-8"))
+        if relative.parts[:2] == ("models", "ascend310b"):
+            continue
+        source = ROOT / relative
+        if not source.is_file():
+            continue
+        destination = source_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
 def git_head() -> str:
     try:
         return subprocess.check_output(
@@ -218,30 +300,55 @@ def materialize_release(
         raise ValueError("正式主实例内部端口必须避开8501/8502且位于1..65535")
 
     ascend = candidate.get("ascend_backend") or {}
+    model_layout = str(ascend.get("model_layout") or "")
+    expected_layout = str((method.get("export") or {}).get("model_layout") or "")
+    expected_context_mode = str(
+        (method.get("runtime") or {}).get("context_mode") or ""
+    )
     if (
         candidate.get("runtime", {}).get("server_port") != 8502
         or ascend.get("validation_candidate") is not True
         or ascend.get("validated") is not False
-        or ascend.get("model_layout") != "shared_backbone_dual_head_v1"
-        or ascend.get("context_mode") != "fixed_neutral_v1"
+        or model_layout not in {
+            "shared_backbone_dual_head_v1",
+            "independent_yolo26_e2e_v1",
+        }
+        or model_layout != expected_layout
+        or ascend.get("context_mode") != expected_context_mode
     ):
-        raise ValueError("输入必须是通过8502隔离评分的共享双头候选配置")
+        raise ValueError("输入必须是与满分方法一致且通过8502隔离评分的候选配置")
     preflight = verify_ascend_artifacts(ascend, require_validation=False)
     if preflight["status"] != "passed":
         raise ValueError("候选资产校验失败：" + ";".join(preflight["errors"]))
 
     source_manifest_path = Path(str(ascend["build_manifest"])).resolve()
     source_manifest = read_json(source_manifest_path, "source build manifest")
-    training_path, _ = checked_entry(source_manifest.get("training_report"), "training_report")
-    training_report = read_json(training_path, "training report")
-    validity = validate_training_report(training_report)
+    generation_source = Path(
+        str(candidate.get("generation", {}).get("registry") or "")
+    )
+    if not generation_source.is_file():
+        raise FileNotFoundError(
+            f"候选generation registry不存在：{generation_source}"
+        )
+    generation_registry = read_json(generation_source, "generation registry")
+    if model_layout == "shared_backbone_dual_head_v1":
+        training_path, _ = checked_entry(
+            source_manifest.get("training_report"), "training_report"
+        )
+        training_report = read_json(training_path, "training report")
+        validity = validate_training_report(training_report)
+    else:
+        validity = validate_independent_generation(
+            generation_registry, source_manifest
+        )
 
-    for name in ("om", "provenance", "validation", "configs", "reports"):
+    for name in ("om", "provenance", "validation", "configs", "reports", "src"):
         target = release_root / name
         if target.exists():
             raise FileExistsError(f"release目标已存在，拒绝覆盖：{target}")
     for name in ("om", "provenance", "validation", "configs", "reports"):
         (release_root / name).mkdir(parents=True, exist_ok=False)
+    copy_runtime_source(release_root)
 
     candidate_copy = release_root / "provenance/candidate-8502.yaml"
     method_copy = release_root / "provenance/full_score_method.yaml"
@@ -267,15 +374,28 @@ def materialize_release(
     )
     for top_name in ("training_report", "export_manifest"):
         entry = source_manifest.get(top_name)
+        if entry is None:
+            if model_layout == "shared_backbone_dual_head_v1":
+                raise ValueError(f"共享双头build manifest缺少{top_name}")
+            continue
         source, _ = checked_entry(entry, top_name)
         destination = release_root / f"provenance/{top_name}{source.suffix}"
         release_manifest[top_name] = copy_entry(entry, destination, top_name)
 
     copied_artifacts: dict[str, dict[str, Any]] = {}
-    for role, om_name in (
-        ("dual_detector", "shared_backbone_dual_head.om"),
-        ("context", "scene_sensor_net.om"),
-    ):
+    artifact_targets = (
+        (
+            ("dual_detector", "shared_backbone_dual_head.om"),
+            ("context", "scene_sensor_net.om"),
+        )
+        if model_layout == "shared_backbone_dual_head_v1"
+        else (
+            ("base", "base_detector.om"),
+            ("specialist", "incremental_detector.om"),
+            ("context", "scene_sensor_net.om"),
+        )
+    )
+    for role, om_name in artifact_targets:
         model_id, artifact = artifact_by_role(source_manifest, role)
         copied = copy.deepcopy(artifact)
         for field in ("source_weight", "onnx", "aipp", "atc_log"):
@@ -309,9 +429,6 @@ def materialize_release(
             }
         )
 
-    generation_source = Path(str(candidate.get("generation", {}).get("registry") or ""))
-    if not generation_source.is_file():
-        raise FileNotFoundError(f"候选generation registry不存在：{generation_source}")
     generation_copy = release_root / "provenance/generations.json"
     shutil.copy2(generation_source, generation_copy)
 
@@ -356,6 +473,9 @@ def materialize_release(
     production = copy.deepcopy(candidate)
     production["runtime"]["server_port"] = int(internal_port)
     production["generation"]["registry"] = str(generation_copy.resolve())
+    production.setdefault("web", {})["generation_registry"] = str(
+        generation_copy.resolve()
+    )
     production["performance"]["report_root"] = str((release_root / "reports").resolve())
     production_ascend = production["ascend_backend"]
     production_ascend.update(
@@ -368,14 +488,36 @@ def materialize_release(
             "build_manifest_sha256": manifest_digest,
         }
     )
-    dual_entry = next(
-        row for row in copied_artifacts.values() if row.get("role") == "dual_detector"
-    )
     context_entry = next(
         row for row in copied_artifacts.values() if row.get("role") == "context"
     )
-    detector = next(iter(production_ascend["models"].values()))
-    detector.update(dual_entry["om"])
+    if model_layout == "shared_backbone_dual_head_v1":
+        dual_entry = next(
+            row
+            for row in copied_artifacts.values()
+            if row.get("role") == "dual_detector"
+        )
+        detector = next(iter(production_ascend["models"].values()))
+        detector.update(dual_entry["om"])
+    else:
+        role_suffixes = {
+            "base": "four_class_base_detector.pt",
+            "specialist": "incremental_detector.pt",
+        }
+        for role, suffix in role_suffixes.items():
+            configured = [
+                row
+                for source, row in production_ascend["models"].items()
+                if str(source).endswith(suffix)
+            ]
+            if len(configured) != 1:
+                raise ValueError(f"正式配置无法唯一定位{role}检测器")
+            artifact = next(
+                row
+                for row in copied_artifacts.values()
+                if row.get("role") == role
+            )
+            configured[0].update(artifact["om"])
     production_ascend["context_model"] = dict(context_entry["om"])
     validate_config(production)
     verification = verify_ascend_artifacts(production_ascend, require_validation=True)
@@ -387,6 +529,8 @@ def materialize_release(
         yaml.safe_dump(production, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+    source_config_path = release_root / "src/configs/agent_pipeline_ascend310b.yaml"
+    shutil.copy2(config_path, source_config_path)
     result = {
         "schema_version": 1,
         "kind": "ascend310b_full_score_primary_release",
@@ -409,7 +553,7 @@ def materialize_release(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="把四项满分的8502共享双头候选物化为可验证的正式主线release。"
+        description="把四项满分的8502候选物化为可验证的正式主线release。"
     )
     parser.add_argument("--candidate-config", type=Path, required=True)
     parser.add_argument(

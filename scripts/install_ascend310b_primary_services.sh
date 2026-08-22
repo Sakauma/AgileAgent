@@ -7,7 +7,7 @@ usage() {
   install_ascend310b_primary_services.sh MAIN_RELEASE_ROOT ROLLBACK_RELEASE_ROOT [MAIN_INTERNAL_PORT]
 
 在已物化并通过release校验的目录上安装两个服务：
-  - 满分共享双头主实例：内部端口18501；
+  - 满分主实例：内部端口18501；
   - 原三OM回滚实例：继续监听8501。
 随后以精确iptables loopback规则原子切换新连接，8502继续保留为候选端口。
 EOF
@@ -96,6 +96,17 @@ if [[ ! "$MAIN_PORT" =~ ^[0-9]+$ ]] || (( MAIN_PORT == 8501 || MAIN_PORT == 8502
 fi
 id "$APP_USER" >/dev/null
 test -x "$PYTHON" || { printf '板端Python不可执行：%s\n' "$PYTHON" >&2; exit 1; }
+MAIN_LAYOUT="$($PYTHON - "$MAIN_CONFIG" <<'PY'
+import sys
+import yaml
+
+payload = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+layout = str((payload.get("ascend_backend") or {}).get("model_layout") or "")
+if layout not in {"shared_backbone_dual_head_v1", "independent_yolo26_e2e_v1"}:
+    raise SystemExit(f"正式主实例布局非法：{layout}")
+print(layout)
+PY
+)"
 require_health_field "$PUBLIC_PORT" '"status":"ready"'
 
 runuser -u "$APP_USER" -- env AGILE_AGENT_CONFIG="$MAIN_CONFIG" \
@@ -193,15 +204,15 @@ install -o root -g root -m 0644 "$route_tmp" "$ROUTE_UNIT"
 rm -f -- "$main_tmp" "$rollback_tmp" "$route_tmp"
 systemctl daemon-reload
 
-step "启动并验证共享双头主实例"
+step "启动并验证满分主实例"
 systemctl enable --now agileagent-ascend310b-main.service
 for _ in $(seq 1 180); do
-  if health_has_field "$MAIN_PORT" '"model_layout":"shared_backbone_dual_head_v1"'; then
+  if health_has_field "$MAIN_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""; then
     break
   fi
   sleep 1
 done
-require_health_field "$MAIN_PORT" '"model_layout":"shared_backbone_dual_head_v1"'
+require_health_field "$MAIN_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""
 
 step "原子切换公共8501新连接"
 "$ROUTE_INSTALL" apply "$MAIN_PORT"
@@ -225,8 +236,8 @@ step "执行正式发布收尾验收"
 require_active agileagent-ascend310b-main.service
 require_active agileagent-ascend310b-rollback.service
 require_active agileagent-ascend310b-route.service
-require_health_field "$MAIN_PORT" '"model_layout":"shared_backbone_dual_head_v1"'
-require_health_field "$PUBLIC_PORT" '"model_layout":"shared_backbone_dual_head_v1"'
+require_health_field "$MAIN_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""
+require_health_field "$PUBLIC_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""
 require_loopback_listener "$PUBLIC_PORT"
 require_loopback_listener "$MAIN_PORT"
 
