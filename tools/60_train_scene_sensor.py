@@ -46,6 +46,19 @@ def read_split(path: Path) -> list[Path]:
     return images
 
 
+def read_split_spec(spec: str | Path | Sequence[str | Path]) -> list[Path]:
+    paths = [spec] if isinstance(spec, (str, Path)) else list(spec)
+    if not paths:
+        raise ValueError("上下文划分配置不能为空。")
+    images: list[Path] = []
+    for path in paths:
+        images.extend(read_split(resolve(path)))
+    duplicates = [path for path, count in Counter(images).items() if count > 1]
+    if duplicates:
+        raise ValueError(f"上下文组合划分包含重复图像：{duplicates[:3]}")
+    return images
+
+
 class ContextDataset(Dataset):
     def __init__(self, images: Sequence[Path], transform: transforms.Compose) -> None:
         self.images = list(images)
@@ -132,11 +145,23 @@ def linear_row_drift(
 def context_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
     errors: list[str] = []
     checks: Dict[str, Any] = {}
+    incremental_enabled = bool(
+        config.get("data", {}).get("incremental_train")
+        and config.get("data", {}).get("incremental_dev")
+    )
     try:
-        base_train = read_split(resolve(config["data"]["train"]))
-        base_dev = read_split(resolve(config["data"]["dev"]))
-        incremental_train = read_split(resolve(config["data"]["incremental_train"]))
-        incremental_dev = read_split(resolve(config["data"]["incremental_dev"]))
+        base_train = read_split_spec(config["data"]["train"])
+        base_dev = read_split_spec(config["data"]["dev"])
+        incremental_train = (
+            read_split_spec(config["data"]["incremental_train"])
+            if incremental_enabled
+            else []
+        )
+        incremental_dev = (
+            read_split_spec(config["data"]["incremental_dev"])
+            if incremental_enabled
+            else []
+        )
     except (KeyError, OSError, ValueError) as exc:
         return {"ready": False, "checks": checks, "errors": [f"上下文划分不可读：{exc}"]}
     base_distribution = target_distribution(base_train, 1, SCENE_NAMES)
@@ -146,12 +171,15 @@ def context_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
     overlap = sorted({path.stem for path in base_train + base_dev} & {path.stem for path in incremental_train + incremental_dev})
     if overlap:
         errors.append(f"基础与增量上下文数据存在重复 stem：{overlap[:5]}")
-    if not incremental_scenes:
-        errors.append("增量上下文训练集没有场景样本")
-    if base_scenes & incremental_scenes:
-        errors.append("增量上下文数据混入基础场景")
-    if base_scenes | incremental_scenes != set(SCENE_NAMES):
-        errors.append("基础与增量上下文数据未覆盖全部场景")
+    if incremental_enabled:
+        if not incremental_scenes:
+            errors.append("增量上下文训练集没有场景样本")
+        if base_scenes & incremental_scenes:
+            errors.append("增量上下文数据混入基础场景")
+        if base_scenes | incremental_scenes != set(SCENE_NAMES):
+            errors.append("基础与增量上下文数据未覆盖全部场景")
+    elif base_scenes != set(SCENE_NAMES):
+        errors.append("联合上下文训练集未覆盖全部场景")
     device_index = int(config["train"]["device"])
     cuda_ready = torch.cuda.is_available() and device_index < torch.cuda.device_count()
     if not cuda_ready:
@@ -169,6 +197,7 @@ def context_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
             "base_dev_count": len(base_dev),
             "incremental_train_count": len(incremental_train),
             "incremental_dev_count": len(incremental_dev),
+            "incremental_enabled": incremental_enabled,
             "base_scene_distribution": base_distribution,
             "incremental_scene_distribution": incremental_distribution,
             "data_overlap": overlap,
@@ -236,8 +265,22 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "scene_sensor_model.yaml")
     parser.add_argument("--force", action="store_true", help="允许覆盖已有认知模型产物。")
     parser.add_argument("--check-only", action="store_true", help="只检查增量上下文数据、GPU 与输出冲突。")
+    parser.add_argument("--seed", type=int, help="覆盖配置中的训练随机种子。")
+    parser.add_argument("--device", help="覆盖配置中的单卡 CUDA 设备编号。")
+    parser.add_argument("--run-dir", type=Path, help="把三项输出写入独立候选目录。")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
+    if args.seed is not None:
+        config["seed"] = int(args.seed)
+    if args.device is not None:
+        config["train"]["device"] = str(args.device)
+    if args.run_dir is not None:
+        run_dir = resolve(args.run_dir)
+        config["output"] = {
+            "weights": str(run_dir / "scene_sensor_net.pt"),
+            "metrics": str(run_dir / "scene_sensor_metrics.json"),
+            "report": str(run_dir / "scene_sensor_report.md"),
+        }
     if args.check_only:
         result = context_preflight(config)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -261,16 +304,16 @@ def main() -> int:
     if not args.force and (output_weights.exists() or output_metrics.exists()):
         raise SystemExit("认知模型产物已存在；如需覆盖请显式传入 --force。")
 
-    train_images = read_split(resolve(config["data"]["train"]))
-    dev_images = read_split(resolve(config["data"]["dev"]))
+    train_images = read_split_spec(config["data"]["train"])
+    dev_images = read_split_spec(config["data"]["dev"])
     incremental_enabled = bool(config["data"].get("incremental_train") and config["data"].get("incremental_dev"))
     incremental_train_images = (
-        read_split(resolve(config["data"]["incremental_train"])) if incremental_enabled else []
+        read_split_spec(config["data"]["incremental_train"]) if incremental_enabled else []
     )
     incremental_dev_images = (
-        read_split(resolve(config["data"]["incremental_dev"])) if incremental_enabled else []
+        read_split_spec(config["data"]["incremental_dev"]) if incremental_enabled else []
     )
-    lock_images = read_split(resolve(config["data"]["lock"]))
+    lock_images = read_split_spec(config["data"]["lock"])
     image_size = int(config["data"]["image_size"])
     batch_size = int(config["train"]["batch"])
     workers = int(config["data"]["num_workers"])

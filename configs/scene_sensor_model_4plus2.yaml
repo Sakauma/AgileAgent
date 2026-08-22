@@ -1,0 +1,41 @@
+seed: 20260822
+
+data:
+  train:
+    - splits/strict_4plus2/base_train.txt
+    - splits/strict_4plus2/increment_train.txt
+  dev:
+    - splits/strict_4plus2/base_dev.txt
+    - splits/strict_4plus2/increment_dev.txt
+  lock:
+    - splits/strict_4plus2/base_lock.txt
+    - splits/strict_4plus2/increment_lock.txt
+  image_size: 224
+  num_workers: 6
+
+model:
+  channels: [24, 48, 96, 160]
+  dropout: 0.20
+
+train:
+  device: "0"
+  epochs: 200
+  batch: 256
+  learning_rate: 0.002
+  min_learning_rate: 0.00005
+  weight_decay: 0.0001
+  label_smoothing: 0.05
+  sensor_loss_weight: 0.5
+  scene_loss_weight: 1.0
+  patience: 30
+  amp: true
+
+output:
+  weights: runs/context/scene_sensor_4plus2/default/scene_sensor_net.pt
+  metrics: runs/context/scene_sensor_4plus2/default/scene_sensor_metrics.json
+  report: runs/context/scene_sensor_4plus2/default/scene_sensor_report.md
+
+acceptance:
+  min_lock_sensor_accuracy: 0.90
+  min_lock_scene_accuracy: 0.70
+  min_lock_joint_accuracy: 0.65
