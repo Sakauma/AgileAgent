@@ -58,6 +58,7 @@ venv/
 !/tools/05_select_base_4plus2.py
 !/tools/06_train_incremental_4plus2.py
 !/tools/07_select_incremental_4plus2.py
+!/tools/08_evaluate_4plus2.py
 !/tools/42_predict_submission.py
 !/tools/60_train_scene_sensor.py
 !/tools/61_select_scene_sensor_4plus2.py
