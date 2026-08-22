@@ -135,6 +135,20 @@ cleanup_failure() {
 }
 trap cleanup_failure EXIT
 
+# 已有板子可能正把8501路由到旧18501。先让公共入口回到保留的
+# rollback listener，再使用旧unit的ExecStop停止旧主实例；否则覆盖unit后
+# `enable --now`不会重启已active的进程，新配置也不会生效。
+step "解除既有主线路由并停止旧主实例"
+systemctl stop agileagent-ascend310b-route.service >/dev/null 2>&1 || true
+if [[ -x "$ROUTE_INSTALL" ]]; then
+  "$ROUTE_INSTALL" remove "$MAIN_PORT" >/dev/null
+  route_state="$($ROUTE_INSTALL status "$MAIN_PORT")"
+  [[ "$route_state" == *"route=rollback"* ]] || \
+    fail "既有8501主线路由未解除：${route_state}"
+fi
+require_health_field "$PUBLIC_PORT" '"status":"ready"'
+systemctl stop agileagent-ascend310b-main.service >/dev/null 2>&1 || true
+
 step "安装路由管理器和systemd units"
 install -o root -g root -m 0755 "$ROUTE_SOURCE" "$ROUTE_INSTALL"
 
@@ -205,7 +219,8 @@ rm -f -- "$main_tmp" "$rollback_tmp" "$route_tmp"
 systemctl daemon-reload
 
 step "启动并验证满分主实例"
-systemctl enable --now agileagent-ascend310b-main.service
+systemctl enable agileagent-ascend310b-main.service
+systemctl restart agileagent-ascend310b-main.service
 for _ in $(seq 1 180); do
   if health_has_field "$MAIN_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""; then
     break

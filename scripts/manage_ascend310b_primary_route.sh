@@ -18,6 +18,10 @@ MAIN_PORT="${2:-18501}"
 PUBLIC_PORT=8501
 COMMENT="AGILE_AGENT_ASCEND310B_PRIMARY"
 IPTABLES="${AGILE_AGENT_IPTABLES:-/usr/sbin/iptables-legacy}"
+SUPPORTED_PRIMARY_LAYOUTS=(
+  shared_backbone_dual_head_v1
+  independent_yolo26_e2e_v1
+)
 
 if [[ ! "$ACTION" =~ ^(apply|remove|status)$ ]]; then
   usage >&2
@@ -58,6 +62,21 @@ health_ready() {
   fi
 }
 
+primary_layout() {
+  local port="$1"
+  local payload
+  local layout
+  payload="$(curl -fsS --max-time 5 "http://127.0.0.1:${port}/api/health")" || return 1
+  [[ "$payload" == *'"status":"ready"'* ]] || return 1
+  for layout in "${SUPPORTED_PRIMARY_LAYOUTS[@]}"; do
+    if [[ "$payload" == *"\"model_layout\":\"${layout}\""* ]]; then
+      printf '%s\n' "$layout"
+      return 0
+    fi
+  done
+  return 1
+}
+
 remove_all() {
   while has_rule; do
     "$IPTABLES" -t nat -D OUTPUT "${RULE[@]}"
@@ -66,20 +85,20 @@ remove_all() {
 
 case "$ACTION" in
   apply)
-    health_ready "$MAIN_PORT" shared_backbone_dual_head_v1 || {
-      printf '满分主实例未ready或布局错误：http://127.0.0.1:%s\n' "$MAIN_PORT" >&2
+    layout="$(primary_layout "$MAIN_PORT")" || {
+      printf '满分主实例未ready或布局不受支持：http://127.0.0.1:%s\n' "$MAIN_PORT" >&2
       exit 1
     }
     if ! has_rule; then
       "$IPTABLES" -t nat -I OUTPUT 1 "${RULE[@]}"
     fi
-    if ! health_ready "$PUBLIC_PORT" shared_backbone_dual_head_v1; then
+    if ! health_ready "$PUBLIC_PORT" "$layout"; then
       remove_all
       printf '8501原子切换后的健康检查失败，已自动删除路由规则。\n' >&2
       exit 1
     fi
-    printf 'public=%s primary=%s route=applied rollback_listener=preserved candidate=8502\n' \
-      "$PUBLIC_PORT" "$MAIN_PORT"
+    printf 'public=%s primary=%s layout=%s route=applied rollback_listener=preserved candidate=8502\n' \
+      "$PUBLIC_PORT" "$MAIN_PORT" "$layout"
     ;;
   remove)
     remove_all
@@ -94,9 +113,14 @@ case "$ACTION" in
     ;;
   status)
     if has_rule; then
-      printf 'route=primary public=%s target=%s\n' "$PUBLIC_PORT" "$MAIN_PORT"
-      health_ready "$MAIN_PORT" shared_backbone_dual_head_v1
-      health_ready "$PUBLIC_PORT" shared_backbone_dual_head_v1
+      layout="$(primary_layout "$MAIN_PORT")" || {
+        printf 'route=primary public=%s target=%s health=invalid\n' \
+          "$PUBLIC_PORT" "$MAIN_PORT" >&2
+        exit 1
+      }
+      printf 'route=primary public=%s target=%s layout=%s\n' \
+        "$PUBLIC_PORT" "$MAIN_PORT" "$layout"
+      health_ready "$PUBLIC_PORT" "$layout"
     else
       printf 'route=rollback public=%s\n' "$PUBLIC_PORT"
       health_ready "$PUBLIC_PORT"
