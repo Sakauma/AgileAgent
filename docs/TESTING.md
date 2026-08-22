@@ -40,13 +40,14 @@ AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代�
 
 当前 scene-aware production 的证据链位于 `models/production/incremental_detection/evidence/`：
 
+- `scene_aware_dev_search.json/.md` 与候选必须声明 `phase: system_calibration`、`counted_as_incremental_learning: false` 和 `detector_weights_updated: false`；
 - `scene_aware_dev_search.json/.md` 记录 mixed dev 上的候选与约束，并明确 `lock_labels_read: false`；
 - `scene_aware_candidate.json` 是由 dev 冻结的 `guarded_precision` 参数；
-- `scene_aware_lock_recheck.json` 记录冻结候选的一次性 mixed lock 复核；
+- `scene_aware_lock_recheck.json` 记录冻结候选的一次性 mixed lock 复核，并声明 `phase: joint_evaluation` 与 `model_selection_allowed: false`；
 - `base_context_prior.json` 只来自 Base train 正样本，`incremental_context_prior.json` 只来自 Increment train 正样本；
 - `operating_point_diagnostics.md` 给出逐类 mAP50、TP、FP、precision、recall 和误激活率。
 
-静态发布校验通过 `models/generations.json` 验证两个先验文件的内容与 SHA256；严格实验档加载器另行验证 active profile 中的同一绑定。参数搜索只允许读取 dev；lock 模式必须接收已冻结 candidate，并在读取 lock 标签前固定候选与模型预测。
+静态发布校验同时检查四阶段范围契约。严格实验档加载器要求当前 schema 的 `calibration.json` 属于 `system_calibration`、不更新检测器权重，并准确声明 Base train、Increment train 与 mixed dev 的用途。参数搜索只允许读取 dev；lock 模式必须接收已冻结 candidate，并在读取 lock 标签前固定候选与模型预测。
 
 ## 测试范围
 

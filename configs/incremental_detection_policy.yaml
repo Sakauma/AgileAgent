@@ -1,9 +1,57 @@
-schema_version: 2
+schema_version: 3
 task_type: incremental_object_detection
 primary_mode: class_incremental
 supported_modes: [class_incremental, target_incremental]
 
+scope_definition:
+  base_learning:
+    counted_as_incremental_learning: false
+    purpose: train_base_detector_on_base_classes
+    detector_weights_updated: [base_detector]
+    training_data_scope: base_dataset_only
+  incremental_learning:
+    counted_as_incremental_learning: true
+    purpose: train_new_class_detector_and_new_class_specific_artifacts
+    includes:
+      - incremental_detector_weight_training
+      - new_class_id_mapping
+      - new_class_specific_learning
+    excludes:
+      - scene_sensor_model_training
+      - scene_gate_search
+      - joint_evaluation
+    detector_weights_updated: [incremental_detector]
+    base_detector_weights_frozen: true
+    training_data_scope: incremental_dataset_only
+    validation_data_scope: incremental_dataset_only
+  system_calibration:
+    counted_as_incremental_learning: false
+    purpose: train_context_model_and_select_scene_aware_system_parameters
+    includes:
+      - scene_sensor_model_training
+      - class_context_prior_learning
+      - scene_gate_threshold_search
+      - fusion_parameter_search
+    detector_weights_updated: false
+    base_detector_weights_frozen: true
+    incremental_detector_weights_frozen: true
+    allowed_data_scopes:
+      - base_train_dev
+      - incremental_train_dev
+      - mixed_dev
+      - base_incremental_lock_for_functional_model_recheck_only
+    parameters_frozen_before_joint_evaluation: true
+  joint_evaluation:
+    counted_as_incremental_learning: false
+    purpose: score_all_learned_old_and_new_classes
+    detector_weights_updated: false
+    model_selection_allowed: false
+    gradients_allowed: false
+    data_scope: all_learned_classes
+
 learning_phase:
+  phase: incremental_learning
+  counted_as_incremental_learning: true
   allowed_inputs:
     - incremental_images
     - incremental_labels
@@ -18,17 +66,40 @@ learning_phase:
   validation_data_scope: incremental_dataset_only
   teacher_inference_scope: incremental_images_only
   train_validation_overlap_allowed: false
+  detector_weights_updated: [incremental_detector]
+  base_detector_weights_frozen: true
 
-derived_artifacts:
+incremental_learning_artifacts:
   allowed:
+    - incremental_detector_weights
+    - new_class_id_mapping
     - incremental_positive_prototype
-    - incremental_threshold_calibration
-    - incremental_context_prior
   required_scope: incremental_dataset_only
   forbidden_sources:
     - old_raw_images
     - old_raw_labels
     - old_cached_features
+
+system_calibration_phase:
+  phase: system_calibration
+  counted_as_incremental_learning: false
+  detector_weights_updated: false
+  base_detector_weights_frozen: true
+  incremental_detector_weights_frozen: true
+  data_roles:
+    scene_sensor_model_training: base_and_incremental_train_dev
+    scene_sensor_model_recheck: base_and_incremental_lock_frozen_model_only
+    base_context_prior: base_train_only
+    incremental_context_prior: incremental_train_only
+    gate_selection: mixed_dev_only
+  artifacts:
+    - scene_sensor_weights
+    - base_context_prior
+    - incremental_context_prior
+    - per_class_threshold_calibration
+    - scene_threshold_penalties
+    - fusion_policy
+  parameters_frozen_before_joint_evaluation: true
 
 mode_contracts:
   class_incremental:
@@ -43,10 +114,13 @@ mode_contracts:
     require_disjoint_class_sets: false
 
 evaluation_phase:
+  phase: joint_evaluation
+  counted_as_incremental_learning: false
   starts_after_incremental_weights_frozen: true
   old_and_new_test_data_allowed: true
   gradients_allowed: false
   model_selection_allowed: false
+  detector_weights_updated: false
 
 acceptance:
   min_base_map50: 0.80

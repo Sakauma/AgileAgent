@@ -260,6 +260,8 @@ def markdown_report(metrics: Dict[str, Any]) -> str:
     lines = [
         "# Scene-SensorNet 训练报告",
         "",
+        "该模型属于 system_calibration 功能模型，不计入竞赛口径的 incremental_learning，且不会更新任何检测器权重。",
+        "",
         f"- 生成时间：`{metrics['created_at']}`",
         f"- 参数量：`{metrics['parameter_count']}`",
         f"- 权重 SHA256：`{metrics['weights_sha256']}`",
@@ -566,6 +568,9 @@ def main() -> int:
     checkpoint = {
         "schema_version": 2 if incremental_enabled else 1,
         "model_id": "scene_sensor_net_v1",
+        "phase": "system_calibration",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
         "architecture": {"channels": list(model_cfg["channels"]), "dropout": float(model_cfg["dropout"])},
         "preprocessing": {"image_size": image_size, "mean": [0.5, 0.5, 0.5], "std": [0.25, 0.25, 0.25]},
         "sensor_names": SENSOR_NAMES,
@@ -597,8 +602,16 @@ def main() -> int:
             }
         )
     metrics = {
-        "schema_version": 1,
+        "schema_version": 2,
         "model_id": "scene_sensor_net_v1",
+        "phase": "system_calibration",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "data_scope": {
+            "training": "configured_context_train_splits",
+            "model_selection": "configured_context_dev_splits",
+            "functional_model_recheck": "configured_context_lock_splits",
+        },
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "seed": seed,
         "best_epoch": best_epoch,

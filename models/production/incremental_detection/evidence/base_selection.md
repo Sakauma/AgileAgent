@@ -1,5 +1,7 @@
 # 4+2 Base 模型复评排名
 
+本步骤属于 base_learning，不计入 incremental_learning，且选模本身不更新检测器权重。
+
 选择口径：固定 Base dev 的 mAP50 主排序，mAP50-95 次排序；未读取 Base lock。
 
 | 排名 | 模型 | seed | mAP50 | mAP50-95 | Precision | Recall |

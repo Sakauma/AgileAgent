@@ -1,5 +1,7 @@
 # 4+2 二类增量专家复评排名
 
+本步骤属于 incremental_learning，只读取 Increment dev；选模本身不再更新检测器权重。
+
 选择口径：固定 Increment dev 的 mAP50 主排序，最弱新增类 AP50 次排序；未读取 lock。
 
 | 排名 | 初始化 | seed | mAP50 | 最弱类 AP50 | mAP50-95 | Precision | Recall |

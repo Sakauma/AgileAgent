@@ -67,8 +67,12 @@ def main() -> int:
     if report.is_file():
         shutil.copy2(report, selected_dir / report.name)
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
+        "phase": "system_calibration",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "component": "scene_sensor_functional_model_selection",
         "selection_scope": "dev_only",
         "ranking": ranked,
         "selected": {

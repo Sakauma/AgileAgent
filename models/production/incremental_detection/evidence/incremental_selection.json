@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "created_at": "2026-08-22T05:37:21.510133+00:00",
   "selection_primary": "Increment dev mAP50",
   "selection_secondary": "minimum per-class Increment dev AP50",
@@ -228,5 +228,9 @@
       "postprocess": 0.10789734577494008
     },
     "promoted_weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/selection/selected/best_incremental.pt"
-  }
+  },
+  "phase": "incremental_learning",
+  "counted_as_incremental_learning": true,
+  "detector_weights_updated": false,
+  "component": "incremental_detector_candidate_selection"
 }

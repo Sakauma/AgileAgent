@@ -213,13 +213,65 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             errors.append("incremental_detection_primary_mode_invalid")
         if set(incremental_policy.get("supported_modes", [])) != {"class_incremental", "target_incremental"}:
             errors.append("incremental_detection_supported_modes_invalid")
+        scope_definition = incremental_policy.get("scope_definition", {})
+        incremental_scope = scope_definition.get("incremental_learning", {})
+        if (
+            incremental_scope.get("counted_as_incremental_learning") is not True
+            or incremental_scope.get("training_data_scope")
+            != "incremental_dataset_only"
+            or incremental_scope.get("validation_data_scope")
+            != "incremental_dataset_only"
+            or incremental_scope.get("base_detector_weights_frozen") is not True
+            or "scene_sensor_model_training"
+            not in incremental_scope.get("excludes", [])
+            or "scene_gate_search" not in incremental_scope.get("excludes", [])
+        ):
+            errors.append("incremental_detection_scope_definition_invalid")
+        system_calibration = scope_definition.get("system_calibration", {})
+        if (
+            system_calibration.get("counted_as_incremental_learning") is not False
+            or system_calibration.get("detector_weights_updated") is not False
+            or system_calibration.get("base_detector_weights_frozen") is not True
+            or system_calibration.get("incremental_detector_weights_frozen")
+            is not True
+            or "base_incremental_lock_for_functional_model_recheck_only"
+            not in system_calibration.get("allowed_data_scopes", [])
+        ):
+            errors.append("incremental_detection_system_calibration_scope_invalid")
+        system_calibration_phase = incremental_policy.get(
+            "system_calibration_phase", {}
+        )
+        calibration_data_roles = system_calibration_phase.get("data_roles", {})
+        if (
+            system_calibration_phase.get("phase") != "system_calibration"
+            or system_calibration_phase.get("counted_as_incremental_learning")
+            is not False
+            or system_calibration_phase.get("detector_weights_updated") is not False
+            or calibration_data_roles.get("base_context_prior")
+            != "base_train_only"
+            or calibration_data_roles.get("incremental_context_prior")
+            != "incremental_train_only"
+            or calibration_data_roles.get("gate_selection") != "mixed_dev_only"
+        ):
+            errors.append("incremental_detection_system_calibration_phase_invalid")
         learning_phase = incremental_policy.get("learning_phase", {})
-        if learning_phase.get("training_data_scope") != "incremental_dataset_only":
+        if (
+            learning_phase.get("phase") != "incremental_learning"
+            or learning_phase.get("training_data_scope")
+            != "incremental_dataset_only"
+        ):
             errors.append("incremental_detection_training_scope_invalid")
         if learning_phase.get("validation_data_scope") != "incremental_dataset_only":
             errors.append("incremental_detection_validation_scope_invalid")
         if "old_sample_replay" not in learning_phase.get("forbidden_inputs", []):
             errors.append("incremental_detection_replay_gate_missing")
+        evaluation_phase = incremental_policy.get("evaluation_phase", {})
+        if (
+            evaluation_phase.get("phase") != "joint_evaluation"
+            or evaluation_phase.get("detector_weights_updated") is not False
+            or evaluation_phase.get("model_selection_allowed") is not False
+        ):
+            errors.append("incremental_detection_evaluation_scope_invalid")
 
     inference_configs = {}
     expected_base_imgsz = int(manifest.get("base_model", {}).get("imgsz") or 0)

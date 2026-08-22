@@ -878,10 +878,37 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
                 raise ValueError(
                     f"严格增量实验档逐类校准证据无效：{profile_id}:{class_id}"
                 ) from exc
+            calibration_schema = int(payload.get("schema_version", 1))
+            if calibration_schema >= 4:
+                data_scope = dict(payload.get("data_scope") or {})
+                calibration_scope_valid = (
+                    payload.get("phase") == "system_calibration"
+                    and payload.get("counted_as_incremental_learning") is False
+                    and payload.get("detector_weights_updated") is False
+                    and payload.get("learning_data_scope") is None
+                    and data_scope.get("gate_selection") == "mixed_dev_only"
+                    and (
+                        not payload.get("context_policy")
+                        or (
+                            data_scope.get("scene_sensor_model_training")
+                            == "base_and_incremental_train_dev"
+                            and data_scope.get("scene_sensor_model_recheck")
+                            == "base_and_incremental_lock_frozen_model_only"
+                            and data_scope.get("base_context_prior")
+                            == "base_train_only"
+                            and data_scope.get("incremental_context_prior")
+                            == "incremental_train_only"
+                        )
+                    )
+                )
+            else:
+                calibration_scope_valid = (
+                    payload.get("learning_data_scope")
+                    == "incremental_dataset_only"
+                )
             if (
                 payload.get("source_split") != "mixed_dev_only"
-                or payload.get("learning_data_scope")
-                != "incremental_dataset_only"
+                or not calibration_scope_valid
                 or payload.get("deployment_policy")
                 != "competition_map50_dev_calibrated"
                 or abs(calibrated_threshold - thresholds[class_id]) > 1e-12
@@ -935,10 +962,25 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
                 metrics.get("competition_accepted")
             )
         }
+    metrics_schema = int(metrics.get("schema_version", 1))
+    if metrics_schema >= 5:
+        metrics_scope_valid = (
+            metrics.get("phase") == "joint_evaluation"
+            and metrics.get("counted_as_incremental_learning") is False
+            and metrics.get("detector_weights_updated") is False
+            and metrics.get("model_selection_allowed") is False
+            and metrics.get("incremental_learning_data_scope")
+            == "incremental_dataset_only"
+            and metrics.get("learning_data_scope") is None
+        )
+    else:
+        metrics_scope_valid = (
+            metrics.get("learning_data_scope") == "incremental_dataset_only"
+        )
     if (
         metrics.get("competition_accepted") is not True
         or metrics.get("incremental_mode") != "class_incremental"
-        or metrics.get("learning_data_scope") != "incremental_dataset_only"
+        or not metrics_scope_valid
         or metrics.get("old_raw_image_count") != 0
         or not evidence_gates
         or not all(evidence_gates.values())

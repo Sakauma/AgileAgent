@@ -5,6 +5,8 @@ models:
   - id: scene_sensor_net_v1
     function: context_perception
     display_name: 场景与传感器认知模型
+    competition_phase: system_calibration
+    counted_as_incremental_learning: false
     implementation: multitask_cnn
     status: verified
     inputs: [image_rgb]
@@ -14,7 +16,7 @@ models:
         sha256: aa99a0e58db1f80b0b6e0cc0e5049b6dc39e88f4349d2e7c362b1e2a25b83a7e
     evidence:
       path: models/context/scene_sensor_metrics.json
-      sha256: 0c8695d2795b16c50988d652724da0c3685ed730e2d875954eb4e64199b965bb
+      sha256: 561524130d4e18101d19934cce14a86132b23fef70f2b81267892519eee66e52
       require_acceptance_passed: true
     runtime:
       x86_gpu: true
@@ -23,6 +25,8 @@ models:
   - id: four_class_base_detector
     function: multimodal_target_detection
     display_name: 四类冻结基础检测器
+    competition_phase: base_learning
+    counted_as_incremental_learning: false
     implementation: yolo26s
     status: verified
     inputs: [image_rgb]
@@ -32,7 +36,7 @@ models:
         sha256: 105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd
     evidence:
       path: models/manifest.json
-      sha256: 7018d0835d7b54684d10e33fc8b4fbe98d53a32b93a9c3c086b824b0ebcbd932
+      sha256: cef6f1b70d89ae5a1cc9e34e771905863752c9487b70f1feae5e9999dc9c49ef
     runtime:
       x86_gpu: true
       ascend_310b: false
@@ -41,6 +45,8 @@ models:
   - id: incremental_model_bank_v1
     function: incremental_object_detection
     display_name: 二类增量目标检测模型库
+    competition_phase: incremental_learning
+    counted_as_incremental_learning: true
     implementation: parallel_frozen_base_and_incremental_expert
     status: verified
     inputs: [incremental_images_labels, frozen_base_weights]
@@ -50,7 +56,7 @@ models:
         sha256: 0ab0c6ed0117b75ab9ee105e9f109ccad96d988156d00fa4c4c0b9599e424a2a
     evidence:
       path: models/manifest.json
-      sha256: 7018d0835d7b54684d10e33fc8b4fbe98d53a32b93a9c3c086b824b0ebcbd932
+      sha256: cef6f1b70d89ae5a1cc9e34e771905863752c9487b70f1feae5e9999dc9c49ef
     runtime:
       x86_gpu: true
       ascend_310b: false

@@ -186,6 +186,8 @@ def write_markdown(path: Path, rows: list[dict[str, Any]], selected: dict[str, A
     lines = [
         "# 4+2 Base 模型复评排名",
         "",
+        "本步骤属于 base_learning，不计入 incremental_learning，且选模本身不更新检测器权重。",
+        "",
         "选择口径：固定 Base dev 的 mAP50 主排序，mAP50-95 次排序；未读取 Base lock。",
         "",
         "| 排名 | 模型 | seed | mAP50 | mAP50-95 | Precision | Recall |",
@@ -237,8 +239,12 @@ def main() -> int:
     output_dir = project / "selection"
     output_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
+        "phase": "base_learning",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "component": "base_detector_candidate_selection",
         "selection_primary": "Base dev mAP50",
         "selection_secondary": "Base dev mAP50-95",
         "lock_used": False,

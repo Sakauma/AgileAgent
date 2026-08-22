@@ -1,5 +1,15 @@
 seed: 20260821
 
+protocol:
+  phase: system_calibration
+  counted_as_incremental_learning: false
+  role: closed_set_scene_sensor_functional_model
+  detector_weights_updated: false
+  data_roles:
+    training: base_and_incremental_train
+    model_selection: base_and_incremental_dev
+    functional_model_recheck: base_and_incremental_lock
+
 data:
   train:
     - splits/strict_4plus2/base_train.txt

@@ -110,6 +110,8 @@ def write_markdown(path: Path, rows: list[dict[str, Any]], selected: dict[str, A
     lines = [
         "# 4+2 二类增量专家复评排名",
         "",
+        "本步骤属于 incremental_learning，只读取 Increment dev；选模本身不再更新检测器权重。",
+        "",
         "选择口径：固定 Increment dev 的 mAP50 主排序，最弱新增类 AP50 次排序；未读取 lock。",
         "",
         "| 排名 | 初始化 | seed | mAP50 | 最弱类 AP50 | mAP50-95 | Precision | Recall |",
@@ -160,8 +162,12 @@ def main() -> int:
     output_dir = project / "selection"
     output_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
+        "phase": "incremental_learning",
+        "counted_as_incremental_learning": True,
+        "detector_weights_updated": False,
+        "component": "incremental_detector_candidate_selection",
         "selection_primary": "Increment dev mAP50",
         "selection_secondary": "minimum per-class Increment dev AP50",
         "lock_used": False,

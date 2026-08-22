@@ -52,6 +52,8 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 
 测试分为基础学习阶段和多轮增量学习阶段。基础阶段使用基础类别训练集完成模型训练；赛题鼓励在端侧完成增量学习，增量阶段使用当轮增量数据集，每轮注入若干新类别，每个新类别提供少量标注样本。评估集覆盖截至当轮全部已学习类别，包括旧类别与新类别。
 
+本工程统一将 `incremental_learning` 限定为“仅用当轮 Increment train/dev 训练新类检测器、完成新类映射及新类专属学习”，Base 检测器权重保持冻结。Scene-SensorNet 训练和六类场景门控搜索单列为 `system_calibration`：允许使用 Base/Increment train/dev 与 mixed dev，context lock 只做冻结功能模型复核，且全程不更新任何检测器权重。参数冻结后的六类 mixed lock/test 评分称为 `joint_evaluation`，只评估、不训练也不选参。完整契约见 [`docs/compliant-incremental-learning.md`](docs/compliant-incremental-learning.md)。
+
 新类别识别精度 New-mAP 占 10 分，衡量模型对新增类别的学习效果：
 
 | New-mAP | 分值 |
@@ -295,6 +297,8 @@ R2 原始标签同时包含旧类与新类。专家训练视图必须只保留�
 ## 4+2 可复现实验
 
 训练与选模入口为 `tools/04`–`tools/07`，Scene-SensorNet 使用 `tools/60`–`tools/61`，冻结评估使用 `tools/08_evaluate_4plus2.py`。六类场景门控的 dev 搜索、冻结 lock 复核与可复现晋级分别由 `tools/09_optimize_scene_aware_4plus2.py` 和 `tools/10_promote_scene_aware_4plus2.py` 完成。正式参数为 1280 输入、500 epoch、50 轮无改善早停；胜出模型、训练实参、dev 搜索和 lock 复核证据均已固化在 `models/production/incremental_detection/evidence/`。
+
+上述工具属于同一离线流水线，但协议阶段不同：`tools/04`–`tools/05` 是 `base_learning`；`tools/06`–`tools/07` 只使用 Increment train/dev 完成二类专家权重训练与选模，属于 `incremental_learning`；`tools/60`–`tools/61` 与 `tools/09 --mode dev` 的场景功能模型训练和门控搜索是 `system_calibration`；`tools/08` 的 lock 评分及 `tools/09 --mode lock` 是冻结后的 `joint_evaluation`。
 
 当前胜出组合：
 

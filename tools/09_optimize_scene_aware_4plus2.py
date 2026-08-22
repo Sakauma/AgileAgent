@@ -28,6 +28,13 @@ CLASS_NAMES = {
 BASE_CLASS_IDS = (0, 1, 2, 3)
 NEW_CLASS_IDS = (4, 5)
 CURRENT_THRESHOLDS = {0: 0.01, 1: 0.01, 2: 0.01, 3: 0.01, 4: 0.18, 5: 0.08}
+SYSTEM_CALIBRATION_DATA_SCOPE = {
+    "scene_sensor_model_training": "base_and_incremental_train_dev",
+    "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
+    "base_context_prior": "base_train_only",
+    "incremental_context_prior": "incremental_train_only",
+    "gate_selection": "mixed_dev_only",
+}
 
 
 def resolve_split(
@@ -543,6 +550,7 @@ def markdown_report(payload: Mapping[str, Any]) -> str:
     lines = [
         "# strict 4+2 逐类场景软门控 dev 搜索",
         "",
+        "本步骤属于 system_calibration，不计入 incremental_learning，也不更新 Base 或 Increment 检测器权重。",
         "线上门控只读取 Scene-SensorNet 输出的已知场景概率，不读取文件名或真值标签。",
         "Base 类先验只由 base train 正样本学习；新增类先验只由 increment train 正样本学习。",
         "",
@@ -677,9 +685,13 @@ def run_dev(args: argparse.Namespace) -> int:
             str(profile["objective"]),
         )
         candidate = {
-            "schema_version": 1,
+            "schema_version": 2,
             "candidate_id": f"scene-aware-4plus2-{name}",
             "created_at": datetime.now().astimezone().isoformat(),
+            "phase": "system_calibration",
+            "counted_as_incremental_learning": False,
+            "detector_weights_updated": False,
+            "data_scope": dict(SYSTEM_CALIBRATION_DATA_SCOPE),
             "selection_source": "mixed_dev_only",
             "selection_constraints": profile["constraints"],
             "selection_objective": profile["objective"],
@@ -702,9 +714,13 @@ def run_dev(args: argparse.Namespace) -> int:
         candidates[name] = candidate
         atomic_json(output_dir / "candidates" / f"{name}.json", candidate)
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
         "protocol": "strict_4plus2_class_specific_scene_soft_gate",
+        "phase": "system_calibration",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "data_scope": dict(SYSTEM_CALIBRATION_DATA_SCOPE),
         "scene_weight": scene_weight.as_posix(),
         "splits": {
             "base_train": len(base_train),
@@ -732,7 +748,10 @@ def run_lock(args: argparse.Namespace) -> int:
     output_dir = args.output_dir.expanduser().resolve()
     candidate_path = args.candidate.expanduser().resolve()
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
-    if candidate.get("selection_source") != "mixed_dev_only":
+    if (
+        candidate.get("selection_source") != "mixed_dev_only"
+        or candidate.get("phase") not in (None, "system_calibration")
+    ):
         raise ValueError("候选不是由 mixed dev 冻结")
     thresholds = {
         int(key): float(value) for key, value in candidate["thresholds"].items()
@@ -802,8 +821,12 @@ def run_lock(args: argparse.Namespace) -> int:
         "krr": float(lock_metrics["krr"]) >= 0.95,
     }
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
+        "phase": "joint_evaluation",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "model_selection_allowed": False,
         "candidate": candidate,
         "baseline": baseline,
         "lock": lock_metrics,

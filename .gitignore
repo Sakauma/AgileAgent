@@ -133,3 +133,4 @@ venv/
 !/docs/DEVELOPMENT.md
 !/docs/GETTING-STARTED.md
 !/docs/TESTING.md
+!/docs/compliant-incremental-learning.md

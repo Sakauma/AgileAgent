@@ -1,10 +1,9 @@
 {
-  "schema_version": 4,
-  "run_id": "strict-4plus2-scene-aware-20260822-091112",
-  "created_at": "2026-08-22T09:11:12.363783+00:00",
+  "schema_version": 5,
+  "run_id": "strict-4plus2-scene-aware-20260822-181928",
+  "created_at": "2026-08-22T18:19:28.905530+08:00",
   "protocol": "strict-4plus2-parallel-specialist-class-specific-scene-gate",
   "incremental_mode": "class_incremental",
-  "learning_data_scope": "incremental_dataset_only",
   "old_raw_image_count": 0,
   "old_raw_label_count": 0,
   "class_map": {
@@ -475,5 +474,10 @@
   "accepted": true,
   "predictions_frozen_before_lock_labels": true,
   "deployment_accepted": true,
-  "candidate_frozen_before_lock_labels": true
+  "candidate_frozen_before_lock_labels": true,
+  "phase": "joint_evaluation",
+  "counted_as_incremental_learning": false,
+  "detector_weights_updated": false,
+  "model_selection_allowed": false,
+  "incremental_learning_data_scope": "incremental_dataset_only"
 }

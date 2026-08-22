@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile_id": "incremental-detection",
-  "run_id": "strict-4plus2-scene-aware-20260822-091112",
+  "run_id": "strict-4plus2-scene-aware-20260822-181928",
   "acceptance": "passed",
   "competition_accepted": true,
   "deployment_accepted": true,
@@ -66,7 +66,7 @@
   "metrics_source": "models/production/incremental_detection/metrics.json",
   "evidence_level": "verified",
   "evaluation_semantics": "all_owners_scene_probability_gated_on_mixed_dev_then_frozen_mixed_lock_v2",
-  "rechecked_at": "2026-08-22T09:11:12.363783+00:00",
+  "rechecked_at": "2026-08-22T18:19:28.905530+08:00",
   "base_imgsz": 1280,
   "specialist_imgsz": 1280,
   "base_test_map50": 0.8560669777957763,
@@ -251,5 +251,39 @@
     "online_input": "scene_sensor_net_probabilities"
   },
   "base_context_prior_source": "models/production/incremental_detection/base_context_prior.json",
-  "base_context_prior_sha256": "496e838aaec2d45c58a4d4814a948468d31926413bd6b97c642dbaf979db32ae"
+  "base_context_prior_sha256": "496e838aaec2d45c58a4d4814a948468d31926413bd6b97c642dbaf979db32ae",
+  "phase_contract": {
+    "base_learning": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": [
+        "base_detector"
+      ],
+      "training_data_scope": "base_dataset_only"
+    },
+    "incremental_learning": {
+      "counted_as_incremental_learning": true,
+      "detector_weights_updated": [
+        "incremental_detector"
+      ],
+      "training_data_scope": "incremental_dataset_only",
+      "validation_data_scope": "incremental_dataset_only",
+      "base_detector_weights_frozen": true
+    },
+    "system_calibration": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": false,
+      "data_scope": {
+        "scene_sensor_model_training": "base_and_incremental_train_dev",
+        "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
+        "base_context_prior": "base_train_only",
+        "incremental_context_prior": "incremental_train_only",
+        "gate_selection": "mixed_dev_only"
+      }
+    },
+    "joint_evaluation": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": false,
+      "model_selection_allowed": false
+    }
+  }
 }

@@ -2,12 +2,14 @@
 
 本目录绑定当前 4+2 Base 与二类增量专家的 dev 选模、训练参数和冻结预测：
 
+协议口径固定如下：二类专家权重训练是 `incremental_learning`，只用当轮 Increment train/dev；Scene-SensorNet 与六类场景门控是 `system_calibration`，可用 Base/Increment train/dev 与 mixed dev，但不更新任何检测器权重；冻结候选的 mixed lock 复核是 `joint_evaluation`，不训练也不选参。
+
 - `base_selection.*` / `incremental_selection.*`：只按 dev mAP50 选模，未读取 lock；
 - `base_training/` / `incremental_training/`：胜出模型的 `args.yaml` 与 `results.csv`；
 - `frozen/`：Base/专家在 mixed dev 和 mixed lock 上的预测，lock 标签在预测冻结后才进入评分。
-- `scene_aware_dev_search.*`：使用 Scene-SensorNet 实际概率完成六类逐类 dev 搜索，未读取 lock 标签；
+- `scene_aware_dev_search.*`：`system_calibration` 证据，使用 Scene-SensorNet 实际概率完成六类逐类 dev 搜索，未读取 lock 标签；
 - `scene_aware_candidate.json`：dev 选择并冻结的 `guarded_precision` 候选；
-- `scene_aware_lock_recheck.json`：冻结候选的一次性 mixed lock 复核。
+- `scene_aware_lock_recheck.json`：`joint_evaluation` 证据，记录冻结候选的一次性 mixed lock 复核。
 
 最终评分、逐类阈值和非阻断诊断见上级目录的 `metrics.json` 与 `calibration.json`。
 

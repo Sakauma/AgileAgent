@@ -11,13 +11,26 @@ AgileAgent 使用 UTF-8 YAML 配置。主运行配置采用 schema 3，并由 `f
 | `models/ascend310b/full-score/20260816-full-score-1493b04/configs/agent_pipeline_ascend310b.yaml` | 已验证满分 release 的字节级正式配置；由物化脚本复制，不手工修改 |
 | `configs/ascend310b/full_score_method.yaml` | Ascend 310B 满分结构、阈值搜索、评分门禁和参考证据 |
 | `configs/functional_models.yaml` | 三个功能模型及发布资产 |
-| `configs/incremental_detection_policy.yaml` | 增量数据范围与评测策略 |
+| `configs/incremental_detection_policy.yaml` | `base_learning`、`incremental_learning`、`system_calibration`、`joint_evaluation` 的统一范围契约 |
 | `configs/strict_class_incremental_3plus1.yaml` | 旧 3+1 兼容实验参数，不是当前 production |
 | `configs/scene_sensor_model.yaml` | 旧 3+1 Scene-SensorNet 兼容参数 |
 | `configs/scene_sensor_model_4plus2.yaml` | 当前 4+2 Scene-SensorNet 训练参数 |
 | `configs/local_infer_gpu.yaml` | 本机 GPU 推理参数 |
 | `configs/submission_infer_base_4class.yaml` | 当前四类 Base 检测提交参数 |
 | `configs/submission_infer_base_3class.yaml` | 旧三类 Base 兼容参数；对应权重已归档 |
+
+## 增量协议字段
+
+`configs/incremental_detection_policy.yaml` 的 `scope_definition` 是术语单一来源：
+
+| `phase` | `counted_as_incremental_learning` | 权重更新与数据口径 |
+| --- | --- | --- |
+| `base_learning` | `false` | Base train/dev，只更新 Base 检测器 |
+| `incremental_learning` | `true` | 只用当轮 Increment train/dev，只更新 Increment 检测器，Base 冻结 |
+| `system_calibration` | `false` | 可用 Base/Increment train/dev 和 mixed dev，两个检测器都冻结 |
+| `joint_evaluation` | `false` | 在全已学类别 lock/test 上只评分，禁止训练和选参 |
+
+`configs/scene_sensor_model_4plus2.yaml` 的 `protocol.phase` 固定为 `system_calibration`。新生成的场景模型、门控候选、`calibration.json` 和联合评估证据均显式记录 `phase`、`counted_as_incremental_learning` 与 `detector_weights_updated`。其中 `calibration.json.data_scope` 分别声明 Scene-SensorNet、Base 先验、Increment 先验和 mixed dev 门控搜索的数据用途，不再把 mixed dev 校准误写成 `incremental_dataset_only`。
 
 ## 加载顺序
 

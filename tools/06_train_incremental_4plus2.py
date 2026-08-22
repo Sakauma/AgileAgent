@@ -170,8 +170,11 @@ def materialize_dataset(data_root: Path, project: Path, queue_tag: str) -> Path:
         encoding="utf-8",
     )
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
+        "phase": "incremental_learning",
+        "counted_as_incremental_learning": True,
+        "detector_weights_updated": False,
         "data_root": data_root.as_posix(),
         "source_scope": "incremental_dataset_only",
         "original_labels_modified": False,
@@ -279,7 +282,10 @@ def main() -> int:
 
     summary_path = project / f"{args.model_tag}_{args.queue_tag}_summary.json"
     summary: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "phase": "incremental_learning",
+        "counted_as_incremental_learning": True,
+        "detector_weights_updated": ["incremental_detector"],
         "model": model.as_posix(),
         "model_tag": args.model_tag,
         "queue_tag": args.queue_tag,

@@ -146,8 +146,11 @@ def materialize_dataset(data_root: Path, project: Path, model_tag: str) -> Path:
         encoding="utf-8",
     )
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
+        "phase": "base_learning",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
         "data_root": data_root.as_posix(),
         "train_images": len(train_images),
         "dev_images": len(dev_images),
@@ -227,7 +230,10 @@ def main() -> int:
 
     summary_path = project / f"{args.model_tag}_queue_summary.json"
     summary: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "phase": "base_learning",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": ["base_detector"],
         "model": model_value,
         "model_tag": args.model_tag,
         "visible_gpu": torch.cuda.get_device_name(0),

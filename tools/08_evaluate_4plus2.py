@@ -226,8 +226,11 @@ def calibrate_map50_thresholds(
         }
     filtered = apply_thresholds(predictions, thresholds)
     return {
-        "schema_version": 2,
-        "learning_data_scope": "incremental_dataset_only",
+        "schema_version": 4,
+        "phase": "system_calibration",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "data_scope": {"gate_selection": "mixed_dev_only"},
         "source_split": "mixed_dev_only",
         "selection_metric": "per_class_mAP50",
         "deployment_policy": "competition_map50_dev_calibrated",
@@ -501,12 +504,16 @@ def main() -> int:
         "krr": float(lock_metrics["krr"]) >= 0.95,
     }
     metrics = {
-        "schema_version": 3,
+        "schema_version": 5,
         "run_id": f"strict-4plus2-{datetime.now().astimezone().strftime('%Y%m%d-%H%M%S')}",
         "created_at": datetime.now().astimezone().isoformat(),
         "protocol": "strict-4plus2-parallel-specialist",
+        "phase": "joint_evaluation",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "model_selection_allowed": False,
         "incremental_mode": "class_incremental",
-        "learning_data_scope": "incremental_dataset_only",
+        "incremental_learning_data_scope": "incremental_dataset_only",
         "old_raw_image_count": 0,
         "old_raw_label_count": 0,
         "class_map": {str(key): value for key, value in GLOBAL_CLASS_NAMES.items()},

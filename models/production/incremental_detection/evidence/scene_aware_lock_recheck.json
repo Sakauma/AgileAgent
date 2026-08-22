@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "created_at": "2026-08-22T09:02:29.120131+00:00",
   "candidate": {
-    "schema_version": 1,
+    "schema_version": 2,
     "candidate_id": "scene-aware-4plus2-guarded_precision",
     "created_at": "2026-08-22T09:00:27.832927+00:00",
     "selection_source": "mixed_dev_only",
@@ -271,6 +271,16 @@
         "fused": 505,
         "conflict_rejected": 0
       }
+    },
+    "phase": "system_calibration",
+    "counted_as_incremental_learning": false,
+    "detector_weights_updated": false,
+    "data_scope": {
+      "scene_sensor_model_training": "base_and_incremental_train_dev",
+      "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
+      "base_context_prior": "base_train_only",
+      "incremental_context_prior": "incremental_train_only",
+      "gate_selection": "mixed_dev_only"
     }
   },
   "baseline": {
@@ -539,5 +549,9 @@
     "krr": true
   },
   "competition_accepted": true,
-  "candidate_frozen_before_lock_labels": true
+  "candidate_frozen_before_lock_labels": true,
+  "phase": "joint_evaluation",
+  "counted_as_incremental_learning": false,
+  "detector_weights_updated": false,
+  "model_selection_allowed": false
 }

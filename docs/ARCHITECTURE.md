@@ -8,7 +8,7 @@ AgileAgent 将配置、模型代际、在线推理、增量学习、审计和设
 | --- | --- | --- |
 | 接口层 | `fair_agent/web/`、`fair_agent/cli.py` | Web API、工作台、CLI 和健康检查 |
 | 编排层 | `fair_agent/modules/web_inference.py` | production 代际解析、三模型执行、类别映射与融合 |
-| 增量层 | `incremental_workbench.py`、`incremental_lifecycle.py` | 数据审计、训练、校准、复核、注册与切换 |
+| 生命周期层 | `incremental_workbench.py`、`incremental_lifecycle.py` | 编排数据审计、增量训练、系统校准、联合复核、注册与切换 |
 | 模型层 | `fair_agent/models/`、`models/` | Scene-SensorNet、基础检测器、增量检测器和模型元数据 |
 | 后端层 | `fair_agent/backends/` | Ultralytics CUDA 与 Ascend ACL/OM 运行时 |
 | 状态层 | `data/`、`reports/`、`models/generations.json` | 批次状态、审计事件、报告和 production 代际 |
@@ -72,23 +72,32 @@ Scene-SensorNet 对 air/forest/sea/urban 四个已知场景做闭集概率预测
 
 old/new 的 `candidate_confidence` 是 Host 运行时参数，不参与 ONNX/OM 身份。更换数据集时可以复用同一 build manifest 搜索阈值，但不能改变 logical owner、class map、anchor 数或 output contract。
 
-## 增量学习流程
+## 学习、校准与评估阶段
 
 ```text
-ZIP 上传
-  -> 安全解压与五列 YOLO 校验
-  -> 数据血缘审计
-  -> train/dev/lock 固定拆分
-  -> 训练快照
-  -> GPU 训练
-  -> dev 阈值校准与混淆图
-  -> 候选代际登记
-  -> lock 指标复核
-  -> shadow 预热
-  -> production 原子切换
+base_learning
+  Base train/dev -> Base 检测器权重
+        |
+        v
+incremental_learning
+  当轮 Increment train/dev -> 新类专家权重与全局 ID 映射
+  Base 检测器权重冻结
+        |
+        v
+system_calibration
+  Base/Increment train/dev + mixed dev
+  -> Scene-SensorNet、逐类场景先验、阈值与场景惩罚
+  -> 不更新 Base 或 Increment 检测器权重
+        |
+        v
+joint_evaluation
+  参数冻结 -> mixed lock/test 六类联合评分
+  -> 禁止训练和选参 -> 候选登记、shadow、production 切换
 ```
 
-训练快照绑定数据清单、类别注册表、父代际和训练配置。模型权重与阈值冻结后进入 lock 复核，复核结果与哈希写入候选代际。
+`incremental_learning` 的定义只覆盖新类检测器训练、新类映射及新类专属学习。Scene-SensorNet 训练、Base/Increment 场景先验学习和六类门控搜索属于独立的 `system_calibration`；它们即使读取 Base train/dev，也不构成旧类样本回放，因为两个检测器权重都保持冻结。工作台状态机会串联这些步骤，但编排范围不等于增量学习统计范围。
+
+训练快照绑定数据清单、类别注册表、父代际和训练配置。Base 类先验只来自 Base train，新增类先验只来自 Increment train，门控参数只由 mixed dev 选择。模型权重与校准参数冻结后进入 mixed lock/test 联合复核，复核结果写入候选代际。
 
 ## 模型代际
 

@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "release": "competition-4plus2-agent-scene-aware-v2-20260822",
-  "created_at": "2026-08-22T09:11:12.363783+00:00",
-  "run_id": "strict-4plus2-scene-aware-20260822-091112",
+  "created_at": "2026-08-22T18:19:28.905530+08:00",
+  "run_id": "strict-4plus2-scene-aware-20260822-181928",
   "base_model": {
     "architecture": "YOLO26s",
     "path": "models/production/incremental_detection/four_class_base_detector.pt",
@@ -44,7 +44,9 @@
       "2": 0.26,
       "3": 0.19
     },
-    "context_prior_source": "models/production/incremental_detection/base_context_prior.json"
+    "context_prior_source": "models/production/incremental_detection/base_context_prior.json",
+    "training_phase": "base_learning",
+    "counted_as_incremental_learning": false
   },
   "functional_models": [
     {
@@ -60,7 +62,10 @@
       "lock_scene_accuracy": 0.8314606741573034,
       "lock_joint_accuracy": 0.8202247191011236,
       "sha256": "aa99a0e58db1f80b0b6e0cc0e5049b6dc39e88f4349d2e7c362b1e2a25b83a7e",
-      "metrics_sha256": "0c8695d2795b16c50988d652724da0c3685ed730e2d875954eb4e64199b965bb"
+      "metrics_sha256": "561524130d4e18101d19934cce14a86132b23fef70f2b81267892519eee66e52",
+      "competition_phase": "system_calibration",
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": false
     },
     {
       "id": "four_class_base_detector",
@@ -70,7 +75,9 @@
       "base_test_map50": 0.8560669777957763,
       "sha256": "105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd",
       "raw_base_test_map50": 0.8875500761448091,
-      "scene_soft_gating": true
+      "scene_soft_gating": true,
+      "competition_phase": "base_learning",
+      "counted_as_incremental_learning": false
     },
     {
       "id": "incremental_model_bank_v1",
@@ -91,7 +98,9 @@
       "old_raw_image_count": 0,
       "true_class_incremental_verified": true,
       "competition_accepted": true,
-      "deployment_accepted": true
+      "deployment_accepted": true,
+      "competition_phase": "incremental_learning",
+      "counted_as_incremental_learning": true
     }
   ],
   "incremental_models": [
@@ -125,9 +134,9 @@
         "4": "models/production/incremental_detection/calibration.json",
         "5": "models/production/incremental_detection/calibration.json"
       },
-      "calibration_sha256": "952ab2137cade4e1a89b0c4d19a6b7f38bd05d62fd05a04423a3c5fa3dd0038d",
+      "calibration_sha256": "c94be3385f9efa8e0457ce4c0a7d55802f90109ea71e11e9628b3e32b11a8738",
       "metrics_source": "models/production/incremental_detection/metrics.json",
-      "metrics_sha256": "c8583a9f58e76d710474746f5c74e1973f9844e69437ccf0fb4f52a61c42c94f",
+      "metrics_sha256": "b651a6f4ca2557798a8cb4c185aad77936f5540a7ce8b41f30983c7ad94e8981",
       "evidence_level": "verified",
       "available": true,
       "context_prior": {
@@ -188,7 +197,7 @@
       "path": "models/production/incremental_detection/incremental_detector.pt",
       "sha256": "0ab0c6ed0117b75ab9ee105e9f109ccad96d988156d00fa4c4c0b9599e424a2a",
       "evaluation_semantics": "all_owners_scene_probability_gated_on_mixed_dev_then_frozen_mixed_lock_v2",
-      "rechecked_at": "2026-08-22T09:11:12.363783+00:00",
+      "rechecked_at": "2026-08-22T18:19:28.905530+08:00",
       "base_test_map50": 0.8560669777957763,
       "old_map50_before": 0.8280599094822771,
       "old_map50_after": 0.8058064769386335,
@@ -219,7 +228,12 @@
       "deployment_accepted": true,
       "acceptance": "passed",
       "overall_lock_precision": 0.66796875,
-      "new_class_lock_precision": 0.8734177215189873
+      "new_class_lock_precision": 0.8734177215189873,
+      "training_phase": "incremental_learning",
+      "counted_as_incremental_learning": true,
+      "training_data_scope": "incremental_dataset_only",
+      "base_detector_weights_frozen": true,
+      "system_calibration_source": "models/production/incremental_detection/calibration.json"
     }
   ],
   "frozen_prediction_evidence": {
@@ -295,10 +309,47 @@
   },
   "notes": [
     "所有检测选择和验收硬指标均为 mAP50。",
+    "incremental_learning 仅指使用当轮增量 train/dev 训练新类检测器及新类专属学习；Base 检测器权重保持冻结。",
+    "Scene-SensorNet 训练和六类场景门控搜索属于 system_calibration，可使用 Base/Increment train/dev，但不更新任何检测器权重。",
+    "六类检测的 mixed lock 只用于参数冻结后的 joint_evaluation，不训练也不选参；Scene-SensorNet 的 context lock 仅做冻结功能模型复核。",
     "Base 与二类专家对每张图并行推理，类别 owner 保持固定。",
     "六类逐类阈值和场景惩罚只由 mixed dev 选择；线上只读取 Scene-SensorNet 概率，不读取文件名或标签。",
     "precision 与误激活率是非阻断诊断；当前场景感知运行点已显著改善二者。",
     "仓库不包含竞赛数据集和标签。",
     "Ascend 3+1 不可变包仅为历史板端发布；当前 4+2 场景感知策略尚未转换为 OM。"
-  ]
+  ],
+  "phase_contract": {
+    "base_learning": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": [
+        "base_detector"
+      ],
+      "training_data_scope": "base_dataset_only"
+    },
+    "incremental_learning": {
+      "counted_as_incremental_learning": true,
+      "detector_weights_updated": [
+        "incremental_detector"
+      ],
+      "training_data_scope": "incremental_dataset_only",
+      "validation_data_scope": "incremental_dataset_only",
+      "base_detector_weights_frozen": true
+    },
+    "system_calibration": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": false,
+      "data_scope": {
+        "scene_sensor_model_training": "base_and_incremental_train_dev",
+        "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
+        "base_context_prior": "base_train_only",
+        "incremental_context_prior": "incremental_train_only",
+        "gate_selection": "mixed_dev_only"
+      }
+    },
+    "joint_evaluation": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": false,
+      "model_selection_allowed": false
+    }
+  }
 }

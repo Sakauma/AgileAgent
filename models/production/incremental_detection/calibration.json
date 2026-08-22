@@ -1,6 +1,15 @@
 {
-  "schema_version": 3,
-  "learning_data_scope": "incremental_dataset_only",
+  "schema_version": 4,
+  "phase": "system_calibration",
+  "counted_as_incremental_learning": false,
+  "detector_weights_updated": false,
+  "data_scope": {
+    "scene_sensor_model_training": "base_and_incremental_train_dev",
+    "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
+    "base_context_prior": "base_train_only",
+    "incremental_context_prior": "incremental_train_only",
+    "gate_selection": "mixed_dev_only"
+  },
   "source_split": "mixed_dev_only",
   "selection_metric": "precision_subject_to_map50_krr_guardrails_with_scene_probabilities",
   "deployment_policy": "competition_map50_dev_calibrated",

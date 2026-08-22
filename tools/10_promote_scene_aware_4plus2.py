@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +27,37 @@ CLASS_NAMES = {
 }
 BASE_IDS = (0, 1, 2, 3)
 NEW_IDS = (4, 5)
+SYSTEM_CALIBRATION_DATA_SCOPE = {
+    "scene_sensor_model_training": "base_and_incremental_train_dev",
+    "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
+    "base_context_prior": "base_train_only",
+    "incremental_context_prior": "incremental_train_only",
+    "gate_selection": "mixed_dev_only",
+}
+PHASE_CONTRACT = {
+    "base_learning": {
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": ["base_detector"],
+        "training_data_scope": "base_dataset_only",
+    },
+    "incremental_learning": {
+        "counted_as_incremental_learning": True,
+        "detector_weights_updated": ["incremental_detector"],
+        "training_data_scope": "incremental_dataset_only",
+        "validation_data_scope": "incremental_dataset_only",
+        "base_detector_weights_frozen": True,
+    },
+    "system_calibration": {
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "data_scope": SYSTEM_CALIBRATION_DATA_SCOPE,
+    },
+    "joint_evaluation": {
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "model_selection_allowed": False,
+    },
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -50,6 +80,54 @@ def atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 def rel(path: Path) -> str:
     return path.resolve().relative_to(ROOT.resolve()).as_posix()
+
+
+def mark_system_calibration(payload: dict[str, Any]) -> dict[str, Any]:
+    payload.update(
+        {
+            "schema_version": max(2, int(payload.get("schema_version", 1))),
+            "phase": "system_calibration",
+            "counted_as_incremental_learning": False,
+            "detector_weights_updated": False,
+            "data_scope": dict(SYSTEM_CALIBRATION_DATA_SCOPE),
+        }
+    )
+    return payload
+
+
+def scoped_dev_report(source: str) -> str:
+    note = (
+        "本步骤属于 system_calibration，不计入 incremental_learning，"
+        "也不更新 Base 或 Increment 检测器权重。"
+    )
+    if note in source:
+        return source
+    lines = source.splitlines()
+    insert_at = 2 if lines and lines[0].startswith("#") else 0
+    lines[insert_at:insert_at] = [note, ""]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def scoped_scene_report(source: str) -> str:
+    note = (
+        "该模型属于 system_calibration 功能模型，不计入竞赛口径的 "
+        "incremental_learning，且不会更新任何检测器权重。"
+    )
+    if note in source:
+        return source
+    lines = source.splitlines()
+    insert_at = 2 if lines and lines[0].startswith("#") else 0
+    lines[insert_at:insert_at] = [note, ""]
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def scoped_selection_report(source: str, note: str) -> str:
+    if note in source:
+        return source
+    lines = source.splitlines()
+    insert_at = 2 if lines and lines[0].startswith("#") else 0
+    lines[insert_at:insert_at] = [note, ""]
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def adapt_split_metrics(raw: Mapping[str, Any], base_image_count: int) -> dict[str, Any]:
@@ -198,8 +276,13 @@ def main() -> int:
     dev_report_path = args.dev_report.expanduser().resolve()
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
     result = json.loads(lock_result_path.read_text(encoding="utf-8"))
+    dev_search = json.loads(dev_search_path.read_text(encoding="utf-8"))
+    dev_report = dev_report_path.read_text(encoding="utf-8")
     if (
         candidate.get("selection_source") != "mixed_dev_only"
+        or candidate.get("phase") not in (None, "system_calibration")
+        or result.get("phase") not in (None, "joint_evaluation")
+        or dev_search.get("phase") not in (None, "system_calibration")
         or result.get("competition_accepted") is not True
         or result.get("candidate_frozen_before_lock_labels") is not True
         or result.get("candidate", {}).get("candidate_id") != candidate.get("candidate_id")
@@ -207,16 +290,101 @@ def main() -> int:
     ):
         raise ValueError("候选未通过冻结 dev→lock 晋级契约")
 
+    mark_system_calibration(candidate)
+    for dev_candidate in dict(dev_search.get("candidates") or {}).values():
+        mark_system_calibration(dev_candidate)
+    dev_search.update(
+        {
+            "schema_version": max(2, int(dev_search.get("schema_version", 1))),
+            "phase": "system_calibration",
+            "counted_as_incremental_learning": False,
+            "detector_weights_updated": False,
+            "data_scope": dict(SYSTEM_CALIBRATION_DATA_SCOPE),
+        }
+    )
+    result.update(
+        {
+            "schema_version": max(2, int(result.get("schema_version", 1))),
+            "phase": "joint_evaluation",
+            "counted_as_incremental_learning": False,
+            "detector_weights_updated": False,
+            "model_selection_allowed": False,
+            "candidate": candidate,
+        }
+    )
+
+    scene_metrics_path = ROOT / "models" / "context" / "scene_sensor_metrics.json"
+    scene_report_path = ROOT / "models" / "context" / "scene_sensor_report.md"
+    old_scene_metrics_hash = sha256_file(scene_metrics_path)
+    scene_metrics = json.loads(scene_metrics_path.read_text(encoding="utf-8"))
+    scene_metrics.update(
+        {
+            "schema_version": max(2, int(scene_metrics.get("schema_version", 1))),
+            "phase": "system_calibration",
+            "counted_as_incremental_learning": False,
+            "detector_weights_updated": False,
+            "data_scope": {
+                "training": "base_and_incremental_train",
+                "model_selection": "base_and_incremental_dev",
+                "functional_model_recheck": "base_and_incremental_lock",
+            },
+        }
+    )
+    atomic_json(scene_metrics_path, scene_metrics)
+    scene_report_path.write_text(
+        scoped_scene_report(scene_report_path.read_text(encoding="utf-8")),
+        encoding="utf-8",
+    )
+    new_scene_metrics_hash = sha256_file(scene_metrics_path)
+
     production = ROOT / "models" / "production" / "incremental_detection"
     evidence = production / "evidence"
     base_prior_path = production / "base_context_prior.json"
     incremental_prior_path = production / "incremental_context_prior.json"
     atomic_json(base_prior_path, candidate["base_context_prior"])
     atomic_json(incremental_prior_path, candidate["incremental_context_prior"])
-    shutil.copy2(candidate_path, evidence / "scene_aware_candidate.json")
-    shutil.copy2(lock_result_path, evidence / "scene_aware_lock_recheck.json")
-    shutil.copy2(dev_search_path, evidence / "scene_aware_dev_search.json")
-    shutil.copy2(dev_report_path, evidence / "scene_aware_dev_search.md")
+    atomic_json(evidence / "scene_aware_candidate.json", candidate)
+    atomic_json(evidence / "scene_aware_lock_recheck.json", result)
+    atomic_json(evidence / "scene_aware_dev_search.json", dev_search)
+    (evidence / "scene_aware_dev_search.md").write_text(
+        scoped_dev_report(dev_report), encoding="utf-8"
+    )
+    selection_specs = (
+        (
+            "base_selection",
+            "base_learning",
+            False,
+            "base_detector_candidate_selection",
+            "本步骤属于 base_learning，不计入 incremental_learning，且选模本身不更新检测器权重。",
+        ),
+        (
+            "incremental_selection",
+            "incremental_learning",
+            True,
+            "incremental_detector_candidate_selection",
+            "本步骤属于 incremental_learning，只读取 Increment dev；选模本身不再更新检测器权重。",
+        ),
+    )
+    for stem, phase, counted, component, note in selection_specs:
+        selection_path = evidence / f"{stem}.json"
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        selection.update(
+            {
+                "schema_version": max(2, int(selection.get("schema_version", 1))),
+                "phase": phase,
+                "counted_as_incremental_learning": counted,
+                "detector_weights_updated": False,
+                "component": component,
+            }
+        )
+        atomic_json(selection_path, selection)
+        selection_report_path = evidence / f"{stem}.md"
+        selection_report_path.write_text(
+            scoped_selection_report(
+                selection_report_path.read_text(encoding="utf-8"), note
+            ),
+            encoding="utf-8",
+        )
 
     thresholds = {
         int(key): float(value) for key, value in candidate["thresholds"].items()
@@ -242,10 +410,15 @@ def main() -> int:
     lock_metrics = adapt_split_metrics(result["lock"], 75)
     metrics = {
         **old_metrics,
-        "schema_version": 4,
+        "schema_version": 5,
         "run_id": run_id,
         "created_at": now,
         "protocol": "strict-4plus2-parallel-specialist-class-specific-scene-gate",
+        "phase": "joint_evaluation",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "model_selection_allowed": False,
+        "incremental_learning_data_scope": "incremental_dataset_only",
         "inference": {
             **dict(old_metrics.get("inference") or {}),
             "fusion": "fixed_class_owners_with_class_specific_scene_soft_gate",
@@ -270,11 +443,15 @@ def main() -> int:
         "predictions_frozen_before_lock_labels": True,
         "candidate_frozen_before_lock_labels": True,
     }
+    metrics.pop("learning_data_scope", None)
     atomic_json(production / "metrics.json", metrics)
 
     calibration = {
-        "schema_version": 3,
-        "learning_data_scope": "incremental_dataset_only",
+        "schema_version": 4,
+        "phase": "system_calibration",
+        "counted_as_incremental_learning": False,
+        "detector_weights_updated": False,
+        "data_scope": dict(SYSTEM_CALIBRATION_DATA_SCOPE),
         "source_split": "mixed_dev_only",
         "selection_metric": "precision_subject_to_map50_krr_guardrails_with_scene_probabilities",
         "deployment_policy": "competition_map50_dev_calibrated",
@@ -337,6 +514,7 @@ def main() -> int:
     profile.update(
         {
             "run_id": run_id,
+            "phase_contract": PHASE_CONTRACT,
             "agent_structure": {
                 **dict(profile["agent_structure"]),
                 "scene_soft_gating": True,
@@ -410,6 +588,7 @@ def main() -> int:
     registered.update(
         {
             "run_id": run_id,
+            "phase_contract": PHASE_CONTRACT,
             "evaluation_semantics": profile["evaluation_semantics"],
             "rechecked_at": now,
             "base_test_map50": lock_metrics["base_map50"],
@@ -496,6 +675,7 @@ def main() -> int:
     generation.update(
         {
             "run_id": run_id,
+            "phase_contract": PHASE_CONTRACT,
             "metrics": {
                 "base_test_map50": lock_metrics["base_map50"],
                 "old_map50_before": lock_metrics["old_map50_before"],
@@ -568,10 +748,13 @@ def main() -> int:
             "release": "competition-4plus2-agent-scene-aware-v2-20260822",
             "created_at": now,
             "run_id": run_id,
+            "phase_contract": PHASE_CONTRACT,
         }
     )
     manifest["base_model"].update(
         {
+            "training_phase": "base_learning",
+            "counted_as_incremental_learning": False,
             "raw_base_test_map50": result["baseline"]["base_map50"],
             "base_dev_map50": dev_metrics["base_map50"],
             "base_test_map50": lock_metrics["base_map50"],
@@ -585,17 +768,40 @@ def main() -> int:
         }
     )
     for functional in manifest["functional_models"]:
-        if functional["id"] == "four_class_base_detector":
+        if functional["id"] == "scene_sensor_net_v1":
             functional.update(
                 {
+                    "competition_phase": "system_calibration",
+                    "counted_as_incremental_learning": False,
+                    "detector_weights_updated": False,
+                    "metrics_sha256": new_scene_metrics_hash,
+                }
+            )
+        elif functional["id"] == "four_class_base_detector":
+            functional.update(
+                {
+                    "competition_phase": "base_learning",
+                    "counted_as_incremental_learning": False,
                     "base_test_map50": lock_metrics["base_map50"],
                     "raw_base_test_map50": result["baseline"]["base_map50"],
                     "scene_soft_gating": True,
                 }
             )
+        elif functional["id"] == "incremental_model_bank_v1":
+            functional.update(
+                {
+                    "competition_phase": "incremental_learning",
+                    "counted_as_incremental_learning": True,
+                }
+            )
     protocol = manifest["incremental_models"][0]
     protocol.update(
         {
+            "training_phase": "incremental_learning",
+            "counted_as_incremental_learning": True,
+            "training_data_scope": "incremental_dataset_only",
+            "base_detector_weights_frozen": True,
+            "system_calibration_source": rel(production / "calibration.json"),
             "activation_thresholds": {
                 str(key): value for key, value in new_thresholds.items()
             },
@@ -629,6 +835,9 @@ def main() -> int:
     )
     manifest["notes"] = [
         "所有检测选择和验收硬指标均为 mAP50。",
+        "incremental_learning 仅指使用当轮增量 train/dev 训练新类检测器及新类专属学习；Base 检测器权重保持冻结。",
+        "Scene-SensorNet 训练和六类场景门控搜索属于 system_calibration，可使用 Base/Increment train/dev，但不更新任何检测器权重。",
+        "六类检测的 mixed lock 只用于参数冻结后的 joint_evaluation，不训练也不选参；Scene-SensorNet 的 context lock 仅做冻结功能模型复核。",
         "Base 与二类专家对每张图并行推理，类别 owner 保持固定。",
         "六类逐类阈值和场景惩罚只由 mixed dev 选择；线上只读取 Scene-SensorNet 概率，不读取文件名或标签。",
         "precision 与误激活率是非阻断诊断；当前场景感知运行点已显著改善二者。",
@@ -641,8 +850,12 @@ def main() -> int:
     functional_text = functional_path.read_text(encoding="utf-8")
     if old_manifest_hash not in functional_text:
         raise ValueError("功能模型注册表未引用晋级前 manifest，拒绝静默改写")
+    if old_scene_metrics_hash not in functional_text:
+        raise ValueError("功能模型注册表未引用晋级前 Scene-SensorNet 证据，拒绝静默改写")
     functional_path.write_text(
-        functional_text.replace(old_manifest_hash, new_manifest_hash),
+        functional_text.replace(old_manifest_hash, new_manifest_hash).replace(
+            old_scene_metrics_hash, new_scene_metrics_hash
+        ),
         encoding="utf-8",
     )
 

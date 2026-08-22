@@ -1,5 +1,7 @@
 # strict 4+2 逐类场景软门控 dev 搜索
 
+本步骤属于 system_calibration，不计入 incremental_learning，也不更新 Base 或 Increment 检测器权重。
+
 线上门控只读取 Scene-SensorNet 输出的已知场景概率，不读取文件名或真值标签。
 Base 类先验只由 base train 正样本学习；新增类先验只由 increment train 正样本学习。
 
@@ -29,4 +31,3 @@ Base 类先验只由 base train 正样本学习；新增类先验只由 incremen
 - 阈值：`{'0': 0.29, '1': 0.14, '2': 0.36, '3': 0.01, '4': 0.57, '5': 0.82}`
 - 最大场景惩罚：`{'0': 0.15, '1': 0.88, '2': 0.26, '3': 0.32, '4': 0.65, '5': 0.0}`
 - 跨类冲突：`{'enabled': False, 'iou': 1.0, 'base_confidence': 0.01, 'specialist_margin': 0.0, 'preserve_base_class_owners': True}`
-
