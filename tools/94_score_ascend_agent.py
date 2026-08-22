@@ -30,9 +30,9 @@ def parse_class_ids(value: str) -> list[int]:
     try:
         values = [int(item.strip()) for item in value.split(",") if item.strip()]
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("old-class-ids必须是逗号分隔的非负整数") from exc
+        raise argparse.ArgumentTypeError("class ids必须是逗号分隔的非负整数") from exc
     if not values or len(values) != len(set(values)) or any(item < 0 for item in values):
-        raise argparse.ArgumentTypeError("old-class-ids必须是互异的非负整数")
+        raise argparse.ArgumentTypeError("class ids必须是互异的非负整数")
     return values
 
 
@@ -72,6 +72,27 @@ def _false_activation_rate(
         str(row["image_id"])
         for row in predictions
         if int(row["class_id"]) == int(class_id)
+    }
+    return len(negative & activated) / len(negative) if negative else 0.0
+
+
+def _false_activation_rate_for_classes(
+    predictions: Sequence[Mapping[str, Any]],
+    ground_truth: Sequence[Mapping[str, Any]],
+    image_ids: set[str],
+    class_ids: Sequence[int],
+) -> float:
+    selected = {int(value) for value in class_ids}
+    positive = {
+        str(row["image_id"])
+        for row in ground_truth
+        if int(row["class_id"]) in selected
+    }
+    negative = image_ids - positive
+    activated = {
+        str(row["image_id"])
+        for row in predictions
+        if int(row["class_id"]) in selected
     }
     return len(negative & activated) / len(negative) if negative else 0.0
 
@@ -116,7 +137,16 @@ def main() -> int:
     )
     parser.add_argument("--expected-images", type=int, default=89)
     parser.add_argument("--old-class-ids", type=parse_class_ids, default=[0, 1, 3])
-    parser.add_argument("--new-class-id", type=int, default=2)
+    parser.add_argument(
+        "--new-class-ids",
+        type=parse_class_ids,
+        help="逗号分隔的新增类ID；4+2使用4,5。",
+    )
+    parser.add_argument(
+        "--new-class-id",
+        type=int,
+        help="兼容旧3+1调用；不能与--new-class-ids同时使用。",
+    )
     args = parser.parse_args()
 
     accuracy_gates = load_accuracy_gates(args.method_config.resolve())
@@ -124,9 +154,15 @@ def main() -> int:
     if args.expected_images <= 0:
         raise ValueError("expected-images必须为正整数。")
     old_ids = [int(value) for value in args.old_class_ids]
-    new_id = int(args.new_class_id)
-    if new_id < 0 or new_id in old_ids:
-        raise ValueError("new-class-id必须是未出现在old-class-ids中的非负整数。")
+    if args.new_class_ids is not None and args.new_class_id is not None:
+        raise ValueError("--new-class-ids与--new-class-id不能同时使用。")
+    new_ids = (
+        [int(value) for value in args.new_class_ids]
+        if args.new_class_ids is not None
+        else [int(args.new_class_id) if args.new_class_id is not None else 2]
+    )
+    if set(new_ids) & set(old_ids):
+        raise ValueError("new-class-ids不能与old-class-ids重叠。")
 
     mixed = read_split(args.mixed_split.resolve())
     base_images = read_split(args.base_split.resolve())
@@ -149,10 +185,27 @@ def main() -> int:
         old_ids,
     )
     retention = retention_metrics(base_predictions, combined, ground_truth, old_ids)
-    new_metrics = evaluate_ap50(combined, ground_truth, [new_id])
-    full_metrics = evaluate_ap50(combined, ground_truth, sorted([*old_ids, new_id]))
-    lock_pr = precision_recall(combined, ground_truth, new_id, 0.63)
-    false_activation = _false_activation_rate(combined, ground_truth, mixed_ids, new_id)
+    new_metrics = evaluate_ap50(combined, ground_truth, new_ids)
+    full_metrics = evaluate_ap50(combined, ground_truth, sorted([*old_ids, *new_ids]))
+    lock_pr_by_class = {
+        class_id: precision_recall(combined, ground_truth, class_id, 0.63)
+        for class_id in new_ids
+    }
+    lock_precision = sum(
+        float(row["precision"]) for row in lock_pr_by_class.values()
+    ) / len(lock_pr_by_class)
+    lock_recall = sum(
+        float(row["recall"]) for row in lock_pr_by_class.values()
+    ) / len(lock_pr_by_class)
+    false_activation_by_class = {
+        class_id: _false_activation_rate(
+            combined, ground_truth, mixed_ids, class_id
+        )
+        for class_id in new_ids
+    }
+    false_activation = _false_activation_rate_for_classes(
+        combined, ground_truth, mixed_ids, new_ids
+    )
     metrics = {
         "base_map50": float(base_metrics["map50"]),
         "new_map50": float(new_metrics["map50"]),
@@ -165,9 +218,20 @@ def main() -> int:
             str(key): float(value)
             for key, value in full_metrics["per_class_ap50"].items()
         },
-        "lock_precision": float(lock_pr["precision"]),
-        "lock_recall": float(lock_pr["recall"]),
+        "lock_precision": float(lock_precision),
+        "lock_recall": float(lock_recall),
+        "lock_precision_recall_by_class": {
+            str(class_id): {
+                "precision": float(row["precision"]),
+                "recall": float(row["recall"]),
+            }
+            for class_id, row in lock_pr_by_class.items()
+        },
         "false_activation_rate": float(false_activation),
+        "false_activation_rate_by_class": {
+            str(class_id): float(value)
+            for class_id, value in false_activation_by_class.items()
+        },
     }
     competition_gates = {
         name: metrics[name] >= minimum
@@ -184,7 +248,10 @@ def main() -> int:
         "image_count": len(mixed),
         "base_image_count": len(base_images),
         "prediction_count": len(combined),
-        "class_contract": {"old_class_ids": old_ids, "new_class_id": new_id},
+        "class_contract": {
+            "old_class_ids": old_ids,
+            "new_class_ids": new_ids,
+        },
         "metrics": metrics,
         # Base mAP50、New-mAP50 与 KRR 是赛题唯一三项精度计分门槛。
         # precision/误激活率继续保留为部署诊断，但不得再淘汰一个计分

@@ -1281,15 +1281,12 @@ class AscendEncodedPreprocessor:
         max_encoded_bytes: int = 2 * 1024 * 1024,
         prepare_context: bool = True,
     ) -> None:
-        contracts = [
-            (base_model, (1, 736, 896, 3), "base"),
-            (context_model, (1, 160, 160, 3), "context"),
-        ]
+        contracts = [(base_model, tuple(base_model.input_shape), "base")]
         if specialist_model is not None:
-            contracts.insert(
-                1,
-                (specialist_model, (1, 512, 640, 3), "specialist"),
+            contracts.append(
+                (specialist_model, tuple(specialist_model.input_shape), "specialist")
             )
+        contracts.append((context_model, (1, 160, 160, 3), "context"))
         for model, shape, name in contracts:
             if model.runtime is not runtime:
                 raise RuntimeError(f"Ascend {name}模型没有共享同一ACL Runtime")
@@ -1300,10 +1297,42 @@ class AscendEncodedPreprocessor:
                     f"Ascend {name}设备预处理输入契约错误："
                     f"shape={model.input_shape}, dtype={model.input_dtype}"
                 )
+        supported_base_shapes = {(1, 736, 896, 3), (1, 608, 736, 3)}
+        if tuple(base_model.input_shape) not in supported_base_shapes:
+            raise RuntimeError(
+                "Ascend Base DVPP当前只支持旧896x736或4+2的736x608输入："
+                f"{base_model.input_shape}"
+            )
+        specialist_shape = (
+            tuple(specialist_model.input_shape)
+            if specialist_model is not None
+            else None
+        )
+        if specialist_shape not in {
+            None,
+            (1, self.source_height, self.source_width, 3),
+            tuple(base_model.input_shape),
+        }:
+            raise RuntimeError(
+                "Ascend Specialist DVPP必须使用原图640x512或与Base相同的输入："
+                f"{specialist_shape}"
+            )
         self.runtime = runtime
         self.base_model = base_model
         self.specialist_model = specialist_model
         self.context_model = context_model
+        self.base_height = int(base_model.input_shape[1])
+        self.base_width = int(base_model.input_shape[2])
+        self.specialist_direct_decode = specialist_shape == (
+            1,
+            self.source_height,
+            self.source_width,
+            3,
+        )
+        self.specialist_clone_from_base = (
+            specialist_model is not None
+            and specialist_shape == tuple(base_model.input_shape)
+        )
         self.prepare_context = bool(prepare_context)
         if len({model.memory_mode for model, _shape, _name in contracts}) != 1:
             raise RuntimeError("Ascend DVPP三个模型必须使用相同内存模式")
@@ -1456,7 +1485,8 @@ class AscendEncodedPreprocessor:
             * 3
             * _align(self.source_height, 2)
         )
-        if self.specialist_model is not None:
+        if self.specialist_direct_decode:
+            assert self.specialist_model is not None
             decoded_pointer = self.specialist_model.input_device
             if expected_decoded_size != self.specialist_model.input_size:
                 raise RuntimeError("Ascend增量OM输入大小与RGB888 PNGD输出不一致")
@@ -1476,15 +1506,32 @@ class AscendEncodedPreprocessor:
             raise RuntimeError("Ascend RGB888 PNGD输出大小计算不一致")
         self.decoded_size = decoded_size
 
-        base_resize_size = _align(896, 16) * 3 * _align(717, 2)
+        base_scale = min(
+            self.base_width / self.source_width,
+            self.base_height / self.source_height,
+        )
+        self.base_resize_width = int(round(self.source_width * base_scale))
+        self.base_resize_height = int(round(self.source_height * base_scale))
+        if self.base_resize_width != self.base_width:
+            raise RuntimeError("Ascend DVPP当前只支持无水平padding的检测输入")
+        self.base_pad_top = (self.base_height - self.base_resize_height) // 2
+        if self.base_pad_top < 0:
+            raise RuntimeError("Ascend Base letterbox padding非法")
+        base_resize_size = (
+            _align(self.base_resize_width, 16)
+            * 3
+            * _align(self.base_resize_height, 2)
+        )
         self.base_resize_pointer = self._dvpp_buffer(
             base_resize_size, "acl.media.dvpp_malloc(base resize)"
         )
         self.base_resize_desc, self.base_width_stride, _, _ = self._picture_desc(
-            self.base_resize_pointer, 896, 717
+            self.base_resize_pointer,
+            self.base_resize_width,
+            self.base_resize_height,
         )
         self.base_desc, base_width_stride, _, base_size = self._picture_desc(
-            self.base_model.input_device, 896, 736
+            self.base_model.input_device, self.base_width, self.base_height
         )
         if base_size != self.base_model.input_size:
             raise RuntimeError("Ascend基础OM输入大小与RGB888 VPC输出不一致")
@@ -1630,7 +1677,7 @@ class AscendEncodedPreprocessor:
                 ),
                 "acl.media.dvpp_png_decode_async",
             )
-            if self.specialist_ready_event is not None:
+            if self.specialist_direct_decode:
                 _require(
                     acl.rt.record_event(self.specialist_ready_event, self.stream),
                     "acl.rt.record_event(specialist input)",
@@ -1647,10 +1694,11 @@ class AscendEncodedPreprocessor:
             )
             _require(
                 acl.rt.memcpy_async(
-                    self.base_model.input_device + 9 * self.base_width_stride,
-                    self.base_width_stride * 717,
+                    self.base_model.input_device
+                    + self.base_pad_top * self.base_width_stride,
+                    self.base_width_stride * self.base_resize_height,
                     self.base_resize_pointer,
-                    self.base_width_stride * 717,
+                    self.base_width_stride * self.base_resize_height,
                     ACL_MEMCPY_DEVICE_TO_DEVICE,
                     self.stream,
                 ),
@@ -1660,6 +1708,23 @@ class AscendEncodedPreprocessor:
                 acl.rt.record_event(self.base_ready_event, self.stream),
                 "acl.rt.record_event(base input)",
             )
+            if self.specialist_clone_from_base:
+                assert self.specialist_model is not None
+                _require(
+                    acl.rt.memcpy_async(
+                        self.specialist_model.input_device,
+                        self.specialist_model.input_size,
+                        self.base_model.input_device,
+                        self.base_model.input_size,
+                        ACL_MEMCPY_DEVICE_TO_DEVICE,
+                        self.stream,
+                    ),
+                    "acl.rt.memcpy_async(specialist shared letterbox)",
+                )
+                _require(
+                    acl.rt.record_event(self.specialist_ready_event, self.stream),
+                    "acl.rt.record_event(specialist shared input)",
+                )
             if self.prepare_context:
                 scene_source = self.decoded_desc
                 for index, intermediate_desc in enumerate(
@@ -1991,6 +2056,69 @@ def detections_v1_records(
     )
 
 
+def yolo26_e2e_v1_records(
+    outputs: Sequence[np.ndarray],
+    info: Mapping[str, float | int],
+    confidence: float,
+    max_det: int,
+    *,
+    contract_max_det: int,
+    class_count: int,
+) -> list[dict[str, Any]]:
+    """Parse Ultralytics YOLO26 end-to-end detections without Host NMS.
+
+    YOLO26 exports a single fixed ``[1, max_det, 6]`` tensor whose rows are
+    ``xyxy, score, class_id`` in letterboxed input coordinates.  Selection and
+    duplicate suppression are already part of the exported graph; applying the
+    legacy raw-YOLO Host NMS here would change both accuracy and latency.
+    """
+
+    if len(outputs) != 1:
+        raise RuntimeError(f"yolo26_e2e_v1输出数量错误：{len(outputs)} != 1")
+    detections = np.asarray(outputs[0])
+    expected_shape = (1, int(contract_max_det), 6)
+    if tuple(detections.shape) != expected_shape:
+        raise RuntimeError(
+            f"yolo26_e2e_v1输出shape错误：{tuple(detections.shape)} != {expected_shape}"
+        )
+    if detections.dtype != np.dtype(np.float32):
+        raise RuntimeError(
+            f"yolo26_e2e_v1输出dtype错误：{detections.dtype} != float32"
+        )
+    if int(contract_max_det) <= 0 or int(class_count) <= 0:
+        raise RuntimeError("yolo26_e2e_v1 max_det/class_count契约非法")
+    requested_max_det = int(max_det)
+    if requested_max_det <= 0 or requested_max_det > int(contract_max_det):
+        raise RuntimeError(
+            "yolo26_e2e_v1 max_det超出设备契约："
+            f"{requested_max_det} not in [1, {contract_max_det}]"
+        )
+
+    rows = detections[0]
+    boxes = rows[:, :4]
+    scores = rows[:, 4]
+    class_values = rows[:, 5]
+    if not (
+        np.all(np.isfinite(boxes))
+        and np.all(np.isfinite(scores))
+        and np.all(np.isfinite(class_values))
+    ):
+        raise RuntimeError("yolo26_e2e_v1包含非有限检测值")
+    rounded_classes = np.rint(class_values)
+    if np.any(np.abs(class_values - rounded_classes) > 1e-4):
+        raise RuntimeError("yolo26_e2e_v1包含非整数类别ID")
+    class_ids = rounded_classes.astype(np.int32, copy=False)
+    if np.any(class_ids < 0) or np.any(class_ids >= int(class_count)):
+        raise RuntimeError("yolo26_e2e_v1包含越界类别ID")
+
+    selected = np.flatnonzero(scores > float(confidence))[:requested_max_det]
+    if len(selected) > 1 and np.any(scores[selected][1:] > scores[selected][:-1]):
+        raise RuntimeError("yolo26_e2e_v1有效记录没有按置信度降序输出")
+    return _restore_detection_rows(
+        boxes[selected], scores[selected], class_ids[selected], info
+    )
+
+
 def decoded_output_copy_plan(
     confidence: float,
     *,
@@ -2236,7 +2364,7 @@ class AscendAclBackend:
         self.output_contract = str(entry.get("output_contract", "raw_yolo_v1"))
         if self.output_contract not in {
             "raw_yolo_v1", "decoded_candidates_v1", "detections_v1",
-            "raw_dual_head_v1",
+            "raw_dual_head_v1", "yolo26_e2e_v1",
         }:
             raise RuntimeError(f"Ascend检测输出契约非法：{self.output_contract}")
         self.candidate_confidence = float(entry.get("candidate_confidence", 0.0))
@@ -2291,6 +2419,20 @@ class AscendAclBackend:
             )
             if self.contract_max_det <= 0 or actual != expected:
                 raise RuntimeError(f"detections_v1 OM输出契约错误：{actual} != {expected}")
+        elif self.output_contract == "yolo26_e2e_v1":
+            expected = (((1, self.contract_max_det, 6), np.dtype(np.float32)),)
+            actual = tuple(
+                (tuple(contract["shape"]), contract["dtype"])
+                for contract in self.model.output_contracts
+            )
+            if (
+                self.contract_max_det <= 0
+                or self.class_count <= 0
+                or actual != expected
+            ):
+                raise RuntimeError(
+                    f"yolo26_e2e_v1 OM输出契约错误：{actual} != {expected}"
+                )
         else:
             if self.model.execution_mode != "async_stream":
                 raise RuntimeError("decoded_candidates_v1要求async_stream执行模式")
@@ -2378,6 +2520,15 @@ class AscendAclBackend:
                 candidate_confidence=self.candidate_confidence,
                 contract_iou=self.contract_iou,
                 contract_max_det=self.contract_max_det,
+            )
+        elif self.output_contract == "yolo26_e2e_v1":
+            rows = yolo26_e2e_v1_records(
+                outputs,
+                info,
+                confidence,
+                max_det,
+                contract_max_det=self.contract_max_det,
+                class_count=self.class_count,
             )
         else:
             copy_mode = str(execution.get("output_copy_mode") or "")

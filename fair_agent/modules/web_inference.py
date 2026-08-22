@@ -1655,6 +1655,32 @@ class WebInferenceEngine:
                 )
             return value, (time.perf_counter() - started) * 1000
 
+        def encoded_detector_contract(backend: Any) -> tuple[Any, Dict[str, Any]]:
+            if self.encoded_preprocessor is None:
+                raise RuntimeError("Ascend DVPP编码预处理器尚未初始化")
+            if backend is self.detector:
+                ready_event = self.encoded_preprocessor.base_ready_event
+            else:
+                ready_event = self.encoded_preprocessor.specialist_ready_event
+            if ready_event is None:
+                raise RuntimeError("Ascend DVPP检测模型缺少对应的输入就绪事件")
+            source_width = int(self.encoded_preprocessor.source_width)
+            source_height = int(self.encoded_preprocessor.source_height)
+            target_width = int(backend.expected_width)
+            target_height = int(backend.expected_height)
+            scale = min(target_width / source_width, target_height / source_height)
+            resized_width = int(round(source_width * scale))
+            resized_height = int(round(source_height * scale))
+            if resized_width > target_width or resized_height > target_height:
+                raise RuntimeError("Ascend DVPP letterbox尺寸计算越界")
+            return ready_event, {
+                "original_height": source_height,
+                "original_width": source_width,
+                "scale": scale,
+                "pad_left": (target_width - resized_width) // 2,
+                "pad_top": (target_height - resized_height) // 2,
+            }
+
         def detector_task(backend: Any, imgsz: int) -> tuple[Any, float]:
             started = time.perf_counter()
             predict_options = {
@@ -1666,29 +1692,7 @@ class WebInferenceEngine:
                 "compile": self.compile,
             }
             if encoded_preloaded:
-                if (backend.expected_height, backend.expected_width) == (736, 896):
-                    ready_event = self.encoded_preprocessor.base_ready_event
-                    info = {
-                        "original_height": 512,
-                        "original_width": 640,
-                        "scale": 1.4,
-                        "pad_left": 0,
-                        "pad_top": 9,
-                    }
-                elif (backend.expected_height, backend.expected_width) == (512, 640):
-                    ready_event = self.encoded_preprocessor.specialist_ready_event
-                    info = {
-                        "original_height": 512,
-                        "original_width": 640,
-                        "scale": 1.0,
-                        "pad_left": 0,
-                        "pad_top": 0,
-                    }
-                else:
-                    raise RuntimeError(
-                        "Ascend DVPP检测输入契约不受支持："
-                        f"{backend.expected_height}x{backend.expected_width}"
-                    )
+                ready_event, info = encoded_detector_contract(backend)
                 if shared_dual_head and backend is self.detector:
                     value = backend.predict_dual_preloaded(
                         info, ready_event=ready_event, **predict_options
@@ -1730,29 +1734,7 @@ class WebInferenceEngine:
                 "compile": self.compile,
             }
             if encoded_preloaded:
-                if (backend.expected_height, backend.expected_width) == (736, 896):
-                    ready_event = self.encoded_preprocessor.base_ready_event
-                    info = {
-                        "original_height": 512,
-                        "original_width": 640,
-                        "scale": 1.4,
-                        "pad_left": 0,
-                        "pad_top": 9,
-                    }
-                elif (backend.expected_height, backend.expected_width) == (512, 640):
-                    ready_event = self.encoded_preprocessor.specialist_ready_event
-                    info = {
-                        "original_height": 512,
-                        "original_width": 640,
-                        "scale": 1.0,
-                        "pad_left": 0,
-                        "pad_top": 0,
-                    }
-                else:
-                    raise RuntimeError(
-                        "Ascend DVPP检测输入契约不受支持："
-                        f"{backend.expected_height}x{backend.expected_width}"
-                    )
+                ready_event, info = encoded_detector_contract(backend)
                 if shared_dual_head and backend is self.detector:
                     handle = backend.submit_dual_preloaded(
                         info, ready_event, **predict_options

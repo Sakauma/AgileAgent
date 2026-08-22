@@ -277,9 +277,11 @@ def validate_config(
     _number(inference, "warmup_batch_size", errors, 1)
     _number(inference, "warmup_width", errors, 1)
     _number(inference, "warmup_height", errors, 1)
-    confidence_min = _number(inference, "confidence_min", errors, 0.01, 1.0)
+    confidence_min = _number(inference, "confidence_min", errors, 0.00001, 1.0)
     confidence_max = _number(inference, "confidence_max", errors, 0.01, 1.0)
-    confidence_default = _number(inference, "confidence_default", errors, 0.01, 1.0)
+    confidence_default = _number(
+        inference, "confidence_default", errors, 0.00001, 1.0
+    )
     if not confidence_min <= confidence_default <= confidence_max:
         errors.append("inference.confidence_default 必须位于最小值与最大值之间")
     if not all(isinstance(inference.get(key), bool) for key in ("preload_specialists", "cudnn_benchmark", "compile")):
@@ -495,6 +497,7 @@ def validate_config(
     if model_layout not in {
         "independent_models_v1",
         "shared_backbone_dual_head_v1",
+        "independent_yolo26_e2e_v1",
     }:
         errors.append("ascend_backend.model_layout非法")
     if not str(ascend.get("device_id", "")).isdigit():
@@ -624,7 +627,7 @@ def validate_config(
             output_contract = entry.get("output_contract", "raw_yolo_v1")
             if output_contract not in {
                 "raw_yolo_v1", "decoded_candidates_v1", "detections_v1",
-                "raw_dual_head_v1",
+                "raw_dual_head_v1", "yolo26_e2e_v1",
             }:
                 errors.append(f"ascend_backend.models.{source}.output_contract非法")
             contract_fields = {
@@ -697,6 +700,20 @@ def validate_config(
                 ):
                     errors.append(
                         f"ascend_backend.models.{source}.candidate_capacity超出候选总数"
+                    )
+            elif output_contract == "yolo26_e2e_v1":
+                required_fields = {"max_det", "class_count"}
+                if configured_contract_fields != required_fields:
+                    errors.append(
+                        f"ascend_backend.models.{source}.yolo26_e2e_v1缺少固定输出参数"
+                    )
+                for name in required_fields:
+                    value = entry.get(name)
+                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                        errors.append(f"ascend_backend.models.{source}.{name}非法")
+                if "logical_heads" in entry:
+                    errors.append(
+                        f"ascend_backend.models.{source}.yolo26_e2e_v1禁止logical_heads"
                     )
             elif output_contract == "raw_dual_head_v1":
                 if configured_contract_fields:
@@ -822,6 +839,18 @@ def validate_config(
                 errors.append("共享双head要求Base与Specialist推理分辨率一致")
         elif dual_entries:
             errors.append("raw_dual_head_v1要求shared_backbone_dual_head_v1布局")
+        if model_layout == "independent_yolo26_e2e_v1":
+            e2e_entries = sum(
+                isinstance(entry, Mapping)
+                and entry.get("output_contract") == "yolo26_e2e_v1"
+                for entry in ascend_models.values()
+            )
+            if e2e_entries != 2 or len(ascend_models) != 2:
+                errors.append(
+                    "independent_yolo26_e2e_v1要求恰好两个yolo26_e2e_v1 OM"
+                )
+            if inference.get("imgsz") != inference.get("specialist_imgsz"):
+                errors.append("YOLO26 E2E独立布局要求Base与Specialist推理分辨率一致")
     context_model = ascend.get("context_model")
     if not isinstance(context_model, Mapping) or not context_model.get("path"):
         errors.append("ascend_backend.context_model非法")

@@ -102,16 +102,41 @@ if (
     or ascend.get("validated") is not False
 ):
     raise RuntimeError("候选配置的布局/context/CANN/验证状态与满分方法不一致")
-model = next(iter(ascend["models"].values()))
-heads = model["logical_heads"]
 print(ascend["build_manifest"])
-old_map = heads["old"]["class_map"]
-print(",".join(str(old_map[key]) for key in sorted(old_map, key=int)))
-new_map = heads["new"]["class_map"]
+layout = ascend["model_layout"]
+if layout == "shared_backbone_dual_head_v1":
+    model = next(iter(ascend["models"].values()))
+    heads = model["logical_heads"]
+    old_map = heads["old"]["class_map"]
+    new_map = heads["new"]["class_map"]
+elif layout == "independent_yolo26_e2e_v1":
+    models = ascend["models"]
+    base_rows = [
+        row for key, row in models.items()
+        if str(key).endswith("four_class_base_detector.pt")
+    ]
+    specialist_rows = [
+        row for key, row in models.items()
+        if str(key).endswith("incremental_detector.pt")
+    ]
+    if len(base_rows) != 1 or len(specialist_rows) != 1:
+        raise RuntimeError("4+2独立布局必须各登记一个Base与Specialist模型")
+    if any(
+        row.get("output_contract") != "yolo26_e2e_v1"
+        for row in (*base_rows, *specialist_rows)
+    ):
+        raise RuntimeError("4+2独立布局必须使用yolo26_e2e_v1输出契约")
+    method_models = method["export"]["models"]
+    old_map = method_models["base"]["class_map"]
+    new_map = method_models["specialist"]["class_map"]
+else:
+    raise RuntimeError(f"score gate不支持模型布局：{layout}")
+old_values = [old_map[key] for key in sorted(old_map, key=int)]
 new_values = [new_map[key] for key in sorted(new_map, key=int)]
-if len(new_values) != 1:
-    raise RuntimeError("score gate当前要求new logical head只映射一个新增类")
-print(new_values[0])
+if not old_values or not new_values or set(old_values) & set(new_values):
+    raise RuntimeError("score gate新旧类别映射非法")
+print(",".join(str(value) for value in old_values))
+print(",".join(str(value) for value in new_values))
 print(target["candidate_port"])
 print(target["formal_port"])
 print(target["cann_version"])
@@ -134,7 +159,7 @@ if (( ${#CONFIG_VALUES[@]} != 17 )); then
 fi
 BUILD_MANIFEST="${CONFIG_VALUES[0]}"
 OLD_CLASS_IDS="${CONFIG_VALUES[1]}"
-NEW_CLASS_ID="${CONFIG_VALUES[2]}"
+NEW_CLASS_IDS="${CONFIG_VALUES[2]}"
 CANDIDATE_PORT="${CONFIG_VALUES[3]}"
 FORMAL_PORT="${CONFIG_VALUES[4]}"
 CANN_VERSION="${CONFIG_VALUES[5]}"
@@ -270,7 +295,7 @@ AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION=1 \
   --base-split "$BASE_SPLIT" \
   --expected-images "$EXPECTED_IMAGES" \
   --old-class-ids "$OLD_CLASS_IDS" \
-  --new-class-id "$NEW_CLASS_ID" \
+  --new-class-ids "$NEW_CLASS_IDS" \
   --output "$OUTPUT_DIR/score.json"
 
 (

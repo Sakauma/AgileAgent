@@ -14,6 +14,7 @@ from fair_agent.backends.ascend_acl import (
     detections_v1_records,
     detector_tensor,
     validate_dvpp_scene_resize_stages,
+    yolo26_e2e_v1_records,
     yolo_detections,
 )
 
@@ -204,6 +205,74 @@ def test_detections_v1_rejects_contract_drift(mutate, kwargs: dict, message: str
             {"original_height": 10, "original_width": 10, "scale": 1.0, "pad_left": 0, "pad_top": 0},
             **options,
             candidate_confidence=0.01, contract_iou=0.7, contract_max_det=3,
+        )
+
+
+def test_yolo26_e2e_v1_filters_without_host_nms_and_restores_boxes() -> None:
+    output = np.asarray(
+        [[
+            [1.0, 2.0, 5.0, 6.0, 0.90, 2.0],
+            [1.5, 2.5, 5.5, 6.5, 0.80, 2.0],
+            [3.0, 4.0, 7.0, 8.0, 0.50, 1.0],
+        ]],
+        dtype=np.float32,
+    )
+    rows = yolo26_e2e_v1_records(
+        [output],
+        {
+            "original_height": 10,
+            "original_width": 10,
+            "scale": 2.0,
+            "pad_left": 1,
+            "pad_top": 2,
+        },
+        confidence=0.5,
+        max_det=3,
+        contract_max_det=3,
+        class_count=4,
+    )
+    assert [row["class_id"] for row in rows] == [2, 2]
+    assert [row["confidence"] for row in rows] == pytest.approx([0.9, 0.8])
+    assert rows[0]["xyxy"] == [0.0, 0.0, 2.0, 2.0]
+    # Both overlapping rows survive: the exported YOLO26 graph owns selection.
+    assert len(rows) == 2
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda value: [value[0].reshape(1, 6)], "shape"),
+        (lambda value: [value[0].astype(np.float16)], "dtype"),
+        (
+            lambda value: [
+                np.asarray(
+                    [[[1.0, 2.0, 5.0, 6.0, 0.9, 4.0]]], dtype=np.float32
+                )
+            ],
+            "越界",
+        ),
+    ],
+)
+def test_yolo26_e2e_v1_rejects_contract_drift(mutate, message: str) -> None:
+    output = [
+        np.asarray(
+            [[[1.0, 2.0, 5.0, 6.0, 0.9, 2.0]]], dtype=np.float32
+        )
+    ]
+    with pytest.raises(RuntimeError, match=message):
+        yolo26_e2e_v1_records(
+            mutate(output),
+            {
+                "original_height": 10,
+                "original_width": 10,
+                "scale": 1.0,
+                "pad_left": 0,
+                "pad_top": 0,
+            },
+            confidence=0.5,
+            max_det=1,
+            contract_max_det=1,
+            class_count=4,
         )
 
 

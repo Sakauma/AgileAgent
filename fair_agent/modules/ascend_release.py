@@ -12,10 +12,10 @@ from fair_agent.core.hashes import sha256_file
 
 
 EXPECTED_CONTRACTS = {
-    "base": [1, 736, 896, 3],
-    "specialist": [1, 512, 640, 3],
-    "dual_detector": [1, 736, 896, 3],
-    "context": [1, 160, 160, 3],
+    "base": ([1, 736, 896, 3], [1, 608, 736, 3]),
+    "specialist": ([1, 512, 640, 3], [1, 608, 736, 3]),
+    "dual_detector": ([1, 736, 896, 3],),
+    "context": ([1, 160, 160, 3],),
 }
 REQUIRED_VALIDATION_REPORTS = ("golden", "accuracy", "performance")
 FULL_SCORE_VALIDATION_REPORTS = ("accuracy", "performance")
@@ -326,11 +326,11 @@ def verify_ascend_artifacts(
         if "conda-env" in command:
             errors.append(f"atc_command_uses_removed_environment:{model_id}")
         contract = raw.get("input_contract")
-        expected_shape = EXPECTED_CONTRACTS[role]
+        expected_shapes = EXPECTED_CONTRACTS[role]
         if not isinstance(contract, Mapping) or (
             contract.get("dtype") != "uint8"
             or contract.get("layout") != "NHWC"
-            or contract.get("shape") != expected_shape
+            or contract.get("shape") not in expected_shapes
         ):
             errors.append(f"input_contract_mismatch:{model_id}:{role}")
     expected_role_counts = (
@@ -424,6 +424,21 @@ def verify_ascend_artifacts(
                     ),
                 }
                 if contract != expected:
+                    errors.append(f"postprocess_contract_mismatch:{role}")
+            elif configured_name == "yolo26_e2e_v1":
+                max_det = int((configured or {}).get("max_det", 0))
+                class_count = int((configured or {}).get("class_count", 0))
+                expected = {
+                    "max_det": max_det,
+                    "class_count": class_count,
+                    "outputs": {
+                        "detections": {
+                            "shape": [1, max_det, 6],
+                            "dtype": "float32",
+                        }
+                    },
+                }
+                if max_det <= 0 or class_count <= 0 or contract != expected:
                     errors.append(f"postprocess_contract_mismatch:{role}")
             elif contract is not None:
                 errors.append(f"raw_output_has_postprocess_contract:{role}")
