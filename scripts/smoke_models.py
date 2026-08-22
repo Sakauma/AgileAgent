@@ -158,6 +158,7 @@ def main() -> int:
             generation_id=settings["generation_id"],
             base_model_id=settings["base_model_id"],
             class_owners=settings["class_owners"],
+            unified_class_gates=settings.get("unified_class_gates"),
         )
         samples = []
         for sensor in ("ir", "sar"):

@@ -105,6 +105,40 @@ def context_affinity(
     return sum(components) / len(components) if components else float(neutral_score)
 
 
+def context_prior_for_class(
+    prior: Mapping[str, Any] | None,
+    class_id: int,
+) -> Dict[str, Any]:
+    """Resolve a class-specific known-context prior with legacy fallback.
+
+    Schema v2 stores priors under ``per_class`` so sea-bound and land-bound
+    classes do not dilute each other.  Older single-prior profiles remain
+    valid and are returned unchanged.
+    """
+    normalized = dict(prior or {})
+    per_class = normalized.get("per_class")
+    if isinstance(per_class, Mapping):
+        selected = per_class.get(str(int(class_id)), per_class.get(int(class_id)))
+        if isinstance(selected, Mapping):
+            return dict(selected)
+        return {}
+    return normalized
+
+
+def context_penalty_for_class(
+    gate: Mapping[str, Any] | None,
+    class_id: int,
+) -> float:
+    """Resolve a per-class soft-threshold penalty with scalar fallback."""
+    normalized = dict(gate or {})
+    penalties = normalized.get("max_threshold_penalties")
+    if isinstance(penalties, Mapping):
+        value = penalties.get(str(int(class_id)), penalties.get(int(class_id)))
+        if value is not None:
+            return float(value)
+    return float(normalized.get("max_threshold_penalty", 0.0))
+
+
 def learn_context_prior(
     contexts: Sequence[Mapping[str, Any]],
     dimensions: Sequence[str] = ("scene",),

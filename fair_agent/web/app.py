@@ -235,6 +235,7 @@ def build_web_settings(
             "default": float(inference["confidence_default"]),
         },
         "protocols": protocols,
+        "unified_class_gates": generation.get("unified_class_gates", {}),
     }
 
 
@@ -260,6 +261,7 @@ class AtomicEngineProvider:
             routing_options=settings["routing"], generation_id=settings["generation_id"],
             base_model_id=settings["base_model_id"], class_owners=settings["class_owners"],
             backend_name=settings["backend"], native_options=settings["native_backend"],
+            unified_class_gates=settings.get("unified_class_gates"),
         )
 
     def get(self) -> WebInferenceEngine:

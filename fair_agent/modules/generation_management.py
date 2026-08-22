@@ -319,6 +319,7 @@ def _engine(config: Mapping[str, Any], registry: Mapping[str, Any], generation_i
         class_owners=settings["class_owners"],
         backend_name=str(inference["backend"]),
         native_options=backend_options,
+        unified_class_gates=settings.get("unified_class_gates"),
     )
 
 

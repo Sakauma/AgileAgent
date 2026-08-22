@@ -86,6 +86,7 @@ def _predict(
         class_owners=settings["class_owners"],
         backend_name=backend,
         native_options=settings["native_backend"],
+        unified_class_gates=settings.get("unified_class_gates"),
     )
     results = []
     batch_size = int(config["tensorrt_backend"]["validation"]["evaluation_batch_size"])

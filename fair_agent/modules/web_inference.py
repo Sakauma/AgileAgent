@@ -19,6 +19,8 @@ from fair_agent.modules.detection_fusion import (
     box_iou,
     context_adjusted_threshold,
     context_affinity,
+    context_penalty_for_class,
+    context_prior_for_class,
     pairwise_box_overlap_metrics,
 )
 from fair_agent.modules.incremental_rejection import apply_positive_prototype_to_image
@@ -365,16 +367,17 @@ def protocol_effective_thresholds(
     """Apply a dev-frozen threshold plus optional known-context soft penalty."""
     gate = dict(protocol.get("context_gate") or {})
     prior = protocol.get("context_prior")
-    max_penalty = (
-        float(gate.get("max_threshold_penalty", 0.0))
-        if gate.get("enabled") is True
-        else 0.0
-    )
     effective: Dict[int, float] = {}
     affinity = 1.0
     for class_id, threshold in protocol_thresholds(protocol).items():
+        class_prior = context_prior_for_class(prior, class_id)
+        max_penalty = (
+            context_penalty_for_class(gate, class_id)
+            if gate.get("enabled") is True
+            else 0.0
+        )
         adjusted, affinity = context_adjusted_threshold(
-            float(threshold), context, prior, max_penalty
+            float(threshold), context, class_prior, max_penalty
         )
         effective[int(class_id)] = max(float(confidence_floor), adjusted)
     return effective, affinity
@@ -473,7 +476,10 @@ def apply_unified_class_gates(
 
 
 def unified_incremental_class_ids(gates: Mapping[str, Any] | None) -> set[int]:
-    raw = dict(gates or {}).get("activation_thresholds") or {}
+    settings = dict(gates or {})
+    if "incremental_class_ids" in settings:
+        return {int(class_id) for class_id in settings.get("incremental_class_ids") or []}
+    raw = settings.get("activation_thresholds") or {}
     return {int(class_id) for class_id in raw}
 
 

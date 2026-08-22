@@ -520,6 +520,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
                         "activation_thresholds": {
                             new_global_id: float(profile["activation_threshold"])
                         },
+                        "incremental_class_ids": [new_global_id],
                         "protocol_id": str(profile["profile_id"]),
                         "class_names": {
                             new_global_id: class_names[new_global_id]
@@ -598,6 +599,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
                             "positive_prototype": profile.get("positive_prototype"),
                         }
                     },
+                    "unified_class_gates": {},
                 })
         engine = WebInferenceEngine(
             settings["detector_path"],

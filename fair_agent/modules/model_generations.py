@@ -8,6 +8,49 @@ from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
 
 
+def _validate_context_configuration(
+    model: Mapping[str, Any],
+    expected_scope: str,
+) -> None:
+    gate = dict(model.get("context_gate") or {"enabled": False})
+    prior = dict(model.get("context_prior") or {})
+    model_id = str(model.get("id") or "unknown")
+    if gate.get("enabled") is not True:
+        if gate.get("enabled") is not False or prior:
+            raise ValueError(f"模型场景软门控开关非法：{model_id}")
+        return
+    if (
+        gate.get("policy") != "soft_threshold_penalty"
+        or gate.get("hard_routing") is not False
+        or gate.get("learning_data_scope") != expected_scope
+        or prior.get("source_split") != expected_scope
+    ):
+        raise ValueError(f"模型场景软门控证据非法：{model_id}")
+    scalar_penalty = float(gate.get("max_threshold_penalty", 0.0))
+    raw_penalties = gate.get("max_threshold_penalties")
+    if isinstance(raw_penalties, Mapping):
+        penalties = {int(key): float(value) for key, value in raw_penalties.items()}
+        missing = set(model.get("owns_classes") or set()) - set(penalties)
+        if missing or any(not 0.0 <= value <= 1.0 for value in penalties.values()):
+            raise ValueError(f"模型逐类场景软门控阈值非法：{model_id}")
+    elif not 0.0 <= scalar_penalty <= 1.0:
+        raise ValueError(f"模型场景软门控阈值非法：{model_id}")
+    per_class = prior.get("per_class")
+    if isinstance(per_class, Mapping):
+        prior_ids = {int(key) for key in per_class}
+        if not set(model.get("owns_classes") or set()).issubset(prior_ids):
+            raise ValueError(f"模型缺少逐类场景先验：{model_id}")
+    prior_path = resolve_path(gate.get("prior_source", ""))
+    expected_hash = str(gate.get("prior_sha256") or "")
+    if (
+        not prior_path.is_file()
+        or len(expected_hash) != 64
+        or sha256_file(prior_path) != expected_hash
+        or json.loads(prior_path.read_text(encoding="utf-8")) != prior
+    ):
+        raise ValueError(f"模型场景软门控资产非法：{model_id}")
+
+
 def load_generation_registry(path: str | Path) -> Dict[str, Any]:
     resolved = resolve_path(path)
     registry = json.loads(resolved.read_text(encoding="utf-8"))
@@ -98,8 +141,11 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
         if generation.get("status") == "active":
             for model_id in model_members:
                 model = models[model_id]
+                if model["role"] == "frozen_base":
+                    _validate_context_configuration(model, "base_train_only")
                 if model["role"] not in {"class_incremental_expert", "target_incremental_expert"}:
                     continue
+                _validate_context_configuration(model, "incremental_train_only")
                 acceptance = model.get("acceptance", {})
                 if (
                     acceptance.get("competition_gates_passed") is not True
@@ -115,37 +161,6 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
                 missing_sources = active_owned - set(model["calibration_sources"])
                 if missing_sources:
                     raise ValueError(f"active增量专家缺少逐类dev校准证据：{model_id}")
-                context_gate = model["context_gate"]
-                context_prior = model["context_prior"]
-                if context_gate.get("enabled") is True:
-                    if (
-                        context_gate.get("policy") != "soft_threshold_penalty"
-                        or context_gate.get("hard_routing") is not False
-                        or context_gate.get("learning_data_scope")
-                        != "incremental_train_only"
-                        or context_prior.get("source_split")
-                        != "incremental_train_only"
-                    ):
-                        raise ValueError(f"active增量专家场景软门控证据非法：{model_id}")
-                    penalty = float(context_gate.get("max_threshold_penalty", -1.0))
-                    if not 0.0 <= penalty <= 1.0:
-                        raise ValueError(f"active增量专家场景软门控阈值非法：{model_id}")
-                    prior_path = resolve_path(context_gate.get("prior_source", ""))
-                    expected_prior_hash = str(
-                        context_gate.get("prior_sha256") or ""
-                    )
-                    if (
-                        not prior_path.is_file()
-                        or len(expected_prior_hash) != 64
-                        or sha256_file(prior_path) != expected_prior_hash
-                        or json.loads(prior_path.read_text(encoding="utf-8"))
-                        != context_prior
-                    ):
-                        raise ValueError(
-                            f"active增量专家场景软门控资产非法：{model_id}"
-                        )
-                elif context_gate.get("enabled") is not False or context_prior:
-                    raise ValueError(f"active增量专家场景软门控开关非法：{model_id}")
         generation["class_owners"] = owners
         generation["model_members"] = model_members
         generation["old_class_ids"] = {int(value) for value in generation.get("old_class_ids", [])}
@@ -184,6 +199,11 @@ def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict
     if len(base_candidates) != 1:
         raise ValueError(f"活动代际必须有且只有一个冻结基础模型：{generation_id}")
     base = base_candidates[0]
+    base_thresholds = {
+        int(class_id): float(base["per_class_thresholds"][class_id])
+        for class_id in sorted(base["owns_classes"] & set(generation["classes"]))
+        if class_id in base["per_class_thresholds"]
+    }
     protocols = {}
     engine_deployments: Dict[str, Dict[str, Any]] = {}
     for model_id in model_ids:
@@ -259,6 +279,12 @@ def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict
         "model_members": list(model_ids),
         "base_class_ids": sorted(base["owns_classes"]),
         "base_local_to_global": dict(base["local_to_global"]),
+        "unified_class_gates": {
+            "activation_thresholds": base_thresholds,
+            "incremental_class_ids": [],
+            "context_prior": dict(base.get("context_prior") or {}),
+            "context_gate": dict(base.get("context_gate") or {"enabled": False}),
+        },
         "protocols": protocols,
         "engine_deployments": engine_deployments,
     }
