@@ -33,6 +33,8 @@ from fair_agent.modules.web_inference import (
     _ascend_role_order,
     _ordered_group_results,
     fixed_neutral_context,
+    apply_content_execution_gates,
+    content_execution_gate_decision,
 )
 
 
@@ -47,6 +49,64 @@ def test_fixed_neutral_context_is_uniform_and_schema_compatible() -> None:
     assert context["scene_confidence"] == 0.25
     assert sum(context["scene_probabilities"].values()) == 1.0
     assert context["_inference_ms"] == 0.0
+
+
+CONTENT_GATE_PROTOCOL = {
+    "content_execution_gate": {
+        "enabled": True,
+        "policy": "skip_specialist_on_scene_and_base_evidence_v1",
+        "scene": "air",
+        "scene_probability_min": 0.5,
+        "base_evidence_class_ids": [1],
+        "base_evidence_mode": "any",
+    }
+}
+
+
+@pytest.mark.parametrize(
+    "protocol,air_probability,base_records,expected_skip",
+    [
+        ({}, 0.99, [{"class_id": 1}], False),
+        (CONTENT_GATE_PROTOCOL, 0.99, [], False),
+        (CONTENT_GATE_PROTOCOL, 0.49, [{"class_id": 1}], False),
+        (CONTENT_GATE_PROTOCOL, 0.99, [{"class_id": 0}], False),
+        (CONTENT_GATE_PROTOCOL, 0.50, [{"class_id": 1}], True),
+    ],
+)
+def test_content_execution_gate_requires_scene_and_base_evidence(
+    protocol, air_probability, base_records, expected_skip
+) -> None:
+    decision = content_execution_gate_decision(
+        protocol,
+        base_records,
+        {
+            "scene_probabilities": {
+                "air": air_probability,
+                "forest": 1.0 - air_probability,
+            }
+        },
+    )
+
+    assert decision["skip_specialist"] is expected_skip
+
+
+def test_content_execution_gate_filters_only_double_evidence_route() -> None:
+    route = {
+        "id": "incremental_detector",
+        "protocol": CONTENT_GATE_PROTOCOL,
+    }
+
+    executed, skipped, decisions = apply_content_execution_gates(
+        [route],
+        [],
+        [{"class_id": 1}],
+        {"scene_probabilities": {"air": 0.9}},
+    )
+
+    assert executed == []
+    assert skipped[0]["reason"] == "content_execution_gate"
+    assert skipped[0]["matched_base_class_ids"] == [1]
+    assert decisions[0]["skip_specialist"] is True
 
 
 def test_shared_dual_head_dvpp_skips_physical_specialist_lookup() -> None:

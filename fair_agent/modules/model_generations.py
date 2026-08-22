@@ -8,6 +8,52 @@ from fair_agent.core.config import rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
 
 
+CONTENT_EXECUTION_GATE_POLICY = "skip_specialist_on_scene_and_base_evidence_v1"
+CONTENT_EXECUTION_GATE_SCENES = {"air", "forest", "sea", "urban"}
+
+
+def _validate_content_execution_gate(model: Mapping[str, Any]) -> Dict[str, Any]:
+    raw = model.get("content_execution_gate")
+    model_id = str(model.get("id") or "unknown")
+    if raw is None:
+        return {"enabled": False}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"模型内容执行门控格式非法：{model_id}")
+    gate = dict(raw)
+    if gate.get("enabled") is False:
+        if set(gate) != {"enabled"}:
+            raise ValueError(f"关闭的模型内容执行门控包含额外字段：{model_id}")
+        return gate
+    evidence_ids = gate.get("base_evidence_class_ids")
+    online_inputs = gate.get("online_inputs")
+    if (
+        gate.get("enabled") is not True
+        or gate.get("policy") != CONTENT_EXECUTION_GATE_POLICY
+        or gate.get("action") != "skip_specialist"
+        or gate.get("scene") not in CONTENT_EXECUTION_GATE_SCENES
+        or not isinstance(evidence_ids, list)
+        or not evidence_ids
+        or len({int(value) for value in evidence_ids}) != len(evidence_ids)
+        or gate.get("base_evidence_mode", "any") not in {"any", "all"}
+        or not isinstance(online_inputs, list)
+        or set(online_inputs) != {"scene_probabilities", "base_detections"}
+        or gate.get("label_aware_online_routing") is not False
+        or gate.get("filename_aware_online_routing") is not False
+        or gate.get("learning_data_scope") != "frozen_system_calibration"
+    ):
+        raise ValueError(f"模型内容执行门控证据非法：{model_id}")
+    try:
+        probability = float(gate["scene_probability_min"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"模型内容执行门控场景阈值非法：{model_id}") from exc
+    if not 0.0 < probability <= 1.0:
+        raise ValueError(f"模型内容执行门控场景阈值非法：{model_id}")
+    gate["scene_probability_min"] = probability
+    gate["base_evidence_class_ids"] = sorted({int(value) for value in evidence_ids})
+    gate["online_inputs"] = sorted(str(value) for value in online_inputs)
+    return gate
+
+
 def _validate_context_configuration(
     model: Mapping[str, Any],
     expected_scope: str,
@@ -88,6 +134,7 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
             raise ValueError(f"模型场景软门控格式非法：{model['id']}")
         model["context_prior"] = dict(raw_context_prior)
         model["context_gate"] = dict(raw_context_gate)
+        model["content_execution_gate"] = _validate_content_execution_gate(model)
         confusion_graph = model.get("confusion_graph")
         if isinstance(confusion_graph, Mapping):
             graph_path = resolve_path(confusion_graph.get("path", ""))
@@ -165,6 +212,24 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
                 missing_sources = active_owned - set(model["calibration_sources"])
                 if missing_sources:
                     raise ValueError(f"active增量专家缺少逐类dev校准证据：{model_id}")
+                execution_gate = dict(model.get("content_execution_gate") or {})
+                if execution_gate.get("enabled") is True:
+                    if model.get("role") != "class_incremental_expert":
+                        raise ValueError(
+                            f"内容执行门控只允许class_incremental专家：{model_id}"
+                        )
+                    evidence_ids = {
+                        int(value)
+                        for value in execution_gate["base_evidence_class_ids"]
+                    }
+                    if any(
+                        class_id not in owners
+                        or models[owners[class_id]].get("role") != "frozen_base"
+                        for class_id in evidence_ids
+                    ):
+                        raise ValueError(
+                            f"内容执行门控Base证据类别所有权非法：{model_id}"
+                        )
         generation["class_owners"] = owners
         generation["model_members"] = model_members
         generation["old_class_ids"] = {int(value) for value in generation.get("old_class_ids", [])}
@@ -257,6 +322,9 @@ def generation_settings(registry: Mapping[str, Any], generation_id: str) -> Dict
             "routing_prior": 1.0,
             "context_prior": dict(model.get("context_prior") or {}),
             "context_gate": dict(model.get("context_gate") or {"enabled": False}),
+            "content_execution_gate": dict(
+                model.get("content_execution_gate") or {"enabled": False}
+            ),
             "confusion_graph": (
                 model.get("confusion_graph", {}).get("payload")
                 if model.get("confusion_graph", {}).get("hash_valid")

@@ -201,6 +201,24 @@
         "prior_sha256": "c102f4b6d1a7de7b712ce117239c3fe20f77fe991f85b6d82b1d15b3e3eb3f29",
         "online_input": "scene_sensor_net_probabilities"
       },
+      "content_execution_gate": {
+        "enabled": true,
+        "policy": "skip_specialist_on_scene_and_base_evidence_v1",
+        "action": "skip_specialist",
+        "scene": "air",
+        "scene_probability_min": 0.5,
+        "base_evidence_class_ids": [
+          1
+        ],
+        "base_evidence_mode": "any",
+        "online_inputs": [
+          "scene_probabilities",
+          "base_detections"
+        ],
+        "label_aware_online_routing": false,
+        "filename_aware_online_routing": false,
+        "learning_data_scope": "frozen_system_calibration"
+      },
       "metrics": {
         "new_map50": 0.7733677094868956,
         "per_class": {

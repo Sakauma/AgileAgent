@@ -37,6 +37,7 @@ CLASS_NAMES = {
 SENSOR_LABELS = {"ir": "红外", "sar": "SAR"}
 SCENE_LABELS = {"air": "空域", "forest": "林地", "sea": "海域", "urban": "城市场景"}
 ASCEND_MODEL_ROLES = ("scene", "base", "specialist")
+CONTENT_EXECUTION_GATE_POLICY = "skip_specialist_on_scene_and_base_evidence_v1"
 T = TypeVar("T")
 
 
@@ -341,6 +342,108 @@ def protocol_thresholds(protocol: Mapping[str, Any]) -> Dict[int, float]:
 
 def protocol_independent_class_ids(protocol: Mapping[str, Any]) -> set[int]:
     return {int(value) for value in protocol.get("independent_class_ids", [])}
+
+
+def protocol_content_execution_gate(
+    protocol: Mapping[str, Any],
+) -> Dict[str, Any] | None:
+    """Return an enabled, validated-at-registry-load execution gate.
+
+    The gate controls whether a *physical* class-incremental expert needs to
+    run. It is deliberately separate from the existing soft context gate,
+    which only adjusts post-processing thresholds after the expert ran.
+    """
+
+    raw = protocol.get("content_execution_gate")
+    if not isinstance(raw, Mapping) or raw.get("enabled") is not True:
+        return None
+    gate = dict(raw)
+    if gate.get("policy") != CONTENT_EXECUTION_GATE_POLICY:
+        raise RuntimeError("增量专家内容执行门控策略非法")
+    return gate
+
+
+def content_execution_gate_decision(
+    protocol: Mapping[str, Any],
+    base_records: Iterable[Mapping[str, Any]],
+    context: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Evaluate a label/filename-independent two-factor specialist gate."""
+
+    gate = protocol_content_execution_gate(protocol)
+    if gate is None:
+        return {"enabled": False, "skip_specialist": False}
+    scene = str(gate["scene"])
+    scene_probabilities = context.get("scene_probabilities")
+    if not isinstance(scene_probabilities, Mapping):
+        scene_probabilities = {}
+    scene_probability = float(scene_probabilities.get(scene, 0.0))
+    scene_probability_min = float(gate["scene_probability_min"])
+    evidence_ids = {int(value) for value in gate["base_evidence_class_ids"]}
+    matched_ids = sorted(
+        {
+            int(row["class_id"])
+            for row in base_records
+            if int(row["class_id"]) in evidence_ids
+        }
+    )
+    evidence_mode = str(gate.get("base_evidence_mode", "any"))
+    base_evidence_passed = (
+        evidence_ids.issubset(matched_ids)
+        if evidence_mode == "all"
+        else bool(matched_ids)
+    )
+    scene_evidence_passed = scene_probability >= scene_probability_min
+    return {
+        "enabled": True,
+        "policy": CONTENT_EXECUTION_GATE_POLICY,
+        "skip_specialist": bool(
+            scene_evidence_passed and base_evidence_passed
+        ),
+        "scene": scene,
+        "scene_probability": round(scene_probability, 6),
+        "scene_probability_min": scene_probability_min,
+        "scene_evidence_passed": scene_evidence_passed,
+        "base_evidence_class_ids": sorted(evidence_ids),
+        "base_evidence_mode": evidence_mode,
+        "matched_base_class_ids": matched_ids,
+        "base_evidence_passed": base_evidence_passed,
+        "label_aware_online_routing": False,
+        "filename_aware_online_routing": False,
+    }
+
+
+def apply_content_execution_gates(
+    routes: Iterable[Mapping[str, Any]],
+    skipped: Iterable[Mapping[str, Any]],
+    base_records: Iterable[Mapping[str, Any]],
+    context: Mapping[str, Any],
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Drop only routes whose scene and Base evidence both satisfy a gate."""
+
+    base_rows = [dict(row) for row in base_records]
+    executed: List[Dict[str, Any]] = []
+    skipped_rows = [dict(row) for row in skipped]
+    decisions: List[Dict[str, Any]] = []
+    for raw_route in routes:
+        route = dict(raw_route)
+        decision = content_execution_gate_decision(
+            dict(route["protocol"]), base_rows, context
+        )
+        if decision["enabled"]:
+            audited = {"id": str(route["id"]), **decision}
+            decisions.append(audited)
+            if decision["skip_specialist"]:
+                skipped_rows.append(
+                    {
+                        "id": str(route["id"]),
+                        "reason": "content_execution_gate",
+                        **decision,
+                    }
+                )
+                continue
+        executed.append(route)
+    return executed, skipped_rows, decisions
 
 
 def protocol_positive_prototypes(
@@ -1280,13 +1383,18 @@ class WebInferenceEngine:
                 )
             return predictions
 
-        prefetch_ids = [
+        route_candidate_ids = [
             protocol_id for protocol_id, protocol in protocol_pool.items()
             if protocol.get("available") and (
                 protocol.get("incremental_mode") == "class_incremental"
                 or protocol_independent_class_ids(protocol)
             )
         ][: self.max_specialists]
+        prefetch_ids = [
+            protocol_id
+            for protocol_id in route_candidate_ids
+            if protocol_content_execution_gate(protocol_pool[protocol_id]) is None
+        ]
         for protocol_id in prefetch_ids:
             protocol = protocol_pool[protocol_id]
             if protocol_id not in self.specialist_detectors:
@@ -1297,7 +1405,7 @@ class WebInferenceEngine:
                     self._backend_options_for_role("specialist"),
                 )
         prefetched_batches: Dict[str, Sequence[Any]] = {}
-        if self.parallel_model_execution and prefetch_ids:
+        if self.parallel_model_execution:
             context_future = self._model_executor.submit(context_batch_task)
             detector_future = self._model_executor.submit(detector_batch_task, self.detector, self.imgsz)
             specialist_futures = {
@@ -1340,7 +1448,7 @@ class WebInferenceEngine:
             base_records_by_image.append(gated)
             unified_gate_decisions_by_image.append(decisions)
 
-        route_rows = [
+        raw_route_rows = [
             plan_specialist_routes(
                 protocol_pool,
                 base_records,
@@ -1354,6 +1462,16 @@ class WebInferenceEngine:
             )
             for base_records, context in zip(base_records_by_image, contexts)
         ]
+        route_rows = []
+        content_gate_decisions_by_image: List[List[Dict[str, Any]]] = []
+        for base_records, context, (eligible, executed, skipped) in zip(
+            base_records_by_image, contexts, raw_route_rows
+        ):
+            filtered, skipped_rows, gate_decisions = apply_content_execution_gates(
+                executed, skipped, base_records, context
+            )
+            route_rows.append((eligible, filtered, skipped_rows))
+            content_gate_decisions_by_image.append(gate_decisions)
         protocol_outputs: List[List[Dict[str, Any]]] = []
         for records, rejections, context in zip(
             base_records_by_image,
@@ -1536,14 +1654,20 @@ class WebInferenceEngine:
                 self.base_model_id,
             ]
             models_used.extend(str(route["id"]) for route in executed)
+            gate_decisions = content_gate_decisions_by_image[index]
             decision = {
                 "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
                 "input_mode": "unlabeled_image",
                 "inference_scope": "production",
                 "routing_basis": "all_class_owners_plus_optional_content_routing",
-                "class_incremental_execution_policy": "every_image",
+                "class_incremental_execution_policy": (
+                    "scene_and_base_evidence_gate"
+                    if gate_decisions
+                    else "every_image"
+                ),
                 "label_aware_routing": False,
-                "scene_hard_routing": False,
+                "scene_hard_routing": bool(gate_decisions),
+                "content_execution_gates": gate_decisions,
                 "evaluated_specialists": len(executed),
                 "base_detection_count": sum(
                     row["source"] == "frozen_base_model" for row in base_with_source
@@ -1750,15 +1874,22 @@ class WebInferenceEngine:
                 return backend.submit_dual(rgb_image, **predict_options), started
             return backend.submit(rgb_image, **predict_options), started
 
-        prefetch_ids = [
+        route_candidate_ids = [
             protocol_id for protocol_id, protocol in protocol_pool.items()
             if protocol.get("available") and (
                 protocol.get("incremental_mode") == "class_incremental"
                 or protocol_independent_class_ids(protocol)
             )
         ][: self.max_specialists]
-        if shared_dual_head and len(prefetch_ids) != 1:
+        if shared_dual_head and len(route_candidate_ids) != 1:
             raise RuntimeError("共享双head执行要求恰好一个预取增量逻辑模型")
+        prefetch_ids = [
+            protocol_id
+            for protocol_id in route_candidate_ids
+            if shared_dual_head
+            or protocol_content_execution_gate(protocol_pool[protocol_id]) is None
+        ]
+        deferred_specialist_ids = set(route_candidate_ids) - set(prefetch_ids)
         physical_specialist_ids = () if shared_dual_head else tuple(prefetch_ids)
         for protocol_id in physical_specialist_ids:
             protocol = protocol_pool[protocol_id]
@@ -1782,7 +1913,11 @@ class WebInferenceEngine:
         unified_ascend_submit = (
             self.backend_name == "ascend_acl"
             and self.parallel_model_execution
-            and bool(physical_specialist_ids or shared_dual_head)
+            and bool(
+                physical_specialist_ids
+                or shared_dual_head
+                or deferred_specialist_ids
+            )
             and self.native_options.get("execution_mode", "synchronous")
             == "async_stream"
             and self.native_options.get("schedule_mode", "threaded_execute")
@@ -1829,7 +1964,11 @@ class WebInferenceEngine:
         elif (
             self.backend_name == "ascend_acl"
             and self.parallel_model_execution
-            and bool(physical_specialist_ids or shared_dual_head)
+            and bool(
+                physical_specialist_ids
+                or shared_dual_head
+                or deferred_specialist_ids
+            )
             and self.native_options.get("execution_mode", "synchronous")
             == "async_stream"
             and self.native_options.get("schedule_mode", "threaded_execute")
@@ -1876,7 +2015,9 @@ class WebInferenceEngine:
                 for protocol_id in physical_specialist_ids
             }
         elif self.parallel_model_execution and (
-            physical_specialist_ids or shared_dual_head
+            physical_specialist_ids
+            or shared_dual_head
+            or deferred_specialist_ids
         ):
             context_future = (
                 None
@@ -1914,7 +2055,7 @@ class WebInferenceEngine:
             raise RuntimeError("上下文执行未返回结果")
         if shared_dual_head:
             prediction, shared_specialist_prediction = prediction
-            prefetched_predictions[prefetch_ids[0]] = (
+            prefetched_predictions[route_candidate_ids[0]] = (
                 shared_specialist_prediction,
                 detector_total_ms,
             )
@@ -1969,6 +2110,14 @@ class WebInferenceEngine:
             self.context_evidence_weight,
             self.neutral_context_score,
             self.default_routing_prior,
+        )
+        executed_routes, skipped_protocols, content_gate_decisions = (
+            apply_content_execution_gates(
+                executed_routes,
+                skipped_protocols,
+                base_records,
+                context,
+            )
         )
 
         routing_started = time.perf_counter()
@@ -2152,9 +2301,14 @@ class WebInferenceEngine:
             "input_mode": "unlabeled_image",
             "inference_scope": "production",
             "routing_basis": "all_class_owners_plus_optional_content_routing",
-            "class_incremental_execution_policy": "every_image",
+            "class_incremental_execution_policy": (
+                "scene_and_base_evidence_gate"
+                if content_gate_decisions
+                else "every_image"
+            ),
             "label_aware_routing": False,
-            "scene_hard_routing": False,
+            "scene_hard_routing": bool(content_gate_decisions),
+            "content_execution_gates": content_gate_decisions,
             "evaluated_specialists": len(executed_routes),
             "base_detection_count": sum(
                 row["source"] == "frozen_base_model" for row in base_with_source
