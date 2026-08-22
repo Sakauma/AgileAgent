@@ -4,213 +4,245 @@
     "0": "soldier",
     "1": "small_aircraft",
     "2": "warship",
-    "3": "tank"
+    "3": "tank",
+    "4": "patrol_boat",
+    "5": "armored_vehicle"
   },
   "models": [
     {
-      "id": "three_class_base_detector",
-      "display_name": "三类基础检测器",
+      "id": "four_class_base_detector",
+      "display_name": "四类冻结基础检测器",
       "role": "frozen_base",
       "backend": "ultralytics",
-      "path": "models/production/incremental_detection/three_class_base_detector.pt",
-      "sha256": "6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119",
-      "imgsz": 896,
-      "owns_classes": [0, 1, 3],
+      "architecture": "YOLO26s",
+      "path": "models/production/incremental_detection/four_class_base_detector.pt",
+      "sha256": "105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd",
+      "imgsz": 1280,
+      "owns_classes": [0, 1, 2, 3],
       "local_to_global": {
         "0": 0,
         "1": 1,
-        "2": 3
+        "2": 2,
+        "3": 3
       },
-      "evidence": "基础阶段只使用三种基础类别，增量阶段权重保持不变"
+      "evidence": "4+2 Base 阶段只读取 R1 四类 train/dev；锁定后在 Base lock 评分"
     },
     {
       "id": "incremental_detector",
-      "display_name": "增量检测器",
+      "display_name": "二类增量检测专家",
       "role": "class_incremental_expert",
       "incremental_mode": "class_incremental",
       "backend": "ultralytics",
+      "architecture": "YOLO26s",
       "path": "models/production/incremental_detection/incremental_detector.pt",
-      "sha256": "d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957",
-      "imgsz": 640,
-      "owns_classes": [2],
+      "sha256": "0ab0c6ed0117b75ab9ee105e9f109ccad96d988156d00fa4c4c0b9599e424a2a",
+      "imgsz": 1280,
+      "owns_classes": [4, 5],
       "local_to_global": {
-        "0": 2
+        "0": 4,
+        "1": 5
       },
-      "activation_threshold": 0.63,
       "per_class_thresholds": {
-        "2": 0.63
+        "4": 0.18,
+        "5": 0.08
       },
       "calibration_source": "models/production/incremental_detection/calibration.json",
       "calibration_sources": {
-        "2": "models/production/incremental_detection/calibration.json"
+        "4": "models/production/incremental_detection/calibration.json",
+        "5": "models/production/incremental_detection/calibration.json"
       },
-      "context_prior": {
-        "schema_version": 1,
-        "source_split": "incremental_train_only",
-        "sample_count": 132,
-        "scene": {
-          "air": 0.18617863533239534,
-          "forest": 0.1406559143799205,
-          "sea": 1.0,
-          "urban": 0.0958989831276946
-        }
-      },
+      "context_prior": {},
       "context_gate": {
-        "enabled": true,
-        "policy": "soft_threshold_penalty",
-        "dimensions": ["scene"],
-        "max_threshold_penalty": 0.05,
-        "learning_data_scope": "incremental_train_only",
-        "prior_source": "models/production/incremental_detection/context_prior.json",
-        "prior_sha256": "85cea399a0691e42d55c60927880828eeaa27107bd9f9da18a43fe031b53247e",
+        "enabled": false,
+        "policy": "disabled_for_first_4plus2_release",
         "hard_routing": false
       },
       "metrics": {
-        "new_map50": 0.6386875981161695,
+        "new_map50": 0.8122485978175054,
         "per_class": {
-          "2": {
-            "map50": 0.6386875981161695,
-            "precision": 0.9245283018867925,
-            "recall": 0.6447368421052632
+          "4": {
+            "map50": 0.7070824343807792,
+            "precision": 0.28378378378378377,
+            "recall": 1.0,
+            "threshold": 0.18
+          },
+          "5": {
+            "map50": 0.9174147612542315,
+            "precision": 0.3879310344827586,
+            "recall": 1.0,
+            "threshold": 0.08
           }
         }
       },
       "deployment_metrics": {
-        "lock_precision": 0.9245283018867925,
-        "false_activation_rate": 0.014285714285714285,
-        "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4"
+        "evaluation_semantics": "all_owners_on_mixed_dev_then_frozen_mixed_lock_v1",
+        "false_activation_rate_by_class": {
+          "4": 0.4268292682926829,
+          "5": 0.34146341463414637
+        },
+        "diagnostic_only": true
       },
       "acceptance": {
         "official_score_gates_passed": true,
         "competition_gates_passed": true,
-        "deployment_quality_gates_passed": true,
+        "deployment_quality_gates_passed": false,
         "integrity_gates_passed": true,
-        "passed": true
+        "passed": true,
+        "diagnostic_warnings": [
+          "lock_precision_below_0_70",
+          "false_activation_rate_above_0_15"
+        ]
       },
       "status": "active"
     }
   ],
   "generations": [
     {
-      "id": "base_detection_generation",
-      "display_name": "基础检测代际",
+      "id": "base_detection_generation_4plus2",
+      "display_name": "4+2 四类基础检测代际",
       "parent": null,
-      "classes": [0, 1, 3],
+      "classes": [0, 1, 2, 3],
       "class_owners": {
-        "0": "three_class_base_detector",
-        "1": "three_class_base_detector",
-        "3": "three_class_base_detector"
+        "0": "four_class_base_detector",
+        "1": "four_class_base_detector",
+        "2": "four_class_base_detector",
+        "3": "four_class_base_detector"
       },
-      "model_members": ["three_class_base_detector"],
+      "model_members": ["four_class_base_detector"],
       "status": "active",
       "old_class_ids": [],
-      "new_class_ids": [0, 1, 3],
-      "dataset_fingerprint": null,
+      "new_class_ids": [0, 1, 2, 3],
+      "updated_class_ids": [],
+      "dataset_fingerprint": "splits/strict_4plus2/manifest.json",
       "metrics": {
-        "base_test_map50": 0.8141423771111025,
-        "evaluation_split": "splits/strict_3plus1/base_test.txt",
-        "image_count": 70
+        "base_dev_map50": 0.9134543086202153,
+        "base_test_map50": 0.8875500761448091,
+        "evaluation_split": "splits/strict_4plus2/base_lock.txt",
+        "image_count": 75
       }
     },
     {
-      "id": "incremental_detection_generation",
-      "display_name": "增量检测生产代际",
-      "run_id": "fresh-ea7ca27-20260807",
-      "parent": "base_detection_generation",
-      "classes": [0, 1, 2, 3],
+      "id": "incremental_detection_generation_4plus2",
+      "display_name": "4+2 增量检测生产代际",
+      "run_id": "strict-4plus2-20260822-054120",
+      "parent": "base_detection_generation_4plus2",
+      "classes": [0, 1, 2, 3, 4, 5],
       "class_owners": {
-        "0": "three_class_base_detector",
-        "1": "three_class_base_detector",
-        "2": "incremental_detector",
-        "3": "three_class_base_detector"
+        "0": "four_class_base_detector",
+        "1": "four_class_base_detector",
+        "2": "four_class_base_detector",
+        "3": "four_class_base_detector",
+        "4": "incremental_detector",
+        "5": "incremental_detector"
       },
       "model_members": [
-        "three_class_base_detector",
+        "four_class_base_detector",
         "incremental_detector"
       ],
       "status": "active",
-      "old_class_ids": [0, 1, 3],
-      "new_class_ids": [2],
-      "dataset_fingerprint": null,
+      "old_class_ids": [0, 1, 2, 3],
+      "new_class_ids": [4, 5],
+      "updated_class_ids": [],
+      "dataset_fingerprint": "splits/strict_4plus2/manifest.json",
       "data_compliance": {
         "compliance": "passed",
-        "lineage_evidence": "current",
-        "audit_source": "configs/incremental/warship_3plus1.yaml",
+        "lineage_evidence": "strict_4plus2_manifest",
+        "audit_source": "splits/strict_4plus2/manifest.json",
         "old_raw_image_count": 0,
         "old_raw_label_count": 0,
         "old_cache_count": 0,
         "unverified_cache_count": 0,
-        "base_train_count": 441,
-        "base_dev_count": 70,
-        "incremental_train_count": 132,
-        "incremental_dev_count": 18
+        "base_train_count": 600,
+        "base_dev_count": 75,
+        "base_lock_count": 75,
+        "incremental_train_count": 112,
+        "incremental_dev_count": 14,
+        "incremental_lock_count": 14
       },
       "evaluation_lock": {
-        "split": "splits/strict_3plus1/mixed_test.txt",
-        "base_split": "splits/strict_3plus1/base_test.txt",
-        "prediction_scope": "all_owners_on_all_89_images_before_labels",
-        "local_to_global": {
-          "0": 2
+        "split_sources": [
+          "splits/strict_4plus2/base_lock.txt",
+          "splits/strict_4plus2/increment_lock.txt"
+        ],
+        "base_split": "splits/strict_4plus2/base_lock.txt",
+        "prediction_scope": "all_owners_on_all_89_images_before_lock_labels",
+        "specialist_local_to_global": {
+          "0": 4,
+          "1": 5
         }
       },
       "metrics": {
-        "base_test_map50": 0.8141423771111025,
-        "old_map50_before": 0.7923058746623943,
-        "old_map50_after": 0.7923058746623943,
-        "new_map50": 0.6386875981161695,
+        "base_test_map50": 0.8875500761448091,
+        "old_map50_before": 0.8280599094822771,
+        "old_map50_after": 0.8280599094822771,
+        "new_map50": 0.8122485978175054,
         "krr": 1.0,
-        "full_map50": 0.7539013055258381,
+        "full_map50": 0.8227894722606865,
         "old_prediction_equivalent": true,
         "per_class": {
-          "2": {
-            "map50": 0.6386875981161695,
-            "precision": 0.9245283018867925,
-            "recall": 0.6447368421052632,
-            "false_activation_rate": 0.014285714285714285,
-            "negative_image_count": 70,
-            "false_activation_image_count": 1,
-            "threshold": 0.63
+          "4": {
+            "map50": 0.7070824343807792,
+            "precision": 0.28378378378378377,
+            "recall": 1.0,
+            "false_activation_rate": 0.4268292682926829,
+            "negative_image_count": 82,
+            "false_activation_image_count": 35,
+            "threshold": 0.18
+          },
+          "5": {
+            "map50": 0.9174147612542315,
+            "precision": 0.3879310344827586,
+            "recall": 1.0,
+            "false_activation_rate": 0.34146341463414637,
+            "negative_image_count": 82,
+            "false_activation_image_count": 28,
+            "threshold": 0.08
           }
         },
         "cumulative_per_class": {
-          "0": 0.5972023411762704,
-          "1": 0.972250162977853,
-          "2": 0.6386875981161695,
-          "3": 0.8074651198330597
+          "0": 0.6867181589124706,
+          "1": 0.9361108364397858,
+          "2": 0.932856444201782,
+          "3": 0.7565541983750703,
+          "4": 0.7070824343807792,
+          "5": 0.9174147612542315
         },
         "image_count": 89,
-        "base_test_image_count": 70,
-        "new_class_image_count": 19,
+        "base_test_image_count": 75,
+        "new_class_image_count": 14,
         "specialist_count": 1
       },
       "acceptance": {
         "core_metrics_passed": true,
         "competition_gates_passed": true,
-        "deployment_quality_gates_passed": true,
+        "deployment_quality_gates_passed": false,
         "deployment_recheck_passed": true,
         "status": "passed",
-        "diagnostic_warnings": []
+        "diagnostic_warnings": [
+          "lock_precision_below_0_70",
+          "false_activation_rate_above_0_15"
+        ]
       },
       "lock_recheck": {
         "status": "completed",
-        "rechecked_at": "2026-08-08T00:27:15+08:00",
-        "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4",
+        "rechecked_at": "2026-08-22T13:41:20+08:00",
+        "evaluation_semantics": "all_owners_on_mixed_dev_then_frozen_mixed_lock_v1",
         "input_image_count": 89,
         "label_aware_routing": false,
         "filename_class_routing": false,
         "scene_hard_routing": false,
-        "activation_threshold_source": "incremental_dev_only",
-        "context_prior_source": "incremental_train_only",
-        "fusion_inputs": "boxes_confidence_iou_fixed_class_owners_soft_known_context"
+        "activation_threshold_source": "mixed_dev_only",
+        "context_gate_enabled": false,
+        "fusion_inputs": "disjoint_class_owner_concatenation"
       }
     }
   ],
   "channels": {
-    "production": "incremental_detection_generation",
-    "candidate": "incremental_detection_generation"
+    "production": "incremental_detection_generation_4plus2",
+    "candidate": "incremental_detection_generation_4plus2"
   },
   "external_blockers": [
-    "ascend_310b_not_available",
+    "ascend_310b_4plus2_release_not_built",
     "official_hidden_test_not_available"
   ]
 }

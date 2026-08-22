@@ -1,12 +1,12 @@
-seed: 20260705
-model: models/production/incremental_detection/three_class_base_detector.pt
-expected_sha256: 6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119
+seed: 20260821
+model: models/production/incremental_detection/four_class_base_detector.pt
+expected_sha256: 105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd
 source:
   path: data/images
   type: dir
   image_exts: [.png, .jpg, .jpeg, .bmp, .tif, .tiff]
 predict:
-  imgsz: 896
+  imgsz: 1280
   conf: 0.01
   iou: 0.70
   max_det: 300
@@ -14,7 +14,7 @@ predict:
   batch: 32
 output:
   root: runs/submission
-  package_name: three_class_base_x86_gpu
+  package_name: four_class_base_x86_gpu
   min_export_conf: null
   write_empty_txt: true
   write_plain_yolo_txt: true
@@ -25,4 +25,5 @@ output:
 names:
   0: soldier
   1: small_aircraft
-  2: tank
+  2: warship
+  3: tank

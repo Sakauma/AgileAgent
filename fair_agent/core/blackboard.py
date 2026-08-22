@@ -72,7 +72,8 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     frozen_candidate = frozen_manifest.get("frozen_candidate") or frozen_manifest.get("base_model", {})
     if frozen_candidate:
         selected_imgsz = int(frozen_candidate.get("imgsz", 640))
-        detector["name"] = f"yolo11s_imgsz{selected_imgsz}"
+        architecture = str(frozen_candidate.get("architecture") or "yolo").lower()
+        detector["name"] = f"{architecture}_imgsz{selected_imgsz}"
         detector["imgsz"] = selected_imgsz
         detector["candidate_status"] = frozen_candidate.get("status", detector.get("candidate_status"))
         for key in ["base_test_map50", "evaluation_split"]:
@@ -91,14 +92,14 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
 
     weights_path = resolve_path(
         model_cfg.get("weights")
-        or "models/production/incremental_detection/three_class_base_detector.pt"
+        or "models/production/incremental_detection/four_class_base_detector.pt"
     )
     weights_hash = hash_if_exists(weights_path)
     expected_hash = model_cfg.get("expected_sha256")
     weights_hash["matches_expected"] = bool(expected_hash and weights_hash.get("sha256") == expected_hash)
 
     inference_config_path = resolve_path(
-        detector.get("config", "configs/submission_infer_base_3class.yaml")
+        detector.get("config", "configs/submission_infer_base_4class.yaml")
     )
     inference_config: Dict[str, Any] = {}
     if inference_config_path.exists():
@@ -152,7 +153,10 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
             protocols.append(
                 {
                     "protocol": model.get("id"),
-                    "new_class": ",".join(str(class_map.get(str(class_id), class_id)) for class_id in class_ids),
+                    "new_class": ",".join(
+                        str(class_map.get(class_id, class_id))
+                        for class_id in class_ids
+                    ),
                     "new_class_ids": class_ids,
                     "task_type": "incremental_object_detection",
                     "incremental_mode": "class_incremental",

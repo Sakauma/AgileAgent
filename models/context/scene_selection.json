@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-08-22T05:29:31.852947+00:00",
+  "selection_scope": "dev_only",
+  "ranking": [
+    {
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/seed_20260821/scene_sensor_net.pt",
+      "metrics": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/seed_20260821/scene_sensor_metrics.json",
+      "best_epoch": 81,
+      "dev_sensor_accuracy": 1.0,
+      "dev_scene_accuracy": 0.8539325842696629,
+      "dev_joint_accuracy": 0.8539325842696629,
+      "dev_selection_score": 0.9050561797752809
+    },
+    {
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/seed_3407/scene_sensor_net.pt",
+      "metrics": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/seed_3407/scene_sensor_metrics.json",
+      "best_epoch": 81,
+      "dev_sensor_accuracy": 1.0,
+      "dev_scene_accuracy": 0.8426966292134831,
+      "dev_joint_accuracy": 0.8426966292134831,
+      "dev_selection_score": 0.897752808988764
+    },
+    {
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/seed_8675309/scene_sensor_net.pt",
+      "metrics": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/seed_8675309/scene_sensor_metrics.json",
+      "best_epoch": 50,
+      "dev_sensor_accuracy": 1.0,
+      "dev_scene_accuracy": 0.8426966292134831,
+      "dev_joint_accuracy": 0.8426966292134831,
+      "dev_selection_score": 0.897752808988764
+    }
+  ],
+  "selected": {
+    "seed": 20260821,
+    "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/seed_20260821/scene_sensor_net.pt",
+    "metrics": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/seed_20260821/scene_sensor_metrics.json",
+    "best_epoch": 81,
+    "dev_sensor_accuracy": 1.0,
+    "dev_scene_accuracy": 0.8539325842696629,
+    "dev_joint_accuracy": 0.8539325842696629,
+    "dev_selection_score": 0.9050561797752809,
+    "promoted_weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/selection/selected/scene_sensor_net.pt",
+    "promoted_metrics": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/context/scene_sensor_4plus2/selection/selected/scene_sensor_metrics.json"
+  }
+}

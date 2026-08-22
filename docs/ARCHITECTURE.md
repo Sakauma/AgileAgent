@@ -19,20 +19,22 @@ AgileAgent 将配置、模型代际、在线推理、增量学习、审计和设
 图像输入
   -> production 代际解析
   -> Scene-SensorNet 场景与传感器认知
-  -> 三类基础检测器
-  -> 活动增量检测器
+  -> 四类 Base 检测器
+  -> 二类增量专家
   -> 全局类别映射
-  -> 逐类阈值与软上下文
-  -> 框级冲突仲裁
+  -> 新增类逐类 dev 阈值
+  -> 固定 owner 直接合并
   -> class-aware NMS
   -> API、黑板与审计事件
 ```
 
-每张图像使用同一 production 代际。基础检测器负责 soldier、small_aircraft 和 tank，当前增量检测器负责 warship。Scene-SensorNet 输出场景与传感器概率，融合阶段把这些概率转换为逐类软阈值证据。
+每张图像使用同一 production 代际。四类 Base 固定负责 soldier、small_aircraft、warship 和 tank（全局类 0–3），二类增量专家固定负责 patrol_boat 与 armored_vehicle（全局类 4–5）。两个检测 owner 对每张图并行推理，专家局部类 `0/1` 映射为全局类 `4/5`，使用 dev 阈值 `0.18/0.08`。Scene-SensorNet 输出场景与传感器概率；4+2 首版不启用场景硬路由或软阈值惩罚。
 
-Ascend 正式满分主线保留相同的三个逻辑职责，但物理执行不同：Base backbone/neck 只运行一次，一个 `shared_backbone_dual_head_v1` OM 同时返回 old/new raw head；`fixed_neutral_v1` 用 Sensor `0.5/0.5`、Scene 四类各 `0.25` 的均匀上下文保持响应和审计结构。context OM 仍加载用于资产回滚，但正常路径不执行其前向推理；old/new 仍分别记录为 `frozen_base_model` 和 `incremental_model`。
+当前 x86/CUDA 4+2 production 与下述 Ascend 结构属于不同发布代际。Ascend 不可变包仍是已验证的 3+1 板端 release；在新的 4+2 head 完成 ONNX/ATC 构建与板端评分前，不把 `.pt` 指针变化解释为 OM 已更新。
 
-### 正式主线、回滚与候选拓扑
+历史 3+1 Ascend 正式满分主线保留相同的三个逻辑职责，但物理执行不同：Base backbone/neck 只运行一次，一个 `shared_backbone_dual_head_v1` OM 同时返回 old/new raw head；`fixed_neutral_v1` 用 Sensor `0.5/0.5`、Scene 四类各 `0.25` 的均匀上下文保持响应和审计结构。context OM 仍加载用于资产回滚，但正常路径不执行其前向推理；old/new 仍分别记录为 `frozen_base_model` 和 `incremental_model`。
+
+### 历史 3+1 Ascend 正式主线、回滚与候选拓扑
 
 ```text
                     POST /api/detect 或 /api/batch
@@ -57,7 +59,7 @@ Ascend 正式满分主线保留相同的三个逻辑职责，但物理执行不�
                     :8502 始终留给下一轮隔离候选
 ```
 
-主线结构的“物理合并”不改变逻辑责任：
+该 Ascend 主线结构的“物理合并”不改变其 3+1 逻辑责任：
 
 | 逻辑功能 | 物理实现 | owner/输出语义 |
 | --- | --- | --- |

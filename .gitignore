@@ -102,6 +102,7 @@ venv/
 !/configs/agent_pipeline_ascend310b.yaml
 !/configs/requirements-ascend310b.txt
 !/configs/submission_infer_base_3class.yaml
+!/configs/submission_infer_base_4class.yaml
 !/configs/local_infer_gpu.yaml
 !/configs/scene_sensor_model.yaml
 !/configs/scene_sensor_model_4plus2.yaml

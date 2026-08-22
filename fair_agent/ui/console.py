@@ -141,7 +141,9 @@ class ConsoleFrontend:
     def _decision(self) -> None:
         sensor = self.input("传感器 [sar/ir，默认 sar]：").strip() or "sar"
         scene = self.input("场景 [all/air/forest/sea/urban，默认 all]：").strip() or "all"
-        class_focus = self.input("关注类别 [soldier/small_aircraft/warship/tank，默认 soldier]：").strip() or "soldier"
+        class_focus = self.input(
+            "关注类别 [soldier/small_aircraft/warship/tank/patrol_boat/armored_vehicle，默认 soldier]："
+        ).strip() or "soldier"
         self._run_cli(["decide", "--sensor", sensor, "--scene", scene, "--class-focus", class_focus])
         self.page = "overview"
 

@@ -1,0 +1,54 @@
+schema_version: 1
+
+experiment:
+  id: warship_3plus1
+  seed: 20260705
+  output_root: runs/experiments/warship_3plus1
+
+dataset:
+  source_splits:
+    train: splits/pool_train.txt
+    dev: splits/pool_dev.txt
+    lock: splits/mixed_test.txt
+  base_test_split: splits/strict_3plus1/base_test.txt
+  class_map:
+    0: soldier
+    1: small_aircraft
+    2: warship
+    3: tank
+
+audit:
+  # 只能填写增量训练进程可读取的外部缓存目录；非空目录将直接阻断实验。
+  cache_roots: []
+
+partition:
+  base_class_ids: [0, 1, 3]
+  cooccurrence_policy: reject
+  rounds:
+    - id: round_01
+      new_class_ids: [2]
+      train_selector: contains_only_new_classes
+      dev_selector: contains_only_new_classes
+      expected_counts:
+        train: 132
+        dev: 18
+
+training:
+  adapter_config: configs/strict_class_incremental_3plus1.yaml
+  protocol_id: warship-incremental
+  pretrained_lineage: generic_pretrained_yolo11s
+  claim: 基础阶段只读取三种基础类别，增量阶段只读取当轮新增类别
+
+acceptance:
+  min_base_map50: 0.80
+  min_new_map50: 0.60
+  min_krr: 0.95
+
+diagnostics:
+  # 不改写赛题三项分数，但候选必须通过这些部署质量门禁才能进入 production。
+  calibration_target_precision: 0.95
+  min_lock_precision: 0.90
+  max_false_activation_rate: 0.05
+
+integrity:
+  max_base_weight_drift: 0.0

@@ -1,0 +1,29 @@
+seed: 20260821
+model: models/production/incremental_detection/four_class_base_detector.pt
+expected_sha256: 105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd
+source:
+  path: datasets_r1_base_test
+  type: dir
+  image_exts: [.png, .jpg, .jpeg, .bmp, .tif, .tiff]
+predict:
+  imgsz: 1280
+  conf: 0.01
+  iou: 0.70
+  max_det: 300
+  device: "0"
+  batch: 32
+output:
+  root: runs/submission
+  package_name: four_class_base_submission
+  min_export_conf: null
+  write_empty_txt: true
+  write_plain_yolo_txt: true
+  write_conf_yolo_txt: true
+  write_csv: true
+  write_json: true
+  make_zip: true
+names:
+  0: soldier
+  1: small_aircraft
+  2: warship
+  3: tank

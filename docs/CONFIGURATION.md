@@ -12,10 +12,12 @@ AgileAgent 使用 UTF-8 YAML 配置。主运行配置采用 schema 3，并由 `f
 | `configs/ascend310b/full_score_method.yaml` | Ascend 310B 满分结构、阈值搜索、评分门禁和参考证据 |
 | `configs/functional_models.yaml` | 三个功能模型及发布资产 |
 | `configs/incremental_detection_policy.yaml` | 增量数据范围与评测策略 |
-| `configs/strict_class_incremental_3plus1.yaml` | 固定 3+1 训练和评分参数 |
-| `configs/scene_sensor_model.yaml` | Scene-SensorNet 训练参数 |
+| `configs/strict_class_incremental_3plus1.yaml` | 旧 3+1 兼容实验参数，不是当前 production |
+| `configs/scene_sensor_model.yaml` | 旧 3+1 Scene-SensorNet 兼容参数 |
+| `configs/scene_sensor_model_4plus2.yaml` | 当前 4+2 Scene-SensorNet 训练参数 |
 | `configs/local_infer_gpu.yaml` | 本机 GPU 推理参数 |
-| `configs/submission_infer_base_3class.yaml` | 三类基础检测提交参数 |
+| `configs/submission_infer_base_4class.yaml` | 当前四类 Base 检测提交参数 |
+| `configs/submission_infer_base_3class.yaml` | 旧三类 Base 兼容参数；对应权重已归档 |
 
 ## 加载顺序
 
@@ -95,12 +97,15 @@ agile-agent generation rollback --to GENERATION_ID
 | --- | --- |
 | `schema_version` | `3` |
 | `inference.backend` | `ultralytics_cuda` |
-| `inference.confidence_default` | `0.50` |
+| `inference.imgsz` / `specialist_imgsz` | `1280 / 1280` |
+| `inference.confidence_default` | `0.01` |
 | `inference.batch_size` | `32` |
 | `incremental_workbench.validation_fraction` | `0.20` |
 | `incremental_workbench.lock_fraction` | `0.20` |
-| `incremental_workbench.split_seed` | `20260705` |
+| `incremental_workbench.split_seed` | `20260821` |
 | `web.generation_channel` | `production` |
+
+当前 CUDA production 的固定 owner 为 Base `0–3`、Increment `4–5`。新增类阈值由 `models/generations.json` 提供：类 4 为 `0.18`，类 5 为 `0.08`。`routing.conflict_iou: 1.0`、`context_evidence_weight: 0.0` 与关闭的 `context_gate` 用于匹配冻结评分时的直接 owner 合并语义。
 
 Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1`，并登记正式共享双逻辑头 OM、context 回滚 OM、release manifest 和验证摘要。板端进程监听内部 `18501`，公共 `8501` 由精确 loopback 路由提供；x86 的 `configs/agent_pipeline.yaml` 仍独立监听本机 `8501`。
 

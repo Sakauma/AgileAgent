@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "profile_id": "incremental-detection",
+  "run_id": "fresh-ea7ca27-20260807",
+  "acceptance": "passed",
+  "competition_accepted": true,
+  "deployment_accepted": true,
+  "incremental_mode": "class_incremental",
+  "deployment": "dual_detector",
+  "agent_structure": {
+    "architecture": "parallel_base_incremental_experts",
+    "inference_scope": "every_image",
+    "old_class_owner": "frozen_base",
+    "new_class_owner": "incremental_specialist",
+    "fusion_level": "detection_boxes",
+    "scene_hard_routing": false,
+    "label_aware_routing": false,
+    "filename_class_routing": false
+  },
+  "base_weight": "models/production/incremental_detection/three_class_base_detector.pt",
+  "base_sha256": "6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119",
+  "specialist_weight": "models/production/incremental_detection/incremental_detector.pt",
+  "specialist_sha256": "d27bda7cb89375788deb1f29366b037757f23f7b32ddf6c11e1aa778384dc957",
+  "base_local_to_global": {
+    "0": 0,
+    "1": 1,
+    "2": 3
+  },
+  "base_local_names": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "tank"
+  },
+  "class_names": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "warship",
+    "3": "tank"
+  },
+  "new_class": "warship",
+  "new_global_id": 2,
+  "activation_threshold": 0.63,
+  "calibration_source": "models/production/incremental_detection/calibration.json",
+  "metrics_source": "models/production/incremental_detection/metrics.json",
+  "evidence_level": "verified",
+  "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4",
+  "rechecked_at": "2026-08-08T00:27:15+08:00",
+  "base_imgsz": 896,
+  "specialist_imgsz": 640,
+  "base_test_map50": 0.8141423771111025,
+  "base_dev_map50": 0.8927239625552286,
+  "old_map50_before": 0.7923058746623943,
+  "old_map50_after": 0.7923058746623943,
+  "new_map50": 0.6386875981161695,
+  "full_map50": 0.7539013055258381,
+  "krr": 1.0,
+  "lock_precision": 0.9245283018867925,
+  "lock_recall": 0.6447368421052632,
+  "lock_false_activation_rate": 0.014285714285714285,
+  "fusion_policy": {
+    "enabled": true,
+    "iou": 0.5,
+    "base_confidence": 0.5,
+    "incremental_margin": 0.15,
+    "preserve_base_class_owners": true
+  },
+  "context_prior": {
+    "schema_version": 1,
+    "source_split": "incremental_train_only",
+    "sample_count": 132,
+    "scene": {
+      "air": 0.18617863533239534,
+      "forest": 0.1406559143799205,
+      "sea": 1.0,
+      "urban": 0.0958989831276946
+    }
+  },
+  "context_gate": {
+    "enabled": true,
+    "policy": "soft_threshold_penalty",
+    "dimensions": ["scene"],
+    "max_threshold_penalty": 0.05,
+    "learning_data_scope": "incremental_train_only",
+    "lock_context_count": 89,
+    "hard_routing": false,
+    "prior_source": "models/production/incremental_detection/context_prior.json"
+  },
+  "context_prior_source": "models/production/incremental_detection/context_prior.json",
+  "context_prior_sha256": "85cea399a0691e42d55c60927880828eeaa27107bd9f9da18a43fe031b53247e",
+  "positive_prototype": null,
+  "positive_prototype_source": null,
+  "positive_prototype_sha256": null
+}

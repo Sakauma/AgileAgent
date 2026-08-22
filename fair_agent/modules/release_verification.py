@@ -45,20 +45,63 @@ def _validate_model_manifest(manifest: Dict[str, Any]) -> List[str]:
         protocol_id = str(item.get("protocol") or "")
         protocol_ids.append(protocol_id)
         mode = item.get("incremental_mode")
-        class_name = str(item.get("class_name") or "")
+        multi_class = isinstance(item.get("global_class_ids"), list)
         try:
-            global_class_id = int(item.get("global_class_id"))
-            threshold = float(item.get("activation_threshold"))
+            if multi_class:
+                global_class_ids = [
+                    int(value) for value in item["global_class_ids"]
+                ]
+                class_names = {
+                    int(key): str(value)
+                    for key, value in dict(item.get("class_names") or {}).items()
+                }
+                thresholds = {
+                    int(key): float(value)
+                    for key, value in dict(
+                        item.get("activation_thresholds") or {}
+                    ).items()
+                }
+                calibration_sources = {
+                    int(key): str(value)
+                    for key, value in dict(
+                        item.get("calibration_sources") or {}
+                    ).items()
+                }
+            else:
+                global_class_id = int(item.get("global_class_id"))
+                global_class_ids = [global_class_id]
+                class_names = {
+                    global_class_id: str(item.get("class_name") or "")
+                }
+                thresholds = {
+                    global_class_id: float(item.get("activation_threshold"))
+                }
+                calibration_sources = (
+                    {global_class_id: str(item.get("calibration_source"))}
+                    if item.get("calibration_source")
+                    else {}
+                )
         except (TypeError, ValueError):
             errors.append(f"manifest_incremental_fields_invalid:{protocol_id}")
             continue
         if mode not in {"class_incremental", "target_incremental"}:
             errors.append(f"manifest_incremental_mode_invalid:{protocol_id}")
-        if not class_name or not 0.01 <= threshold <= 1.0 or item.get("evidence_level") not in {
-            "unavailable", "rehearsal_only", "verified"
-        }:
+        if (
+            not global_class_ids
+            or len(global_class_ids) != len(set(global_class_ids))
+            or set(global_class_ids) != set(class_names)
+            or set(global_class_ids) != set(thresholds)
+            or not all(class_names.values())
+            or not all(0.01 <= value <= 1.0 for value in thresholds.values())
+            or item.get("evidence_level")
+            not in {"unavailable", "rehearsal_only", "verified"}
+        ):
             errors.append(f"manifest_incremental_fields_invalid:{protocol_id}")
-        if mode == "target_incremental" and base_class_map.get(global_class_id) != class_name:
+        if mode == "target_incremental" and (
+            len(global_class_ids) != 1
+            or base_class_map.get(global_class_ids[0])
+            != class_names.get(global_class_ids[0])
+        ):
             errors.append(f"manifest_target_class_mapping_invalid:{protocol_id}")
         if mode == "class_incremental":
             raw_base_ids = item.get("base_class_ids")
@@ -71,10 +114,12 @@ def _validate_model_manifest(manifest: Dict[str, Any]) -> List[str]:
                 except (TypeError, ValueError):
                     errors.append(f"manifest_new_class_base_scope_invalid:{protocol_id}")
                     base_ids = set(base_class_map)
-            if global_class_id in base_ids:
+            if set(global_class_ids) & base_ids:
                 errors.append(f"manifest_new_class_overlaps_base:{protocol_id}")
             if item.get("available") and (
-                not item.get("calibration_source") or item.get("evidence_level") != "verified"
+                set(calibration_sources) != set(global_class_ids)
+                or not all(calibration_sources.values())
+                or item.get("evidence_level") != "verified"
             ):
                 errors.append(f"manifest_new_class_calibration_missing:{protocol_id}")
         if item.get("available") and item.get("competition_accepted") is not True:

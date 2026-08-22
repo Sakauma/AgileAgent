@@ -3,22 +3,34 @@
   "verified_profiles": [
     {
       "profile_id": "incremental-detection",
-      "run_id": "fresh-ea7ca27-20260807",
+      "run_id": "strict-4plus2-20260822-054120",
       "incremental_mode": "class_incremental",
-      "new_class": "warship",
-      "new_global_id": 2,
+      "new_classes": {
+        "4": "patrol_boat",
+        "5": "armored_vehicle"
+      },
+      "new_global_ids": [4, 5],
       "active_profile": "models/profiles/incremental-detection/active.json",
-      "evaluation_semantics": "all_owners_on_full_mixed_test_before_labels_v4",
-      "rechecked_at": "2026-08-08T00:27:15+08:00",
-      "base_test_map50": 0.8141423771111025,
-      "new_map50": 0.6386875981161695,
+      "evaluation_semantics": "all_owners_on_mixed_dev_then_frozen_mixed_lock_v1",
+      "rechecked_at": "2026-08-22T13:41:20+08:00",
+      "base_test_map50": 0.8875500761448091,
+      "new_map50": 0.8122485978175054,
+      "new_per_class_ap50": {
+        "4": 0.7070824343807792,
+        "5": 0.9174147612542315
+      },
       "krr": 1.0,
-      "activation_threshold": 0.63,
-      "lock_precision": 0.9245283018867925,
-      "false_activation_rate": 0.014285714285714285,
+      "activation_thresholds": {
+        "4": 0.18,
+        "5": 0.08
+      },
       "competition_accepted": true,
       "deployment_accepted": true,
-      "acceptance_status": "passed"
+      "acceptance_status": "passed",
+      "diagnostic_warnings": [
+        "lock_precision_below_0_70",
+        "false_activation_rate_above_0_15"
+      ]
     }
   ]
 }

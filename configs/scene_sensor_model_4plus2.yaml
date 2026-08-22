@@ -1,4 +1,4 @@
-seed: 20260822
+seed: 20260821
 
 data:
   train:
@@ -31,9 +31,9 @@ train:
   amp: true
 
 output:
-  weights: runs/context/scene_sensor_4plus2/default/scene_sensor_net.pt
-  metrics: runs/context/scene_sensor_4plus2/default/scene_sensor_metrics.json
-  report: runs/context/scene_sensor_4plus2/default/scene_sensor_report.md
+  weights: runs/context/scene_sensor_4plus2/seed_20260821/scene_sensor_net.pt
+  metrics: runs/context/scene_sensor_4plus2/seed_20260821/scene_sensor_metrics.json
+  report: runs/context/scene_sensor_4plus2/seed_20260821/scene_sensor_report.md
 
 acceptance:
   min_lock_sensor_accuracy: 0.90

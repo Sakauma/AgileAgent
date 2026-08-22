@@ -1,0 +1,35 @@
+seed: 20260705
+
+data:
+  train: splits/strict_3plus1/scene_train.txt
+  dev: splits/strict_3plus1/scene_dev.txt
+  lock: splits/strict_3plus1/scene_test.txt
+  image_size: 160
+  num_workers: 4
+
+model:
+  channels: [24, 48, 96, 160]
+  dropout: 0.20
+
+train:
+  device: "0"
+  epochs: 80
+  batch: 64
+  learning_rate: 0.002
+  min_learning_rate: 0.00005
+  weight_decay: 0.0001
+  label_smoothing: 0.05
+  sensor_loss_weight: 0.5
+  scene_loss_weight: 1.0
+  patience: 15
+  amp: true
+
+output:
+  weights: models/context/scene_sensor_net.pt
+  metrics: models/context/scene_sensor_metrics.json
+  report: reports/context_model/scene_sensor_report.md
+
+acceptance:
+  min_lock_sensor_accuracy: 0.90
+  min_lock_scene_accuracy: 0.70
+  min_lock_joint_accuracy: 0.65

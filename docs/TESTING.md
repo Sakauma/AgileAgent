@@ -34,7 +34,7 @@ AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代�
 .venv/bin/python scripts/smoke_models.py
 ```
 
-该脚本加载 Scene-SensorNet、三类基础检测器和增量检测器，并执行 production 模型组合冒烟。
+该脚本加载 Scene-SensorNet、四类 Base 检测器和二类增量专家，并执行当前 4+2 production 模型组合冒烟。
 
 ## 测试范围
 

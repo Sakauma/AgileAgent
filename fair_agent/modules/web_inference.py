@@ -24,7 +24,14 @@ from fair_agent.modules.detection_fusion import (
 from fair_agent.modules.incremental_rejection import apply_positive_prototype_to_image
 
 
-CLASS_NAMES = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
+CLASS_NAMES = {
+    0: "soldier",
+    1: "small_aircraft",
+    2: "warship",
+    3: "tank",
+    4: "patrol_boat",
+    5: "armored_vehicle",
+}
 SENSOR_LABELS = {"ir": "红外", "sar": "SAR"}
 SCENE_LABELS = {"air": "空域", "forest": "林地", "sea": "海域", "urban": "城市场景"}
 ASCEND_MODEL_ROLES = ("scene", "base", "specialist")

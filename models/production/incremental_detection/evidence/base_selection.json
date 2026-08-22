@@ -1,0 +1,1293 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-08-21T20:18:12.247783+00:00",
+  "selection_primary": "Base dev mAP50",
+  "selection_secondary": "Base dev mAP50-95",
+  "lock_used": false,
+  "candidates": [
+    {
+      "model_tag": "yolo11n",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed3407/weights/best.pt",
+      "map50": 0.8940063600754655,
+      "map50_95": 0.4661196565982534,
+      "precision": 0.895609665642127,
+      "recall": 0.8881874568539048,
+      "per_class_ap50": {
+        "soldier": 0.6312593520520655,
+        "small_aircraft": 0.9880805609915198,
+        "warship": 0.9726617647058824,
+        "tank": 0.9840237625523944
+      },
+      "speed_ms": {
+        "preprocess": 2.6166739066441855,
+        "inference": 3.3116470463573933,
+        "loss": 0.0008071524401505787,
+        "postprocess": 0.6467675541838009
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed20260821/weights/best.pt",
+      "map50": 0.8808453771217253,
+      "map50_95": 0.4625678194331389,
+      "precision": 0.8804852054760334,
+      "recall": 0.8938177738398938,
+      "per_class_ap50": {
+        "soldier": 0.5782040725336923,
+        "small_aircraft": 0.9893835616438357,
+        "warship": 0.9656887511644315,
+        "tank": 0.9901051231449415
+      },
+      "speed_ms": {
+        "preprocess": 2.857884094119072,
+        "inference": 1.886112205684185,
+        "loss": 0.0006659142673015594,
+        "postprocess": 0.6382202667494615
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed8675309/weights/best.pt",
+      "map50": 0.862111559944756,
+      "map50_95": 0.4596407124755313,
+      "precision": 0.8475957716506446,
+      "recall": 0.8349756823461091,
+      "per_class_ap50": {
+        "soldier": 0.53471508981991,
+        "small_aircraft": 0.9796079911209771,
+        "warship": 0.9749145041901652,
+        "tank": 0.9592086546479719
+      },
+      "speed_ms": {
+        "preprocess": 2.8364490531384945,
+        "inference": 1.8825831015904746,
+        "loss": 0.0004701750973860423,
+        "postprocess": 0.6404955312609673
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed42/weights/best.pt",
+      "map50": 0.8678075936776282,
+      "map50_95": 0.46535371733372893,
+      "precision": 0.8769965905216051,
+      "recall": 0.8955175316874314,
+      "per_class_ap50": {
+        "soldier": 0.5013098667829223,
+        "small_aircraft": 0.995,
+        "warship": 0.9873347795774201,
+        "tank": 0.9875857283501703
+      },
+      "speed_ms": {
+        "preprocess": 2.870244402438402,
+        "inference": 1.8880057645340762,
+        "loss": 0.0008247544368108114,
+        "postprocess": 0.6734371557831764
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed20260822/weights/best.pt",
+      "map50": 0.8963231338644231,
+      "map50_95": 0.4672721012410316,
+      "precision": 0.917479258805846,
+      "recall": 0.8971550764614789,
+      "per_class_ap50": {
+        "soldier": 0.6498718650815999,
+        "small_aircraft": 0.9865933333333334,
+        "warship": 0.9723858039665387,
+        "tank": 0.9764415330762203
+      },
+      "speed_ms": {
+        "preprocess": 2.89888896048069,
+        "inference": 1.8887185367445152,
+        "loss": 0.0007018881539503733,
+        "postprocess": 0.6642057684560616
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed3407/weights/best.pt",
+      "map50": 0.9032346786404032,
+      "map50_95": 0.4662415414292834,
+      "precision": 0.9081511882938332,
+      "recall": 0.9084323113048305,
+      "per_class_ap50": {
+        "soldier": 0.6415415226280227,
+        "small_aircraft": 0.995,
+        "warship": 0.9846341463414634,
+        "tank": 0.9917630455921266
+      },
+      "speed_ms": {
+        "preprocess": 2.905120054880778,
+        "inference": 4.5135823016365375,
+        "loss": 0.0004711871345837911,
+        "postprocess": 0.5926604693134626
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed20260821/weights/best.pt",
+      "map50": 0.8947679384020444,
+      "map50_95": 0.47371197789522723,
+      "precision": 0.9113048539107991,
+      "recall": 0.9106530780035157,
+      "per_class_ap50": {
+        "soldier": 0.633271110431411,
+        "small_aircraft": 0.995,
+        "warship": 0.9848780487804878,
+        "tank": 0.9659225943962786
+      },
+      "speed_ms": {
+        "preprocess": 2.780321507404248,
+        "inference": 4.0891043903927,
+        "loss": 0.0004837351540724436,
+        "postprocess": 0.6193631080289682
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed8675309/weights/best.pt",
+      "map50": 0.8925814252552176,
+      "map50_95": 0.4690926340343614,
+      "precision": 0.8957603449661573,
+      "recall": 0.8980231320170345,
+      "per_class_ap50": {
+        "soldier": 0.6227162750103755,
+        "small_aircraft": 0.995,
+        "warship": 0.9708890632708244,
+        "tank": 0.9817203627396707
+      },
+      "speed_ms": {
+        "preprocess": 2.9509870149195194,
+        "inference": 4.088234441975753,
+        "loss": 0.0004579685628414154,
+        "postprocess": 0.6569226644933224
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed42/weights/best.pt",
+      "map50": 0.8832645025896292,
+      "map50_95": 0.46487469184013974,
+      "precision": 0.9085551406744264,
+      "recall": 0.8571216850561363,
+      "per_class_ap50": {
+        "soldier": 0.6089609175112332,
+        "small_aircraft": 0.9884737632549037,
+        "warship": 0.9742560975609756,
+        "tank": 0.9613672320314043
+      },
+      "speed_ms": {
+        "preprocess": 2.882311139255762,
+        "inference": 4.087089225649834,
+        "loss": 0.0004690264662106832,
+        "postprocess": 0.6152233046789963
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed20260822/weights/best.pt",
+      "map50": 0.8842470019582629,
+      "map50_95": 0.4689338648479272,
+      "precision": 0.8893409963654412,
+      "recall": 0.8838348093302362,
+      "per_class_ap50": {
+        "soldier": 0.5883886996897458,
+        "small_aircraft": 0.995,
+        "warship": 0.9626661629448856,
+        "tank": 0.9909331451984199
+      },
+      "speed_ms": {
+        "preprocess": 2.840993007024129,
+        "inference": 4.089023532966773,
+        "loss": 0.0004756823182106018,
+        "postprocess": 0.6244239397346973
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed3407/weights/best.pt",
+      "map50": 0.8692697335325761,
+      "map50_95": 0.4651158320441757,
+      "precision": 0.8905112042692694,
+      "recall": 0.85714753606418,
+      "per_class_ap50": {
+        "soldier": 0.5229395574956911,
+        "small_aircraft": 0.995,
+        "warship": 0.9805143906412508,
+        "tank": 0.9786249859933625
+      },
+      "speed_ms": {
+        "preprocess": 2.88939851646622,
+        "inference": 9.865119835982721,
+        "loss": 0.00048805649081865943,
+        "postprocess": 0.5989695340394974
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed20260821/weights/best.pt",
+      "map50": 0.8829243036573938,
+      "map50_95": 0.46652357994791754,
+      "precision": 0.8986196791554639,
+      "recall": 0.8908043699359275,
+      "per_class_ap50": {
+        "soldier": 0.585676809262985,
+        "small_aircraft": 0.995,
+        "warship": 0.9774994821621836,
+        "tank": 0.9735209232044065
+      },
+      "speed_ms": {
+        "preprocess": 2.8521496492127576,
+        "inference": 9.855688462654749,
+        "loss": 0.00048502037922541297,
+        "postprocess": 0.5996154062449932
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed8675309/weights/best.pt",
+      "map50": 0.9057886388550622,
+      "map50_95": 0.47104288234513536,
+      "precision": 0.9118821037304609,
+      "recall": 0.8905431389869407,
+      "per_class_ap50": {
+        "soldier": 0.6642338586667522,
+        "small_aircraft": 0.9921176654182271,
+        "warship": 0.9755760276198012,
+        "tank": 0.9912270037154683
+      },
+      "speed_ms": {
+        "preprocess": 2.891449468831221,
+        "inference": 9.861450729270777,
+        "loss": 0.0005113892257213593,
+        "postprocess": 0.5976538918912411
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed42/weights/best.pt",
+      "map50": 0.8738100046970916,
+      "map50_95": 0.4600104293996071,
+      "precision": 0.8877986089714497,
+      "recall": 0.8947006933307173,
+      "per_class_ap50": {
+        "soldier": 0.5508391792645948,
+        "small_aircraft": 0.9928769841269842,
+        "warship": 0.9813743992573102,
+        "tank": 0.970149456139477
+      },
+      "speed_ms": {
+        "preprocess": 2.5761807213226957,
+        "inference": 9.84868846212824,
+        "loss": 0.0004861503839492798,
+        "postprocess": 0.6086928149064382
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed20260822/weights/best.pt",
+      "map50": 0.8892721868496475,
+      "map50_95": 0.47683134235672986,
+      "precision": 0.9153722537061262,
+      "recall": 0.8810870371519776,
+      "per_class_ap50": {
+        "soldier": 0.6042232375761443,
+        "small_aircraft": 0.995,
+        "warship": 0.9674731335201355,
+        "tank": 0.9903923763023103
+      },
+      "speed_ms": {
+        "preprocess": 2.8747361029187837,
+        "inference": 9.849345311522484,
+        "loss": 0.0005185231566429138,
+        "postprocess": 0.6134371211131414
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed3407/weights/best.pt",
+      "map50": 0.8703684118691544,
+      "map50_95": 0.45553471917960964,
+      "precision": 0.8630871841862251,
+      "recall": 0.8702665263259776,
+      "per_class_ap50": {
+        "soldier": 0.541424530908448,
+        "small_aircraft": 0.9940570175438596,
+        "warship": 0.9695521784257187,
+        "tank": 0.9764399205985912
+      },
+      "speed_ms": {
+        "preprocess": 2.9235718275109925,
+        "inference": 2.310602075109879,
+        "loss": 0.0005832935372988383,
+        "postprocess": 0.12605050578713417
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed20260821/weights/best.pt",
+      "map50": 0.8695336227915644,
+      "map50_95": 0.4564541435002146,
+      "precision": 0.8761593411181013,
+      "recall": 0.8604188506202729,
+      "per_class_ap50": {
+        "soldier": 0.5563356240580561,
+        "small_aircraft": 0.9768413195871678,
+        "warship": 0.967614129906592,
+        "tank": 0.9773434176144418
+      },
+      "speed_ms": {
+        "preprocess": 2.7329533422986665,
+        "inference": 1.8579461301366487,
+        "loss": 0.0008571520447731018,
+        "postprocess": 0.1478579267859459
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed8675309/weights/best.pt",
+      "map50": 0.8527462521095678,
+      "map50_95": 0.45871298637560143,
+      "precision": 0.7247500062759611,
+      "recall": 0.8564276076879368,
+      "per_class_ap50": {
+        "soldier": 0.49085772730478877,
+        "small_aircraft": 0.9569986085763125,
+        "warship": 0.9802231909776807,
+        "tank": 0.9829054815794894
+      },
+      "speed_ms": {
+        "preprocess": 2.6162030547857285,
+        "inference": 1.8628934460381668,
+        "loss": 0.0008176639676094055,
+        "postprocess": 0.14567984268069267
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed42/weights/best.pt",
+      "map50": 0.8695500929776174,
+      "map50_95": 0.46165806225148637,
+      "precision": 0.8357204581190179,
+      "recall": 0.8569263936817506,
+      "per_class_ap50": {
+        "soldier": 0.5452248869980884,
+        "small_aircraft": 0.9935248332097849,
+        "warship": 0.9850604722019487,
+        "tank": 0.954390179500648
+      },
+      "speed_ms": {
+        "preprocess": 2.6439886974791684,
+        "inference": 1.8563972289363544,
+        "loss": 0.00046548744042714435,
+        "postprocess": 0.11501847455898921
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed20260822/weights/best.pt",
+      "map50": 0.8904877699151501,
+      "map50_95": 0.47254734632101203,
+      "precision": 0.8469616012191554,
+      "recall": 0.8759194734804491,
+      "per_class_ap50": {
+        "soldier": 0.5950020207020725,
+        "small_aircraft": 0.9930390390390389,
+        "warship": 0.984894520044674,
+        "tank": 0.9890154998748153
+      },
+      "speed_ms": {
+        "preprocess": 2.6269141832987466,
+        "inference": 1.862093210220337,
+        "loss": 0.0006504108508427938,
+        "postprocess": 0.12926099821925163
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed3407/weights/best.pt",
+      "map50": 0.8804265233677814,
+      "map50_95": 0.4706172599835554,
+      "precision": 0.8006421161834647,
+      "recall": 0.8882476771196284,
+      "per_class_ap50": {
+        "soldier": 0.6013652406604881,
+        "small_aircraft": 0.9785093383418114,
+        "warship": 0.9840812617255866,
+        "tank": 0.957750252743239
+      },
+      "speed_ms": {
+        "preprocess": 2.7198179562886557,
+        "inference": 4.244061708450317,
+        "loss": 0.0004874728620052337,
+        "postprocess": 0.1140709159274896
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed20260821/weights/best.pt",
+      "map50": 0.9009399762536469,
+      "map50_95": 0.46875634810683114,
+      "precision": 0.9106508392859731,
+      "recall": 0.8924216027874565,
+      "per_class_ap50": {
+        "soldier": 0.6827006553889368,
+        "small_aircraft": 0.9946,
+        "warship": 0.9558342905062419,
+        "tank": 0.9706249591194086
+      },
+      "speed_ms": {
+        "preprocess": 3.054355513304472,
+        "inference": 4.245247909178336,
+        "loss": 0.0004995924731095631,
+        "postprocess": 0.1222637171546618
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed8675309/weights/best.pt",
+      "map50": 0.9134543086202153,
+      "map50_95": 0.46468907535997667,
+      "precision": 0.8921213666339268,
+      "recall": 0.8834839576074333,
+      "per_class_ap50": {
+        "soldier": 0.7062514525104402,
+        "small_aircraft": 0.9944594594594593,
+        "warship": 0.9851729054148408,
+        "tank": 0.9679334170961208
+      },
+      "speed_ms": {
+        "preprocess": 2.889042515307665,
+        "inference": 4.2435890187819805,
+        "loss": 0.0006418923536936443,
+        "postprocess": 0.13834902395804724
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed42/weights/best.pt",
+      "map50": 0.8974439123876423,
+      "map50_95": 0.46528956171462,
+      "precision": 0.8493302880365221,
+      "recall": 0.8808475854839494,
+      "per_class_ap50": {
+        "soldier": 0.6948487711943153,
+        "small_aircraft": 0.9789537100680807,
+        "warship": 0.9606542477821304,
+        "tank": 0.955318920506043
+      },
+      "speed_ms": {
+        "preprocess": 2.847569640725851,
+        "inference": 4.246840340395769,
+        "loss": 0.0005878135561943054,
+        "postprocess": 0.12569675842920938
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed20260822/weights/best.pt",
+      "map50": 0.8853909419609436,
+      "map50_95": 0.46686316072006695,
+      "precision": 0.8794162371338483,
+      "recall": 0.8925365369725126,
+      "per_class_ap50": {
+        "soldier": 0.574749908277316,
+        "small_aircraft": 0.9923972602739727,
+        "warship": 0.9926906966490299,
+        "tank": 0.9817259026434558
+      },
+      "speed_ms": {
+        "preprocess": 2.8797846101224422,
+        "inference": 4.244604495664437,
+        "loss": 0.0004651521643002828,
+        "postprocess": 0.1225662666062514
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed3407/weights/best.pt",
+      "map50": 0.8909387453849451,
+      "map50_95": 0.4685762499466124,
+      "precision": 0.8764112881442371,
+      "recall": 0.8726755294245861,
+      "per_class_ap50": {
+        "soldier": 0.6203106891056638,
+        "small_aircraft": 0.993656204906205,
+        "warship": 0.9768141349391349,
+        "tank": 0.972973952588777
+      },
+      "speed_ms": {
+        "preprocess": 2.891292391965787,
+        "inference": 9.962287315477926,
+        "loss": 0.0005046154061953227,
+        "postprocess": 0.11880612000823021
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed20260821/weights/best.pt",
+      "map50": 0.9011711109989757,
+      "map50_95": 0.4719193583276291,
+      "precision": 0.8695648259163177,
+      "recall": 0.8807860288424313,
+      "per_class_ap50": {
+        "soldier": 0.6577470998600042,
+        "small_aircraft": 0.9947297297297296,
+        "warship": 0.9668791598511358,
+        "tank": 0.9853284545550329
+      },
+      "speed_ms": {
+        "preprocess": 2.6995045629640417,
+        "inference": 9.946214581529299,
+        "loss": 0.0005851499736309052,
+        "postprocess": 0.12223480269312859
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed8675309/weights/best.pt",
+      "map50": 0.8859896297594452,
+      "map50_95": 0.4725246856826105,
+      "precision": 0.870589495027751,
+      "recall": 0.8928675772047268,
+      "per_class_ap50": {
+        "soldier": 0.5962230179258365,
+        "small_aircraft": 0.9938960791777693,
+        "warship": 0.970524470953783,
+        "tank": 0.983314950980392
+      },
+      "speed_ms": {
+        "preprocess": 2.864834244052569,
+        "inference": 9.960498431076607,
+        "loss": 0.0005076142648855845,
+        "postprocess": 0.11998345454533894
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed42/weights/best.pt",
+      "map50": 0.8960543476193898,
+      "map50_95": 0.47119645551284856,
+      "precision": 0.8927135247771356,
+      "recall": 0.8873007046479091,
+      "per_class_ap50": {
+        "soldier": 0.6342534931483799,
+        "small_aircraft": 0.9910662642521798,
+        "warship": 0.985,
+        "tank": 0.973897633077
+      },
+      "speed_ms": {
+        "preprocess": 2.9407199658453465,
+        "inference": 9.979030564427376,
+        "loss": 0.0004997290670871735,
+        "postprocess": 0.11818448702494302
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed20260822/weights/best.pt",
+      "map50": 0.9015658761014438,
+      "map50_95": 0.4668382188697887,
+      "precision": 0.8878875905108741,
+      "recall": 0.910381941371496,
+      "per_class_ap50": {
+        "soldier": 0.6548436938769597,
+        "small_aircraft": 0.993063063063063,
+        "warship": 0.9670718127307274,
+        "tank": 0.9912849347350248
+      },
+      "speed_ms": {
+        "preprocess": 2.8958288456002874,
+        "inference": 9.953401765475672,
+        "loss": 0.0004941225051879883,
+        "postprocess": 0.1165581742922465
+      }
+    }
+  ],
+  "ranking": [
+    {
+      "model_tag": "yolo26s",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed8675309/weights/best.pt",
+      "map50": 0.9134543086202153,
+      "map50_95": 0.46468907535997667,
+      "precision": 0.8921213666339268,
+      "recall": 0.8834839576074333,
+      "per_class_ap50": {
+        "soldier": 0.7062514525104402,
+        "small_aircraft": 0.9944594594594593,
+        "warship": 0.9851729054148408,
+        "tank": 0.9679334170961208
+      },
+      "speed_ms": {
+        "preprocess": 2.889042515307665,
+        "inference": 4.2435890187819805,
+        "loss": 0.0006418923536936443,
+        "postprocess": 0.13834902395804724
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed8675309/weights/best.pt",
+      "map50": 0.9057886388550622,
+      "map50_95": 0.47104288234513536,
+      "precision": 0.9118821037304609,
+      "recall": 0.8905431389869407,
+      "per_class_ap50": {
+        "soldier": 0.6642338586667522,
+        "small_aircraft": 0.9921176654182271,
+        "warship": 0.9755760276198012,
+        "tank": 0.9912270037154683
+      },
+      "speed_ms": {
+        "preprocess": 2.891449468831221,
+        "inference": 9.861450729270777,
+        "loss": 0.0005113892257213593,
+        "postprocess": 0.5976538918912411
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed3407/weights/best.pt",
+      "map50": 0.9032346786404032,
+      "map50_95": 0.4662415414292834,
+      "precision": 0.9081511882938332,
+      "recall": 0.9084323113048305,
+      "per_class_ap50": {
+        "soldier": 0.6415415226280227,
+        "small_aircraft": 0.995,
+        "warship": 0.9846341463414634,
+        "tank": 0.9917630455921266
+      },
+      "speed_ms": {
+        "preprocess": 2.905120054880778,
+        "inference": 4.5135823016365375,
+        "loss": 0.0004711871345837911,
+        "postprocess": 0.5926604693134626
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed20260822/weights/best.pt",
+      "map50": 0.9015658761014438,
+      "map50_95": 0.4668382188697887,
+      "precision": 0.8878875905108741,
+      "recall": 0.910381941371496,
+      "per_class_ap50": {
+        "soldier": 0.6548436938769597,
+        "small_aircraft": 0.993063063063063,
+        "warship": 0.9670718127307274,
+        "tank": 0.9912849347350248
+      },
+      "speed_ms": {
+        "preprocess": 2.8958288456002874,
+        "inference": 9.953401765475672,
+        "loss": 0.0004941225051879883,
+        "postprocess": 0.1165581742922465
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed20260821/weights/best.pt",
+      "map50": 0.9011711109989757,
+      "map50_95": 0.4719193583276291,
+      "precision": 0.8695648259163177,
+      "recall": 0.8807860288424313,
+      "per_class_ap50": {
+        "soldier": 0.6577470998600042,
+        "small_aircraft": 0.9947297297297296,
+        "warship": 0.9668791598511358,
+        "tank": 0.9853284545550329
+      },
+      "speed_ms": {
+        "preprocess": 2.6995045629640417,
+        "inference": 9.946214581529299,
+        "loss": 0.0005851499736309052,
+        "postprocess": 0.12223480269312859
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed20260821/weights/best.pt",
+      "map50": 0.9009399762536469,
+      "map50_95": 0.46875634810683114,
+      "precision": 0.9106508392859731,
+      "recall": 0.8924216027874565,
+      "per_class_ap50": {
+        "soldier": 0.6827006553889368,
+        "small_aircraft": 0.9946,
+        "warship": 0.9558342905062419,
+        "tank": 0.9706249591194086
+      },
+      "speed_ms": {
+        "preprocess": 3.054355513304472,
+        "inference": 4.245247909178336,
+        "loss": 0.0004995924731095631,
+        "postprocess": 0.1222637171546618
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed42/weights/best.pt",
+      "map50": 0.8974439123876423,
+      "map50_95": 0.46528956171462,
+      "precision": 0.8493302880365221,
+      "recall": 0.8808475854839494,
+      "per_class_ap50": {
+        "soldier": 0.6948487711943153,
+        "small_aircraft": 0.9789537100680807,
+        "warship": 0.9606542477821304,
+        "tank": 0.955318920506043
+      },
+      "speed_ms": {
+        "preprocess": 2.847569640725851,
+        "inference": 4.246840340395769,
+        "loss": 0.0005878135561943054,
+        "postprocess": 0.12569675842920938
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed20260822/weights/best.pt",
+      "map50": 0.8963231338644231,
+      "map50_95": 0.4672721012410316,
+      "precision": 0.917479258805846,
+      "recall": 0.8971550764614789,
+      "per_class_ap50": {
+        "soldier": 0.6498718650815999,
+        "small_aircraft": 0.9865933333333334,
+        "warship": 0.9723858039665387,
+        "tank": 0.9764415330762203
+      },
+      "speed_ms": {
+        "preprocess": 2.89888896048069,
+        "inference": 1.8887185367445152,
+        "loss": 0.0007018881539503733,
+        "postprocess": 0.6642057684560616
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed42/weights/best.pt",
+      "map50": 0.8960543476193898,
+      "map50_95": 0.47119645551284856,
+      "precision": 0.8927135247771356,
+      "recall": 0.8873007046479091,
+      "per_class_ap50": {
+        "soldier": 0.6342534931483799,
+        "small_aircraft": 0.9910662642521798,
+        "warship": 0.985,
+        "tank": 0.973897633077
+      },
+      "speed_ms": {
+        "preprocess": 2.9407199658453465,
+        "inference": 9.979030564427376,
+        "loss": 0.0004997290670871735,
+        "postprocess": 0.11818448702494302
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed20260821/weights/best.pt",
+      "map50": 0.8947679384020444,
+      "map50_95": 0.47371197789522723,
+      "precision": 0.9113048539107991,
+      "recall": 0.9106530780035157,
+      "per_class_ap50": {
+        "soldier": 0.633271110431411,
+        "small_aircraft": 0.995,
+        "warship": 0.9848780487804878,
+        "tank": 0.9659225943962786
+      },
+      "speed_ms": {
+        "preprocess": 2.780321507404248,
+        "inference": 4.0891043903927,
+        "loss": 0.0004837351540724436,
+        "postprocess": 0.6193631080289682
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed3407/weights/best.pt",
+      "map50": 0.8940063600754655,
+      "map50_95": 0.4661196565982534,
+      "precision": 0.895609665642127,
+      "recall": 0.8881874568539048,
+      "per_class_ap50": {
+        "soldier": 0.6312593520520655,
+        "small_aircraft": 0.9880805609915198,
+        "warship": 0.9726617647058824,
+        "tank": 0.9840237625523944
+      },
+      "speed_ms": {
+        "preprocess": 2.6166739066441855,
+        "inference": 3.3116470463573933,
+        "loss": 0.0008071524401505787,
+        "postprocess": 0.6467675541838009
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed8675309/weights/best.pt",
+      "map50": 0.8925814252552176,
+      "map50_95": 0.4690926340343614,
+      "precision": 0.8957603449661573,
+      "recall": 0.8980231320170345,
+      "per_class_ap50": {
+        "soldier": 0.6227162750103755,
+        "small_aircraft": 0.995,
+        "warship": 0.9708890632708244,
+        "tank": 0.9817203627396707
+      },
+      "speed_ms": {
+        "preprocess": 2.9509870149195194,
+        "inference": 4.088234441975753,
+        "loss": 0.0004579685628414154,
+        "postprocess": 0.6569226644933224
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed3407/weights/best.pt",
+      "map50": 0.8909387453849451,
+      "map50_95": 0.4685762499466124,
+      "precision": 0.8764112881442371,
+      "recall": 0.8726755294245861,
+      "per_class_ap50": {
+        "soldier": 0.6203106891056638,
+        "small_aircraft": 0.993656204906205,
+        "warship": 0.9768141349391349,
+        "tank": 0.972973952588777
+      },
+      "speed_ms": {
+        "preprocess": 2.891292391965787,
+        "inference": 9.962287315477926,
+        "loss": 0.0005046154061953227,
+        "postprocess": 0.11880612000823021
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed20260822/weights/best.pt",
+      "map50": 0.8904877699151501,
+      "map50_95": 0.47254734632101203,
+      "precision": 0.8469616012191554,
+      "recall": 0.8759194734804491,
+      "per_class_ap50": {
+        "soldier": 0.5950020207020725,
+        "small_aircraft": 0.9930390390390389,
+        "warship": 0.984894520044674,
+        "tank": 0.9890154998748153
+      },
+      "speed_ms": {
+        "preprocess": 2.6269141832987466,
+        "inference": 1.862093210220337,
+        "loss": 0.0006504108508427938,
+        "postprocess": 0.12926099821925163
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed20260822/weights/best.pt",
+      "map50": 0.8892721868496475,
+      "map50_95": 0.47683134235672986,
+      "precision": 0.9153722537061262,
+      "recall": 0.8810870371519776,
+      "per_class_ap50": {
+        "soldier": 0.6042232375761443,
+        "small_aircraft": 0.995,
+        "warship": 0.9674731335201355,
+        "tank": 0.9903923763023103
+      },
+      "speed_ms": {
+        "preprocess": 2.8747361029187837,
+        "inference": 9.849345311522484,
+        "loss": 0.0005185231566429138,
+        "postprocess": 0.6134371211131414
+      }
+    },
+    {
+      "model_tag": "yolo26m",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26m_seed8675309/weights/best.pt",
+      "map50": 0.8859896297594452,
+      "map50_95": 0.4725246856826105,
+      "precision": 0.870589495027751,
+      "recall": 0.8928675772047268,
+      "per_class_ap50": {
+        "soldier": 0.5962230179258365,
+        "small_aircraft": 0.9938960791777693,
+        "warship": 0.970524470953783,
+        "tank": 0.983314950980392
+      },
+      "speed_ms": {
+        "preprocess": 2.864834244052569,
+        "inference": 9.960498431076607,
+        "loss": 0.0005076142648855845,
+        "postprocess": 0.11998345454533894
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed20260822/weights/best.pt",
+      "map50": 0.8853909419609436,
+      "map50_95": 0.46686316072006695,
+      "precision": 0.8794162371338483,
+      "recall": 0.8925365369725126,
+      "per_class_ap50": {
+        "soldier": 0.574749908277316,
+        "small_aircraft": 0.9923972602739727,
+        "warship": 0.9926906966490299,
+        "tank": 0.9817259026434558
+      },
+      "speed_ms": {
+        "preprocess": 2.8797846101224422,
+        "inference": 4.244604495664437,
+        "loss": 0.0004651521643002828,
+        "postprocess": 0.1225662666062514
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed20260822/weights/best.pt",
+      "map50": 0.8842470019582629,
+      "map50_95": 0.4689338648479272,
+      "precision": 0.8893409963654412,
+      "recall": 0.8838348093302362,
+      "per_class_ap50": {
+        "soldier": 0.5883886996897458,
+        "small_aircraft": 0.995,
+        "warship": 0.9626661629448856,
+        "tank": 0.9909331451984199
+      },
+      "speed_ms": {
+        "preprocess": 2.840993007024129,
+        "inference": 4.089023532966773,
+        "loss": 0.0004756823182106018,
+        "postprocess": 0.6244239397346973
+      }
+    },
+    {
+      "model_tag": "yolo11s",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11s_seed42/weights/best.pt",
+      "map50": 0.8832645025896292,
+      "map50_95": 0.46487469184013974,
+      "precision": 0.9085551406744264,
+      "recall": 0.8571216850561363,
+      "per_class_ap50": {
+        "soldier": 0.6089609175112332,
+        "small_aircraft": 0.9884737632549037,
+        "warship": 0.9742560975609756,
+        "tank": 0.9613672320314043
+      },
+      "speed_ms": {
+        "preprocess": 2.882311139255762,
+        "inference": 4.087089225649834,
+        "loss": 0.0004690264662106832,
+        "postprocess": 0.6152233046789963
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed20260821/weights/best.pt",
+      "map50": 0.8829243036573938,
+      "map50_95": 0.46652357994791754,
+      "precision": 0.8986196791554639,
+      "recall": 0.8908043699359275,
+      "per_class_ap50": {
+        "soldier": 0.585676809262985,
+        "small_aircraft": 0.995,
+        "warship": 0.9774994821621836,
+        "tank": 0.9735209232044065
+      },
+      "speed_ms": {
+        "preprocess": 2.8521496492127576,
+        "inference": 9.855688462654749,
+        "loss": 0.00048502037922541297,
+        "postprocess": 0.5996154062449932
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed20260821/weights/best.pt",
+      "map50": 0.8808453771217253,
+      "map50_95": 0.4625678194331389,
+      "precision": 0.8804852054760334,
+      "recall": 0.8938177738398938,
+      "per_class_ap50": {
+        "soldier": 0.5782040725336923,
+        "small_aircraft": 0.9893835616438357,
+        "warship": 0.9656887511644315,
+        "tank": 0.9901051231449415
+      },
+      "speed_ms": {
+        "preprocess": 2.857884094119072,
+        "inference": 1.886112205684185,
+        "loss": 0.0006659142673015594,
+        "postprocess": 0.6382202667494615
+      }
+    },
+    {
+      "model_tag": "yolo26s",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed3407/weights/best.pt",
+      "map50": 0.8804265233677814,
+      "map50_95": 0.4706172599835554,
+      "precision": 0.8006421161834647,
+      "recall": 0.8882476771196284,
+      "per_class_ap50": {
+        "soldier": 0.6013652406604881,
+        "small_aircraft": 0.9785093383418114,
+        "warship": 0.9840812617255866,
+        "tank": 0.957750252743239
+      },
+      "speed_ms": {
+        "preprocess": 2.7198179562886557,
+        "inference": 4.244061708450317,
+        "loss": 0.0004874728620052337,
+        "postprocess": 0.1140709159274896
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed42/weights/best.pt",
+      "map50": 0.8738100046970916,
+      "map50_95": 0.4600104293996071,
+      "precision": 0.8877986089714497,
+      "recall": 0.8947006933307173,
+      "per_class_ap50": {
+        "soldier": 0.5508391792645948,
+        "small_aircraft": 0.9928769841269842,
+        "warship": 0.9813743992573102,
+        "tank": 0.970149456139477
+      },
+      "speed_ms": {
+        "preprocess": 2.5761807213226957,
+        "inference": 9.84868846212824,
+        "loss": 0.0004861503839492798,
+        "postprocess": 0.6086928149064382
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed3407/weights/best.pt",
+      "map50": 0.8703684118691544,
+      "map50_95": 0.45553471917960964,
+      "precision": 0.8630871841862251,
+      "recall": 0.8702665263259776,
+      "per_class_ap50": {
+        "soldier": 0.541424530908448,
+        "small_aircraft": 0.9940570175438596,
+        "warship": 0.9695521784257187,
+        "tank": 0.9764399205985912
+      },
+      "speed_ms": {
+        "preprocess": 2.9235718275109925,
+        "inference": 2.310602075109879,
+        "loss": 0.0005832935372988383,
+        "postprocess": 0.12605050578713417
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed42/weights/best.pt",
+      "map50": 0.8695500929776174,
+      "map50_95": 0.46165806225148637,
+      "precision": 0.8357204581190179,
+      "recall": 0.8569263936817506,
+      "per_class_ap50": {
+        "soldier": 0.5452248869980884,
+        "small_aircraft": 0.9935248332097849,
+        "warship": 0.9850604722019487,
+        "tank": 0.954390179500648
+      },
+      "speed_ms": {
+        "preprocess": 2.6439886974791684,
+        "inference": 1.8563972289363544,
+        "loss": 0.00046548744042714435,
+        "postprocess": 0.11501847455898921
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed20260821/weights/best.pt",
+      "map50": 0.8695336227915644,
+      "map50_95": 0.4564541435002146,
+      "precision": 0.8761593411181013,
+      "recall": 0.8604188506202729,
+      "per_class_ap50": {
+        "soldier": 0.5563356240580561,
+        "small_aircraft": 0.9768413195871678,
+        "warship": 0.967614129906592,
+        "tank": 0.9773434176144418
+      },
+      "speed_ms": {
+        "preprocess": 2.7329533422986665,
+        "inference": 1.8579461301366487,
+        "loss": 0.0008571520447731018,
+        "postprocess": 0.1478579267859459
+      }
+    },
+    {
+      "model_tag": "yolo11m",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11m_seed3407/weights/best.pt",
+      "map50": 0.8692697335325761,
+      "map50_95": 0.4651158320441757,
+      "precision": 0.8905112042692694,
+      "recall": 0.85714753606418,
+      "per_class_ap50": {
+        "soldier": 0.5229395574956911,
+        "small_aircraft": 0.995,
+        "warship": 0.9805143906412508,
+        "tank": 0.9786249859933625
+      },
+      "speed_ms": {
+        "preprocess": 2.88939851646622,
+        "inference": 9.865119835982721,
+        "loss": 0.00048805649081865943,
+        "postprocess": 0.5989695340394974
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed42/weights/best.pt",
+      "map50": 0.8678075936776282,
+      "map50_95": 0.46535371733372893,
+      "precision": 0.8769965905216051,
+      "recall": 0.8955175316874314,
+      "per_class_ap50": {
+        "soldier": 0.5013098667829223,
+        "small_aircraft": 0.995,
+        "warship": 0.9873347795774201,
+        "tank": 0.9875857283501703
+      },
+      "speed_ms": {
+        "preprocess": 2.870244402438402,
+        "inference": 1.8880057645340762,
+        "loss": 0.0008247544368108114,
+        "postprocess": 0.6734371557831764
+      }
+    },
+    {
+      "model_tag": "yolo11n",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo11n_seed8675309/weights/best.pt",
+      "map50": 0.862111559944756,
+      "map50_95": 0.4596407124755313,
+      "precision": 0.8475957716506446,
+      "recall": 0.8349756823461091,
+      "per_class_ap50": {
+        "soldier": 0.53471508981991,
+        "small_aircraft": 0.9796079911209771,
+        "warship": 0.9749145041901652,
+        "tank": 0.9592086546479719
+      },
+      "speed_ms": {
+        "preprocess": 2.8364490531384945,
+        "inference": 1.8825831015904746,
+        "loss": 0.0004701750973860423,
+        "postprocess": 0.6404955312609673
+      }
+    },
+    {
+      "model_tag": "yolo26n",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26n_seed8675309/weights/best.pt",
+      "map50": 0.8527462521095678,
+      "map50_95": 0.45871298637560143,
+      "precision": 0.7247500062759611,
+      "recall": 0.8564276076879368,
+      "per_class_ap50": {
+        "soldier": 0.49085772730478877,
+        "small_aircraft": 0.9569986085763125,
+        "warship": 0.9802231909776807,
+        "tank": 0.9829054815794894
+      },
+      "speed_ms": {
+        "preprocess": 2.6162030547857285,
+        "inference": 1.8628934460381668,
+        "loss": 0.0008176639676094055,
+        "postprocess": 0.14567984268069267
+      }
+    }
+  ],
+  "selected": {
+    "model_tag": "yolo26s",
+    "seed": 8675309,
+    "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/yolo26s_seed8675309/weights/best.pt",
+    "map50": 0.9134543086202153,
+    "map50_95": 0.46468907535997667,
+    "precision": 0.8921213666339268,
+    "recall": 0.8834839576074333,
+    "per_class_ap50": {
+      "soldier": 0.7062514525104402,
+      "small_aircraft": 0.9944594594594593,
+      "warship": 0.9851729054148408,
+      "tank": 0.9679334170961208
+    },
+    "speed_ms": {
+      "preprocess": 2.889042515307665,
+      "inference": 4.2435890187819805,
+      "loss": 0.0006418923536936443,
+      "postprocess": 0.13834902395804724
+    },
+    "promoted_weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/base_4plus2_search_1280e500/selection/selected/best_base.pt"
+  }
+}

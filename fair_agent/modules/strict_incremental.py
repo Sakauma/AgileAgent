@@ -676,12 +676,32 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
         or profile.get("evidence_level") != "verified"
     ):
         raise ValueError(f"严格增量实验档无效：{profile_id}")
+    raw_thresholds = profile.get("activation_thresholds")
+    raw_new_ids = profile.get("new_global_ids")
+    multi_class_profile = isinstance(raw_thresholds, Mapping) or isinstance(
+        raw_new_ids, list
+    )
     try:
-        threshold = float(profile["activation_threshold"])
-        new_global_id = int(profile["new_global_id"])
+        if multi_class_profile:
+            thresholds = {
+                int(key): float(value)
+                for key, value in dict(raw_thresholds or {}).items()
+            }
+            new_global_ids = sorted(int(value) for value in (raw_new_ids or []))
+            if not new_global_ids or set(new_global_ids) != set(thresholds):
+                raise ValueError("新增类别与逐类阈值不一致")
+        else:
+            new_global_id = int(profile["new_global_id"])
+            thresholds = {new_global_id: float(profile["activation_threshold"])}
+            new_global_ids = [new_global_id]
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"严格增量实验档字段无效：{profile_id}") from exc
+    if any(not 0.01 <= value <= 1.0 for value in thresholds.values()):
+        raise ValueError(f"严格增量实验档逐类阈值无效：{profile_id}")
     single_detector = profile.get("deployment") == "single_detector"
+    if single_detector and len(new_global_ids) != 1:
+        raise ValueError(f"统一学生实验档暂不支持多个新增类别：{profile_id}")
+    new_global_id = new_global_ids[0]
     if single_detector:
         mapping = {
             int(key): int(key) for key in profile.get("class_names", GLOBAL_CLASS_NAMES)
@@ -702,14 +722,15 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
             }
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"严格增量实验档类别映射无效：{profile_id}") from exc
-        if set(mapping) != {0, 1, 2} or new_global_id in mapping.values():
+        if (
+            set(mapping) != set(range(len(mapping)))
+            or set(new_global_ids) & set(mapping.values())
+        ):
             raise ValueError(f"严格增量实验档类别映射或阈值无效：{profile_id}")
         weight_fields = (
             ("base_weight", "base_sha256"),
             ("specialist_weight", "specialist_sha256"),
         )
-    if not 0.01 <= threshold <= 1.0:
-        raise ValueError(f"严格增量实验档类别映射或阈值无效：{profile_id}")
     for path_key, hash_key in weight_fields:
         weight = resolve_path(profile[path_key])
         if not weight.exists() or sha256_file(weight) != profile[hash_key]:
@@ -759,26 +780,81 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
             raise ValueError(f"严格增量实验档场景先验内容不一致：{profile_id}")
     elif context_gate.get("enabled") is not False or context_prior not in ({}, None):
         raise ValueError(f"严格增量实验档场景软门控开关无效：{profile_id}")
-    calibration = resolve_path(profile.get("calibration_source", "__missing_calibration__"))
-    if not calibration.exists():
-        raise ValueError(f"严格增量实验档缺少校准证据：{profile_id}")
-    calibration_payload = json.loads(calibration.read_text(encoding="utf-8"))
-    try:
-        calibrated_threshold = float(calibration_payload["deployment_threshold"])
-        selected_threshold = float(calibration_payload["selected"]["threshold"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"严格增量实验档校准证据无效：{profile_id}") from exc
-    if (
-        calibration_payload.get("passed") is not True
-        or calibration_payload.get("source_split") != "incremental_dev_only"
-        or calibration_payload.get("learning_data_scope")
-        != "incremental_dataset_only"
-        or calibration_payload.get("deployment_policy")
-        != "incremental_dev_calibrated"
-        or abs(calibrated_threshold - threshold) > 1e-12
-        or abs(selected_threshold - threshold) > 1e-12
-    ):
-        raise ValueError(f"严格增量实验档校准证据无效：{profile_id}")
+    raw_calibration_sources = profile.get("calibration_sources")
+    if multi_class_profile:
+        if isinstance(raw_calibration_sources, Mapping):
+            calibration_sources = {
+                int(key): str(value)
+                for key, value in raw_calibration_sources.items()
+            }
+        elif profile.get("calibration_source"):
+            calibration_sources = {
+                class_id: str(profile["calibration_source"])
+                for class_id in new_global_ids
+            }
+        else:
+            calibration_sources = {}
+        if set(calibration_sources) != set(new_global_ids):
+            raise ValueError(f"严格增量实验档缺少逐类校准证据：{profile_id}")
+        calibration_payloads: Dict[Path, Dict[str, Any]] = {}
+        for class_id, source in calibration_sources.items():
+            calibration = resolve_path(source)
+            if not calibration.is_file():
+                raise ValueError(
+                    f"严格增量实验档缺少校准证据：{profile_id}:{class_id}"
+                )
+            payload = calibration_payloads.setdefault(
+                calibration,
+                json.loads(calibration.read_text(encoding="utf-8")),
+            )
+            try:
+                calibrated_threshold = float(
+                    payload["per_class_thresholds"][str(class_id)]
+                )
+                selected_threshold = float(
+                    payload["per_class"][str(class_id)]["selected"]["threshold"]
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"严格增量实验档逐类校准证据无效：{profile_id}:{class_id}"
+                ) from exc
+            if (
+                payload.get("source_split") != "mixed_dev_only"
+                or payload.get("learning_data_scope")
+                != "incremental_dataset_only"
+                or payload.get("deployment_policy")
+                != "competition_map50_dev_calibrated"
+                or abs(calibrated_threshold - thresholds[class_id]) > 1e-12
+                or abs(selected_threshold - thresholds[class_id]) > 1e-12
+            ):
+                raise ValueError(
+                    f"严格增量实验档逐类校准证据无效：{profile_id}:{class_id}"
+                )
+        calibration = resolve_path(calibration_sources[new_global_ids[0]])
+    else:
+        calibration = resolve_path(
+            profile.get("calibration_source", "__missing_calibration__")
+        )
+        if not calibration.exists():
+            raise ValueError(f"严格增量实验档缺少校准证据：{profile_id}")
+        calibration_payload = json.loads(calibration.read_text(encoding="utf-8"))
+        try:
+            calibrated_threshold = float(calibration_payload["deployment_threshold"])
+            selected_threshold = float(calibration_payload["selected"]["threshold"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"严格增量实验档校准证据无效：{profile_id}") from exc
+        if (
+            calibration_payload.get("passed") is not True
+            or calibration_payload.get("source_split") != "incremental_dev_only"
+            or calibration_payload.get("learning_data_scope")
+            != "incremental_dataset_only"
+            or calibration_payload.get("deployment_policy")
+            != "incremental_dev_calibrated"
+            or abs(calibrated_threshold - thresholds[new_global_id]) > 1e-12
+            or abs(selected_threshold - thresholds[new_global_id]) > 1e-12
+        ):
+            raise ValueError(f"严格增量实验档校准证据无效：{profile_id}")
+        calibration_sources = {new_global_id: rel_path(calibration)}
     evidence_weight = profile.get("base_weight") or profile.get("model_weight")
     if not evidence_weight:
         raise ValueError(f"严格增量实验档缺少评测权重：{profile_id}")
@@ -806,16 +882,85 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
         or metrics.get("old_raw_image_count") != 0
         or not evidence_gates
         or not all(evidence_gates.values())
+        or (
+            multi_class_profile
+            and metrics.get("predictions_frozen_before_lock_labels") is not True
+        )
     ):
         raise ValueError(f"严格增量实验档合规证据无效：{profile_id}")
     profile["metrics_source"] = rel_path(metrics_path)
     profile["deployment"] = "single_detector" if single_detector else "dual_detector"
     profile["base_local_to_global"] = mapping
-    profile["lock_precision"] = metrics.get("lock_deployment_metrics", {}).get("precision")
-    profile["lock_recall"] = metrics.get("lock_deployment_metrics", {}).get("recall")
-    profile["lock_false_activation_rate"] = metrics.get("false_activation", {}).get("false_activation_rate")
+    profile["new_global_ids"] = new_global_ids
+    profile["activation_thresholds"] = thresholds
+    profile["calibration_sources"] = {
+        class_id: rel_path(resolve_path(source))
+        for class_id, source in calibration_sources.items()
+    }
+    if multi_class_profile:
+        class_names = {
+            int(key): str(value)
+            for key, value in profile.get("class_names", {}).items()
+        }
+        new_classes = {
+            class_id: class_names[class_id] for class_id in new_global_ids
+        }
+        lock = dict(metrics.get("lock") or {})
+        quality = {
+            int(key): dict(value)
+            for key, value in lock.get("new_class_quality", {}).items()
+        }
+        false_activation = {
+            int(key): dict(value)
+            for key, value in lock.get("false_activation", {}).items()
+        }
+        profile["new_classes"] = new_classes
+        profile["new_class"] = "、".join(new_classes.values())
+        profile["new_map50"] = float(lock.get("new_map50", 0.0))
+        profile["krr"] = float(lock.get("krr", 0.0))
+        profile["full_map50"] = float(lock.get("full_map50", 0.0))
+        profile["lock_precision_by_class"] = {
+            class_id: row.get("precision") for class_id, row in quality.items()
+        }
+        profile["lock_recall_by_class"] = {
+            class_id: row.get("recall") for class_id, row in quality.items()
+        }
+        profile["lock_false_activation_rate_by_class"] = {
+            class_id: row.get("false_activation_rate")
+            for class_id, row in false_activation.items()
+        }
+        profile["lock_precision"] = min(
+            (
+                float(value)
+                for value in profile["lock_precision_by_class"].values()
+                if value is not None
+            ),
+            default=None,
+        )
+        profile["lock_recall"] = min(
+            (
+                float(value)
+                for value in profile["lock_recall_by_class"].values()
+                if value is not None
+            ),
+            default=None,
+        )
+        profile["lock_false_activation_rate"] = max(
+            (
+                float(value)
+                for value in profile["lock_false_activation_rate_by_class"].values()
+                if value is not None
+            ),
+            default=None,
+        )
+    else:
+        profile["lock_precision"] = metrics.get("lock_deployment_metrics", {}).get("precision")
+        profile["lock_recall"] = metrics.get("lock_deployment_metrics", {}).get("recall")
+        profile["lock_false_activation_rate"] = metrics.get("false_activation", {}).get("false_activation_rate")
     profile["competition_accepted"] = bool(metrics["competition_accepted"])
-    profile["deployment_accepted"] = bool(metrics.get("deployment_accepted"))
+    profile["deployment_accepted"] = bool(
+        metrics.get("deployment_accepted", metrics.get("accepted", False))
+    )
     profile["diagnostic_warnings"] = {
         "lock_precision_below_0_70": bool(
             profile["lock_precision"] is not None

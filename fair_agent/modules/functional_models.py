@@ -19,6 +19,54 @@ def _load_registry(path: Path) -> Dict[str, Any]:
     return data
 
 
+def _incremental_protocol_contract_valid(protocol: Any) -> bool:
+    if not isinstance(protocol, dict):
+        return False
+    if (
+        protocol.get("task_type") != "incremental_object_detection"
+        or protocol.get("incremental_mode")
+        not in {"class_incremental", "target_incremental"}
+        or protocol.get("learning_data_scope") != "incremental_dataset_only"
+        or protocol.get("evidence_level")
+        not in {"unavailable", "rehearsal_only", "verified"}
+        or (bool(protocol.get("available")) and not protocol.get("path"))
+    ):
+        return False
+    raw_ids = protocol.get("global_class_ids")
+    if isinstance(raw_ids, list):
+        try:
+            class_ids = [int(value) for value in raw_ids]
+            names = {
+                int(key): str(value)
+                for key, value in dict(protocol.get("class_names") or {}).items()
+            }
+            thresholds = {
+                int(key): float(value)
+                for key, value in dict(
+                    protocol.get("activation_thresholds") or {}
+                ).items()
+            }
+            sources = {
+                int(key): str(value)
+                for key, value in dict(
+                    protocol.get("calibration_sources") or {}
+                ).items()
+            }
+        except (TypeError, ValueError):
+            return False
+        return bool(class_ids) and len(class_ids) == len(set(class_ids)) and (
+            set(class_ids) == set(names) == set(thresholds) == set(sources)
+            and all(names.values())
+            and all(0.01 <= value <= 1.0 for value in thresholds.values())
+        )
+    try:
+        int(protocol.get("global_class_id"))
+        threshold = float(protocol.get("activation_threshold"))
+    except (TypeError, ValueError):
+        return False
+    return bool(protocol.get("class_name")) and 0.01 <= threshold <= 1.0
+
+
 def validate_functional_models(path: str | Path) -> Dict[str, Any]:
     registry_path = resolve_path(path)
     errors: list[str] = []
@@ -66,16 +114,36 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                 ]
                 if experts:
                     expert = experts[0]
-                    global_class_id = int(next(iter(expert["owns_classes"])))
+                    global_class_ids = sorted(
+                        int(value) for value in expert["owns_classes"]
+                    )
+                    activation_thresholds = {
+                        class_id: float(expert["per_class_thresholds"][class_id])
+                        for class_id in global_class_ids
+                    }
                     production_incremental = {
                         "generation_id": production_id,
                         "model_id": expert["id"],
-                        "class_name": generations["class_map"][global_class_id],
-                        "global_class_id": global_class_id,
-                        "activation_threshold": float(expert["activation_threshold"]),
+                        "class_names": {
+                            class_id: generations["class_map"][class_id]
+                            for class_id in global_class_ids
+                        },
+                        "global_class_ids": global_class_ids,
+                        "activation_thresholds": activation_thresholds,
                         "metrics": dict(production.get("metrics", {})),
                         "deployment_accepted": True,
                     }
+                    if len(global_class_ids) == 1:
+                        global_class_id = global_class_ids[0]
+                        production_incremental.update(
+                            {
+                                "class_name": generations["class_map"][global_class_id],
+                                "global_class_id": global_class_id,
+                                "activation_threshold": activation_thresholds[
+                                    global_class_id
+                                ],
+                            }
+                        )
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             errors.append(f"functional_generation_registry_invalid:{exc}")
     summaries = []
@@ -193,15 +261,7 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     or manifest_entry.get("learning_data_scope") != "incremental_dataset_only"
                     or manifest_entry.get("old_raw_image_count") != 0
                     or any(
-                        not isinstance(protocol, dict)
-                        or protocol.get("task_type") != "incremental_object_detection"
-                        or protocol.get("incremental_mode") not in {"class_incremental", "target_incremental"}
-                        or protocol.get("learning_data_scope") != "incremental_dataset_only"
-                        or not isinstance(protocol.get("global_class_id"), int)
-                        or not protocol.get("class_name")
-                        or not isinstance(protocol.get("activation_threshold"), (int, float))
-                        or protocol.get("evidence_level") not in {"unavailable", "rehearsal_only", "verified"}
-                        or (bool(protocol.get("available")) and not protocol.get("path"))
+                        not _incremental_protocol_contract_valid(protocol)
                         for protocol in protocols
                     )
                 ):
@@ -232,9 +292,13 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                         {
                             "profile_id": profile["profile_id"],
                             "new_class": profile["new_class"],
+                            "new_class_ids": profile.get("new_global_ids"),
                             "new_map50": profile["new_map50"],
                             "krr": profile["krr"],
-                            "activation_threshold": profile["activation_threshold"],
+                            "activation_threshold": profile.get("activation_threshold"),
+                            "activation_thresholds": profile.get(
+                                "activation_thresholds"
+                            ),
                             "lock_false_activation_rate": profile.get("lock_false_activation_rate"),
                             "deployment_accepted": profile.get("deployment_accepted"),
                         }

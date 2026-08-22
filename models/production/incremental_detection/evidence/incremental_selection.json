@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-08-22T05:37:21.510133+00:00",
+  "selection_primary": "Increment dev mAP50",
+  "selection_secondary": "minimum per-class Increment dev AP50",
+  "lock_used": false,
+  "candidates": [
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed3407/weights/best.pt",
+      "map50": 0.9776209934186175,
+      "minimum_class_ap50": 0.972098078867543,
+      "map50_95": 0.45014675054131786,
+      "precision": 0.9622692923701064,
+      "recall": 0.965079365079365,
+      "per_class_ap50": {
+        "patrol_boat": 0.983143907969692,
+        "armored_vehicle": 0.972098078867543
+      },
+      "speed_ms": {
+        "preprocess": 1.332963417683329,
+        "inference": 6.485029156985028,
+        "loss": 0.0006387875016246523,
+        "postprocess": 0.11344107666185924
+      }
+    },
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed20260821/weights/best.pt",
+      "map50": 0.9839172576832151,
+      "minimum_class_ap50": 0.9728345153664303,
+      "map50_95": 0.46074343051221656,
+      "precision": 0.9615061865174491,
+      "recall": 0.9769235128074696,
+      "per_class_ap50": {
+        "patrol_boat": 0.995,
+        "armored_vehicle": 0.9728345153664303
+      },
+      "speed_ms": {
+        "preprocess": 1.2556534327034439,
+        "inference": 4.3993849373821705,
+        "loss": 0.0005403666624001094,
+        "postprocess": 0.10789734577494008
+      }
+    },
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed8675309/weights/best.pt",
+      "map50": 0.9522907274932183,
+      "minimum_class_ap50": 0.9390454127785748,
+      "map50_95": 0.4426471883066605,
+      "precision": 0.9624074000637096,
+      "recall": 0.8007134660755516,
+      "per_class_ap50": {
+        "patrol_boat": 0.9655360422078618,
+        "armored_vehicle": 0.9390454127785748
+      },
+      "speed_ms": {
+        "preprocess": 1.3553402719220944,
+        "inference": 4.410948205207076,
+        "loss": 0.0005772869501795087,
+        "postprocess": 0.10897249116429261
+      }
+    },
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed42/weights/best.pt",
+      "map50": 0.9826936026936026,
+      "minimum_class_ap50": 0.9703872053872054,
+      "map50_95": 0.44099164291016296,
+      "precision": 0.9886337063111483,
+      "recall": 0.9740700020287374,
+      "per_class_ap50": {
+        "patrol_boat": 0.995,
+        "armored_vehicle": 0.9703872053872054
+      },
+      "speed_ms": {
+        "preprocess": 1.2841203715652227,
+        "inference": 4.385668518287795,
+        "loss": 0.0005309203905718667,
+        "postprocess": 0.1070265591676746
+      }
+    },
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed20260822/weights/best.pt",
+      "map50": 0.9811293590303451,
+      "minimum_class_ap50": 0.9677238343397602,
+      "map50_95": 0.42458657511510517,
+      "precision": 0.9488769159554163,
+      "recall": 0.945606779465808,
+      "per_class_ap50": {
+        "patrol_boat": 0.9945348837209302,
+        "armored_vehicle": 0.9677238343397602
+      },
+      "speed_ms": {
+        "preprocess": 1.2610054109245539,
+        "inference": 4.381377516048295,
+        "loss": 0.0005516423178570611,
+        "postprocess": 0.11163298040628433
+      }
+    }
+  ],
+  "ranking": [
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 20260821,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed20260821/weights/best.pt",
+      "map50": 0.9839172576832151,
+      "minimum_class_ap50": 0.9728345153664303,
+      "map50_95": 0.46074343051221656,
+      "precision": 0.9615061865174491,
+      "recall": 0.9769235128074696,
+      "per_class_ap50": {
+        "patrol_boat": 0.995,
+        "armored_vehicle": 0.9728345153664303
+      },
+      "speed_ms": {
+        "preprocess": 1.2556534327034439,
+        "inference": 4.3993849373821705,
+        "loss": 0.0005403666624001094,
+        "postprocess": 0.10789734577494008
+      }
+    },
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 42,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed42/weights/best.pt",
+      "map50": 0.9826936026936026,
+      "minimum_class_ap50": 0.9703872053872054,
+      "map50_95": 0.44099164291016296,
+      "precision": 0.9886337063111483,
+      "recall": 0.9740700020287374,
+      "per_class_ap50": {
+        "patrol_boat": 0.995,
+        "armored_vehicle": 0.9703872053872054
+      },
+      "speed_ms": {
+        "preprocess": 1.2841203715652227,
+        "inference": 4.385668518287795,
+        "loss": 0.0005309203905718667,
+        "postprocess": 0.1070265591676746
+      }
+    },
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 20260822,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed20260822/weights/best.pt",
+      "map50": 0.9811293590303451,
+      "minimum_class_ap50": 0.9677238343397602,
+      "map50_95": 0.42458657511510517,
+      "precision": 0.9488769159554163,
+      "recall": 0.945606779465808,
+      "per_class_ap50": {
+        "patrol_boat": 0.9945348837209302,
+        "armored_vehicle": 0.9677238343397602
+      },
+      "speed_ms": {
+        "preprocess": 1.2610054109245539,
+        "inference": 4.381377516048295,
+        "loss": 0.0005516423178570611,
+        "postprocess": 0.11163298040628433
+      }
+    },
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 3407,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed3407/weights/best.pt",
+      "map50": 0.9776209934186175,
+      "minimum_class_ap50": 0.972098078867543,
+      "map50_95": 0.45014675054131786,
+      "precision": 0.9622692923701064,
+      "recall": 0.965079365079365,
+      "per_class_ap50": {
+        "patrol_boat": 0.983143907969692,
+        "armored_vehicle": 0.972098078867543
+      },
+      "speed_ms": {
+        "preprocess": 1.332963417683329,
+        "inference": 6.485029156985028,
+        "loss": 0.0006387875016246523,
+        "postprocess": 0.11344107666185924
+      }
+    },
+    {
+      "model_tag": "yolo26s_generic",
+      "seed": 8675309,
+      "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed8675309/weights/best.pt",
+      "map50": 0.9522907274932183,
+      "minimum_class_ap50": 0.9390454127785748,
+      "map50_95": 0.4426471883066605,
+      "precision": 0.9624074000637096,
+      "recall": 0.8007134660755516,
+      "per_class_ap50": {
+        "patrol_boat": 0.9655360422078618,
+        "armored_vehicle": 0.9390454127785748
+      },
+      "speed_ms": {
+        "preprocess": 1.3553402719220944,
+        "inference": 4.410948205207076,
+        "loss": 0.0005772869501795087,
+        "postprocess": 0.10897249116429261
+      }
+    }
+  ],
+  "selected": {
+    "model_tag": "yolo26s_generic",
+    "seed": 20260821,
+    "weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/yolo26s_generic_seed20260821/weights/best.pt",
+    "map50": 0.9839172576832151,
+    "minimum_class_ap50": 0.9728345153664303,
+    "map50_95": 0.46074343051221656,
+    "precision": 0.9615061865174491,
+    "recall": 0.9769235128074696,
+    "per_class_ap50": {
+      "patrol_boat": 0.995,
+      "armored_vehicle": 0.9728345153664303
+    },
+    "speed_ms": {
+      "preprocess": 1.2556534327034439,
+      "inference": 4.3993849373821705,
+      "loss": 0.0005403666624001094,
+      "postprocess": 0.10789734577494008
+    },
+    "promoted_weight": "/project/IDIP/MAJ/code/tiaozhanbei0821/AgileAgent/runs/detect/incremental_4plus2_search_1280e500/selection/selected/best_incremental.pt"
+  }
+}

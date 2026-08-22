@@ -538,6 +538,26 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 })
             else:
                 profile_id = profile["profile_id"]
+                new_global_ids = [
+                    int(value)
+                    for value in profile.get(
+                        "new_global_ids", [profile.get("new_global_id")]
+                    )
+                ]
+                activation_thresholds = {
+                    int(key): float(value)
+                    for key, value in profile.get(
+                        "activation_thresholds",
+                        {profile.get("new_global_id"): profile.get("activation_threshold")},
+                    ).items()
+                }
+                calibration_sources = {
+                    int(key): str(value)
+                    for key, value in profile.get(
+                        "calibration_sources",
+                        {profile.get("new_global_id"): profile.get("calibration_source")},
+                    ).items()
+                }
                 settings.update({
                     "detector_path": resolve_path(profile["base_weight"]),
                     "class_names": class_names,
@@ -547,21 +567,29 @@ def cmd_detect(args: argparse.Namespace) -> int:
                     "base_model_id": f"{profile_id}_base",
                     "class_owners": {
                         **{global_id: f"{profile_id}_base" for global_id in base_mapping.values()},
-                        int(profile["new_global_id"]): profile_id,
+                        **{global_id: profile_id for global_id in new_global_ids},
                     },
                     "protocols": {
                         profile_id: {
                             "id": profile_id,
                             "class_name": profile["new_class"],
                             "new_class": profile["new_class"],
-                            "global_class_id": int(profile["new_global_id"]),
+                            "class_names": {
+                                global_id: class_names[global_id]
+                                for global_id in new_global_ids
+                            },
+                            "global_class_ids": new_global_ids,
+                            "local_to_global": {
+                                index: global_id
+                                for index, global_id in enumerate(new_global_ids)
+                            },
                             "incremental_mode": "class_incremental",
                             "weights": resolve_path(profile["specialist_weight"]),
                             "new_map50": float(profile["new_map50"]),
                             "krr": float(profile["krr"]),
                             "available": True,
-                            "activation_threshold": float(profile["activation_threshold"]),
-                            "calibration_source": profile["calibration_source"],
+                            "activation_thresholds": activation_thresholds,
+                            "calibration_sources": calibration_sources,
                             "routing_prior": float(config["routing"]["default_routing_prior"]),
                             "context_prior": dict(profile.get("context_prior") or {}),
                             "context_gate": dict(
@@ -866,7 +894,17 @@ def build_parser() -> argparse.ArgumentParser:
     console = sub.add_parser("console", help="在无浏览器环境运行终端工作台。")
     console.add_argument("--sensor", choices=["ir", "sar"])
     console.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
-    console.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"])
+    console.add_argument(
+        "--class-focus",
+        choices=[
+            "soldier",
+            "small_aircraft",
+            "warship",
+            "tank",
+            "patrol_boat",
+            "armored_vehicle",
+        ],
+    )
     console.add_argument("--source", help="使用 Scene-SensorNet 从图像推断传感器和场景。")
     console.add_argument("--once", action="store_true", help="只打印一次终端总览，不进入交互界面。")
     console.set_defaults(func=cmd_console)
@@ -874,7 +912,17 @@ def build_parser() -> argparse.ArgumentParser:
     decide = sub.add_parser("decide")
     decide.add_argument("--sensor", choices=["ir", "sar"])
     decide.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
-    decide.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"])
+    decide.add_argument(
+        "--class-focus",
+        choices=[
+            "soldier",
+            "small_aircraft",
+            "warship",
+            "tank",
+            "patrol_boat",
+            "armored_vehicle",
+        ],
+    )
     decide.add_argument("--source", help="使用 Scene-SensorNet 从图像自动推断传感器和场景。")
     decide.add_argument("--refresh", action="store_true")
     decide.add_argument("--cached", action="store_true", help="复用已保存的黑板状态，不重新采集证据。")
@@ -884,7 +932,18 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--mode", choices=["dryrun", "execute"], default="dryrun")
     pipeline.add_argument("--sensor", choices=["ir", "sar"])
     pipeline.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
-    pipeline.add_argument("--class-focus", choices=["soldier", "small_aircraft", "warship", "tank"], default="soldier")
+    pipeline.add_argument(
+        "--class-focus",
+        choices=[
+            "soldier",
+            "small_aircraft",
+            "warship",
+            "tank",
+            "patrol_boat",
+            "armored_vehicle",
+        ],
+        default="soldier",
+    )
     pipeline.add_argument("--source", help="使用 Scene-SensorNet 从图像自动推断传感器和场景。")
     pipeline.set_defaults(func=cmd_pipeline)
 

@@ -8,7 +8,7 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 | --- | --- |
 | 多模态目标检测 | IR/SAR 图像统一进入 YOLO 检测链路，输出全局类别 ID、边界框和置信度。 |
 | 类别增量学习 | 上传五列 YOLO 数据后自动完成审计、拆分、训练、校准、复核、代际登记和 production 切换。 |
-| 场景与传感器认知 | Scene-SensorNet 输出 IR/SAR 与 air/forest/sea/urban 概率，并作为逐类软阈值证据。 |
+| 场景与传感器认知 | Scene-SensorNet 输出 IR/SAR 与 air/forest/sea/urban 概率；4+2 首版将其用于响应与审计，不启用场景门控。 |
 | 模型代际管理 | `models/generations.json` 记录父子代际、类别所有权、权重身份、阈值和评测指标。 |
 | Web 与 CLI | Web 支持检测、批量检测和增量工作台；CLI 支持状态、检测、配置、日志、实验与代际操作。 |
 | Ascend 310B | 公共 `8501` 已原子路由到共享骨干双逻辑头满分主线；原三 OM 监听器保留为即时回滚，`8502` 专用于后续候选。 |
@@ -16,17 +16,17 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 
 ## Production 模型组合
 
-仓库同时交付两套可直接运行的 production 资产：x86/CUDA 使用下列三个 `.pt`，Ascend310B1 使用仓库内预构建的共享双头 `.om` 发布包。部署现有满分 Ascend 方案不需要重新训练、导出 ONNX 或运行 ATC。
+当前 x86/CUDA production 是 strict 4+2 三模型组合，使用下列三个 `.pt`。仓库内预构建的 Ascend310B1 共享双头 `.om` 仍是已验证的 3+1 板端发布包；它可直接部署，但不代表新的 4+2 权重已经完成 OM 转换。
 
 | 成员 | 职责 | 当前绑定 |
 | --- | --- | --- |
 | Scene-SensorNet | 传感器与已知场景认知 | `models/context/scene_sensor_net.pt` |
-| 三类基础检测器 | soldier、small_aircraft、tank | `models/production/incremental_detection/three_class_base_detector.pt` |
-| 增量检测器 | warship，全局类别 ID 2 | `models/production/incremental_detection/incremental_detector.pt` |
+| 四类 Base 检测器 | soldier、small_aircraft、warship、tank；全局类 0–3 | `models/production/incremental_detection/four_class_base_detector.pt` |
+| 二类增量专家 | patrol_boat、armored_vehicle；全局类 4–5 | `models/production/incremental_detection/incremental_detector.pt` |
 
-在线推理按 production 代际解析模型成员。基础检测器与增量检测器共同处理每张图像，Scene-SensorNet 提供软上下文，最终结果经过类别所有权映射、逐类阈值、冲突仲裁和 class-aware NMS。
+在线推理按 production 代际解析模型成员。Base 与增量专家共同处理每张图像，按固定 owner 映射和 dev 逐类阈值直接合并，再执行 class-aware NMS。Scene-SensorNet 同步提供场景/传感器结果；首版不据此跳过检测器或修改检测阈值。
 
-Ascend 正式模型包位于 [`models/ascend310b/full-score/20260816-full-score-1493b04/`](models/ascend310b/full-score/20260816-full-score-1493b04/README.md)，包含可直接加载的 OM、完整构建 provenance、正式配置和原始验收报告。其共享双头仍分别输出 `frozen_base_model` 与 `incremental_model` 两个逻辑结果；`fixed_neutral_v1` 保留第三个 Scene/Sensor 逻辑职责和审计字段，但满分快路径不执行 context OM 前向。
+历史 3+1 Ascend 正式模型包位于 [`models/ascend310b/full-score/20260816-full-score-1493b04/`](models/ascend310b/full-score/20260816-full-score-1493b04/README.md)，包含可直接加载的 OM、完整构建 provenance、正式配置和原始验收报告。它保持不可变，用于板端回滚与 4+2 转换前的结构参考。
 
 ## 赛题评选标准
 
@@ -107,17 +107,20 @@ Ascend 正式模型包位于 [`models/ascend310b/full-score/20260816-full-score-
 
 ## 已验证指标
 
-固定 3+1 基础数据实验使用 573 张训练源池、88 张开发源池和 89 张混合测试集：
+strict 4+2 冻结评估使用 75 张 Base lock 与 14 张 Increment lock，共 89 张 mixed lock。所有检测选择和验收均只看 mAP50：
 
 | 指标 | 仓库 production |
 | --- | ---: |
-| Base mAP50 | `0.814142` |
-| New-mAP50 | `0.638688` |
+| Base lock mAP50 | `0.887550` |
+| New-mAP50 | `0.812249` |
+| patrol_boat AP50 | `0.707082` |
+| armored_vehicle AP50 | `0.917415` |
 | KRR | `1.000000` |
-| 新类 precision | `0.924528` |
-| 旧类图误激活率 | `0.014286` |
+| Scene lock sensor / scene / joint | `0.988764 / 0.831461 / 0.820225` |
 
-Ascend 310B 原三模型 OM release 已完成 89 图复核，现保留为即时回滚：
+precision 与误激活率较弱，但按工程比赛门禁只记录为诊断项，不否决三项计分指标。完整证据见 `models/production/incremental_detection/metrics.json`、`calibration.json` 和 `evidence/frozen/`。
+
+历史 3+1 Ascend 原三模型 OM release 已完成 89 图复核，现保留为即时回滚：
 
 | 指标 | 板端正式 release |
 | --- | ---: |
@@ -276,39 +279,26 @@ agile-agent incremental-data jobs --batch-id BATCH_ID
 
 工作台保存源包、拆分清单、类别注册表、训练快照、权重、阈值、指标、任务日志和代际记录。训练数据范围固定为当前批次 train/dev，lock 在权重与阈值冻结后进入复核。
 
-## 固定 3+1 数据协议
+## 固定 4+2 数据协议
 
-`splits/` 保存固定源池和模型清单：
+`splits/strict_4plus2/` 是当前正式清单；旧 3+1 清单仅作兼容副本，归档正本位于 `splits/archive/2026-08-21_strict_3plus1/`。
 
-| 清单 | 图片数 | 用途 |
-| --- | ---: | --- |
-| `pool_train.txt` | 573 | 训练源池 |
-| `pool_dev.txt` | 88 | 开发源池 |
-| `mixed_test.txt` | 89 | 四类混合测试集 |
-| `strict_3plus1/base_train.txt` | 441 | 三类基础训练 |
-| `strict_3plus1/base_dev.txt` | 70 | 三类基础开发 |
-| `strict_3plus1/increment_train.txt` | 132 | 舰船增量训练 |
-| `strict_3plus1/increment_dev.txt` | 18 | 舰船增量校准 |
-| `strict_3plus1/base_test.txt` | 70 | 基础指标评分子集 |
+| 数据 | train | dev | lock | train+dev | all |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| R1 四类 Base | 600 | 75 | 75 | 675 | 750 |
+| R2 二类增量 | 112 | 14 | 14 | 126 | 140 |
 
-重新生成：
+R2 原始标签同时包含旧类与新类。专家训练视图必须只保留全局类 4/5，并映射为局部 `0/1`；不得改写原始标签。随机拆分按比赛得分优先，不做相邻帧隔离。完整协议见 [`splits/strict_4plus2/README.md`](splits/strict_4plus2/README.md)。
 
-```bash
-.venv/bin/python tools/02_split_dataset.py \
-  --increment-class warship \
-  --output-dir reports/splits_check
-```
+## 4+2 可复现实验
 
-## 可复现实验
+训练与选模入口为 `tools/04`–`tools/07`，Scene-SensorNet 使用 `tools/60`–`tools/61`，冻结评估使用 `tools/08_evaluate_4plus2.py`。正式参数为 1280 输入、500 epoch、50 轮无改善早停；胜出模型和训练实参已固化在 `models/production/incremental_detection/evidence/`。
 
-```bash
-agile-agent experiment validate --config configs/incremental/warship_3plus1.yaml
-agile-agent experiment run --config configs/incremental/warship_3plus1.yaml
-agile-agent experiment reproduce \
-  --manifest runs/experiments/warship_3plus1/RUN_ID/run_manifest.json
-```
+当前胜出组合：
 
-实验 manifest 记录配置、数据清单、模型身份、阈值、环境和指标，支持同一实验条件的复核。
+- Base：YOLO26s，seed `8675309`，dev mAP50 `0.913454`，best epoch `24`，共运行 `74` 轮；
+- Increment：YOLO26s，seed `20260821`，dev mAP50 `0.983917`，best epoch `209`，共运行 `259` 轮；
+- Scene-SensorNet：seed `20260821`，best epoch `81`。
 
 ## Ascend 310B
 
@@ -356,7 +346,7 @@ models/              发布模型、代际注册表与指标元数据
 scripts/             环境准备、启动和发布校验
 tools/               数据、实验、导出与板端验收工具
 tests/               单元测试与集成回归测试
-splits/              固定 573/88/89 源池与 3+1 清单
+splits/              当前 strict 4+2 清单与可恢复的旧 3+1 归档
 native_ascend/       Ascend C ABI 契约夹具
 demo_artifacts/      脱敏演示状态
 ```

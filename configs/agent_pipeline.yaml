@@ -14,18 +14,18 @@ web:
 
 inference:
   backend: ultralytics_cuda
-  imgsz: 896
-  specialist_imgsz: 640
+  imgsz: 1280
+  specialist_imgsz: 1280
   iou: 0.70
   max_det: 300
-  batch_size: 20
+  batch_size: 32
   confidence_min: 0.01
   confidence_max: 1.00
-  confidence_default: 0.50
+  confidence_default: 0.01
   warmup_iterations: 1
   warmup_batch_size: 1
-  warmup_width: 896
-  warmup_height: 896
+  warmup_width: 1280
+  warmup_height: 1280
   preload_specialists: true
   quantize: null
   cudnn_benchmark: true
@@ -36,13 +36,14 @@ routing:
   require_acceptance_passed: true
   consensus_iou: 0.30
   fusion_iou: 0.60
-  max_specialists_per_image: 4
-  conflict_iou: 0.50
-  conflict_base_confidence: 0.50
-  specialist_margin: 0.15
+  max_specialists_per_image: 1
+  # 4+2冻结评估采用固定owner直接拼接；1.0避免跨类别框被额外仲裁。
+  conflict_iou: 1.00
+  conflict_base_confidence: 0.01
+  specialist_margin: 0.00
   preserve_base_class_owners: true
-  detection_evidence_weight: 0.70
-  context_evidence_weight: 0.30
+  detection_evidence_weight: 1.00
+  context_evidence_weight: 0.00
   neutral_context_score: 0.50
   default_routing_prior: 0.50
   parallel_model_execution: true
@@ -75,7 +76,7 @@ incremental_workbench:
   allowed_image_extensions: [.png, .jpg, .jpeg, .bmp, .tif, .tiff]
   validation_fraction: 0.20
   lock_fraction: 0.20
-  split_seed: 20260705
+  split_seed: 20260821
   minimum_images: 2
   preview_limit: 12
   job_log_tail_lines: 300
@@ -95,16 +96,16 @@ incremental_workbench:
     threshold_step: 0.01
   training:
     python: null
-    initial_weights: models/production/incremental_detection/three_class_base_detector.pt
+    initial_weights: models/production/incremental_detection/four_class_base_detector.pt
     device: "0"
-    imgsz: 640
-    batch: 32
-    epochs: 80
-    patience: 0
-    workers: 8
+    imgsz: 1280
+    batch: 18
+    epochs: 500
+    patience: 50
+    workers: 6
     optimizer: AdamW
     lr0: 0.001
-    seed: 20260705
+    seed: 20260821
     deterministic: true
     amp: true
 
@@ -123,7 +124,7 @@ performance:
   request_timeout_seconds: 180
   benchmark_rounds: 3
   warmup_requests: 3
-  benchmark_split: splits/strict_3plus1/mixed_test.txt
+  benchmark_split: splits/strict_4plus2/mixed_lock.txt
   report_root: reports/api_performance
   concurrent_requests: 8
   batch_probe_size: 20
@@ -131,11 +132,12 @@ performance:
 generation:
   registry: models/generations.json
   runtime_registry: data/generation_registry/runtime.json
-  # 代际复核以当前70张基础测试清单作为旧类基准；新增类lock由当轮增量批次提供。
-  recheck_lock_split: splits/strict_3plus1/base_test.txt
+  # 代际复核以75张四类Base lock作为旧类基准；新增类lock由当轮增量批次提供。
+  recheck_lock_split: splits/strict_4plus2/base_lock.txt
   report_root: reports/generation_rechecks
-  candidate_id: incremental_detection_generation
-  calibrated_threshold: 0.63
+  candidate_id: incremental_detection_generation_4plus2
+  # 旧单阈值接口的保守回退；正式逐类阈值来自generation registry（4=0.18、5=0.08）。
+  calibrated_threshold: 0.08
   auto_promote: true
   shadow_smoke_images: 1
 
@@ -174,11 +176,11 @@ incremental_guardian:
 # x86/NVIDIA 原生 TensorRT 后端，由 inference.backend=tensorrt_native 启用。
 native_backend:
   library: build/native/libagile_agent_tensorrt.so
-  base_engine: runs/engines/local/three_class_base_detector.engine
+  base_engine: runs/engines/local/four_class_base_detector.engine
   context_engine: runs/engines/local/scene_sensor_net.engine
   engines:
-    models/production/incremental_detection/three_class_base_detector.pt:
-      path: runs/engines/local/three_class_base_detector.engine
+    models/production/incremental_detection/four_class_base_detector.pt:
+      path: runs/engines/local/four_class_base_detector.engine
       sha256: null
     models/production/incremental_detection/incremental_detector.pt:
       path: runs/engines/local/incremental_detector.engine
@@ -205,8 +207,8 @@ ascend_backend:
   build_manifest: null
   build_manifest_sha256: null
   models:
-    models/production/incremental_detection/three_class_base_detector.pt:
-      path: runs/ascend310b/om/base_detector.om
+    models/production/incremental_detection/four_class_base_detector.pt:
+      path: runs/ascend310b/om/four_class_base_detector.om
       sha256: null
     models/production/incremental_detection/incremental_detector.pt:
       path: runs/ascend310b/om/incremental_detector.om
@@ -241,13 +243,13 @@ tensorrt_backend:
   int8_calibration:
     enabled: true
     auto_quantize_incremental: true
-    representative_split: splits/strict_3plus1/increment_train.txt
-    threshold_split: splits/strict_3plus1/increment_dev.txt
+    representative_split: splits/strict_4plus2/increment_train.txt
+    threshold_split: splits/strict_4plus2/increment_dev.txt
     cache_root: runs/tensorrt_calibration
     batch_size: 8
     max_images: 256
     minimum_images_per_class: 8
-    seed: 20260705
+    seed: 20260821
   export:
     device: "0"
     overwrite: false
@@ -257,48 +259,53 @@ tensorrt_backend:
   context_engine:
     path: runs/engines/local/scene_sensor_net.engine
     sha256: null
-    imgsz: 160
+    imgsz: 224
     min_batch_size: 1
     opt_batch_size: 8
-    batch_size: 20
+    batch_size: 32
   engines:
-    models/production/incremental_detection/three_class_base_detector.pt:
-      path: runs/engines/local/three_class_base_detector.engine
+    models/production/incremental_detection/four_class_base_detector.pt:
+      path: runs/engines/local/four_class_base_detector.engine
       sha256: null
-      imgsz: 896
-      opt_height: 896
-      opt_width: 896
+      imgsz: 1280
+      opt_height: 1280
+      opt_width: 1280
       min_batch_size: 1
       opt_batch_size: 8
-      batch_size: 20
+      batch_size: 32
     models/production/incremental_detection/incremental_detector.pt:
       path: runs/engines/local/incremental_detector.engine
       sha256: null
-      imgsz: 640
-      opt_height: 640
-      opt_width: 640
+      imgsz: 1280
+      opt_height: 1280
+      opt_width: 1280
       min_batch_size: 1
       opt_batch_size: 8
-      batch_size: 20
+      batch_size: 32
 
 model:
-  weights: models/production/incremental_detection/three_class_base_detector.pt
-  expected_sha256: 6cf015573f50fe49c7c42203c6ca587b890d81e75a349b26bbe696dc77470119
+  weights: models/production/incremental_detection/four_class_base_detector.pt
+  expected_sha256: 105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd
 
 assets:
   manifest: models/manifest.json
   generation_registry: models/generations.json
   checksums: models/SHA256SUMS.txt
   required:
-    - models/pretrained/yolo11s.pt
-    - models/production/incremental_detection/three_class_base_detector.pt
+    - models/production/incremental_detection/four_class_base_detector.pt
     - models/production/incremental_detection/incremental_detector.pt
     - models/production/incremental_detection/calibration.json
-    - models/production/incremental_detection/context_prior.json
     - models/production/incremental_detection/metrics.json
     - models/production/incremental_detection/profile.json
+    - models/production/incremental_detection/evidence/frozen/base_dev_predictions.jsonl
+    - models/production/incremental_detection/evidence/frozen/base_lock_predictions.jsonl
+    - models/production/incremental_detection/evidence/frozen/specialist_dev_predictions.jsonl
+    - models/production/incremental_detection/evidence/frozen/specialist_lock_predictions.jsonl
     - models/context/scene_sensor_net.pt
     - models/context/scene_sensor_metrics.json
+    - models/context/scene_selection.json
+    - models/profiles/incremental-detection/active.json
+    - models/profiles/registry.json
     - models/manifest.json
     - models/generations.json
     - demo_artifacts/agent_demo_state.json
@@ -326,13 +333,13 @@ blackboard:
   demo_evidence: demo_artifacts/agent_demo_state.json
 
 detector:
-  name: three_class_base_yolo11s_imgsz896
-  weights: models/production/incremental_detection/three_class_base_detector.pt
-  config: configs/submission_infer_base_3class.yaml
+  name: four_class_base_yolo26s_imgsz1280
+  weights: models/production/incremental_detection/four_class_base_detector.pt
+  config: configs/submission_infer_base_4class.yaml
   candidate_status: verified
   metric: mAP50
-  base_test_map50: 0.8141423771111025
-  evaluation_split: splits/strict_3plus1/base_test.txt
+  base_test_map50: 0.8875500761448091
+  evaluation_split: splits/strict_4plus2/base_lock.txt
 
 functional_models:
   registry: configs/functional_models.yaml

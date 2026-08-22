@@ -11,6 +11,8 @@
     small_aircraft: "小型飞行器",
     warship: "舰船",
     tank: "坦克",
+    patrol_boat: "巡逻艇",
+    armored_vehicle: "装甲车辆",
   };
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
