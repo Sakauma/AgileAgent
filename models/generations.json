@@ -242,7 +242,6 @@
     "candidate": "incremental_detection_generation_4plus2"
   },
   "external_blockers": [
-    "ascend_310b_4plus2_release_not_built",
-    "official_hidden_test_not_available"
+    "ascend_310b_4plus2_release_not_built"
   ]
 }

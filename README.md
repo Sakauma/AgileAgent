@@ -118,7 +118,9 @@ strict 4+2 冻结评估使用 75 张 Base lock 与 14 张 Increment lock，共 8
 | KRR | `1.000000` |
 | Scene lock sensor / scene / joint | `0.988764 / 0.831461 / 0.820225` |
 
-precision 与误激活率较弱，但按工程比赛门禁只记录为诊断项，不否决三项计分指标。完整证据见 `models/production/incremental_detection/metrics.json`、`calibration.json` 和 `evidence/frozen/`。
+当前运行点使用 Base `0.01`、patrol_boat `0.18`、armored_vehicle `0.08` 的阈值。在 mixed lock 上，二类增量专家共有 `87 TP / 177 FP`，合并 precision 为 `0.329545`；patrol_boat 为 `42 TP / 106 FP / 0.283784 precision`，armored_vehicle 为 `45 TP / 71 FP / 0.387931 precision`。对应逐类误激活率分别为 `35/82 = 0.426829` 和 `28/82 = 0.341463`；按图像去重，共有 58 张图至少发生一次新增类误激活，其中 5 张同时误激活两类。
+
+六类融合结果在相同运行点共有 `376 TP / 1275 FP`，整体 precision 为 `0.227741`、recall 为 `0.956743`。这里的 FP 是按类别、单图一对一匹配且 IoU `>=0.50` 后得到的错误检测框，包含重复框、定位不足、错类和负样本图上的检测；它不是错误图像数。precision 与误激活率按工程比赛门禁只记录为诊断项，不否决 Base mAP50、New-mAP50 与 KRR。逐类明细与复算口径见 [`models/production/incremental_detection/evidence/operating_point_diagnostics.md`](models/production/incremental_detection/evidence/operating_point_diagnostics.md)。
 
 历史 3+1 Ascend 原三模型 OM release 已完成 89 图复核，现保留为即时回滚：
 
@@ -299,6 +301,8 @@ R2 原始标签同时包含旧类与新类。专家训练视图必须只保留�
 - Base：YOLO26s，seed `8675309`，dev mAP50 `0.913454`，best epoch `24`，共运行 `74` 轮；
 - Increment：YOLO26s，seed `20260821`，dev mAP50 `0.983917`，best epoch `209`，共运行 `259` 轮；
 - Scene-SensorNet：seed `20260821`，best epoch `81`。
+
+2026-08-22 已在 4090 服务器的 `sam_hq2_dinov3` 环境使用独立 GPU 完成海面和陆地两张真实图的 CUDA 编排冒烟。两次推理均加载 Scene-SensorNet、四类 Base 和二类增量专家，production 代际为 `incremental_detection_generation_4plus2`，并分别实际激活全局类 4 与全局类 5。
 
 ## Ascend 310B
 

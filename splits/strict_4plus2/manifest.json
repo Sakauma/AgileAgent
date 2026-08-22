@@ -461,7 +461,7 @@
   "release_refit_policy": {
     "development": "train only; dev for selection; lock opened after prediction freeze",
     "competition_refit": "train_plus_dev after hyperparameters and thresholds are frozen",
-    "official_hidden_test_only": "all may be used, but local lock is then training data and not independent evidence"
+    "full_data_retrain_only": "all may be used only after explicitly giving up local lock independence"
   },
   "legacy_archive": {
     "path": "splits/archive/2026-08-21_strict_3plus1",
