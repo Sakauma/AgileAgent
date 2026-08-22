@@ -1,8 +1,8 @@
 # strict 4+2 production 证据
 
-本目录绑定当前 4+2 Base 与二类增量专家的 dev 选模、训练参数和冻结预测：
+本目录绑定当前 4+2 Base 与联合二类增量专家的 dev 选模、训练参数和冻结预测。它是已通过六类指标的 production 性能基线，不冒充两轮顺序类别注入证据；正式两轮流程由 `configs/incremental_round_registry_4plus2.yaml` 和 `tools/06`–`tools/13` 驱动，完成逐轮训练、复核、候选登记和证据汇总后再生成独立证据。
 
-协议口径固定如下：二类专家权重训练是 `incremental_learning`，只用当轮 Increment train/dev；Scene-SensorNet 与六类场景门控是 `system_calibration`，可用 Base/Increment train/dev 与 mixed dev，但不更新任何检测器权重；冻结候选的 mixed lock 复核是 `joint_evaluation`，不训练也不选参。
+本基线的联合二类专家权重训练只使用 Increment train/dev，属于 `incremental_learning`；Scene-SensorNet 与六类场景门控是 `system_calibration`，可用 Base/Increment train/dev 与 mixed dev，但不更新任何检测器权重；冻结候选的 mixed lock 复核是 `joint_evaluation`，不训练也不选参。严格多轮证据还要求两个不同新类分轮训练、父子代际与逐轮 New-mAP50/KRR/Full-mAP50，当前目录不作该项声明。
 
 - `base_selection.*` / `incremental_selection.*`：只按 dev mAP50 选模，未读取 lock；
 - `base_training/` / `incremental_training/`：胜出模型的 `args.yaml` 与 `results.csv`；
@@ -10,6 +10,8 @@
 - `scene_aware_dev_search.*`：`system_calibration` 证据，使用 Scene-SensorNet 实际概率完成六类逐类 dev 搜索，未读取 lock 标签；
 - `scene_aware_candidate.json`：dev 选择并冻结的 `guarded_precision` 候选；
 - `scene_aware_lock_recheck.json`：`joint_evaluation` 证据，记录冻结候选的一次性 mixed lock 复核。
+
+严格两轮候选晋级后，本目录会新增 `rounds/<round_id>/` 与 `sequential_round_evidence.json/.md`，`incremental_selection.*` 会替换为两轮聚合记录；`models/generations.json` 成为两个单类专家的唯一运行来源，当前联合二类代际改为 `retired_baseline`。
 
 最终评分、逐类阈值和非阻断诊断见上级目录的 `metrics.json` 与 `calibration.json`。
 

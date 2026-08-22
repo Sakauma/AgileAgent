@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-evaluate 4+2 specialist candidates on dev and select by mAP50."""
+"""Select one registry-defined round specialist on Increment dev mAP50."""
 
 from __future__ import annotations
 
@@ -7,12 +7,21 @@ import argparse
 import json
 import os
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
-CLASS_NAMES = {0: "patrol_boat", 1: "armored_vehicle"}
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fair_agent.modules.incremental_round_registry import (  # noqa: E402
+    DEFAULT_ROUND_REGISTRY,
+    load_incremental_round_registry,
+    select_round,
+)
 
 
 def parse_csv(value: str) -> list[str]:
@@ -48,10 +57,12 @@ def validate_candidate(
     imgsz: int,
     batch: int,
     workers: int,
+    round_id: str,
+    local_class_names: Mapping[int, str],
 ) -> dict[str, Any]:
     from ultralytics import YOLO
 
-    name = f"{model_tag}_seed{seed}"
+    name = f"{round_id}_{model_tag}_seed{seed}"
     print(
         json.dumps(
             {
@@ -84,12 +95,12 @@ def validate_candidate(
     )
     ap50 = [float(value) for value in result.box.ap50]
     per_class = {
-        CLASS_NAMES[index]: ap50[index]
-        for index in sorted(CLASS_NAMES)
+        local_class_names[index]: ap50[index]
+        for index in sorted(local_class_names)
         if index < len(ap50)
     }
-    if set(per_class) != set(CLASS_NAMES.values()):
-        raise RuntimeError(f"候选没有返回完整的二类 AP50：{per_class}")
+    if set(per_class) != set(local_class_names.values()):
+        raise RuntimeError(f"候选没有返回本轮完整类别 AP50：{per_class}")
     row = {
         "model_tag": model_tag,
         "seed": seed,
@@ -106,13 +117,19 @@ def validate_candidate(
     return row
 
 
-def write_markdown(path: Path, rows: list[dict[str, Any]], selected: dict[str, Any]) -> None:
+def write_markdown(
+    path: Path,
+    rows: list[dict[str, Any]],
+    selected: dict[str, Any],
+    round_spec: Mapping[str, Any],
+) -> None:
     lines = [
-        "# 4+2 二类增量专家复评排名",
+        f"# {round_spec['round_id']} 增量专家复评排名",
         "",
         "本步骤属于 incremental_learning，只读取 Increment dev；选模本身不再更新检测器权重。",
         "",
-        "选择口径：固定 Increment dev 的 mAP50 主排序，最弱新增类 AP50 次排序；未读取 lock。",
+        f"父代 `{round_spec['parent_generation_id']}`，子代 `{round_spec['generation_id']}`。",
+        "选择口径：当轮 Increment dev 的 mAP50 主排序，最弱新增类 AP50 次排序；未读取 Base 或 lock。",
         "",
         "| 排名 | 初始化 | seed | mAP50 | 最弱类 AP50 | mAP50-95 | Precision | Recall |",
         "|---:|---|---:|---:|---:|---:|---:|---:|",
@@ -135,9 +152,13 @@ def write_markdown(path: Path, rows: list[dict[str, Any]], selected: dict[str, A
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="复评并选择 4+2 二类增量专家。")
+    parser = argparse.ArgumentParser(description="按轮次注册表复评并选择增量专家。")
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--dataset-yaml", type=Path, required=True)
+    parser.add_argument(
+        "--round-registry", type=Path, default=ROOT / DEFAULT_ROUND_REGISTRY
+    )
+    parser.add_argument("--round-id", required=True)
     parser.add_argument("--model-tag", default="yolo26s_generic")
     parser.add_argument("--seeds", type=parse_seeds, required=True)
     parser.add_argument("--device", default="0")
@@ -149,17 +170,28 @@ def main() -> int:
     project = args.project.expanduser().resolve()
     dataset_yaml = args.dataset_yaml.expanduser().resolve()
     if not dataset_yaml.is_file():
-        raise FileNotFoundError(f"二类派生数据配置不存在：{dataset_yaml}")
+        raise FileNotFoundError(f"本轮派生数据配置不存在：{dataset_yaml}")
+    registry = load_incremental_round_registry(args.round_registry)
+    round_spec = select_round(registry, args.round_id)
+    local_to_global = {
+        int(key): int(value)
+        for key, value in round_spec["specialist"]["local_to_global"].items()
+    }
+    local_class_names = {
+        local_id: registry["class_names"][global_id]
+        for local_id, global_id in local_to_global.items()
+    }
 
     candidates: list[tuple[int, Path]] = []
     for seed in args.seeds:
-        weight = project / f"{args.model_tag}_seed{seed}" / "weights" / "best.pt"
-        results = project / f"{args.model_tag}_seed{seed}" / "results.csv"
+        run_name = f"{round_spec['round_id']}_{args.model_tag}_seed{seed}"
+        weight = project / run_name / "weights" / "best.pt"
+        results = project / run_name / "results.csv"
         if not weight.is_file() or not results.is_file():
             raise FileNotFoundError(f"增量候选尚未完成：{args.model_tag}/seed={seed}")
         candidates.append((seed, weight))
 
-    output_dir = project / "selection"
+    output_dir = project / "selection" / str(round_spec["round_id"])
     output_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "schema_version": 2,
@@ -168,6 +200,29 @@ def main() -> int:
         "counted_as_incremental_learning": True,
         "detector_weights_updated": False,
         "component": "incremental_detector_candidate_selection",
+        "round_registry": Path(registry["path"]).as_posix(),
+        "round_id": round_spec["round_id"],
+        "round_index": round_spec["round_index"],
+        "parent_generation_id": round_spec["parent_generation_id"],
+        "generation_id": round_spec["generation_id"],
+        "new_class_ids": round_spec["new_class_ids"],
+        "old_class_ids": round_spec["old_class_ids"],
+        "specialist": {
+            "model_id": round_spec["specialist"]["model_id"],
+            "local_to_global": {
+                str(key): value for key, value in local_to_global.items()
+            },
+        },
+        "dataset_yaml": dataset_yaml.as_posix(),
+        "imgsz": args.imgsz,
+        "validation_batch": args.batch,
+        "training_data_scope": "incremental_dataset_only",
+        "validation_data_scope": "incremental_dataset_only",
+        "old_raw_image_count": 0,
+        "old_raw_label_count": 0,
+        "base_detector_weights_frozen": True,
+        "old_expert_weights_frozen": True,
+        "scene_sensor_is_incremental_learner": False,
         "selection_primary": "Increment dev mAP50",
         "selection_secondary": "minimum per-class Increment dev AP50",
         "lock_used": False,
@@ -187,6 +242,8 @@ def main() -> int:
                 args.imgsz,
                 args.batch,
                 args.workers,
+                str(round_spec["round_id"]),
+                local_class_names,
             )
         )
         atomic_json(progress_path, payload)
@@ -204,7 +261,7 @@ def main() -> int:
     selected = ranked[0]
     selected_dir = output_dir / "selected"
     selected_dir.mkdir(parents=True, exist_ok=True)
-    selected_weight = selected_dir / "best_incremental.pt"
+    selected_weight = selected_dir / f"best_{round_spec['round_id']}.pt"
     shutil.copy2(selected["weight"], selected_weight)
     source_run = Path(selected["weight"]).parents[1]
     for filename in ("args.yaml", "results.csv"):
@@ -215,7 +272,9 @@ def main() -> int:
     payload["ranking"] = ranked
     payload["selected"] = {**selected, "promoted_weight": selected_weight.as_posix()}
     atomic_json(progress_path, payload)
-    write_markdown(output_dir / "incremental_selection.md", ranked, selected)
+    write_markdown(
+        output_dir / "incremental_selection.md", ranked, selected, round_spec
+    )
     print(json.dumps(payload["selected"], ensure_ascii=False), flush=True)
     return 0
 

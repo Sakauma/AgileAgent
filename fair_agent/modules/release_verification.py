@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping
 
 import yaml
 
@@ -10,6 +10,9 @@ from fair_agent.core.blackboard import build_blackboard
 from fair_agent.core.config import ROOT, load_config, rel_path, resolve_path
 from fair_agent.core.hashes import hash_if_exists, verify_sha256s
 from fair_agent.modules.functional_models import validate_functional_models
+from fair_agent.modules.incremental_round_registry import (
+    load_incremental_round_registry,
+)
 from fair_agent.modules.model_generations import load_generation_registry
 
 
@@ -157,6 +160,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
     incremental_models = manifest.get("incremental_models", [])
     errors.extend(_validate_model_manifest(manifest))
     generation_summary: Dict[str, Any] = {}
+    production_expert_paths: set[str] = set()
     try:
         generation_registry = load_generation_registry(assets["generation_registry"])
         production_id = str(generation_registry["channels"]["production"])
@@ -171,6 +175,9 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             for model_id in production_models
             if generation_registry["models_by_id"][model_id]["role"] == "class_incremental_expert"
         ]
+        production_expert_paths = {
+            rel_path(model["resolved_path"]) for model in production_experts
+        }
         if any(
             model.get("acceptance", {}).get("competition_gates_passed") is not True
             for model in production_experts
@@ -202,6 +209,25 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         errors.append("functional_model_count_invalid")
     if not functional["all_x86_gpu_ready"]:
         errors.append("functional_models_not_x86_gpu_ready")
+    incremental_functional = next(
+        (
+            row
+            for row in functional.get("models", [])
+            if row.get("id") == "incremental_model_bank_v1"
+        ),
+        None,
+    )
+    functional_expert_paths = {
+        str(item.get("path"))
+        for item in (
+            incremental_functional.get("artifacts", [])
+            if isinstance(incremental_functional, Mapping)
+            else []
+        )
+    }
+    if production_expert_paths != functional_expert_paths:
+        errors.append("functional_incremental_assets_not_production_generation")
+    round_registry_summary: Dict[str, Any] = {}
     incremental_policy_path = resolve_path(config["incremental"]["policy"])
     incremental_policy = _load_yaml(incremental_policy_path) if incremental_policy_path.exists() else {}
     if not incremental_policy:
@@ -272,6 +298,196 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             or evaluation_phase.get("model_selection_allowed") is not False
         ):
             errors.append("incremental_detection_evaluation_scope_invalid")
+
+        round_execution = incremental_policy.get("round_execution", {})
+        configured_round_registry = str(
+            config["incremental"].get("round_registry") or ""
+        )
+        if (
+            not configured_round_registry
+            or round_execution.get("registry") != configured_round_registry
+            or round_execution.get("class_ids_from_registry_only") is not True
+            or round_execution.get("fixed_new_class_ids_forbidden") is not True
+            or round_execution.get("require_parent_child_generation_chain")
+            is not True
+            or round_execution.get("require_distinct_new_classes_across_rounds")
+            is not True
+        ):
+            errors.append("incremental_round_execution_contract_invalid")
+        try:
+            round_registry = load_incremental_round_registry(
+                configured_round_registry
+            )
+            minimum_rounds = int(
+                config["incremental"].get("minimum_distinct_new_class_rounds")
+                or 0
+            )
+            round_rows = list(round_registry["rounds"])
+            distinct_new_classes = {
+                class_id
+                for row in round_rows
+                for class_id in row["new_class_ids"]
+            }
+            if (
+                minimum_rounds < 2
+                or len(round_rows) < minimum_rounds
+                or len(distinct_new_classes) < minimum_rounds
+            ):
+                errors.append("incremental_round_count_invalid")
+            source_workflow = {
+                "register": str(
+                    config["incremental"].get(
+                        "round_candidate_registration_tool"
+                    )
+                    or ""
+                ),
+                "summarize": str(
+                    config["incremental"].get("round_summary_tool") or ""
+                ),
+                "promote": str(
+                    config["incremental"].get("strict_promotion_tool") or ""
+                ),
+            }
+            expected_workflow = {
+                "register": "tools/13_register_incremental_round_candidate.py",
+                "summarize": "tools/12_summarize_incremental_rounds.py",
+                "promote": "tools/10_promote_scene_aware_4plus2.py",
+            }
+            if (
+                source_workflow != expected_workflow
+                or config["incremental"].get("strict_runtime_source")
+                != "models/generations.json"
+                or round_execution.get("candidate_registration_required")
+                is not True
+                or round_execution.get(
+                    "promotion_requires_complete_round_evidence"
+                )
+                is not True
+                or round_execution.get(
+                    "production_switch_only_after_final_round_lock"
+                )
+                is not True
+            ):
+                errors.append("incremental_round_source_workflow_invalid")
+            elif any(
+                not resolve_path(path).is_file()
+                for path in source_workflow.values()
+            ):
+                errors.append("incremental_round_source_tool_missing")
+            split_counts: Dict[str, Dict[str, int]] = {}
+            for split_role in ("train", "dev", "lock"):
+                source_references = {
+                    str(row["source_splits"][split_role]) for row in round_rows
+                }
+                if len(source_references) != 1:
+                    errors.append(
+                        f"incremental_round_source_split_invalid:{split_role}"
+                    )
+                    continue
+                source_path = resolve_path(source_references.pop())
+                source_rows = {
+                    value.strip()
+                    for value in source_path.read_text(encoding="utf-8").splitlines()
+                    if value.strip()
+                }
+                cumulative_rows: set[str] = set()
+                for row in round_rows:
+                    round_id = str(row["round_id"])
+                    split_path = resolve_path(row["splits"][split_role])
+                    values = [
+                        value.strip()
+                        for value in split_path.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                        if value.strip()
+                    ]
+                    if (
+                        not values
+                        or len(values) != len(set(values))
+                        or cumulative_rows & set(values)
+                    ):
+                        errors.append(
+                            f"incremental_round_split_invalid:{round_id}:{split_role}"
+                        )
+                    cumulative_rows.update(values)
+                    split_counts.setdefault(round_id, {})[split_role] = len(values)
+                if cumulative_rows != source_rows:
+                    errors.append(
+                        f"incremental_round_split_coverage_invalid:{split_role}"
+                    )
+            split_manifest = json.loads(
+                (ROOT / "splits" / "strict_4plus2" / "manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            manifest_round_contract = dict(
+                split_manifest.get("increment_rounds") or {}
+            )
+            manifest_rounds = list(
+                manifest_round_contract.get("rounds") or []
+            )
+            manifest_owners = dict(split_manifest.get("owners") or {})
+            if (
+                manifest_round_contract.get("registry")
+                != configured_round_registry
+                or manifest_round_contract.get("materializer")
+                != "tools/11_prepare_incremental_round_splits.py"
+                or len(manifest_rounds) != len(round_rows)
+            ):
+                errors.append("incremental_round_split_manifest_invalid")
+            else:
+                for expected, recorded in zip(round_rows, manifest_rounds):
+                    model_id = str(expected["specialist"]["model_id"])
+                    owner = dict(manifest_owners.get(model_id) or {})
+                    if (
+                        recorded.get("round_id") != expected["round_id"]
+                        or recorded.get("round_index")
+                        != expected["round_index"]
+                        or recorded.get("parent_generation_id")
+                        != expected["parent_generation_id"]
+                        or recorded.get("generation_id")
+                        != expected["generation_id"]
+                        or recorded.get("new_global_class_ids")
+                        != expected["new_class_ids"]
+                        or dict(recorded.get("counts") or {})
+                        != split_counts.get(str(expected["round_id"]), {})
+                        or owner.get("round_id") != expected["round_id"]
+                        or owner.get("global_class_ids")
+                        != expected["new_class_ids"]
+                        or {
+                            int(key): int(value)
+                            for key, value in dict(
+                                owner.get("local_to_global") or {}
+                            ).items()
+                        }
+                        != expected["specialist"]["local_to_global"]
+                    ):
+                        errors.append(
+                            "incremental_round_split_manifest_invalid:"
+                            f"{expected['round_id']}"
+                        )
+            scene_boundary = incremental_policy.get("scene_system_boundary", {})
+            if (
+                config["incremental"].get("scene_sensor_is_incremental_learner")
+                is not False
+                or scene_boundary.get("scene_sensor_is_incremental_learner")
+                is not False
+                or scene_boundary.get("phase") != "system_calibration"
+                or scene_boundary.get("detector_weights_updated") is not False
+            ):
+                errors.append("incremental_scene_system_boundary_invalid")
+            round_registry_summary = {
+                "path": rel_path(Path(round_registry["path"])),
+                "protocol": round_registry["protocol_id"],
+                "round_count": len(round_rows),
+                "distinct_new_class_count": len(distinct_new_classes),
+                "split_counts": split_counts,
+                "source_workflow": source_workflow,
+                "runtime_source": "models/generations.json",
+                "scene_sensor_is_incremental_learner": False,
+            }
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            errors.append(f"incremental_round_registry_invalid:{exc}")
 
     inference_configs = {}
     expected_base_imgsz = int(manifest.get("base_model", {}).get("imgsz") or 0)
@@ -347,9 +563,19 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         "model_generations": generation_summary,
         "incremental_detection_policy": {
             "path": rel_path(incremental_policy_path),
-            "valid": not any(error.startswith("incremental_detection_") for error in errors),
+            "valid": not any(
+                error.startswith(
+                    (
+                        "incremental_detection_",
+                        "incremental_round_",
+                        "incremental_scene_",
+                    )
+                )
+                for error in errors
+            ),
             "task_type": incremental_policy.get("task_type"),
         },
+        "incremental_round_registry": round_registry_summary,
         "evidence_mode": state.get("evidence", {}).get("mode"),
         "blockers": state.get("current_blockers", []),
     }

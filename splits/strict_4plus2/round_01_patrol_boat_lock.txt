@@ -1,0 +1,7 @@
+datasets_r2_inc_train/ir_r2_inc_sea_000002.png
+datasets_r2_inc_train/ir_r2_inc_sea_000008.png
+datasets_r2_inc_train/ir_r2_inc_sea_000012.png
+datasets_r2_inc_train/ir_r2_inc_sea_000017.png
+datasets_r2_inc_train/ir_r2_inc_sea_000045.png
+datasets_r2_inc_train/sar_r2_inc_sea_000001.png
+datasets_r2_inc_train/sar_r2_inc_sea_000014.png

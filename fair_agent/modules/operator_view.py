@@ -5,9 +5,9 @@ from typing import Any, Dict, Iterable, List
 
 
 BLOCKER_LABELS = {
-    "official_test_not_ready": "官方测试集尚未就绪",
+    "official_test_not_ready": "本地赛题评测输入未配置（不阻断源码交付）",
     "official_format_not_confirmed": "官方提交格式尚未确认",
-    "official_test_dir_missing": "官方测试目录不存在",
+    "official_test_dir_missing": "已配置的本地赛题评测目录不存在",
     "incremental_compliant_threshold_not_met": "增量协议未全部达到门槛",
     "ascend_310b_not_ready": "Ascend 310B 尚未完成验收",
     "final_weight_hash_not_verified": "冻结权重哈希未通过",

@@ -1,0 +1,100 @@
+schema_version: 1
+protocol_id: strict_4plus2_sequential_class_incremental
+description: 四类 Base 冻结后，按 patrol_boat → armored_vehicle 顺序注入两个不同新类别。
+
+classes:
+  0: {name: soldier, introduced_in: base}
+  1: {name: small_aircraft, introduced_in: base}
+  2: {name: warship, introduced_in: base}
+  3: {name: tank, introduced_in: base}
+  4: {name: patrol_boat, introduced_in: round_01_patrol_boat}
+  5: {name: armored_vehicle, introduced_in: round_02_armored_vehicle}
+
+base:
+  generation_id: base_detection_generation_4plus2
+  model_id: four_class_base_detector
+  class_ids: [0, 1, 2, 3]
+  local_to_global: {0: 0, 1: 1, 2: 2, 3: 3}
+  learning_data_scope: base_dataset_only
+  splits:
+    train: splits/strict_4plus2/base_train.txt
+    dev: splits/strict_4plus2/base_dev.txt
+    lock: splits/strict_4plus2/base_lock.txt
+
+rounds:
+  - round_id: round_01_patrol_boat
+    round_index: 1
+    generation_id: incremental_detection_generation_4plus2_round_01
+    parent_generation_id: base_detection_generation_4plus2
+    new_class_ids: [4]
+    learned_class_ids: [0, 1, 2, 3, 4]
+    learning_data_scope: incremental_dataset_only
+    validation_data_scope: incremental_dataset_only
+    base_detector_weights_frozen: true
+    old_expert_weights_frozen: true
+    old_raw_image_count: 0
+    image_selector: contains_current_round_class
+    label_projection: current_round_classes_only
+    source_splits:
+      train: splits/strict_4plus2/increment_train.txt
+      dev: splits/strict_4plus2/increment_dev.txt
+      lock: splits/strict_4plus2/increment_lock.txt
+    splits:
+      train: splits/strict_4plus2/round_01_patrol_boat_train.txt
+      dev: splits/strict_4plus2/round_01_patrol_boat_dev.txt
+      lock: splits/strict_4plus2/round_01_patrol_boat_lock.txt
+    specialist:
+      model_id: patrol_boat_expert_round_01
+      local_to_global: {0: 4}
+
+  - round_id: round_02_armored_vehicle
+    round_index: 2
+    generation_id: incremental_detection_generation_4plus2_round_02
+    parent_generation_id: incremental_detection_generation_4plus2_round_01
+    new_class_ids: [5]
+    learned_class_ids: [0, 1, 2, 3, 4, 5]
+    learning_data_scope: incremental_dataset_only
+    validation_data_scope: incremental_dataset_only
+    base_detector_weights_frozen: true
+    old_expert_weights_frozen: true
+    old_raw_image_count: 0
+    image_selector: contains_current_round_class
+    label_projection: current_round_classes_only
+    source_splits:
+      train: splits/strict_4plus2/increment_train.txt
+      dev: splits/strict_4plus2/increment_dev.txt
+      lock: splits/strict_4plus2/increment_lock.txt
+    splits:
+      train: splits/strict_4plus2/round_02_armored_vehicle_train.txt
+      dev: splits/strict_4plus2/round_02_armored_vehicle_dev.txt
+      lock: splits/strict_4plus2/round_02_armored_vehicle_lock.txt
+    specialist:
+      model_id: armored_vehicle_expert_round_02
+      local_to_global: {0: 5}
+
+system_calibration:
+  phase: system_calibration
+  counted_as_incremental_learning: false
+  detector_weights_updated: false
+  scene_sensor_is_incremental_learner: false
+  allowed_data_scopes: [base_train_dev, incremental_train_dev, mixed_dev]
+  frozen_before_joint_evaluation: true
+
+joint_evaluation:
+  phase: joint_evaluation
+  counted_as_incremental_learning: false
+  detector_weights_updated: false
+  model_selection_allowed: false
+  metrics_per_round: [new_map50, krr, full_map50]
+  lineage_required: true
+
+system_calibration_defaults:
+  threshold_by_class: {0: 0.01, 1: 0.01, 2: 0.01, 3: 0.01, 4: 0.18, 5: 0.08}
+
+current_production_compatibility:
+  generation_id: incremental_detection_generation_4plus2
+  model_id: incremental_detector
+  training_shape: one_joint_two_class_expert
+  sequential_round_evidence: false
+  status: retained_production_baseline
+  note: 当前 production 保留作为已通过六类基线，不冒充两轮顺序注入证据。

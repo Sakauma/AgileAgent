@@ -291,20 +291,37 @@ agile-agent incremental-data jobs --batch-id BATCH_ID
 | --- | ---: | ---: | ---: | ---: | ---: |
 | R1 四类 Base | 600 | 75 | 75 | 675 | 750 |
 | R2 二类增量 | 112 | 14 | 14 | 126 | 140 |
+| Round 1 patrol_boat | 56 | 7 | 7 | — | 70 |
+| Round 2 armored_vehicle | 56 | 7 | 7 | — | 70 |
 
-R2 原始标签同时包含旧类与新类。专家训练视图必须只保留全局类 4/5，并映射为局部 `0/1`；不得改写原始标签。随机拆分按比赛得分优先，不做相邻帧隔离。完整协议见 [`splits/strict_4plus2/README.md`](splits/strict_4plus2/README.md)。
+R2 原始标签同时包含旧类与新类。正式源码通过 `configs/incremental_round_registry_4plus2.yaml` 注册两轮不同新类别：先注入 patrol_boat，再注入 armored_vehicle；每轮训练视图只保留当轮新类并映射为该专家的局部类别，不改写原始标签。随机拆分按比赛得分优先，不做相邻帧隔离。完整协议见 [`splits/strict_4plus2/README.md`](splits/strict_4plus2/README.md)。
 
 ## 4+2 可复现实验
 
-训练与选模入口为 `tools/04`–`tools/07`，Scene-SensorNet 使用 `tools/60`–`tools/61`，冻结评估使用 `tools/08_evaluate_4plus2.py`。六类场景门控的 dev 搜索、冻结 lock 复核与可复现晋级分别由 `tools/09_optimize_scene_aware_4plus2.py` 和 `tools/10_promote_scene_aware_4plus2.py` 完成。正式参数为 1280 输入、500 epoch、50 轮无改善早停；胜出模型、训练实参、dev 搜索和 lock 复核证据均已固化在 `models/production/incremental_detection/evidence/`。
+Base 训练与选模入口为 `tools/04`–`tools/05`。`tools/11_prepare_incremental_round_splits.py` 固化逐轮清单，`tools/06`–`tools/07` 按 `--round-id` 训练和选择当轮专家，`tools/08_evaluate_4plus2.py` 按类别注册表累计执行父代/子代评测。每轮通过后，`tools/13_register_incremental_round_candidate.py` 将权重与证据复制进受版本控制的候选目录并登记 `models/generations.json`，但不切换 production；两轮都登记后，`tools/12_summarize_incremental_rounds.py` 联合校验 New-mAP50、KRR、Full-mAP50、父子链和模型身份。Scene-SensorNet 使用 `tools/60`–`tools/61`；场景门控的 dev 搜索与冻结 lock 复核由 `tools/09_optimize_scene_aware_4plus2.py` 完成，属于独立的 `system_calibration`/`joint_evaluation`。最终仅 `tools/10_promote_scene_aware_4plus2.py` 能在完整两轮证据存在时切换 production。正式参数为 1280 输入、500 epoch、50 轮无改善早停。
 
-上述工具属于同一离线流水线，但协议阶段不同：`tools/04`–`tools/05` 是 `base_learning`；`tools/06`–`tools/07` 只使用 Increment train/dev 完成二类专家权重训练与选模，属于 `incremental_learning`；`tools/60`–`tools/61` 与 `tools/09 --mode dev` 的场景功能模型训练和门控搜索是 `system_calibration`；`tools/08` 的 lock 评分及 `tools/09 --mode lock` 是冻结后的 `joint_evaluation`。
+上述工具属于同一离线流水线，但协议阶段不同：`tools/04`–`tools/05` 是 `base_learning`；`tools/06`–`tools/07` 每轮只使用该轮 Increment train/dev，Base 与历史专家冻结，属于 `incremental_learning`；`tools/13` 只登记已冻结产物，不训练；`tools/60`–`tools/61` 与 `tools/09 --mode dev` 的场景功能模型训练和门控搜索是 `system_calibration`，不属于增量学习；`tools/08` 的 lock 评分及 `tools/09 --mode lock` 是冻结后的 `joint_evaluation`。
+
+严格源码交付顺序固定为：
+
+```text
+11 固化轮次清单
+  -> 06/07 Round 1 训练与 Increment dev 选模
+  -> 08 Round 1 累计冻结评测 -> 13 登记 Round 1 candidate
+  -> 06/07 Round 2 训练与 Increment dev 选模
+  -> 08 Round 2 累计冻结评测 -> 13 登记 Round 2 candidate
+  -> 12 汇总并核验完整两轮证据
+  -> 09 system_calibration dev 搜索与 joint_evaluation lock 复核
+  -> 10 切换 generations.json 的 production，并退役联合二类基线
+```
 
 当前胜出组合：
 
 - Base：YOLO26s，seed `8675309`，dev mAP50 `0.913454`，best epoch `24`，共运行 `74` 轮；
 - Increment：YOLO26s，seed `20260821`，dev mAP50 `0.983917`，best epoch `209`，共运行 `259` 轮；
 - Scene-SensorNet：seed `20260821`，best epoch `81`。
+
+上述胜出 Increment 是现有“一次联合训练两个新类”的 production 性能基线，不作为两轮顺序注入证据。严格两轮源码流程不会在新候选完成训练与逐轮验收前覆盖该 production。
 
 场景识别是 air/forest/sea/urban 四个已知类的闭集识别。Base 四类先验只从 Base train 正样本学习，新增二类先验只从 Increment train 正样本学习；因此场景判断会同时影响旧类和新类的有效阈值，但不会改变类别所有权或决定某个模型是否执行。
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train one multi-seed two-class specialist queue for the formal 4+2 split."""
+"""Train one registry-selected class-incremental round without Base replay."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -16,8 +17,16 @@ from typing import Any
 import yaml
 
 
-GLOBAL_NEW_TO_LOCAL = {4: 0, 5: 1}
-LOCAL_CLASS_NAMES = {0: "patrol_boat", 1: "armored_vehicle"}
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fair_agent.modules.incremental_round_registry import (  # noqa: E402
+    DEFAULT_ROUND_REGISTRY,
+    introduced_class_names,
+    load_incremental_round_registry,
+    select_round,
+)
 
 
 def parse_seeds(value: str) -> list[int]:
@@ -41,8 +50,10 @@ def parse_batch(value: str) -> int | float:
     raise argparse.ArgumentTypeError("batch 必须是正整数或 0 到 1 的显存占比")
 
 
-def resolve_split(data_root: Path, split_name: str) -> list[Path]:
-    split_path = data_root / "splits" / "strict_4plus2" / split_name
+def resolve_split(data_root: Path, split_reference: str) -> list[Path]:
+    split_path = Path(split_reference)
+    if not split_path.is_absolute():
+        split_path = data_root / split_path
     if not split_path.is_file():
         raise FileNotFoundError(f"划分不存在：{split_path}")
     images: list[Path] = []
@@ -52,12 +63,11 @@ def resolve_split(data_root: Path, split_name: str) -> list[Path]:
         value = raw.strip()
         if not value:
             continue
-        image = Path(value)
-        if not image.is_absolute():
-            image = data_root / image
+        reference = Path(value)
+        image = reference if reference.is_absolute() else data_root / reference
         image = image.resolve()
         try:
-            image.relative_to(data_root)
+            image.relative_to(data_root.resolve())
         except ValueError as exc:
             raise ValueError(
                 f"{split_path}:{line_number} 越出数据根目录：{image}"
@@ -74,9 +84,13 @@ def resolve_split(data_root: Path, split_name: str) -> list[Path]:
     return images
 
 
-def projected_labels(source: Path) -> tuple[list[str], dict[int, int]]:
+def projected_labels(
+    source: Path,
+    global_to_local: dict[int, int],
+    local_class_names: dict[int, str],
+) -> tuple[list[str], dict[int, int]]:
     output: list[str] = []
-    counts = {local_id: 0 for local_id in LOCAL_CLASS_NAMES}
+    counts = {local_id: 0 for local_id in local_class_names}
     for line_number, raw in enumerate(
         source.with_suffix(".txt").read_text(encoding="utf-8").splitlines(),
         start=1,
@@ -95,13 +109,11 @@ def projected_labels(source: Path) -> tuple[list[str], dict[int, int]]:
             raise ValueError(
                 f"{source.with_suffix('.txt')}:{line_number} 坐标越界"
             )
-        if global_id not in GLOBAL_NEW_TO_LOCAL:
+        if global_id not in global_to_local:
             continue
-        local_id = GLOBAL_NEW_TO_LOCAL[global_id]
+        local_id = global_to_local[global_id]
         output.append(f"{local_id} {' '.join(parts[1:])}")
         counts[local_id] += 1
-    if not output:
-        raise ValueError(f"增量图像没有全局类 4/5 标注：{source}")
     return output, counts
 
 
@@ -114,43 +126,78 @@ def link_image(source: Path, target: Path) -> None:
     target.symlink_to(source.resolve())
 
 
-def materialize_dataset(data_root: Path, project: Path, queue_tag: str) -> Path:
-    control = project / "_control" / queue_tag
-    dataset_yaml = control / "incremental_4plus2.yaml"
+def materialize_dataset(
+    data_root: Path,
+    project: Path,
+    queue_tag: str,
+    registry: dict[str, Any],
+    round_spec: dict[str, Any],
+) -> Path:
+    round_id = str(round_spec["round_id"])
+    control = project / "_control" / queue_tag / round_id
+    dataset_yaml = control / "incremental_round.yaml"
     manifest_path = control / "dataset_manifest.json"
+    local_to_global = {
+        int(key): int(value)
+        for key, value in round_spec["specialist"]["local_to_global"].items()
+    }
+    global_to_local = {
+        global_id: local_id for local_id, global_id in local_to_global.items()
+    }
+    global_names = introduced_class_names(registry, round_spec["new_class_ids"])
+    local_class_names = {
+        local_id: global_names[global_id]
+        for local_id, global_id in local_to_global.items()
+    }
+    serialized_mapping = {
+        str(global_id): local_id for global_id, local_id in global_to_local.items()
+    }
     if dataset_yaml.is_file() and manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if (
             manifest.get("data_root") != data_root.as_posix()
-            or manifest.get("global_to_local") != {"4": 0, "5": 1}
+            or manifest.get("round_id") != round_id
+            or manifest.get("global_to_local") != serialized_mapping
         ):
             raise ValueError(f"已有派生数据视图与本次参数不一致：{control}")
         return dataset_yaml
     if control.exists() and any(control.iterdir()):
         raise FileExistsError(f"拒绝覆盖不完整的派生数据视图：{control}")
 
-    split_specs = {"train": "increment_train.txt", "val": "increment_dev.txt"}
+    split_specs = {
+        "train": str(round_spec["splits"]["train"]),
+        "val": str(round_spec["splits"]["dev"]),
+    }
     split_counts: dict[str, Any] = {}
     for target_split, source_split in split_specs.items():
         images = resolve_split(data_root, source_split)
-        class_counts = {local_id: 0 for local_id in LOCAL_CLASS_NAMES}
+        class_counts = {local_id: 0 for local_id in local_class_names}
+        selected_images = 0
         for source in images:
+            rows, counts = projected_labels(
+                source, global_to_local, local_class_names
+            )
+            if not rows:
+                raise ValueError(
+                    f"轮次清单包含不属于 {round_id} 的图像：{source}"
+                )
             target_image = control / "dataset" / "images" / target_split / source.name
             target_label = (
                 control / "dataset" / "labels" / target_split / f"{source.stem}.txt"
             )
             link_image(source, target_image)
-            rows, counts = projected_labels(source)
             target_label.parent.mkdir(parents=True, exist_ok=True)
             target_label.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            selected_images += 1
             for class_id, count in counts.items():
                 class_counts[class_id] += count
         if any(count == 0 for count in class_counts.values()):
-            raise ValueError(f"{source_split} 未覆盖全部两个新增类别：{class_counts}")
+            raise ValueError(f"{source_split} 未覆盖本轮全部新增类别：{class_counts}")
         split_counts[target_split] = {
-            "images": len(images),
+            "source_images": len(images),
+            "selected_images": selected_images,
             "objects": {
-                LOCAL_CLASS_NAMES[class_id]: count
+                local_class_names[class_id]: count
                 for class_id, count in class_counts.items()
             },
         }
@@ -162,7 +209,7 @@ def materialize_dataset(data_root: Path, project: Path, queue_tag: str) -> Path:
                 "path": (control / "dataset").resolve().as_posix(),
                 "train": "images/train",
                 "val": "images/val",
-                "names": LOCAL_CLASS_NAMES,
+                "names": local_class_names,
             },
             allow_unicode=True,
             sort_keys=False,
@@ -176,9 +223,20 @@ def materialize_dataset(data_root: Path, project: Path, queue_tag: str) -> Path:
         "counted_as_incremental_learning": True,
         "detector_weights_updated": False,
         "data_root": data_root.as_posix(),
+        "round_registry": Path(registry["path"]).as_posix(),
+        "round_id": round_id,
+        "round_index": int(round_spec["round_index"]),
+        "parent_generation_id": round_spec["parent_generation_id"],
+        "generation_id": round_spec["generation_id"],
+        "new_class_ids": list(round_spec["new_class_ids"]),
+        "old_class_ids": list(round_spec["old_class_ids"]),
         "source_scope": "incremental_dataset_only",
+        "old_raw_image_count": 0,
+        "old_raw_label_count": 0,
         "original_labels_modified": False,
-        "global_to_local": {"4": 0, "5": 1},
+        "image_selector": "contains_current_round_class",
+        "label_projection": "current_round_classes_only",
+        "global_to_local": serialized_mapping,
         "splits": split_counts,
         "lock_used": False,
     }
@@ -242,9 +300,13 @@ def atomic_json(path: Path, payload: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="训练正式 4+2 数据的二类增量专家多随机种子队列。"
+        description="按轮次注册表训练正式类别增量专家多随机种子队列。"
     )
     parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--round-registry", type=Path, default=ROOT / DEFAULT_ROUND_REGISTRY
+    )
+    parser.add_argument("--round-id", required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--model-tag", default="yolo26s_generic")
     parser.add_argument("--queue-tag", required=True)
@@ -264,7 +326,11 @@ def main() -> int:
     model = args.model.expanduser().resolve()
     if not model.is_file():
         raise FileNotFoundError(f"通用预训练权重不存在：{model}")
-    dataset_yaml = materialize_dataset(data_root, project, args.queue_tag)
+    registry = load_incremental_round_registry(args.round_registry)
+    round_spec = select_round(registry, args.round_id)
+    dataset_yaml = materialize_dataset(
+        data_root, project, args.queue_tag, registry, round_spec
+    )
     if args.prepare_only:
         print(dataset_yaml, flush=True)
         return 0
@@ -280,12 +346,24 @@ def main() -> int:
             f"当前可见 {torch.cuda.device_count()} 张"
         )
 
-    summary_path = project / f"{args.model_tag}_{args.queue_tag}_summary.json"
+    summary_path = (
+        project
+        / f"{round_spec['round_id']}_{args.model_tag}_{args.queue_tag}_summary.json"
+    )
     summary: dict[str, Any] = {
         "schema_version": 2,
         "phase": "incremental_learning",
         "counted_as_incremental_learning": True,
-        "detector_weights_updated": ["incremental_detector"],
+        "detector_weights_updated": [round_spec["specialist"]["model_id"]],
+        "round_registry": Path(registry["path"]).as_posix(),
+        "round_id": round_spec["round_id"],
+        "round_index": round_spec["round_index"],
+        "parent_generation_id": round_spec["parent_generation_id"],
+        "generation_id": round_spec["generation_id"],
+        "new_class_ids": round_spec["new_class_ids"],
+        "old_class_ids": round_spec["old_class_ids"],
+        "learned_class_ids": round_spec["learned_class_ids"],
+        "specialist_model_id": round_spec["specialist"]["model_id"],
         "model": model.as_posix(),
         "model_tag": args.model_tag,
         "queue_tag": args.queue_tag,
@@ -299,6 +377,12 @@ def main() -> int:
             "workers": args.workers,
             "checkpoint_metric": "incremental dev mAP50",
             "training_data_scope": "incremental_dataset_only",
+            "validation_data_scope": "incremental_dataset_only",
+            "old_raw_image_count": 0,
+            "old_raw_label_count": 0,
+            "base_detector_weights_frozen": True,
+            "old_expert_weights_frozen": True,
+            "scene_sensor_is_incremental_learner": False,
             "lock_used": False,
         },
         "runs": [],
@@ -306,7 +390,7 @@ def main() -> int:
     atomic_json(summary_path, summary)
 
     for seed in args.seeds:
-        name = f"{args.model_tag}_seed{seed}"
+        name = f"{round_spec['round_id']}_{args.model_tag}_seed{seed}"
         run_dir = project / name
         best_weight = run_dir / "weights" / "best.pt"
         results_csv = run_dir / "results.csv"
@@ -328,6 +412,7 @@ def main() -> int:
             json.dumps(
                 {
                     "event": "incremental_training_start",
+                    "round_id": round_spec["round_id"],
                     "model": args.model_tag,
                     "seed": seed,
                     "imgsz": args.imgsz,

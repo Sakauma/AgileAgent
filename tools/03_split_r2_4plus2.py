@@ -11,28 +11,28 @@ import json
 import random
 import shutil
 import subprocess
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from fair_agent.modules.incremental_round_registry import (  # noqa: E402
+    DEFAULT_ROUND_REGISTRY,
+    load_incremental_round_registry,
+)
+
+
 SPLITS_ROOT = ROOT / "splits"
 OUTPUT_ROOT = SPLITS_ROOT / "strict_4plus2"
 ARCHIVE_ROOT = SPLITS_ROOT / "archive" / "2026-08-21_strict_3plus1"
 R1_ROOT = ROOT / "datasets_r1_base_train"
 R2_ROOT = ROOT / "datasets_r2_inc_train"
 
-CLASS_NAMES = [
-    "soldier",
-    "small_aircraft",
-    "warship",
-    "tank",
-    "patrol_boat",
-    "armored_vehicle",
-]
-BASE_CLASS_IDS = [0, 1, 2, 3]
-INCREMENT_CLASS_IDS = [4, 5]
 BASE_TARGET_COUNTS = {"train": 600, "dev": 75, "lock": 75}
 INCREMENT_TARGET_COUNTS = {"train": 112, "dev": 14, "lock": 14}
 SEED_SEARCH_START = 20260821
@@ -371,11 +371,25 @@ def distribution(split: Mapping[str, Sequence[Mapping[str, Any]]]) -> Dict[str, 
 def write_split_lists(
     base: Mapping[str, Sequence[Mapping[str, Any]]],
     increment: Mapping[str, Sequence[Mapping[str, Any]]],
+    rounds: Sequence[Mapping[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
     rows_by_name: Dict[str, List[str]] = {}
     for name in ("train", "dev", "lock"):
         rows_by_name["base_{}".format(name)] = [row["image_path"] for row in base[name]]
         rows_by_name["increment_{}".format(name)] = [row["image_path"] for row in increment[name]]
+        assigned: List[str] = []
+        for round_spec in rounds:
+            round_id = str(round_spec["round_id"])
+            new_ids = set(int(value) for value in round_spec["new_class_ids"])
+            selected = [
+                row["image_path"]
+                for row in increment[name]
+                if set(row["class_ids"]) & new_ids
+            ]
+            rows_by_name["{}_{}".format(round_id, name)] = selected
+            assigned.extend(selected)
+        if sorted(assigned) != sorted(rows_by_name["increment_{}".format(name)]):
+            raise ValueError("Increment {} rows are not uniquely owned by rounds".format(name))
     rows_by_name["base_train_plus_dev"] = sorted(
         rows_by_name["base_train"] + rows_by_name["base_dev"]
     )
@@ -407,6 +421,20 @@ def write_split_lists(
 def create_readme(manifest: Mapping[str, Any]) -> None:
     base_counts = manifest["base_dataset"]["counts"]
     inc_counts = manifest["increment_dataset"]["counts"]
+    round_rows = "\n".join(
+        "| {round_id} {names} | {train} | {dev} | {lock} | — | {total} |".format(
+            round_id=row["round_id"],
+            names="/".join(
+                manifest["class_map"][str(class_id)]
+                for class_id in row["new_global_class_ids"]
+            ),
+            train=row["counts"]["train"],
+            dev=row["counts"]["dev"],
+            lock=row["counts"]["lock"],
+            total=sum(row["counts"].values()),
+        )
+        for row in manifest["increment_rounds"]["rounds"]
+    )
     text = """# 正式 4+2 比赛优先数据划分
 
 该目录是 `4 旧类 + 2 新类` 正式工作的固定数据清单。划分以比赛得分为优先，
@@ -416,11 +444,12 @@ def create_readme(manifest: Mapping[str, Any]) -> None:
 | --- | ---: | ---: | ---: | ---: | ---: |
 | R1 四类 Base | {base_train} | {base_dev} | {base_lock} | {base_refit} | {base_all} |
 | R2 二类增量 | {inc_train} | {inc_dev} | {inc_lock} | {inc_refit} | {inc_all} |
+{round_rows}
 
 - 首轮开发：使用 `*_train.txt` 训练、`*_dev.txt` 选参、`*_lock.txt` 冻结评分。
 - 比赛复训：超参和阈值冻结后，可使用 `*_train_plus_dev.txt` 重训，lock 仍保留。
-- `*_all.txt` 仅用于最终官方隐藏测试提交版；使用它后不再声称本地 lock 是独立评测。
-- R2 清单引用原始六类标签。新头训练前还必须生成只保留全局类 4/5、并映射为局部 0/1 的派生标签视图。
+- `*_all.txt` 仅用于明确放弃本地 lock 独立性后的全量复训。
+- R2 总清单按类别注册表预先固化为至少两轮不同新增类别；每轮训练只投影该轮类别。
 - 该工具只生成划分，不启动训练。
 
 具体随机种子、各层配额、类别/传感器/场景分布和相邻帧覆盖率见 `manifest.json`。
@@ -435,6 +464,7 @@ def create_readme(manifest: Mapping[str, Any]) -> None:
         inc_lock=inc_counts["lock"],
         inc_refit=inc_counts["train"] + inc_counts["dev"],
         inc_all=sum(inc_counts.values()),
+        round_rows=round_rows,
     )
     (OUTPUT_ROOT / "README.md").write_text(text, encoding="utf-8")
 
@@ -442,11 +472,24 @@ def create_readme(manifest: Mapping[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="归档 3+1 划分并生成比赛优先的固定 4+2 划分。")
     parser.add_argument(
+        "--round-registry", type=Path, default=ROOT / DEFAULT_ROUND_REGISTRY
+    )
+    parser.add_argument(
         "--verify-only",
         action="store_true",
         help="只验证已生成的划分与归档是否完整。",
     )
     args = parser.parse_args()
+    round_registry = load_incremental_round_registry(args.round_registry)
+    class_names = [
+        round_registry["class_names"][class_id]
+        for class_id in sorted(round_registry["class_names"])
+    ]
+    base_class_ids = list(round_registry["base"]["class_ids"])
+    rounds = list(round_registry["rounds"])
+    increment_class_ids = [
+        class_id for row in rounds for class_id in row["new_class_ids"]
+    ]
 
     if args.verify_only:
         archive = json.loads((ARCHIVE_ROOT / "ARCHIVE_MANIFEST.json").read_text(encoding="utf-8"))
@@ -467,8 +510,12 @@ def main() -> int:
         raise FileExistsError("Refusing to overwrite fixed 4+2 split: {}".format(OUTPUT_ROOT))
 
     archive = archive_legacy_split()
-    base_rows = scan_dataset(R1_ROOT, "datasets_r1_base_train", CLASS_NAMES[:4])
-    increment_rows = scan_dataset(R2_ROOT, "datasets_r2_inc_train", CLASS_NAMES)
+    base_rows = scan_dataset(
+        R1_ROOT,
+        "datasets_r1_base_train",
+        [class_names[class_id] for class_id in base_class_ids],
+    )
+    increment_rows = scan_dataset(R2_ROOT, "datasets_r2_inc_train", class_names)
     if len(base_rows) != 750 or len(increment_rows) != 140:
         raise ValueError("Unexpected source counts: R1={} R2={}".format(len(base_rows), len(increment_rows)))
 
@@ -486,20 +533,51 @@ def main() -> int:
         require_new_only_in_eval=True,
     )
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=False)
-    lists = write_split_lists(base_split, increment_split)
+    lists = write_split_lists(base_split, increment_split, rounds)
+
+    incremental_owners = {
+        str(row["specialist"]["model_id"]): {
+            "round_id": row["round_id"],
+            "global_class_ids": row["new_class_ids"],
+            "local_to_global": {
+                str(key): value
+                for key, value in row["specialist"]["local_to_global"].items()
+            },
+        }
+        for row in rounds
+    }
+    increment_rounds = {
+        "registry": Path(round_registry["path"]).relative_to(ROOT).as_posix(),
+        "materializer": "tools/11_prepare_incremental_round_splits.py",
+        "created_before_round_training": True,
+        "source_lists_unchanged": True,
+        "rounds_are_pairwise_disjoint": True,
+        "rounds_cover_increment_source_lists": True,
+        "rounds": [
+            {
+                "round_id": row["round_id"],
+                "round_index": row["round_index"],
+                "parent_generation_id": row["parent_generation_id"],
+                "generation_id": row["generation_id"],
+                "new_global_class_ids": row["new_class_ids"],
+                "counts": {
+                    role: lists["{}_{}".format(row["round_id"], role)]["count"]
+                    for role in ("train", "dev", "lock")
+                },
+            }
+            for row in rounds
+        ],
+    }
 
     manifest: Dict[str, Any] = {
         "schema_version": 1,
         "protocol": "competition_score_priority_strict_4plus2_partition",
         "created_on": "2026-08-21",
         "source_git_commit": git_head(),
-        "class_map": {str(index): name for index, name in enumerate(CLASS_NAMES)},
+        "class_map": {str(index): name for index, name in enumerate(class_names)},
         "owners": {
-            "frozen_base_model": {"global_class_ids": BASE_CLASS_IDS},
-            "incremental_model": {
-                "global_class_ids": INCREMENT_CLASS_IDS,
-                "local_to_global": {"0": 4, "1": 5},
-            },
+            "frozen_base_model": {"global_class_ids": base_class_ids},
+            **incremental_owners,
         },
         "allocation_policy": {
             "objective": "competition_score_priority",
@@ -523,7 +601,7 @@ def main() -> int:
         "base_dataset": {
             "source": "datasets_r1_base_train",
             "source_images": len(base_rows),
-            "global_class_ids": BASE_CLASS_IDS,
+            "global_class_ids": base_class_ids,
             "counts": dict(BASE_TARGET_COUNTS),
             "selected_seed": base_seed,
             "selection_score": list(base_score),
@@ -535,7 +613,7 @@ def main() -> int:
             "source": "datasets_r2_inc_train",
             "source_images": len(increment_rows),
             "source_objects": sum(sum(row["object_counts"].values()) for row in increment_rows),
-            "new_global_class_ids": INCREMENT_CLASS_IDS,
+            "new_global_class_ids": increment_class_ids,
             "old_labels_retained_for_audit": True,
             "new_head_label_projection_required": True,
             "counts": dict(INCREMENT_TARGET_COUNTS),
@@ -545,11 +623,12 @@ def main() -> int:
             "distribution": distribution(increment_split),
             "temporal_leakage": neighbor_metrics(increment_split),
         },
+        "increment_rounds": increment_rounds,
         "lists": lists,
         "release_refit_policy": {
             "development": "train only; dev for selection; lock opened after prediction freeze",
             "competition_refit": "train_plus_dev after hyperparameters and thresholds are frozen",
-            "official_hidden_test_only": "all may be used, but local lock is then training data and not independent evidence",
+            "full_data_retrain_only": "all may be used only after explicitly giving up local lock independence",
         },
         "legacy_archive": {
             "path": ARCHIVE_ROOT.relative_to(ROOT).as_posix(),

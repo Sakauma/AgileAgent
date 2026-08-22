@@ -1,4 +1,4 @@
-schema_version: 3
+schema_version: 4
 task_type: incremental_object_detection
 primary_mode: class_incremental
 supported_modes: [class_incremental, target_incremental]
@@ -11,17 +11,21 @@ scope_definition:
     training_data_scope: base_dataset_only
   incremental_learning:
     counted_as_incremental_learning: true
-    purpose: train_new_class_detector_and_new_class_specific_artifacts
+    purpose: train_current_round_new_class_expert_without_base_replay
     includes:
       - incremental_detector_weight_training
       - new_class_id_mapping
       - new_class_specific_learning
     excludes:
       - scene_sensor_model_training
+      - class_context_prior_learning
+      - per_class_confidence_threshold_search
       - scene_gate_search
+      - fusion_parameter_search
       - joint_evaluation
-    detector_weights_updated: [incremental_detector]
+    detector_weights_updated: [current_round_incremental_expert]
     base_detector_weights_frozen: true
+    historical_incremental_expert_weights_frozen: true
     training_data_scope: incremental_dataset_only
     validation_data_scope: incremental_dataset_only
   system_calibration:
@@ -30,6 +34,7 @@ scope_definition:
     includes:
       - scene_sensor_model_training
       - class_context_prior_learning
+      - per_class_confidence_threshold_search
       - scene_gate_threshold_search
       - fusion_parameter_search
     detector_weights_updated: false
@@ -53,21 +58,89 @@ learning_phase:
   phase: incremental_learning
   counted_as_incremental_learning: true
   allowed_inputs:
-    - incremental_images
-    - incremental_labels
+    - current_round_incremental_images
+    - current_round_incremental_labels
+    - generic_pretrained_initialization
     - frozen_base_weights
-    - frozen_context_model
+    - frozen_parent_generation_metadata
   forbidden_inputs:
     - old_raw_images
     - old_raw_labels
+    - historical_incremental_raw_images
+    - historical_incremental_raw_labels
     - old_sample_replay
     - old_cached_features
   training_data_scope: incremental_dataset_only
   validation_data_scope: incremental_dataset_only
   teacher_inference_scope: incremental_images_only
   train_validation_overlap_allowed: false
-  detector_weights_updated: [incremental_detector]
+  detector_weights_updated: [current_round_incremental_expert]
   base_detector_weights_frozen: true
+  historical_incremental_expert_weights_frozen: true
+
+round_execution:
+  registry: configs/incremental_round_registry_4plus2.yaml
+  class_ids_from_registry_only: true
+  fixed_new_class_ids_forbidden: true
+  minimum_distinct_new_class_rounds: 2
+  require_parent_child_generation_chain: true
+  require_distinct_new_classes_across_rounds: true
+  candidate_registration_required: true
+  candidate_registry: models/generations.json
+  promotion_requires_complete_round_evidence: true
+  production_switch_only_after_final_round_lock: true
+  current_round_inputs:
+    - current_round_incremental_images
+    - current_round_incremental_labels
+    - generic_pretrained_initialization
+    - frozen_parent_generation_metadata
+  current_round_forbidden_inputs:
+    - base_raw_images
+    - base_raw_labels
+    - historical_incremental_raw_images
+    - historical_incremental_raw_labels
+    - old_cached_features
+  per_round_outputs:
+    - current_round_expert_weights
+    - current_round_local_to_global_mapping
+    - parent_generation_id
+    - generation_id
+    - new_map50
+    - krr
+    - full_map50
+
+candidate_registration:
+  tool: tools/13_register_incremental_round_candidate.py
+  source_registry: models/generations.json
+  artifact_root: models/candidates/incremental_detection
+  copy_selected_weight_into_source_tree: true
+  verify_selection_evaluation_weight_identity: true
+  verify_historical_expert_identity: true
+  candidate_channel_updated: true
+  production_channel_updated: false
+
+sequential_evidence:
+  tool: tools/12_summarize_incremental_rounds.py
+  require_all_configured_rounds: true
+  require_registered_parent_child_lineage: true
+  require_distinct_new_classes: true
+  required_metrics: [new_map50, krr, full_map50]
+
+production_promotion:
+  tool: tools/10_promote_scene_aware_4plus2.py
+  require_complete_sequential_evidence: true
+  require_final_candidate_generation: true
+  retire_legacy_joint_baseline: true
+  runtime_source: models/generations.json
+
+scene_system_boundary:
+  scene_sensor_is_incremental_learner: false
+  scene_prior_and_gate_search_is_incremental_learning: false
+  phase: system_calibration
+  detector_weights_updated: false
+  may_read_base_train_dev: true
+  may_read_incremental_train_dev: true
+  must_freeze_before_joint_evaluation: true
 
 incremental_learning_artifacts:
   allowed:

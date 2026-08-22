@@ -565,46 +565,99 @@ def cmd_detect(args: argparse.Namespace) -> int:
                         profile.get("base_activation_thresholds") or {}
                     ).items()
                 }
+                raw_specialists = profile.get("specialist_models")
+                if isinstance(raw_specialists, list) and raw_specialists:
+                    specialist_specs = [dict(item) for item in raw_specialists]
+                else:
+                    specialist_mapping = {
+                        int(key): int(value)
+                        for key, value in dict(
+                            profile.get("specialist_local_to_global")
+                            or {
+                                index: global_id
+                                for index, global_id in enumerate(new_global_ids)
+                            }
+                        ).items()
+                    }
+                    specialist_specs = [
+                        {
+                            "model_id": profile_id,
+                            "weight": profile["specialist_weight"],
+                            "local_to_global": specialist_mapping,
+                            "global_class_ids": sorted(
+                                specialist_mapping.values()
+                            ),
+                            "new_map50": profile.get("new_map50", 0.0),
+                        }
+                    ]
+                protocols = {}
+                class_owners = {
+                    global_id: f"{profile_id}_base"
+                    for global_id in base_mapping.values()
+                }
+                for specialist in specialist_specs:
+                    specialist_id = str(specialist["model_id"])
+                    specialist_mapping = {
+                        int(key): int(value)
+                        for key, value in dict(
+                            specialist["local_to_global"]
+                        ).items()
+                    }
+                    owned_ids = sorted(set(specialist_mapping.values()))
+                    owned_names = {
+                        global_id: class_names[global_id]
+                        for global_id in owned_ids
+                    }
+                    for global_id in owned_ids:
+                        class_owners[global_id] = specialist_id
+                    protocols[specialist_id] = {
+                        "id": specialist_id,
+                        "class_name": "、".join(owned_names.values()),
+                        "new_class": "、".join(owned_names.values()),
+                        "class_names": owned_names,
+                        "global_class_ids": owned_ids,
+                        "local_to_global": specialist_mapping,
+                        "incremental_mode": "class_incremental",
+                        "weights": resolve_path(specialist["weight"]),
+                        "new_map50": float(
+                            specialist.get("new_map50", profile["new_map50"])
+                        ),
+                        "krr": float(profile["krr"]),
+                        "available": True,
+                        "activation_thresholds": {
+                            class_id: activation_thresholds[class_id]
+                            for class_id in owned_ids
+                        },
+                        "calibration_sources": {
+                            class_id: calibration_sources[class_id]
+                            for class_id in owned_ids
+                        },
+                        "routing_prior": float(
+                            config["routing"]["default_routing_prior"]
+                        ),
+                        "context_prior": dict(
+                            profile.get("context_prior") or {}
+                        ),
+                        "context_gate": dict(
+                            profile.get("context_gate") or {"enabled": False}
+                        ),
+                        "positive_prototype": (
+                            profile.get("positive_prototype")
+                            if len(specialist_specs) == 1
+                            else None
+                        ),
+                    }
                 settings.update({
                     "detector_path": resolve_path(profile["base_weight"]),
                     "class_names": class_names,
                     "base_class_ids": list(base_mapping.values()),
                     "base_local_to_global": base_mapping,
-                    "generation_id": f"experiment-{profile_id}",
+                    "generation_id": str(
+                        profile.get("generation_id") or f"experiment-{profile_id}"
+                    ),
                     "base_model_id": f"{profile_id}_base",
-                    "class_owners": {
-                        **{global_id: f"{profile_id}_base" for global_id in base_mapping.values()},
-                        **{global_id: profile_id for global_id in new_global_ids},
-                    },
-                    "protocols": {
-                        profile_id: {
-                            "id": profile_id,
-                            "class_name": profile["new_class"],
-                            "new_class": profile["new_class"],
-                            "class_names": {
-                                global_id: class_names[global_id]
-                                for global_id in new_global_ids
-                            },
-                            "global_class_ids": new_global_ids,
-                            "local_to_global": {
-                                index: global_id
-                                for index, global_id in enumerate(new_global_ids)
-                            },
-                            "incremental_mode": "class_incremental",
-                            "weights": resolve_path(profile["specialist_weight"]),
-                            "new_map50": float(profile["new_map50"]),
-                            "krr": float(profile["krr"]),
-                            "available": True,
-                            "activation_thresholds": activation_thresholds,
-                            "calibration_sources": calibration_sources,
-                            "routing_prior": float(config["routing"]["default_routing_prior"]),
-                            "context_prior": dict(profile.get("context_prior") or {}),
-                            "context_gate": dict(
-                                profile.get("context_gate") or {"enabled": False}
-                            ),
-                            "positive_prototype": profile.get("positive_prototype"),
-                        }
-                    },
+                    "class_owners": class_owners,
+                    "protocols": protocols,
                     "unified_class_gates": {
                         "activation_thresholds": base_activation_thresholds,
                         "incremental_class_ids": [],

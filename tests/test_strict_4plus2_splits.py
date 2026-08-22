@@ -3,6 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
+from fair_agent.modules.incremental_round_registry import (
+    load_incremental_round_registry,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPLIT_ROOT = ROOT / "splits" / "strict_4plus2"
@@ -136,3 +142,76 @@ def test_increment_sequence_quotas_match_fixed_80_10_10_design() -> None:
     }
     assert set(read_split("increment_dev")) & armored_vehicle_only
     assert set(read_split("increment_lock")) & armored_vehicle_only
+
+
+def test_two_distinct_class_rounds_cover_each_increment_split() -> None:
+    registry = load_incremental_round_registry(
+        "configs/incremental_round_registry_4plus2.yaml"
+    )
+    assert [row["round_id"] for row in registry["rounds"]] == [
+        "round_01_patrol_boat",
+        "round_02_armored_vehicle",
+    ]
+    assert [row["new_class_ids"] for row in registry["rounds"]] == [[4], [5]]
+    assert registry["rounds"][0]["parent_generation_id"] == registry["base"][
+        "generation_id"
+    ]
+    assert (
+        registry["rounds"][1]["parent_generation_id"]
+        == registry["rounds"][0]["generation_id"]
+    )
+    for split_role in ("train", "dev", "lock"):
+        round_sets = [
+            set(
+                value.strip()
+                for value in (ROOT / row["splits"][split_role])
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if value.strip()
+            )
+            for row in registry["rounds"]
+        ]
+        assert not round_sets[0] & round_sets[1]
+        assert round_sets[0] | round_sets[1] == set(
+            read_split(f"increment_{split_role}")
+        )
+
+
+def test_scene_sensor_is_outside_incremental_learning_scope() -> None:
+    registry = load_incremental_round_registry(
+        "configs/incremental_round_registry_4plus2.yaml"
+    )
+    scene = registry["system_calibration"]
+    assert scene["phase"] == "system_calibration"
+    assert scene["counted_as_incremental_learning"] is False
+    assert scene["detector_weights_updated"] is False
+    assert scene["scene_sensor_is_incremental_learner"] is False
+
+
+def test_strict_round_source_workflow_requires_registration_and_evidence() -> None:
+    policy = yaml.safe_load(
+        (ROOT / "configs" / "incremental_detection_policy.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    execution = policy["round_execution"]
+    assert execution["candidate_registration_required"] is True
+    assert execution["promotion_requires_complete_round_evidence"] is True
+    assert execution["production_switch_only_after_final_round_lock"] is True
+
+    registration = policy["candidate_registration"]
+    assert registration["production_channel_updated"] is False
+    assert registration["candidate_channel_updated"] is True
+    assert registration["verify_historical_expert_identity"] is True
+
+    for section in (
+        "candidate_registration",
+        "sequential_evidence",
+        "production_promotion",
+    ):
+        assert (ROOT / policy[section]["tool"]).is_file()
+    promotion_source = (
+        ROOT / policy["production_promotion"]["tool"]
+    ).read_text(encoding="utf-8")
+    assert 'parser.add_argument("--round-evidence"' in promotion_source
+    assert 'generations["channels"]["production"]' in promotion_source

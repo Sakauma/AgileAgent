@@ -59,6 +59,11 @@ venv/
 !/tools/06_train_incremental_4plus2.py
 !/tools/07_select_incremental_4plus2.py
 !/tools/08_evaluate_4plus2.py
+!/tools/09_optimize_scene_aware_4plus2.py
+!/tools/10_promote_scene_aware_4plus2.py
+!/tools/11_prepare_incremental_round_splits.py
+!/tools/12_summarize_incremental_rounds.py
+!/tools/13_register_incremental_round_candidate.py
 !/tools/42_predict_submission.py
 !/tools/60_train_scene_sensor.py
 !/tools/61_select_scene_sensor_4plus2.py
@@ -108,6 +113,7 @@ venv/
 !/configs/scene_sensor_model_4plus2.yaml
 !/configs/functional_models.yaml
 !/configs/incremental_detection_policy.yaml
+!/configs/incremental_round_registry_4plus2.yaml
 !/configs/strict_class_incremental_3plus1.yaml
 !/configs/ascend310b/
 !/configs/ascend310b/**
@@ -134,3 +140,4 @@ venv/
 !/docs/GETTING-STARTED.md
 !/docs/TESTING.md
 !/docs/compliant-incremental-learning.md
+!/docs/incremental-workbench.md

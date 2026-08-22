@@ -20,14 +20,22 @@
         3
       ]
     },
-    "incremental_model": {
+    "patrol_boat_expert_round_01": {
+      "round_id": "round_01_patrol_boat",
       "global_class_ids": [
-        4,
+        4
+      ],
+      "local_to_global": {
+        "0": 4
+      }
+    },
+    "armored_vehicle_expert_round_02": {
+      "round_id": "round_02_armored_vehicle",
+      "global_class_ids": [
         5
       ],
       "local_to_global": {
-        "0": 4,
-        "1": 5
+        "0": 5
       }
     }
   },
@@ -408,6 +416,32 @@
       }
     }
   },
+  "increment_rounds": {
+    "registry": "configs/incremental_round_registry_4plus2.yaml",
+    "materializer": "tools/11_prepare_incremental_round_splits.py",
+    "created_before_round_training": true,
+    "source_lists_unchanged": true,
+    "rounds_are_pairwise_disjoint": true,
+    "rounds_cover_increment_source_lists": true,
+    "rounds": [
+      {
+        "round_id": "round_01_patrol_boat",
+        "round_index": 1,
+        "parent_generation_id": "base_detection_generation_4plus2",
+        "generation_id": "incremental_detection_generation_4plus2_round_01",
+        "new_global_class_ids": [4],
+        "counts": {"train": 56, "dev": 7, "lock": 7}
+      },
+      {
+        "round_id": "round_02_armored_vehicle",
+        "round_index": 2,
+        "parent_generation_id": "incremental_detection_generation_4plus2_round_01",
+        "generation_id": "incremental_detection_generation_4plus2_round_02",
+        "new_global_class_ids": [5],
+        "counts": {"train": 56, "dev": 7, "lock": 7}
+      }
+    ]
+  },
   "lists": {
     "base_all": {
       "path": "splits/strict_4plus2/base_all.txt",
@@ -448,6 +482,30 @@
     "increment_train_plus_dev": {
       "path": "splits/strict_4plus2/increment_train_plus_dev.txt",
       "count": 126
+    },
+    "round_01_patrol_boat_train": {
+      "path": "splits/strict_4plus2/round_01_patrol_boat_train.txt",
+      "count": 56
+    },
+    "round_01_patrol_boat_dev": {
+      "path": "splits/strict_4plus2/round_01_patrol_boat_dev.txt",
+      "count": 7
+    },
+    "round_01_patrol_boat_lock": {
+      "path": "splits/strict_4plus2/round_01_patrol_boat_lock.txt",
+      "count": 7
+    },
+    "round_02_armored_vehicle_train": {
+      "path": "splits/strict_4plus2/round_02_armored_vehicle_train.txt",
+      "count": 56
+    },
+    "round_02_armored_vehicle_dev": {
+      "path": "splits/strict_4plus2/round_02_armored_vehicle_dev.txt",
+      "count": 7
+    },
+    "round_02_armored_vehicle_lock": {
+      "path": "splits/strict_4plus2/round_02_armored_vehicle_lock.txt",
+      "count": 7
     },
     "mixed_dev": {
       "path": "splits/strict_4plus2/mixed_dev.txt",

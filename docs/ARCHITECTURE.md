@@ -81,7 +81,7 @@ base_learning
         v
 incremental_learning
   当轮 Increment train/dev -> 新类专家权重与全局 ID 映射
-  Base 检测器权重冻结
+  Base 与历史专家权重冻结；不读取 Base/历史增量样本
         |
         v
 system_calibration
@@ -91,13 +91,16 @@ system_calibration
         |
         v
 joint_evaluation
-  参数冻结 -> mixed lock/test 六类联合评分
+  参数冻结 -> 截至当轮全部已学类别的累计 lock/test 评分
+  -> New-mAP50、KRR、Full-mAP50 与父子代际
   -> 禁止训练和选参 -> 候选登记、shadow、production 切换
 ```
 
 `incremental_learning` 的定义只覆盖新类检测器训练、新类映射及新类专属学习。Scene-SensorNet 训练、Base/Increment 场景先验学习和六类门控搜索属于独立的 `system_calibration`；它们即使读取 Base train/dev，也不构成旧类样本回放，因为两个检测器权重都保持冻结。工作台状态机会串联这些步骤，但编排范围不等于增量学习统计范围。
 
-训练快照绑定数据清单、类别注册表、父代际和训练配置。Base 类先验只来自 Base train，新增类先验只来自 Increment train，门控参数只由 mixed dev 选择。模型权重与校准参数冻结后进入 mixed lock/test 联合复核，复核结果写入候选代际。
+训练快照绑定数据清单、类别注册表、父代际和训练配置。正式 4+2 注册表按 patrol_boat → armored_vehicle 形成两个不同新增类别轮次；每轮专家只读该轮 56/7 的 Increment train/dev，预测冻结后在 Base lock 加截至当轮全部 Increment lock 上复核。Base 类先验只来自 Base train，新增类先验只来自 Increment train，门控参数只由 mixed dev 选择。模型权重与校准参数冻结后进入联合复核，复核结果写入候选代际。
+
+当前在线 production 的二类联合专家是此前已通过六类指标的兼容基线，不被回写成两轮顺序训练产物。注册表驱动的两个单轮专家完成训练和逐轮复核后，`tools/13` 逐轮复制可提交资产并登记 candidate，`tools/12` 验证完整父子链；只有 `tools/10` 在最终系统校准和 lock 通过后切换 production。切换后运行时从 `models/generations.json` 加载两个独立协议，类 `4/5` 分别由 Round 1/2 专家拥有，联合二类代际仅保留为 `retired_baseline`。
 
 ## 模型代际
 
@@ -108,8 +111,10 @@ joint_evaluation
 - 基础类、新增类和更新类集合；
 - 每个类别的模型所有权；
 - 权重、配置和证据文件哈希；
-- Base mAP50、New-mAP50、KRR、precision 和误激活率；
+- 每轮 New-mAP50、KRR、Full-mAP50，以及 precision 和误激活率；
 - 冲突融合策略与场景软阈值配置。
+
+严格候选的状态流是 `registered_candidate -> active`。逐轮登记不会触碰 production；最终晋级要求 `sequential_round_evidence.json`、最终 candidate 通道和所有专家权重身份同时匹配。默认 Web 服务与 `--profile` CLI 均支持多个 `class_incremental_expert`，并对每张未标注图执行全部新增类 owner。
 
 Web 服务启动时加载 production 代际，代际切换时构建并预热新引擎，再更新进程内运行实例。
 

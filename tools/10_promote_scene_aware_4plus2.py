@@ -6,10 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,16 +21,17 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-CLASS_NAMES = {
-    0: "soldier",
-    1: "small_aircraft",
-    2: "warship",
-    3: "tank",
-    4: "patrol_boat",
-    5: "armored_vehicle",
-}
-BASE_IDS = (0, 1, 2, 3)
-NEW_IDS = (4, 5)
+from fair_agent.modules.incremental_round_registry import (  # noqa: E402
+    DEFAULT_ROUND_REGISTRY,
+    load_incremental_round_registry,
+    rounds_through,
+    select_round,
+)
+
+
+CLASS_NAMES: dict[int, str] = {}
+BASE_IDS: tuple[int, ...] = ()
+NEW_IDS: tuple[int, ...] = ()
 SYSTEM_CALIBRATION_DATA_SCOPE = {
     "scene_sensor_model_training": "base_and_incremental_train_dev",
     "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
@@ -42,14 +47,17 @@ PHASE_CONTRACT = {
     },
     "incremental_learning": {
         "counted_as_incremental_learning": True,
-        "detector_weights_updated": ["incremental_detector"],
+        "detector_weights_updated": ["current_round_incremental_expert"],
         "training_data_scope": "incremental_dataset_only",
         "validation_data_scope": "incremental_dataset_only",
         "base_detector_weights_frozen": True,
+        "historical_incremental_expert_weights_frozen": True,
     },
     "system_calibration": {
         "counted_as_incremental_learning": False,
         "detector_weights_updated": False,
+        "base_detector_weights_frozen": True,
+        "incremental_detector_weights_frozen": True,
         "data_scope": SYSTEM_CALIBRATION_DATA_SCOPE,
     },
     "joint_evaluation": {
@@ -58,6 +66,226 @@ PHASE_CONTRACT = {
         "model_selection_allowed": False,
     },
 }
+
+
+def configure_round_contract(
+    registry_path: Path, round_id: str
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    global CLASS_NAMES, BASE_IDS, NEW_IDS
+
+    registry = load_incremental_round_registry(registry_path)
+    target_round = select_round(registry, round_id)
+    active_rounds = rounds_through(registry, round_id)
+    CLASS_NAMES = {
+        class_id: registry["class_names"][class_id]
+        for class_id in target_round["learned_class_ids"]
+    }
+    BASE_IDS = tuple(registry["base"]["class_ids"])
+    NEW_IDS = tuple(
+        class_id
+        for round_spec in active_rounds
+        for class_id in round_spec["new_class_ids"]
+    )
+    return registry, target_round, active_rounds
+
+
+def registered_path(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    return path.resolve() if path.is_absolute() else (ROOT / path).resolve()
+
+
+def copy_immutable_weight(source: Path, destination: Path) -> None:
+    source = source.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if not destination.is_file() or sha256_file(destination) != sha256_file(source):
+            raise FileExistsError(
+                f"拒绝覆盖内容不同的 production 专家权重：{destination}"
+            )
+        return
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    shutil.copy2(source, temporary)
+    os.replace(temporary, destination)
+
+
+def validate_round_evidence(
+    payload: Mapping[str, Any],
+    registry: Mapping[str, Any],
+    target_round: Mapping[str, Any],
+    active_rounds: list[dict[str, Any]],
+) -> None:
+    expected_rounds = list(registry["rounds"])
+    rows = list(payload.get("rounds") or [])
+    registrations = list(payload.get("registrations") or [])
+    if (
+        target_round["round_index"] != len(expected_rounds)
+        or active_rounds != expected_rounds
+        or payload.get("protocol") != registry["protocol_id"]
+        or payload.get("evidence_status") != "complete"
+        or payload.get("sequential_class_incremental_verified") is not True
+        or payload.get("registered_lineage_verified") is not True
+        or payload.get("all_rounds_competition_accepted") is not True
+        or int(payload.get("distinct_round_count", 0)) < 2
+        or int(payload.get("distinct_new_class_count", 0)) < 2
+        or payload.get("scene_sensor_is_incremental_learner") is not False
+        or len(rows) != len(expected_rounds)
+        or len(registrations) != len(expected_rounds)
+    ):
+        raise ValueError("晋级必须提供完整的两轮顺序类别增量证据")
+    for expected, row, registration in zip(
+        expected_rounds, rows, registrations
+    ):
+        metrics = dict(row.get("metrics") or {})
+        if (
+            row.get("round_id") != expected["round_id"]
+            or row.get("round_index") != expected["round_index"]
+            or row.get("parent_generation_id")
+            != expected["parent_generation_id"]
+            or row.get("generation_id") != expected["generation_id"]
+            or row.get("old_class_ids") != expected["old_class_ids"]
+            or row.get("new_class_ids") != expected["new_class_ids"]
+            or row.get("learned_class_ids") != expected["learned_class_ids"]
+            or row.get("competition_accepted") is not True
+            or set(metrics) != {"new_map50", "krr", "full_map50"}
+            or registration.get("model_id")
+            != expected["specialist"]["model_id"]
+            or registration.get("generation_id") != expected["generation_id"]
+        ):
+            raise ValueError(
+                f"顺序增量汇总与注册表不一致：{expected['round_id']}"
+            )
+
+
+def validate_registered_lineage(
+    raw: Mapping[str, Any],
+    registry: Mapping[str, Any],
+    target_round: Mapping[str, Any],
+    active_rounds: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    models = {str(row["id"]): row for row in raw.get("models", [])}
+    generations = {
+        str(row["id"]): row for row in raw.get("generations", [])
+    }
+    base_model_id = str(registry["base"]["model_id"])
+    base_generation_id = str(registry["base"]["generation_id"])
+    if base_model_id not in models or base_generation_id not in generations:
+        raise ValueError("严格轮次缺少已冻结的 Base 模型或 Base 代际")
+    expected_owners = {
+        str(class_id): base_model_id for class_id in registry["base"]["class_ids"]
+    }
+    expected_members = [base_model_id]
+    previous_generation_id = base_generation_id
+    for round_spec in active_rounds:
+        model_id = str(round_spec["specialist"]["model_id"])
+        generation_id = str(round_spec["generation_id"])
+        if model_id not in models or generation_id not in generations:
+            raise ValueError(
+                f"严格轮次尚未登记：{round_spec['round_id']}"
+            )
+        model = models[model_id]
+        generation = generations[generation_id]
+        local_to_global = {
+            int(key): int(value)
+            for key, value in dict(model.get("local_to_global") or {}).items()
+        }
+        evidence = dict(model.get("training_evidence") or {})
+        model_path = registered_path(str(model.get("path") or ""))
+        expected_members.append(model_id)
+        for class_id in round_spec["new_class_ids"]:
+            expected_owners[str(class_id)] = model_id
+        generation_metrics = dict(generation.get("metrics") or {})
+        if (
+            model.get("role") != "class_incremental_expert"
+            or model.get("incremental_mode") != "class_incremental"
+            or set(int(value) for value in model.get("owns_classes", []))
+            != set(round_spec["new_class_ids"])
+            or local_to_global != round_spec["specialist"]["local_to_global"]
+            or not model_path.is_file()
+            or sha256_file(model_path) != model.get("sha256")
+            or evidence.get("phase") != "incremental_learning"
+            or evidence.get("round_id") != round_spec["round_id"]
+            or evidence.get("parent_generation_id") != previous_generation_id
+            or evidence.get("generation_id") != generation_id
+            or evidence.get("training_data_scope")
+            != "incremental_dataset_only"
+            or evidence.get("validation_data_scope")
+            != "incremental_dataset_only"
+            or int(evidence.get("old_raw_image_count", -1)) != 0
+            or int(evidence.get("old_raw_label_count", -1)) != 0
+            or evidence.get("base_detector_weights_frozen") is not True
+            or evidence.get("historical_incremental_expert_weights_frozen")
+            is not True
+            or model.get("acceptance", {}).get("competition_gates_passed")
+            is not True
+            or generation.get("parent") != previous_generation_id
+            or set(int(value) for value in generation.get("classes", []))
+            != set(round_spec["learned_class_ids"])
+            or set(int(value) for value in generation.get("old_class_ids", []))
+            != set(round_spec["old_class_ids"])
+            or set(int(value) for value in generation.get("new_class_ids", []))
+            != set(round_spec["new_class_ids"])
+            or generation.get("class_owners") != expected_owners
+            or generation.get("model_members") != expected_members
+            or generation.get("status") not in {"registered_candidate", "active"}
+            or any(
+                key not in generation_metrics
+                for key in ("new_map50", "krr", "full_map50")
+            )
+            or generation.get("acceptance", {}).get(
+                "competition_gates_passed"
+            )
+            is not True
+        ):
+            raise ValueError(
+                f"严格轮次登记或冻结证据不完整：{round_spec['round_id']}"
+            )
+        previous_generation_id = generation_id
+    if (
+        str(raw.get("channels", {}).get("candidate"))
+        != target_round["generation_id"]
+        or generations[target_round["generation_id"]].get("status")
+        != "registered_candidate"
+    ):
+        raise ValueError("candidate 频道尚未指向待晋级的最后一轮冻结代际")
+    return models, generations
+
+
+def validate_round_evidence_identity(
+    payload: Mapping[str, Any],
+    models: Mapping[str, Mapping[str, Any]],
+    generations: Mapping[str, Mapping[str, Any]],
+    active_rounds: list[dict[str, Any]],
+) -> None:
+    rows = {str(row["round_id"]): row for row in payload["rounds"]}
+    registrations = {
+        str(row["generation_id"]): row for row in payload["registrations"]
+    }
+    for round_spec in active_rounds:
+        round_id = str(round_spec["round_id"])
+        generation_id = str(round_spec["generation_id"])
+        model_id = str(round_spec["specialist"]["model_id"])
+        row = rows[round_id]
+        registration = registrations[generation_id]
+        generation = generations[generation_id]
+        model = models[model_id]
+        evidence = dict(model.get("training_evidence") or {})
+        metrics = dict(row["metrics"])
+        registered_metrics = dict(generation.get("metrics") or {})
+        if (
+            registration.get("model_id") != model_id
+            or registered_path(registration.get("model_path") or "")
+            != registered_path(model.get("path") or "")
+            or registered_path(registration.get("evaluation_source") or "")
+            != registered_path(evidence.get("evaluation_source") or "")
+            or registration.get("generation_status")
+            != generation.get("status")
+            or any(
+                abs(float(metrics[key]) - float(registered_metrics.get(key, -1.0)))
+                > 1e-12
+                for key in ("new_map50", "krr", "full_map50")
+            )
+        ):
+            raise ValueError(f"顺序增量证据与已登记资产不一致：{round_id}")
 
 
 def sha256_file(path: Path) -> str:
@@ -128,6 +356,48 @@ def scoped_selection_report(source: str, note: str) -> str:
     insert_at = 2 if lines and lines[0].startswith("#") else 0
     lines[insert_at:insert_at] = [note, ""]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def update_release_checksums(
+    path: Path,
+    models: Mapping[str, Mapping[str, Any]],
+    active_model_ids: list[str],
+) -> None:
+    entries: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        value = line.strip()
+        if not value:
+            continue
+        digest, separator, relative = value.partition("  ")
+        if not separator or len(digest) != 64 or not relative:
+            raise ValueError(f"模型校验清单格式非法：{line}")
+        entries[relative] = digest
+    for relative in list(entries):
+        if (
+            relative.startswith("production/incremental_detection/")
+            and relative.endswith(".pt")
+        ) or relative.startswith("candidates/incremental_detection/"):
+            entries.pop(relative)
+    models_root = (ROOT / "models").resolve()
+    for model_id in active_model_ids:
+        model = models[model_id]
+        model_path = registered_path(str(model["path"]))
+        try:
+            relative = model_path.relative_to(models_root).as_posix()
+        except ValueError as exc:
+            raise ValueError(
+                f"production 模型必须位于 models/：{model_id}"
+            ) from exc
+        entries[relative] = str(model["sha256"])
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        "".join(
+            f"{digest}  {relative}\n"
+            for relative, digest in sorted(entries.items())
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def adapt_split_metrics(raw: Mapping[str, Any], base_image_count: int) -> dict[str, Any]:
@@ -264,20 +534,40 @@ def diagnostics_markdown(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="晋级已冻结并通过 lock 的场景感知 4+2 候选。")
+    parser.add_argument(
+        "--round-registry", type=Path, default=ROOT / DEFAULT_ROUND_REGISTRY
+    )
+    parser.add_argument("--round-id", required=True)
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--lock-result", type=Path, required=True)
     parser.add_argument("--dev-search", type=Path, required=True)
     parser.add_argument("--dev-report", type=Path, required=True)
+    parser.add_argument("--round-evidence", type=Path, required=True)
     args = parser.parse_args()
+    round_registry, target_round, active_rounds = configure_round_contract(
+        args.round_registry, args.round_id
+    )
+    round_registry_ref = rel(Path(round_registry["path"]))
 
     candidate_path = args.candidate.expanduser().resolve()
     lock_result_path = args.lock_result.expanduser().resolve()
     dev_search_path = args.dev_search.expanduser().resolve()
     dev_report_path = args.dev_report.expanduser().resolve()
+    round_evidence_path = args.round_evidence.expanduser().resolve()
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
     result = json.loads(lock_result_path.read_text(encoding="utf-8"))
     dev_search = json.loads(dev_search_path.read_text(encoding="utf-8"))
     dev_report = dev_report_path.read_text(encoding="utf-8")
+    round_evidence = json.loads(round_evidence_path.read_text(encoding="utf-8"))
+    validate_round_evidence(
+        round_evidence, round_registry, target_round, active_rounds
+    )
+    lineage_keys = (
+        "round_id",
+        "round_index",
+        "parent_generation_id",
+        "generation_id",
+    )
     if (
         candidate.get("selection_source") != "mixed_dev_only"
         or candidate.get("phase") not in (None, "system_calibration")
@@ -287,8 +577,29 @@ def main() -> int:
         or result.get("candidate_frozen_before_lock_labels") is not True
         or result.get("candidate", {}).get("candidate_id") != candidate.get("candidate_id")
         or not all(result.get("score_gates", {}).values())
+        or any(candidate.get(key) != target_round[key] for key in lineage_keys)
+        or any(result.get(key) != target_round[key] for key in lineage_keys)
+        or any(dev_search.get(key) != target_round[key] for key in lineage_keys)
     ):
         raise ValueError("候选未通过冻结 dev→lock 晋级契约")
+
+    generations_path = ROOT / "models" / "generations.json"
+    generations = json.loads(generations_path.read_text(encoding="utf-8"))
+    previous_production_id = str(generations["channels"]["production"])
+    registered_models, registered_generations = validate_registered_lineage(
+        generations, round_registry, target_round, active_rounds
+    )
+    validate_round_evidence_identity(
+        round_evidence,
+        registered_models,
+        registered_generations,
+        active_rounds,
+    )
+    candidate["round_registry"] = round_registry_ref
+    result["round_registry"] = round_registry_ref
+    dev_search["round_registry"] = round_registry_ref
+    round_evidence["round_registry"] = round_registry_ref
+    round_evidence["generation_registry"] = "models/generations.json"
 
     mark_system_calibration(candidate)
     for dev_candidate in dict(dev_search.get("candidates") or {}).values():
@@ -339,6 +650,15 @@ def main() -> int:
 
     production = ROOT / "models" / "production" / "incremental_detection"
     evidence = production / "evidence"
+    production_expert_root = production / "round_experts"
+    for round_spec in active_rounds:
+        model_id = str(round_spec["specialist"]["model_id"])
+        model = registered_models[model_id]
+        source_weight = registered_path(model["path"])
+        production_weight = production_expert_root / f"{model_id}.pt"
+        copy_immutable_weight(source_weight, production_weight)
+        model["path"] = rel(production_weight)
+        model["sha256"] = sha256_file(production_weight)
     base_prior_path = production / "base_context_prior.json"
     incremental_prior_path = production / "incremental_context_prior.json"
     atomic_json(base_prior_path, candidate["base_context_prior"])
@@ -346,8 +666,87 @@ def main() -> int:
     atomic_json(evidence / "scene_aware_candidate.json", candidate)
     atomic_json(evidence / "scene_aware_lock_recheck.json", result)
     atomic_json(evidence / "scene_aware_dev_search.json", dev_search)
+    sequential_evidence_path = evidence / "sequential_round_evidence.json"
+    atomic_json(sequential_evidence_path, round_evidence)
+    round_evidence_report = round_evidence_path.with_suffix(".md")
+    if round_evidence_report.is_file():
+        (evidence / "sequential_round_evidence.md").write_text(
+            round_evidence_report.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
     (evidence / "scene_aware_dev_search.md").write_text(
         scoped_dev_report(dev_report), encoding="utf-8"
+    )
+    round_selection_rows = []
+    for round_spec in active_rounds:
+        model_id = str(round_spec["specialist"]["model_id"])
+        training_evidence = dict(
+            registered_models[model_id].get("training_evidence") or {}
+        )
+        round_evidence_root = evidence / "rounds" / str(round_spec["round_id"])
+        selection_source = registered_path(training_evidence["selection_source"])
+        evaluation_source = registered_path(training_evidence["evaluation_source"])
+        calibration_source = registered_path(training_evidence["calibration_source"])
+        selection_payload = json.loads(
+            selection_source.read_text(encoding="utf-8")
+        )
+        evaluation_payload = json.loads(
+            evaluation_source.read_text(encoding="utf-8")
+        )
+        calibration_payload = json.loads(
+            calibration_source.read_text(encoding="utf-8")
+        )
+        atomic_json(round_evidence_root / "incremental_selection.json", selection_payload)
+        atomic_json(round_evidence_root / "metrics.json", evaluation_payload)
+        atomic_json(round_evidence_root / "calibration.json", calibration_payload)
+        selection_report = selection_source.with_suffix(".md")
+        if selection_report.is_file():
+            (round_evidence_root / "incremental_selection.md").write_text(
+                selection_report.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        round_selection_rows.append(
+            {
+                "round_id": round_spec["round_id"],
+                "round_index": round_spec["round_index"],
+                "parent_generation_id": round_spec["parent_generation_id"],
+                "generation_id": round_spec["generation_id"],
+                "model_id": model_id,
+                "new_class_ids": round_spec["new_class_ids"],
+                "selection": selection_payload,
+                "production_evidence_root": rel(round_evidence_root),
+            }
+        )
+    atomic_json(
+        evidence / "incremental_selection.json",
+        {
+            "schema_version": 3,
+            "phase": "incremental_learning",
+            "counted_as_incremental_learning": True,
+            "detector_weights_updated": False,
+            "component": "sequential_incremental_detector_candidate_selection",
+            "training_data_scope": "incremental_dataset_only",
+            "validation_data_scope": "incremental_dataset_only",
+            "base_detector_weights_frozen": True,
+            "historical_incremental_expert_weights_frozen": True,
+            "rounds": round_selection_rows,
+        },
+    )
+    incremental_selection_lines = [
+        "# 严格顺序增量专家选模",
+        "",
+        "每轮只读取当轮 Increment dev；Base 与历史专家权重冻结，lock 不参与选模。",
+        "",
+        "| 轮次 | 父代 | 子代 | 专家 | 新类 |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in round_selection_rows:
+        incremental_selection_lines.append(
+            f"| {row['round_id']} | {row['parent_generation_id']} | "
+            f"{row['generation_id']} | {row['model_id']} | {row['new_class_ids']} |"
+        )
+    (evidence / "incremental_selection.md").write_text(
+        "\n".join(incremental_selection_lines) + "\n", encoding="utf-8"
     )
     selection_specs = (
         (
@@ -356,13 +755,6 @@ def main() -> int:
             False,
             "base_detector_candidate_selection",
             "本步骤属于 base_learning，不计入 incremental_learning，且选模本身不更新检测器权重。",
-        ),
-        (
-            "incremental_selection",
-            "incremental_learning",
-            True,
-            "incremental_detector_candidate_selection",
-            "本步骤属于 incremental_learning，只读取 Increment dev；选模本身不再更新检测器权重。",
         ),
     )
     for stem, phase, counted, component, note in selection_specs:
@@ -406,14 +798,23 @@ def main() -> int:
         "%Y%m%d-%H%M%S"
     )
     old_metrics = json.loads((production / "metrics.json").read_text(encoding="utf-8"))
-    dev_metrics = adapt_split_metrics(candidate["dev_metrics"], 75)
-    lock_metrics = adapt_split_metrics(result["lock"], 75)
+    base_dev_count = int(dev_search.get("splits", {}).get("base_dev") or 0)
+    base_lock_count = int(result.get("splits", {}).get("base_lock") or 0)
+    if not base_dev_count or not base_lock_count:
+        raise ValueError("候选缺少注册表驱动的 Base dev/lock 数量")
+    dev_metrics = adapt_split_metrics(candidate["dev_metrics"], base_dev_count)
+    lock_metrics = adapt_split_metrics(result["lock"], base_lock_count)
     metrics = {
         **old_metrics,
         "schema_version": 5,
         "run_id": run_id,
         "created_at": now,
         "protocol": "strict-4plus2-parallel-specialist-class-specific-scene-gate",
+        "round_registry": round_registry_ref,
+        "round_id": target_round["round_id"],
+        "round_index": target_round["round_index"],
+        "parent_generation_id": target_round["parent_generation_id"],
+        "generation_id": target_round["generation_id"],
         "phase": "joint_evaluation",
         "counted_as_incremental_learning": False,
         "detector_weights_updated": False,
@@ -513,10 +914,57 @@ def main() -> int:
     profile = json.loads((production / "profile.json").read_text(encoding="utf-8"))
     profile.update(
         {
+            "schema_version": max(2, int(profile.get("schema_version", 1))),
             "run_id": run_id,
+            "deployment": "multi_specialist",
             "phase_contract": PHASE_CONTRACT,
+            "round_registry": round_registry_ref,
+            "round_id": target_round["round_id"],
+            "round_index": target_round["round_index"],
+            "parent_generation_id": target_round["parent_generation_id"],
+            "generation_id": target_round["generation_id"],
+            "new_global_ids": list(NEW_IDS),
+            "new_classes": {
+                str(class_id): CLASS_NAMES[class_id] for class_id in NEW_IDS
+            },
+            "specialist_models": [
+                {
+                    "round_id": row["round_id"],
+                    "model_id": row["specialist"]["model_id"],
+                    "weight": registered_models[
+                        str(row["specialist"]["model_id"])
+                    ]["path"],
+                    "sha256": registered_models[
+                        str(row["specialist"]["model_id"])
+                    ]["sha256"],
+                    "global_class_ids": list(row["new_class_ids"]),
+                    "local_to_global": {
+                        str(key): value
+                        for key, value in row["specialist"][
+                            "local_to_global"
+                        ].items()
+                    },
+                    "activation_thresholds": {
+                        str(class_id): new_thresholds[class_id]
+                        for class_id in row["new_class_ids"]
+                    },
+                    "calibration_sources": {
+                        str(class_id): rel(production / "calibration.json")
+                        for class_id in row["new_class_ids"]
+                    },
+                    "new_map50": sum(
+                        float(new_quality[class_id]["map50"])
+                        for class_id in row["new_class_ids"]
+                    )
+                    / len(row["new_class_ids"]),
+                }
+                for row in active_rounds
+            ],
+            "runtime_registry_source": "models/generations.json",
             "agent_structure": {
                 **dict(profile["agent_structure"]),
+                "architecture": "parallel_base_registered_incremental_experts",
+                "new_class_owner": "registered_incremental_specialists",
                 "scene_soft_gating": True,
                 "scene_hard_routing": False,
                 "label_aware_routing": False,
@@ -524,6 +972,11 @@ def main() -> int:
             },
             "activation_thresholds": {
                 str(key): value for key, value in new_thresholds.items()
+            },
+            "calibration_source": rel(production / "calibration.json"),
+            "calibration_sources": {
+                str(key): rel(production / "calibration.json")
+                for key in new_thresholds
             },
             "base_activation_thresholds": {
                 str(key): value for key, value in base_thresholds.items()
@@ -578,6 +1031,12 @@ def main() -> int:
             "diagnostic_warnings": advisory_warnings,
         }
     )
+    for legacy_key in (
+        "specialist_weight",
+        "specialist_sha256",
+        "specialist_local_to_global",
+    ):
+        profile.pop(legacy_key, None)
     atomic_json(production / "profile.json", profile)
     active_profile = ROOT / "models" / "profiles" / "incremental-detection" / "active.json"
     atomic_json(active_profile, profile)
@@ -588,6 +1047,14 @@ def main() -> int:
     registered.update(
         {
             "run_id": run_id,
+            "generation_id": target_round["generation_id"],
+            "round_registry": round_registry_ref,
+            "round_id": target_round["round_id"],
+            "sequential_class_incremental_verified": True,
+            "sequential_round_evidence_source": rel(
+                sequential_evidence_path
+            ),
+            "specialist_models": list(profile["specialist_models"]),
             "phase_contract": PHASE_CONTRACT,
             "evaluation_semantics": profile["evaluation_semantics"],
             "rechecked_at": now,
@@ -607,10 +1074,8 @@ def main() -> int:
     )
     atomic_json(registry_path, profile_registry)
 
-    generations_path = ROOT / "models" / "generations.json"
-    generations = json.loads(generations_path.read_text(encoding="utf-8"))
     models = {str(row["id"]): row for row in generations["models"]}
-    base_model = models["four_class_base_detector"]
+    base_model = models[str(round_registry["base"]["model_id"])]
     base_model.update(
         {
             "per_class_thresholds": {
@@ -620,49 +1085,60 @@ def main() -> int:
             "context_gate": base_gate,
         }
     )
-    incremental_model = models["incremental_detector"]
-    incremental_model.update(
-        {
-            "per_class_thresholds": {
-                str(key): value for key, value in new_thresholds.items()
-            },
-            "context_prior": dict(candidate["incremental_context_prior"]),
-            "context_gate": incremental_gate,
-            "metrics": {
-                "new_map50": lock_metrics["new_map50"],
-                "per_class": {
-                    str(class_id): {
-                        "map50": new_quality[class_id]["map50"],
-                        "precision": new_quality[class_id]["precision"],
-                        "recall": new_quality[class_id]["recall"],
-                        "threshold": new_thresholds[class_id],
-                        "max_scene_penalty": new_penalties[class_id],
-                    }
-                    for class_id in NEW_IDS
+    for round_spec in active_rounds:
+        model_id = str(round_spec["specialist"]["model_id"])
+        owned_ids = [int(value) for value in round_spec["new_class_ids"]]
+        incremental_model = models[model_id]
+        incremental_model.update(
+            {
+                "per_class_thresholds": {
+                    str(class_id): new_thresholds[class_id]
+                    for class_id in owned_ids
                 },
-            },
-            "deployment_metrics": {
-                "evaluation_semantics": profile["evaluation_semantics"],
-                "overall_precision": result["lock"]["overall"]["precision"],
-                "new_class_precision": result["lock"]["new_classes"]["precision"],
-                "false_activation_rate_by_class": {
-                    str(key): value["false_activation_rate"]
-                    for key, value in new_false_activation.items()
+                "context_prior": dict(candidate["incremental_context_prior"]),
+                "context_gate": incremental_gate,
+                "metrics": {
+                    "new_map50": sum(
+                        float(new_quality[class_id]["map50"])
+                        for class_id in owned_ids
+                    )
+                    / len(owned_ids),
+                    "per_class": {
+                        str(class_id): {
+                            "map50": new_quality[class_id]["map50"],
+                            "precision": new_quality[class_id]["precision"],
+                            "recall": new_quality[class_id]["recall"],
+                            "threshold": new_thresholds[class_id],
+                            "max_scene_penalty": new_penalties[class_id],
+                        }
+                        for class_id in owned_ids
+                    },
                 },
-                "diagnostic_only": True,
-            },
-            "acceptance": {
-                "official_score_gates_passed": True,
-                "competition_gates_passed": True,
-                "deployment_quality_gates_passed": not advisory_warnings,
-                "integrity_gates_passed": True,
-                "passed": True,
-                "diagnostic_warnings": advisory_warnings,
-            },
-        }
-    )
+                "deployment_metrics": {
+                    "evaluation_semantics": profile["evaluation_semantics"],
+                    "overall_precision": result["lock"]["overall"]["precision"],
+                    "new_class_precision": result["lock"]["new_classes"]["precision"],
+                    "false_activation_rate_by_class": {
+                        str(class_id): new_false_activation[class_id][
+                            "false_activation_rate"
+                        ]
+                        for class_id in owned_ids
+                    },
+                    "diagnostic_only": True,
+                },
+                "acceptance": {
+                    "official_score_gates_passed": True,
+                    "competition_gates_passed": True,
+                    "deployment_quality_gates_passed": not advisory_warnings,
+                    "integrity_gates_passed": True,
+                    "passed": True,
+                    "diagnostic_warnings": advisory_warnings,
+                },
+                "status": "active",
+            }
+        )
     generation_rows = {str(row["id"]): row for row in generations["generations"]}
-    base_generation = generation_rows["base_detection_generation_4plus2"]
+    base_generation = generation_rows[round_registry["base"]["generation_id"]]
     base_generation["metrics"].update(
         {
             "base_dev_map50": dev_metrics["base_map50"],
@@ -671,11 +1147,16 @@ def main() -> int:
             "scene_soft_gating": True,
         }
     )
-    generation = generation_rows["incremental_detection_generation_4plus2"]
+    generation = generation_rows[target_round["generation_id"]]
     generation.update(
         {
             "run_id": run_id,
+            "status": "active",
             "phase_contract": PHASE_CONTRACT,
+            "sequential_round_evidence": True,
+            "sequential_round_evidence_source": rel(
+                sequential_evidence_path
+            ),
             "metrics": {
                 "base_test_map50": lock_metrics["base_map50"],
                 "old_map50_before": lock_metrics["old_map50_before"],
@@ -710,9 +1191,11 @@ def main() -> int:
                     "false_activation_image_count"
                 ],
                 "image_count": result["lock"]["image_count"],
-                "base_test_image_count": 75,
-                "new_class_image_count": 14,
-                "specialist_count": 1,
+                "base_test_image_count": base_lock_count,
+                "new_class_image_count": int(
+                    result.get("splits", {}).get("incremental_lock") or 0
+                ),
+                "specialist_count": len(active_rounds),
             },
             "acceptance": {
                 "core_metrics_passed": True,
@@ -738,16 +1221,46 @@ def main() -> int:
             },
         }
     )
+    if previous_production_id != target_round["generation_id"]:
+        previous_generation = generation_rows[previous_production_id]
+        if previous_production_id != round_registry["base"]["generation_id"]:
+            previous_generation["status"] = "retired_baseline"
+        target_members = set(generation["model_members"])
+        for model_id in previous_generation.get(
+            "model_members", previous_generation["class_owners"].values()
+        ):
+            if (
+                str(model_id) not in target_members
+                and models[str(model_id)].get("role")
+                in {"class_incremental_expert", "target_incremental_expert"}
+            ):
+                models[str(model_id)]["status"] = "retired_baseline"
+    generations["channels"]["production"] = target_round["generation_id"]
+    generations["channels"]["candidate"] = target_round["generation_id"]
     atomic_json(generations_path, generations)
+    update_release_checksums(
+        ROOT / "models" / "SHA256SUMS.txt",
+        models,
+        list(generation["model_members"]),
+    )
 
     manifest_path = ROOT / "models" / "manifest.json"
     old_manifest_hash = sha256_file(manifest_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.update(
         {
-            "release": "competition-4plus2-agent-scene-aware-v2-20260822",
+            "release": (
+                "competition-4plus2-sequential-scene-aware-v3-"
+                + datetime.now().astimezone().strftime("%Y%m%d")
+            ),
             "created_at": now,
             "run_id": run_id,
+            "generation_id": target_round["generation_id"],
+            "round_registry": round_registry_ref,
+            "sequential_class_incremental_verified": True,
+            "sequential_round_evidence_source": rel(
+                sequential_evidence_path
+            ),
             "phase_contract": PHASE_CONTRACT,
         }
     )
@@ -792,53 +1305,106 @@ def main() -> int:
                 {
                     "competition_phase": "incremental_learning",
                     "counted_as_incremental_learning": True,
+                    "model_count": len(active_rounds),
+                    "protocol_count": len(active_rounds),
+                    "passed_protocols": len(active_rounds),
+                    "total_protocols": len(active_rounds),
+                    "true_class_incremental_verified": True,
                 }
             )
-    protocol = manifest["incremental_models"][0]
-    protocol.update(
-        {
-            "training_phase": "incremental_learning",
-            "counted_as_incremental_learning": True,
-            "training_data_scope": "incremental_dataset_only",
-            "base_detector_weights_frozen": True,
-            "system_calibration_source": rel(production / "calibration.json"),
-            "activation_thresholds": {
-                str(key): value for key, value in new_thresholds.items()
-            },
-            "calibration_sha256": sha256_file(production / "calibration.json"),
-            "metrics_sha256": sha256_file(production / "metrics.json"),
-            "context_prior": dict(candidate["incremental_context_prior"]),
-            "context_gate": incremental_gate,
-            "evaluation_semantics": profile["evaluation_semantics"],
-            "rechecked_at": now,
-            "base_test_map50": lock_metrics["base_map50"],
-            "old_map50_before": lock_metrics["old_map50_before"],
-            "old_map50_after": lock_metrics["old_map50_after"],
-            "new_map50": lock_metrics["new_map50"],
-            "new_per_class_ap50": dict(lock_metrics["new_per_class_ap50"]),
-            "full_map50": lock_metrics["full_map50"],
-            "krr": lock_metrics["krr"],
-            "lock_precision_by_class": {
-                str(key): value["precision"] for key, value in new_quality.items()
-            },
-            "lock_recall_by_class": {
-                str(key): value["recall"] for key, value in new_quality.items()
-            },
-            "false_activation_rate_by_class": {
-                str(key): value["false_activation_rate"]
-                for key, value in new_false_activation.items()
-            },
-            "overall_lock_precision": result["lock"]["overall"]["precision"],
-            "new_class_lock_precision": result["lock"]["new_classes"]["precision"],
-            "diagnostic_warnings": advisory_warnings,
-        }
-    )
+    manifest_protocols = []
+    for round_spec in active_rounds:
+        model_id = str(round_spec["specialist"]["model_id"])
+        registered_model = registered_models[model_id]
+        owned_ids = [int(value) for value in round_spec["new_class_ids"]]
+        manifest_protocols.append(
+            {
+                "protocol": model_id,
+                "display_name": "{} 增量专家".format(round_spec["round_id"]),
+                "task_type": "incremental_object_detection",
+                "incremental_mode": "class_incremental",
+                "learning_data_scope": "incremental_dataset_only",
+                "class_names": {
+                    str(class_id): CLASS_NAMES[class_id]
+                    for class_id in owned_ids
+                },
+                "global_class_ids": owned_ids,
+                "base_model_id": round_registry["base"]["model_id"],
+                "base_class_ids": list(BASE_IDS),
+                "round_id": round_spec["round_id"],
+                "round_index": round_spec["round_index"],
+                "parent_generation_id": round_spec["parent_generation_id"],
+                "generation_id": round_spec["generation_id"],
+                "activation_thresholds": {
+                    str(class_id): new_thresholds[class_id]
+                    for class_id in owned_ids
+                },
+                "calibration_source": rel(production / "calibration.json"),
+                "calibration_sources": {
+                    str(class_id): rel(production / "calibration.json")
+                    for class_id in owned_ids
+                },
+                "calibration_sha256": sha256_file(
+                    production / "calibration.json"
+                ),
+                "metrics_source": rel(production / "metrics.json"),
+                "metrics_sha256": sha256_file(production / "metrics.json"),
+                "evidence_level": "verified",
+                "available": True,
+                "context_prior": dict(candidate["incremental_context_prior"]),
+                "context_gate": incremental_gate,
+                "path": registered_model["path"],
+                "sha256": registered_model["sha256"],
+                "evaluation_semantics": profile["evaluation_semantics"],
+                "rechecked_at": now,
+                "base_test_map50": lock_metrics["base_map50"],
+                "old_map50_before": lock_metrics["old_map50_before"],
+                "old_map50_after": lock_metrics["old_map50_after"],
+                "new_map50": sum(
+                    float(new_quality[class_id]["map50"])
+                    for class_id in owned_ids
+                )
+                / len(owned_ids),
+                "new_per_class_ap50": {
+                    str(class_id): new_quality[class_id]["map50"]
+                    for class_id in owned_ids
+                },
+                "full_map50": lock_metrics["full_map50"],
+                "krr": lock_metrics["krr"],
+                "lock_precision_by_class": {
+                    str(class_id): new_quality[class_id]["precision"]
+                    for class_id in owned_ids
+                },
+                "lock_recall_by_class": {
+                    str(class_id): new_quality[class_id]["recall"]
+                    for class_id in owned_ids
+                },
+                "false_activation_rate_by_class": {
+                    str(class_id): new_false_activation[class_id][
+                        "false_activation_rate"
+                    ]
+                    for class_id in owned_ids
+                },
+                "competition_accepted": True,
+                "deployment_accepted": True,
+                "acceptance": "passed",
+                "diagnostic_warnings": advisory_warnings,
+                "training_phase": "incremental_learning",
+                "counted_as_incremental_learning": True,
+                "training_data_scope": "incremental_dataset_only",
+                "base_detector_weights_frozen": True,
+                "historical_incremental_expert_weights_frozen": True,
+                "system_calibration_source": rel(production / "calibration.json"),
+            }
+        )
+    manifest["incremental_models"] = manifest_protocols
     manifest["notes"] = [
         "所有检测选择和验收硬指标均为 mAP50。",
-        "incremental_learning 仅指使用当轮增量 train/dev 训练新类检测器及新类专属学习；Base 检测器权重保持冻结。",
+        "incremental_learning 按轮次注册表只使用当轮 Increment train/dev；Base 与历史专家权重保持冻结。",
+        "两轮不同新增类别的父子代际、逐轮 New-mAP50/KRR/Full-mAP50 与专家登记均由 sequential_round_evidence.json 固化。",
         "Scene-SensorNet 训练和六类场景门控搜索属于 system_calibration，可使用 Base/Increment train/dev，但不更新任何检测器权重。",
         "六类检测的 mixed lock 只用于参数冻结后的 joint_evaluation，不训练也不选参；Scene-SensorNet 的 context lock 仅做冻结功能模型复核。",
-        "Base 与二类专家对每张图并行推理，类别 owner 保持固定。",
+        "Base 与截至当前轮的注册专家对每张图并行推理，类别 owner 保持固定。",
         "六类逐类阈值和场景惩罚只由 mixed dev 选择；线上只读取 Scene-SensorNet 概率，不读取文件名或标签。",
         "precision 与误激活率是非阻断诊断；当前场景感知运行点已显著改善二者。",
         "仓库不包含竞赛数据集和标签。",
@@ -852,12 +1418,61 @@ def main() -> int:
         raise ValueError("功能模型注册表未引用晋级前 manifest，拒绝静默改写")
     if old_scene_metrics_hash not in functional_text:
         raise ValueError("功能模型注册表未引用晋级前 Scene-SensorNet 证据，拒绝静默改写")
-    functional_path.write_text(
-        functional_text.replace(old_manifest_hash, new_manifest_hash).replace(
-            old_scene_metrics_hash, new_scene_metrics_hash
+    functional_registry = yaml.safe_load(functional_text)
+    functional_models = {
+        str(row["id"]): row for row in functional_registry["models"]
+    }
+    scene_functional = functional_models["scene_sensor_net_v1"]
+    base_functional = functional_models["four_class_base_detector"]
+    incremental_functional = functional_models["incremental_model_bank_v1"]
+    scene_functional["evidence"]["sha256"] = new_scene_metrics_hash
+    base_functional["evidence"]["sha256"] = new_manifest_hash
+    incremental_functional.update(
+        {
+            "display_name": "顺序类别增量目标检测模型库",
+            "implementation": (
+                "parallel_frozen_base_and_registered_incremental_experts"
+            ),
+            "artifacts": [
+                {
+                    "path": models[model_id]["path"],
+                    "sha256": models[model_id]["sha256"],
+                }
+                for model_id in generation["model_members"]
+                if models[model_id].get("role")
+                in {"class_incremental_expert", "target_incremental_expert"}
+            ],
+        }
+    )
+    incremental_functional["evidence"]["sha256"] = new_manifest_hash
+    for edge in functional_registry.get("collaboration", []):
+        direction = (str(edge.get("from")), str(edge.get("to")))
+        if direction == (
+            "four_class_base_detector",
+            "incremental_model_bank_v1",
+        ):
+            edge["purpose"] = (
+                "Base owner 与两个注册单类专家对每张未知图并行推理"
+            )
+        elif direction == (
+            "incremental_model_bank_v1",
+            "four_class_base_detector",
+        ):
+            edge["purpose"] = (
+                "Base 固定负责全局类0至3，两个注册单类专家分别负责4和5，"
+                "按dev逐类阈值及固定类别 owner 融合"
+            )
+    temporary_functional = functional_path.with_suffix(".yaml.tmp")
+    temporary_functional.write_text(
+        yaml.safe_dump(
+            functional_registry,
+            allow_unicode=True,
+            sort_keys=False,
+            width=1000,
         ),
         encoding="utf-8",
     )
+    temporary_functional.replace(functional_path)
 
     (evidence / "operating_point_diagnostics.md").write_text(
         diagnostics_markdown(result["baseline"], result["lock"], thresholds, penalties),
@@ -866,6 +1481,8 @@ def main() -> int:
     summary = {
         "run_id": run_id,
         "candidate_id": candidate["candidate_id"],
+        "generation_id": target_round["generation_id"],
+        "sequential_class_incremental_verified": True,
         "base_map50": lock_metrics["base_map50"],
         "new_map50": lock_metrics["new_map50"],
         "krr": lock_metrics["krr"],

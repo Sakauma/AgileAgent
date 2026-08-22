@@ -81,7 +81,7 @@ def render_page(page: str, state: Dict[str, Any], decision: Dict[str, Any]) -> s
             f"x86 NVIDIA GPU={deployment.get('x86_nvidia_gpu')}",
             f"Ascend 310B={deployment.get('ascend_310b')}",
             "310B 门禁=" + " -> ".join(deployment.get("ascend_gates", [])),
-            f"官方测试集={submission.get('official_test_ready')}  提交格式={submission.get('official_format_confirmed')}",
+            f"本地评测输入={submission.get('official_test_ready')}  提交格式={submission.get('official_format_confirmed')}",
         ]
     )
 

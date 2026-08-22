@@ -12,6 +12,7 @@ AgileAgent 使用 UTF-8 YAML 配置。主运行配置采用 schema 3，并由 `f
 | `configs/ascend310b/full_score_method.yaml` | Ascend 310B 满分结构、阈值搜索、评分门禁和参考证据 |
 | `configs/functional_models.yaml` | 三个功能模型及发布资产 |
 | `configs/incremental_detection_policy.yaml` | `base_learning`、`incremental_learning`、`system_calibration`、`joint_evaluation` 的统一范围契约 |
+| `configs/incremental_round_registry_4plus2.yaml` | 两轮类别注册、逐轮 split、局部/全局类别映射及父子代际契约 |
 | `configs/strict_class_incremental_3plus1.yaml` | 旧 3+1 兼容实验参数，不是当前 production |
 | `configs/scene_sensor_model.yaml` | 旧 3+1 Scene-SensorNet 兼容参数 |
 | `configs/scene_sensor_model_4plus2.yaml` | 当前 4+2 Scene-SensorNet 训练参数 |
@@ -31,6 +32,10 @@ AgileAgent 使用 UTF-8 YAML 配置。主运行配置采用 schema 3，并由 `f
 | `joint_evaluation` | `false` | 在全已学类别 lock/test 上只评分，禁止训练和选参 |
 
 `configs/scene_sensor_model_4plus2.yaml` 的 `protocol.phase` 固定为 `system_calibration`。新生成的场景模型、门控候选、`calibration.json` 和联合评估证据均显式记录 `phase`、`counted_as_incremental_learning` 与 `detector_weights_updated`。其中 `calibration.json.data_scope` 分别声明 Scene-SensorNet、Base 先验、Increment 先验和 mixed dev 门控搜索的数据用途，不再把 mixed dev 校准误写成 `incremental_dataset_only`。
+
+`incremental.round_registry` 是正式多轮源码入口。训练和评估工具不接受源码内固定的新类集合，而是从注册表读取 `round_id`、`new_class_ids`、`local_to_global`、`parent_generation_id` 与 `generation_id`。当前顺序为 `round_01_patrol_boat` → `round_02_armored_vehicle`；每轮 Base 和历史专家冻结，只使用该轮 Increment train/dev。`incremental.round_candidate_registration_tool`、`round_summary_tool` 与 `strict_promotion_tool` 固定登记、汇总和晋级入口；运行时模型唯一来源为 `models/generations.json`。Scene-SensorNet、场景先验与门控搜索仍属于 `system_calibration`，可以使用其声明的数据范围，不受增量检测器“不得回放 Base”规则约束。
+
+候选登记只允许更新 `channels.candidate`。只有最终轮次已登记、两轮 `round_evidence.json` 完整且最终 scene-aware lock 通过时，晋级工具才会更新 `channels.production`；旧联合二类代际随后标记为 `retired_baseline`。实验档 schema 2 同时登记 `specialist_models[]`，命令行 `--profile incremental-detection` 与默认 Web 运行时都按相同的多专家 owner 加载。
 
 ## 加载顺序
 

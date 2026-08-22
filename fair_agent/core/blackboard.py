@@ -347,7 +347,7 @@ def render_blackboard_report(state: Dict[str, Any]) -> str:
         "",
         "## 提交状态",
         "",
-        f"- 隐藏测试集就绪：`{state.get('submission', {}).get('official_test_ready')}`",
+        f"- 本地评测输入已配置：`{state.get('submission', {}).get('official_test_ready')}`",
         f"- 提交格式已确认：`{state.get('submission', {}).get('official_format_confirmed')}`",
         f"- 提交格式：`{state.get('submission', {}).get('official_format')}`",
     ]

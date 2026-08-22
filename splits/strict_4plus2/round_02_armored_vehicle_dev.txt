@@ -1,0 +1,7 @@
+datasets_r2_inc_train/ir_r2_inc_forest_000003.png
+datasets_r2_inc_train/ir_r2_inc_forest_000009.png
+datasets_r2_inc_train/ir_r2_inc_forest_000015.png
+datasets_r2_inc_train/ir_r2_inc_urban_000017.png
+datasets_r2_inc_train/ir_r2_inc_urban_000021.png
+datasets_r2_inc_train/sar_r2_inc_forest_000002.png
+datasets_r2_inc_train/sar_r2_inc_urban_000004.png

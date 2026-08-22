@@ -24,7 +24,7 @@ AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代�
 - `models/generations.json`；
 - 三个功能模型、Base/Increment 场景先验及其证据；
 - production 类别所有权和指标；
-- 增量检测策略。
+- 增量检测策略、轮次登记/汇总/晋级源码入口。
 
 当前发布校验状态为 `passed`。
 
@@ -45,6 +45,17 @@ AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代�
 - `scene_aware_candidate.json` 是由 dev 冻结的 `guarded_precision` 参数；
 - `scene_aware_lock_recheck.json` 记录冻结候选的一次性 mixed lock 复核，并声明 `phase: joint_evaluation` 与 `model_selection_allowed: false`；
 - `base_context_prior.json` 只来自 Base train 正样本，`incremental_context_prior.json` 只来自 Increment train 正样本；
+
+## 4+2 两轮类别增量证据
+
+`configs/incremental_round_registry_4plus2.yaml` 是轮次、类别映射和父子代际的单一来源。发布校验会静态检查：
+
+- 至少两轮且每轮注入不同新类别；
+- Round 1/2 的 train/dev/lock 各自非空、互斥，合并后等于固定 Increment 总清单；
+- Scene-SensorNet 明确属于 `system_calibration`，不计入增量学习；
+- 训练和评估入口从注册表读取类别，源码不使用固定 `4/5` 作为协议参数。
+
+实际训练后，每轮 `tools/08_evaluate_4plus2.py` 必须生成 `lineage`、`round_metrics.new_map50/krr/full_map50` 和 `predictions_frozen_before_lock_labels: true`。随后 `tools/13_register_incremental_round_candidate.py` 核对 selection、evaluation、历史专家和父代 owner，只登记 candidate。`tools/12_summarize_incremental_rounds.py` 只在两轮指标及 `models/generations.json` 都满足父子链、模型身份、零旧样本及不同新类别约束时生成完整证据；`tools/10` 缺少该证据时不得晋级。
 - `operating_point_diagnostics.md` 给出逐类 mAP50、TP、FP、precision、recall 和误激活率。
 
 静态发布校验同时检查四阶段范围契约。严格实验档加载器要求当前 schema 的 `calibration.json` 属于 `system_calibration`、不更新检测器权重，并准确声明 Base train、Increment train 与 mixed dev 的用途。参数搜索只允许读取 dev；lock 模式必须接收已冻结 candidate，并在读取 lock 标签前固定候选与模型预测。

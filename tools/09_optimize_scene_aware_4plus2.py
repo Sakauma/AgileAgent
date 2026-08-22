@@ -17,17 +17,18 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-CLASS_NAMES = {
-    0: "soldier",
-    1: "small_aircraft",
-    2: "warship",
-    3: "tank",
-    4: "patrol_boat",
-    5: "armored_vehicle",
-}
-BASE_CLASS_IDS = (0, 1, 2, 3)
-NEW_CLASS_IDS = (4, 5)
-CURRENT_THRESHOLDS = {0: 0.01, 1: 0.01, 2: 0.01, 3: 0.01, 4: 0.18, 5: 0.08}
+from fair_agent.modules.incremental_round_registry import (  # noqa: E402
+    DEFAULT_ROUND_REGISTRY,
+    load_incremental_round_registry,
+    rounds_through,
+    select_round,
+)
+
+
+CLASS_NAMES: dict[int, str] = {}
+BASE_CLASS_IDS: tuple[int, ...] = ()
+NEW_CLASS_IDS: tuple[int, ...] = ()
+CURRENT_THRESHOLDS: dict[int, float] = {}
 SYSTEM_CALIBRATION_DATA_SCOPE = {
     "scene_sensor_model_training": "base_and_incremental_train_dev",
     "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
@@ -39,11 +40,13 @@ SYSTEM_CALIBRATION_DATA_SCOPE = {
 
 def resolve_split(
     data_root: Path,
-    split_name: str,
+    split_reference: str,
     *,
     require_labels: bool = True,
 ) -> list[Path]:
-    split_path = data_root / "splits" / "strict_4plus2" / split_name
+    split_path = Path(split_reference)
+    if not split_path.is_absolute():
+        split_path = data_root / split_path
     if not split_path.is_file():
         raise FileNotFoundError(f"划分不存在：{split_path}")
     images: list[Path] = []
@@ -72,6 +75,58 @@ def resolve_split(
         images.append(image)
     if not images or len(images) != len(set(images)):
         raise ValueError(f"划分为空或包含重复图像：{split_path}")
+    return images
+
+
+def configure_round_contract(
+    registry_path: Path, round_id: str
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    global CLASS_NAMES, BASE_CLASS_IDS, NEW_CLASS_IDS, CURRENT_THRESHOLDS
+
+    registry = load_incremental_round_registry(registry_path)
+    target_round = select_round(registry, round_id)
+    active_rounds = rounds_through(registry, round_id)
+    CLASS_NAMES = {
+        class_id: registry["class_names"][class_id]
+        for class_id in target_round["learned_class_ids"]
+    }
+    BASE_CLASS_IDS = tuple(registry["base"]["class_ids"])
+    NEW_CLASS_IDS = tuple(
+        class_id
+        for round_spec in active_rounds
+        for class_id in round_spec["new_class_ids"]
+    )
+    defaults = registry.get("system_calibration_defaults") or {}
+    CURRENT_THRESHOLDS = {
+        int(key): float(value)
+        for key, value in dict(defaults.get("threshold_by_class") or {}).items()
+        if int(key) in CLASS_NAMES
+    }
+    if set(CURRENT_THRESHOLDS) != set(CLASS_NAMES):
+        raise ValueError("轮次注册表缺少截至当前轮的系统校准初始阈值")
+    return registry, target_round, active_rounds
+
+
+def cumulative_round_split(
+    data_root: Path,
+    active_rounds: Sequence[Mapping[str, Any]],
+    split_role: str,
+    *,
+    require_labels: bool = True,
+) -> list[Path]:
+    images = [
+        image
+        for round_spec in active_rounds
+        for image in resolve_split(
+            data_root,
+            str(round_spec["splits"][split_role]),
+            require_labels=require_labels,
+        )
+    ]
+    if len(images) != len(set(images)) or len({path.stem for path in images}) != len(
+        images
+    ):
+        raise ValueError(f"累计 {split_role} 轮次清单包含重复图像")
     return images
 
 
@@ -591,12 +646,18 @@ def run_dev(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"Scene-SensorNet 权重不存在：{scene_weight}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    base_train = resolve_split(data_root, "base_train.txt")
-    incremental_train = resolve_split(data_root, "increment_train.txt")
-    base_dev = resolve_split(data_root, "base_dev.txt")
-    incremental_dev = resolve_split(data_root, "increment_dev.txt")
-    mixed_dev = resolve_split(data_root, "mixed_dev.txt")
-    ensure_mixed_contract(base_dev, incremental_dev, mixed_dev, "mixed_dev")
+    registry = args.round_registry_payload
+    active_rounds = args.active_rounds
+    target_round = args.target_round
+    base_train = resolve_split(data_root, registry["base"]["splits"]["train"])
+    incremental_train = cumulative_round_split(
+        data_root, active_rounds, "train"
+    )
+    base_dev = resolve_split(data_root, registry["base"]["splits"]["dev"])
+    incremental_dev = cumulative_round_split(data_root, active_rounds, "dev")
+    mixed_dev = [*base_dev, *incremental_dev]
+    if len(mixed_dev) != len(set(mixed_dev)):
+        raise ValueError("累计 mixed dev 包含重复图像")
     train_images = [*base_train, *incremental_train]
     train_contexts = predict_context_cache(
         train_images,
@@ -686,8 +747,14 @@ def run_dev(args: argparse.Namespace) -> int:
         )
         candidate = {
             "schema_version": 2,
-            "candidate_id": f"scene-aware-4plus2-{name}",
+            "candidate_id": f"scene-aware-{target_round['round_id']}-{name}",
             "created_at": datetime.now().astimezone().isoformat(),
+            "round_registry": Path(registry["path"]).as_posix(),
+            "round_id": target_round["round_id"],
+            "round_index": target_round["round_index"],
+            "parent_generation_id": target_round["parent_generation_id"],
+            "generation_id": target_round["generation_id"],
+            "learned_class_ids": target_round["learned_class_ids"],
             "phase": "system_calibration",
             "counted_as_incremental_learning": False,
             "detector_weights_updated": False,
@@ -717,6 +784,12 @@ def run_dev(args: argparse.Namespace) -> int:
         "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
         "protocol": "strict_4plus2_class_specific_scene_soft_gate",
+        "round_registry": Path(registry["path"]).as_posix(),
+        "round_id": target_round["round_id"],
+        "round_index": target_round["round_index"],
+        "parent_generation_id": target_round["parent_generation_id"],
+        "generation_id": target_round["generation_id"],
+        "learned_class_ids": target_round["learned_class_ids"],
         "phase": "system_calibration",
         "counted_as_incremental_learning": False,
         "detector_weights_updated": False,
@@ -725,6 +798,8 @@ def run_dev(args: argparse.Namespace) -> int:
         "splits": {
             "base_train": len(base_train),
             "incremental_train": len(incremental_train),
+            "base_dev": len(base_dev),
+            "incremental_dev": len(incremental_dev),
             "mixed_dev": len(mixed_dev),
         },
         "baseline": baseline,
@@ -763,12 +838,29 @@ def run_lock(args: argparse.Namespace) -> int:
     priors = combined_class_priors(
         candidate["base_context_prior"], candidate["incremental_context_prior"]
     )
-    base_lock = resolve_split(data_root, "base_lock.txt", require_labels=False)
-    incremental_lock = resolve_split(
-        data_root, "increment_lock.txt", require_labels=False
+    registry = args.round_registry_payload
+    active_rounds = args.active_rounds
+    target_round = args.target_round
+    if any(
+        candidate.get(key) != target_round[key]
+        for key in (
+            "round_id",
+            "round_index",
+            "parent_generation_id",
+            "generation_id",
+            "learned_class_ids",
+        )
+    ):
+        raise ValueError("场景候选与当前轮次注册表不一致")
+    base_lock = resolve_split(
+        data_root, registry["base"]["splits"]["lock"], require_labels=False
     )
-    mixed_lock = resolve_split(data_root, "mixed_lock.txt", require_labels=False)
-    ensure_mixed_contract(base_lock, incremental_lock, mixed_lock, "mixed_lock")
+    incremental_lock = cumulative_round_split(
+        data_root, active_rounds, "lock", require_labels=False
+    )
+    mixed_lock = [*base_lock, *incremental_lock]
+    if len(mixed_lock) != len(set(mixed_lock)):
+        raise ValueError("累计 mixed lock 包含重复图像")
     lock_contexts = predict_context_cache(
         mixed_lock,
         scene_weight,
@@ -824,10 +916,20 @@ def run_lock(args: argparse.Namespace) -> int:
         "schema_version": 2,
         "created_at": datetime.now().astimezone().isoformat(),
         "phase": "joint_evaluation",
+        "round_registry": Path(registry["path"]).as_posix(),
+        "round_id": target_round["round_id"],
+        "round_index": target_round["round_index"],
+        "parent_generation_id": target_round["parent_generation_id"],
+        "generation_id": target_round["generation_id"],
         "counted_as_incremental_learning": False,
         "detector_weights_updated": False,
         "model_selection_allowed": False,
         "candidate": candidate,
+        "splits": {
+            "base_lock": len(base_lock),
+            "incremental_lock": len(incremental_lock),
+            "mixed_lock": len(mixed_lock),
+        },
         "baseline": baseline,
         "lock": lock_metrics,
         "score_gates": score_gates,
@@ -846,6 +948,10 @@ def main() -> int:
     parser.add_argument("mode", choices=("dev", "lock"))
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument(
+        "--round-registry", type=Path, default=ROOT / DEFAULT_ROUND_REGISTRY
+    )
+    parser.add_argument("--round-id", required=True)
+    parser.add_argument(
         "--evidence-dir",
         type=Path,
         default=ROOT / "models" / "production" / "incremental_detection" / "evidence",
@@ -860,6 +966,12 @@ def main() -> int:
     parser.add_argument("--device", default="1")
     parser.add_argument("--batch", type=int, default=256)
     args = parser.parse_args()
+    registry, target_round, active_rounds = configure_round_contract(
+        args.round_registry, args.round_id
+    )
+    args.round_registry_payload = registry
+    args.target_round = target_round
+    args.active_rounds = active_rounds
     return run_dev(args) if args.mode == "dev" else run_lock(args)
 
 

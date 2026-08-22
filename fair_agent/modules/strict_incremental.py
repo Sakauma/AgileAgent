@@ -699,6 +699,12 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     if any(not 0.01 <= value <= 1.0 for value in thresholds.values()):
         raise ValueError(f"严格增量实验档逐类阈值无效：{profile_id}")
     single_detector = profile.get("deployment") == "single_detector"
+    raw_specialist_models = profile.get("specialist_models")
+    multi_specialist = (
+        not single_detector
+        and isinstance(raw_specialist_models, list)
+        and bool(raw_specialist_models)
+    )
     if single_detector and len(new_global_ids) != 1:
         raise ValueError(f"统一学生实验档暂不支持多个新增类别：{profile_id}")
     new_global_id = new_global_ids[0]
@@ -727,14 +733,72 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
             or set(new_global_ids) & set(mapping.values())
         ):
             raise ValueError(f"严格增量实验档类别映射或阈值无效：{profile_id}")
-        weight_fields = (
-            ("base_weight", "base_sha256"),
-            ("specialist_weight", "specialist_sha256"),
-        )
+        weight_fields = (("base_weight", "base_sha256"),)
+        if not multi_specialist:
+            weight_fields += (("specialist_weight", "specialist_sha256"),)
     for path_key, hash_key in weight_fields:
         weight = resolve_path(profile[path_key])
         if not weight.exists() or sha256_file(weight) != profile[hash_key]:
             raise ValueError(f"严格增量实验档权重校验失败：{profile_id}:{path_key}")
+    if multi_specialist:
+        normalized_specialists = []
+        covered_ids: set[int] = set()
+        specialist_ids: set[str] = set()
+        for raw_specialist in raw_specialist_models:
+            if not isinstance(raw_specialist, Mapping):
+                raise ValueError(f"严格增量实验档多专家格式无效：{profile_id}")
+            specialist = dict(raw_specialist)
+            specialist_id = str(
+                specialist.get("model_id") or specialist.get("id") or ""
+            ).strip()
+            try:
+                specialist_mapping = {
+                    int(key): int(value)
+                    for key, value in dict(
+                        specialist.get("local_to_global") or {}
+                    ).items()
+                }
+                owned_ids = set(specialist_mapping.values())
+                declared_ids = {
+                    int(value)
+                    for value in specialist.get("global_class_ids", owned_ids)
+                }
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"严格增量实验档专家映射无效：{profile_id}:{specialist_id}"
+                ) from exc
+            weight = resolve_path(str(specialist.get("weight") or ""))
+            expected_hash = str(specialist.get("sha256") or "")
+            if (
+                not specialist_id
+                or specialist_id in specialist_ids
+                or not specialist_mapping
+                or set(specialist_mapping) != set(range(len(specialist_mapping)))
+                or owned_ids != declared_ids
+                or not owned_ids
+                or covered_ids & owned_ids
+                or owned_ids - set(new_global_ids)
+                or not weight.is_file()
+                or len(expected_hash) != 64
+                or sha256_file(weight) != expected_hash
+            ):
+                raise ValueError(
+                    f"严格增量实验档专家身份无效：{profile_id}:{specialist_id}"
+                )
+            specialist_ids.add(specialist_id)
+            covered_ids.update(owned_ids)
+            normalized_specialists.append(
+                {
+                    **specialist,
+                    "model_id": specialist_id,
+                    "weight": rel_path(weight),
+                    "local_to_global": specialist_mapping,
+                    "global_class_ids": sorted(owned_ids),
+                }
+            )
+        if covered_ids != set(new_global_ids):
+            raise ValueError(f"严格增量实验档专家类别所有权不完整：{profile_id}")
+        profile["specialist_models"] = normalized_specialists
     prototype_source = profile.get("positive_prototype_source")
     if prototype_source:
         prototype_path = resolve_path(prototype_source)
@@ -991,7 +1055,11 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     ):
         raise ValueError(f"严格增量实验档合规证据无效：{profile_id}")
     profile["metrics_source"] = rel_path(metrics_path)
-    profile["deployment"] = "single_detector" if single_detector else "dual_detector"
+    profile["deployment"] = (
+        "single_detector"
+        if single_detector
+        else ("multi_specialist" if multi_specialist else "dual_detector")
+    )
     profile["base_local_to_global"] = mapping
     profile["new_global_ids"] = new_global_ids
     profile["activation_thresholds"] = thresholds
