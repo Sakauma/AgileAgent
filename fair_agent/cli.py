@@ -559,6 +559,12 @@ def cmd_detect(args: argparse.Namespace) -> int:
                         {profile.get("new_global_id"): profile.get("calibration_source")},
                     ).items()
                 }
+                base_activation_thresholds = {
+                    int(key): float(value)
+                    for key, value in dict(
+                        profile.get("base_activation_thresholds") or {}
+                    ).items()
+                }
                 settings.update({
                     "detector_path": resolve_path(profile["base_weight"]),
                     "class_names": class_names,
@@ -599,7 +605,17 @@ def cmd_detect(args: argparse.Namespace) -> int:
                             "positive_prototype": profile.get("positive_prototype"),
                         }
                     },
-                    "unified_class_gates": {},
+                    "unified_class_gates": {
+                        "activation_thresholds": base_activation_thresholds,
+                        "incremental_class_ids": [],
+                        "context_prior": dict(
+                            profile.get("base_context_prior") or {}
+                        ),
+                        "context_gate": dict(
+                            profile.get("base_context_gate")
+                            or {"enabled": False}
+                        ),
+                    },
                 })
         engine = WebInferenceEngine(
             settings["detector_path"],

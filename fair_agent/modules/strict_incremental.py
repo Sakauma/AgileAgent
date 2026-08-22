@@ -765,6 +765,17 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
         penalty = float(context_gate.get("max_threshold_penalty", -1.0))
         if not 0.0 <= penalty <= 1.0:
             raise ValueError(f"严格增量实验档场景软门控阈值无效：{profile_id}")
+        raw_penalties = context_gate.get("max_threshold_penalties")
+        if isinstance(raw_penalties, Mapping):
+            penalties = {
+                int(key): float(value) for key, value in raw_penalties.items()
+            }
+            if set(penalties) != set(new_global_ids) or any(
+                not 0.0 <= value <= 1.0 for value in penalties.values()
+            ):
+                raise ValueError(
+                    f"严格增量实验档逐类场景软门控阈值无效：{profile_id}"
+                )
         context_prior_path = resolve_path(
             profile.get("context_prior_source", "__missing_context_prior__")
         )
@@ -780,6 +791,55 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
             raise ValueError(f"严格增量实验档场景先验内容不一致：{profile_id}")
     elif context_gate.get("enabled") is not False or context_prior not in ({}, None):
         raise ValueError(f"严格增量实验档场景软门控开关无效：{profile_id}")
+    raw_base_thresholds = profile.get("base_activation_thresholds") or {}
+    try:
+        base_thresholds = {
+            int(key): float(value) for key, value in dict(raw_base_thresholds).items()
+        }
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"严格增量实验档 Base 逐类阈值无效：{profile_id}") from exc
+    base_gate = profile.get("base_context_gate")
+    base_prior = profile.get("base_context_prior")
+    if isinstance(base_gate, Mapping) and base_gate.get("enabled") is True:
+        expected_base_ids = set(mapping.values())
+        raw_base_penalties = base_gate.get("max_threshold_penalties")
+        if (
+            set(base_thresholds) != expected_base_ids
+            or any(not 0.01 <= value <= 1.0 for value in base_thresholds.values())
+            or base_gate.get("policy") != "soft_threshold_penalty"
+            or base_gate.get("hard_routing") is not False
+            or base_gate.get("learning_data_scope") != "base_train_only"
+            or not isinstance(raw_base_penalties, Mapping)
+            or {int(key) for key in raw_base_penalties} != expected_base_ids
+            or any(
+                not 0.0 <= float(value) <= 1.0
+                for value in raw_base_penalties.values()
+            )
+            or not isinstance(base_prior, Mapping)
+            or base_prior.get("source_split") != "base_train_only"
+        ):
+            raise ValueError(f"严格增量实验档 Base 场景软门控无效：{profile_id}")
+        base_prior_path = resolve_path(
+            profile.get("base_context_prior_source", "__missing_base_context_prior__")
+        )
+        expected_base_hash = str(profile.get("base_context_prior_sha256") or "")
+        if (
+            not base_prior_path.is_file()
+            or len(expected_base_hash) != 64
+            or sha256_file(base_prior_path) != expected_base_hash
+            or json.loads(base_prior_path.read_text(encoding="utf-8"))
+            != dict(base_prior)
+        ):
+            raise ValueError(
+                f"严格增量实验档 Base 场景先验证据缺失：{profile_id}"
+            )
+    elif base_gate is not None and (
+        not isinstance(base_gate, Mapping)
+        or base_gate.get("enabled") is not False
+        or base_thresholds
+        or base_prior not in ({}, None)
+    ):
+        raise ValueError(f"严格增量实验档 Base 场景软门控开关无效：{profile_id}")
     raw_calibration_sources = profile.get("calibration_sources")
     if multi_class_profile:
         if isinstance(raw_calibration_sources, Mapping):
@@ -893,6 +953,7 @@ def load_experiment_profile(profile_id: str, profile_root: str | Path | None = N
     profile["base_local_to_global"] = mapping
     profile["new_global_ids"] = new_global_ids
     profile["activation_thresholds"] = thresholds
+    profile["base_activation_thresholds"] = base_thresholds
     profile["calibration_sources"] = {
         class_id: rel_path(resolve_path(source))
         for class_id, source in calibration_sources.items()
