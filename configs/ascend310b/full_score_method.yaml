@@ -144,7 +144,7 @@ benchmark:
     width: 640
     height: 512
     bit_depth: 8
-    color_types: [2, 6]
+    color_types: [0, 2, 6]
 
 reference_result:
   date: "2026-08-22"

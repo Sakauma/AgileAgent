@@ -35,7 +35,7 @@ def fixed_png_header(
     )
 
 
-@pytest.mark.parametrize("color_type", [2, 6])
+@pytest.mark.parametrize("color_type", [0, 2, 6])
 def test_encoded_preprocessor_accepts_only_fixed_rgb_png(color_type: int) -> None:
     assert AscendEncodedPreprocessor.accepts(
         fixed_png_header(color_type=color_type)
@@ -49,7 +49,7 @@ def test_encoded_preprocessor_accepts_only_fixed_rgb_png(color_type: int) -> Non
         fixed_png_header(width=641),
         fixed_png_header(height=511),
         fixed_png_header(bit_depth=16),
-        fixed_png_header(color_type=0),
+        fixed_png_header(color_type=4),
     ],
 )
 def test_encoded_preprocessor_rejects_other_image_contracts(payload: bytes) -> None:

@@ -1392,7 +1392,7 @@ class AscendEncodedPreprocessor:
             width == AscendEncodedPreprocessor.source_width
             and height == AscendEncodedPreprocessor.source_height
             and bit_depth == 8
-            and color_type in {2, 6}
+            and color_type in {0, 2, 6}
         )
 
     def _picture_desc(
@@ -1609,7 +1609,7 @@ class AscendEncodedPreprocessor:
 
     def prepare(self, data: bytes) -> float:
         if not self.accepts(data):
-            raise ValueError("Ascend DVPP仅接受固定640x512的8位RGB/RGBA PNG")
+            raise ValueError("Ascend DVPP仅接受固定640x512的8位灰度/RGB/RGBA PNG")
         if self.closed:
             raise RuntimeError("Ascend DVPP编码预处理器已经关闭")
         if len(data) > self.max_encoded_bytes:
