@@ -8,7 +8,7 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 | --- | --- |
 | 多模态目标检测 | IR/SAR 图像统一进入 YOLO 检测链路，输出全局类别 ID、边界框和置信度。 |
 | 类别增量学习 | 上传五列 YOLO 数据后自动完成审计、拆分、训练、校准、复核、代际登记和 production 切换。 |
-| 场景与传感器认知 | Scene-SensorNet 输出 IR/SAR 与 air/forest/sea/urban 概率；4+2 首版将其用于响应与审计，不启用场景门控。 |
+| 场景与传感器认知 | Scene-SensorNet 对已知场景 air/forest/sea/urban 与 IR/SAR 输出概率；当前 4+2 production 用场景概率对新旧六类执行逐类软阈值门控。 |
 | 模型代际管理 | `models/generations.json` 记录父子代际、类别所有权、权重身份、阈值和评测指标。 |
 | Web 与 CLI | Web 支持检测、批量检测和增量工作台；CLI 支持状态、检测、配置、日志、实验与代际操作。 |
 | Ascend 310B | 公共 `8501` 已原子路由到共享骨干双逻辑头满分主线；原三 OM 监听器保留为即时回滚，`8502` 专用于后续候选。 |
@@ -24,7 +24,7 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 | 四类 Base 检测器 | soldier、small_aircraft、warship、tank；全局类 0–3 | `models/production/incremental_detection/four_class_base_detector.pt` |
 | 二类增量专家 | patrol_boat、armored_vehicle；全局类 4–5 | `models/production/incremental_detection/incremental_detector.pt` |
 
-在线推理按 production 代际解析模型成员。Base 与增量专家共同处理每张图像，按固定 owner 映射和 dev 逐类阈值直接合并，再执行 class-aware NMS。Scene-SensorNet 同步提供场景/传感器结果；首版不据此跳过检测器或修改检测阈值。
+在线推理按 production 代际解析模型成员。Base 与增量专家仍共同处理每张图像，类别 owner 固定；Scene-SensorNet 的已知场景概率分别与 Base-train、Increment-train 正样本学习出的六类场景先验计算亲和度，再按逐类最大惩罚软提升有效阈值，最后合并并执行 class-aware NMS。线上不读取文件名或真值标签，也不按场景跳过任一检测器。
 
 历史 3+1 Ascend 正式模型包位于 [`models/ascend310b/full-score/20260816-full-score-1493b04/`](models/ascend310b/full-score/20260816-full-score-1493b04/README.md)，包含可直接加载的 OM、完整构建 provenance、正式配置和原始验收报告。它保持不可变，用于板端回滚与 4+2 转换前的结构参考。
 
@@ -107,20 +107,20 @@ AgileAgent 面向多模态目标检测与小样本增量学习，提供 Web 工�
 
 ## 已验证指标
 
-strict 4+2 冻结评估使用 75 张 Base lock 与 14 张 Increment lock，共 89 张 mixed lock。所有检测选择和验收均只看 mAP50：
+strict 4+2 冻结评估使用 75 张 Base lock 与 14 张 Increment lock，共 89 张 mixed lock。赛题检测门禁仍由 mAP50 及其保持率 KRR 决定；precision、FP 和误激活率是非阻断诊断。本次候选只在 mixed dev 上以 precision 为优化目标并受 mAP50/KRR 下限约束，参数冻结后才一次性复核 mixed lock：
 
 | 指标 | 仓库 production |
 | --- | ---: |
-| Base lock mAP50 | `0.887550` |
-| New-mAP50 | `0.812249` |
-| patrol_boat AP50 | `0.707082` |
-| armored_vehicle AP50 | `0.917415` |
-| KRR | `1.000000` |
+| Base lock mAP50 | `0.856067` |
+| New-mAP50 | `0.773368` |
+| patrol_boat AP50 | `0.691000` |
+| armored_vehicle AP50 | `0.855735` |
+| KRR | `0.973126` |
 | Scene lock sensor / scene / joint | `0.988764 / 0.831461 / 0.820225` |
 
-当前运行点使用 Base `0.01`、patrol_boat `0.18`、armored_vehicle `0.08` 的阈值。在 mixed lock 上，二类增量专家共有 `87 TP / 177 FP`，合并 precision 为 `0.329545`；patrol_boat 为 `42 TP / 106 FP / 0.283784 precision`，armored_vehicle 为 `45 TP / 71 FP / 0.387931 precision`。对应逐类误激活率分别为 `35/82 = 0.426829` 和 `28/82 = 0.341463`；按图像去重，共有 58 张图至少发生一次新增类误激活，其中 5 张同时误激活两类。
+当前逐类基础阈值为 `0=.21, 1=.14, 2=.36, 3=.05, 4=.57, 5=.82`，最大场景惩罚为 `0=.15, 1=.88, 2=.26, 3=.19, 4=.65, 5=0`。有效阈值按 `基础阈值 + 最大惩罚 × (1 - 场景亲和度)` 计算并封顶为 `1.0`。小型飞机对应 air，舰船与巡逻艇对应 sea，人员、坦克和装甲车辆主要对应 forest/urban；这些对应关系来自训练正样本上的模型概率，而不是人工在线规则。
 
-六类融合结果在相同运行点共有 `376 TP / 1275 FP`，整体 precision 为 `0.227741`、recall 为 `0.956743`。这里的 FP 是按类别、单图一对一匹配且 IoU `>=0.50` 后得到的错误检测框，包含重复框、定位不足、错类和负样本图上的检测；它不是错误图像数。precision 与误激活率按工程比赛门禁只记录为诊断项，不否决 Base mAP50、New-mAP50 与 KRR。逐类明细与复算口径见 [`models/production/incremental_detection/evidence/operating_point_diagnostics.md`](models/production/incremental_detection/evidence/operating_point_diagnostics.md)。
+在 mixed lock 上，二类增量专家共有 `69 TP / 10 FP`，合并 precision 为 `0.873418`；patrol_boat 为 `29 TP / 1 FP / 0.966667 precision`、误激活率 `1/82 = 0.012195`，armored_vehicle 为 `40 TP / 9 FP / 0.816327 precision`、误激活率 `7/82 = 0.085366`。六类融合共有 `342 TP / 170 FP`，整体 precision 为 `0.667969`；89 张图中有 14 张至少发生一次六类误激活，旧运行点为 72 张。这里的 FP 是按类别、单图一对一匹配且 IoU `>=0.50` 后得到的错误检测框，包含重复框、定位不足、错类和负样本图上的检测；它不是错误图像数。逐类明细与复算口径见 [`models/production/incremental_detection/evidence/operating_point_diagnostics.md`](models/production/incremental_detection/evidence/operating_point_diagnostics.md)，dev 选择过程见 [`scene_aware_dev_search.md`](models/production/incremental_detection/evidence/scene_aware_dev_search.md)。
 
 历史 3+1 Ascend 原三模型 OM release 已完成 89 图复核，现保留为即时回滚：
 
@@ -294,13 +294,15 @@ R2 原始标签同时包含旧类与新类。专家训练视图必须只保留�
 
 ## 4+2 可复现实验
 
-训练与选模入口为 `tools/04`–`tools/07`，Scene-SensorNet 使用 `tools/60`–`tools/61`，冻结评估使用 `tools/08_evaluate_4plus2.py`。正式参数为 1280 输入、500 epoch、50 轮无改善早停；胜出模型和训练实参已固化在 `models/production/incremental_detection/evidence/`。
+训练与选模入口为 `tools/04`–`tools/07`，Scene-SensorNet 使用 `tools/60`–`tools/61`，冻结评估使用 `tools/08_evaluate_4plus2.py`。六类场景门控的 dev 搜索、冻结 lock 复核与可复现晋级分别由 `tools/09_optimize_scene_aware_4plus2.py` 和 `tools/10_promote_scene_aware_4plus2.py` 完成。正式参数为 1280 输入、500 epoch、50 轮无改善早停；胜出模型、训练实参、dev 搜索和 lock 复核证据均已固化在 `models/production/incremental_detection/evidence/`。
 
 当前胜出组合：
 
 - Base：YOLO26s，seed `8675309`，dev mAP50 `0.913454`，best epoch `24`，共运行 `74` 轮；
 - Increment：YOLO26s，seed `20260821`，dev mAP50 `0.983917`，best epoch `209`，共运行 `259` 轮；
 - Scene-SensorNet：seed `20260821`，best epoch `81`。
+
+场景识别是 air/forest/sea/urban 四个已知类的闭集识别。Base 四类先验只从 Base train 正样本学习，新增二类先验只从 Increment train 正样本学习；因此场景判断会同时影响旧类和新类的有效阈值，但不会改变类别所有权或决定某个模型是否执行。
 
 2026-08-22 已在 4090 服务器的 `sam_hq2_dinov3` 环境使用独立 GPU 完成海面和陆地两张真实图的 CUDA 编排冒烟。两次推理均加载 Scene-SensorNet、四类 Base 和二类增量专家，production 代际为 `incremental_detection_generation_4plus2`，并分别实际激活全局类 4 与全局类 5。
 

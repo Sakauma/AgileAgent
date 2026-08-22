@@ -22,13 +22,16 @@ AgileAgent 将配置、模型代际、在线推理、增量学习、审计和设
   -> 四类 Base 检测器
   -> 二类增量专家
   -> 全局类别映射
-  -> 新增类逐类 dev 阈值
+  -> 六类逐类场景先验亲和度
+  -> 六类逐类 dev 基础阈值 + 场景软惩罚
   -> 固定 owner 直接合并
   -> class-aware NMS
   -> API、黑板与审计事件
 ```
 
-每张图像使用同一 production 代际。四类 Base 固定负责 soldier、small_aircraft、warship 和 tank（全局类 0–3），二类增量专家固定负责 patrol_boat 与 armored_vehicle（全局类 4–5）。两个检测 owner 对每张图并行推理，专家局部类 `0/1` 映射为全局类 `4/5`，使用 dev 阈值 `0.18/0.08`。Scene-SensorNet 输出场景与传感器概率；4+2 首版不启用场景硬路由或软阈值惩罚。
+每张图像使用同一 production 代际。四类 Base 固定负责 soldier、small_aircraft、warship 和 tank（全局类 0–3），二类增量专家固定负责 patrol_boat 与 armored_vehicle（全局类 4–5）。两个检测 owner 对每张图并行推理，专家局部类 `0/1` 映射为全局类 `4/5`。当前基础阈值为 `0=.21, 1=.14, 2=.36, 3=.05, 4=.57, 5=.82`，逐类最大场景惩罚为 `0=.15, 1=.88, 2=.26, 3=.19, 4=.65, 5=0`。
+
+Scene-SensorNet 对 air/forest/sea/urban 四个已知场景做闭集概率预测。Base 类先验只从 Base train 正样本学习，新增类先验只从 Increment train 正样本学习；在线亲和度由场景概率与对应类别先验计算，有效阈值为 `min(1, 基础阈值 + 最大惩罚 × (1 - 亲和度))`。该信号会同时影响新旧类，但只软抑制低亲和度候选：不读取文件名或真值标签、不改变 owner、不做场景硬路由，也不跳过 Base 或 Increment。
 
 当前 x86/CUDA 4+2 production 与下述 Ascend 结构属于不同发布代际。Ascend 不可变包仍是已验证的 3+1 板端 release；在新的 4+2 head 完成 ONNX/ATC 构建与板端评分前，不把 `.pt` 指针变化解释为 OM 已更新。
 

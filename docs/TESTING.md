@@ -22,7 +22,7 @@ AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代�
 - 发布模型路径与 SHA256；
 - `models/manifest.json`；
 - `models/generations.json`；
-- 三个功能模型与证据；
+- 三个功能模型、Base/Increment 场景先验及其证据；
 - production 类别所有权和指标；
 - 增量检测策略。
 
@@ -34,7 +34,19 @@ AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代�
 .venv/bin/python scripts/smoke_models.py
 ```
 
-该脚本加载 Scene-SensorNet、四类 Base 检测器和二类增量专家，并执行当前 4+2 production 模型组合冒烟。
+该脚本加载 Scene-SensorNet、四类 Base 检测器和二类增量专家，并执行当前 4+2 production 模型组合冒烟。当前编排中，场景头输出 air/forest/sea/urban 已知类概率，Base 与 Increment 都必须执行；配置与推理测试另行覆盖逐类 `soft_threshold_penalty`、固定 owner，以及不使用文件名、标签或场景硬路由的约束。
+
+## 4+2 场景门控证据
+
+当前 scene-aware production 的证据链位于 `models/production/incremental_detection/evidence/`：
+
+- `scene_aware_dev_search.json/.md` 记录 mixed dev 上的候选与约束，并明确 `lock_labels_read: false`；
+- `scene_aware_candidate.json` 是由 dev 冻结的 `guarded_precision` 参数；
+- `scene_aware_lock_recheck.json` 记录冻结候选的一次性 mixed lock 复核；
+- `base_context_prior.json` 只来自 Base train 正样本，`incremental_context_prior.json` 只来自 Increment train 正样本；
+- `operating_point_diagnostics.md` 给出逐类 mAP50、TP、FP、precision、recall 和误激活率。
+
+静态发布校验通过 `models/generations.json` 验证两个先验文件的内容与 SHA256；严格实验档加载器另行验证 active profile 中的同一绑定。参数搜索只允许读取 dev；lock 模式必须接收已冻结 candidate，并在读取 lock 标签前固定候选与模型预测。
 
 ## 测试范围
 
@@ -44,7 +56,7 @@ AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代�
 | 数据与固定划分 | `test_strict_3plus1_splits.py`、`test_strict_incremental.py` |
 | 增量工作台 | `test_incremental_workbench.py`、`test_incremental_lifecycle_v2.py` |
 | 模型代际 | `test_runtime_maturity.py`、`test_incremental_lifecycle_v2.py` |
-| 推理与融合 | `test_web_inference.py`、`test_incremental_rejection.py` |
+| 推理与融合 | `test_web_inference.py`、`test_incremental_rejection.py`；覆盖 Base/Increment 逐类场景软门控、每图执行与固定 owner |
 | Web API 与 UI | `test_agent_workbench.py`、`test_web_ui_flow.py` |
 | Ascend | `test_ascend_acl.py`、`test_ascend_preflight.py` |
 | Ascend 满分方法 | `test_ascend_full_score_workflow.py`、`test_shared_dual_head.py`、`test_ascend_release.py` |

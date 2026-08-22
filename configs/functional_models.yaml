@@ -59,9 +59,14 @@ models:
 collaboration:
   - from: scene_sensor_net_v1
     to: four_class_base_detector
-    payload: audited_context_observation
+    payload: known_scene_probabilities
     status: implemented
-    purpose: 场景与传感器结果进入响应和审计；4+2 首版不据此跳过检测器或修改阈值
+    purpose: 已知场景概率与Base逐类训练先验计算亲和度，并软提升全局类0至3的有效阈值；不做场景硬路由
+  - from: scene_sensor_net_v1
+    to: incremental_model_bank_v1
+    payload: known_scene_probabilities
+    status: implemented
+    purpose: 已知场景概率与Increment逐类训练先验计算亲和度，并软提升全局类4至5的有效阈值；专家仍对每张图执行
   - from: four_class_base_detector
     to: incremental_model_bank_v1
     payload: parallel_base_class_predictions

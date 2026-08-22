@@ -105,7 +105,9 @@ agile-agent generation rollback --to GENERATION_ID
 | `incremental_workbench.split_seed` | `20260821` |
 | `web.generation_channel` | `production` |
 
-当前 CUDA production 的固定 owner 为 Base `0–3`、Increment `4–5`。新增类阈值由 `models/generations.json` 提供：类 4 为 `0.18`，类 5 为 `0.08`。`routing.conflict_iou: 1.0`、`context_evidence_weight: 0.0` 与关闭的 `context_gate` 用于匹配冻结评分时的直接 owner 合并语义。
+当前 CUDA production 的固定 owner 为 Base `0–3`、Increment `4–5`。`models/generations.json` 提供六类逐类基础阈值：`0=.21, 1=.14, 2=.36, 3=.05, 4=.57, 5=.82`；逐类最大场景惩罚为 `0=.15, 1=.88, 2=.26, 3=.19, 4=.65, 5=0`。Base 的 `context_prior` 绑定 `base_context_prior.json` 且 `learning_data_scope=base_train_only`，Increment 绑定 `incremental_context_prior.json` 且 `learning_data_scope=incremental_train_only`。
+
+两个 `context_gate` 均使用 `soft_threshold_penalty`，线上输入为 Scene-SensorNet 的 air/forest/sea/urban 已知场景概率。有效阈值按 `min(1, 基础阈值 + 最大场景惩罚 × (1 - 场景亲和度))` 计算；`hard_routing: false` 保证场景只影响候选阈值，不跳过 Base 或 Increment。`routing.conflict_iou: 1.0` 关闭跨 owner 冲突抑制，`context_evidence_weight: 0.0` 不参与可选专家排名；class-incremental 专家仍是每图必执行。
 
 Ascend 配置将 `inference.backend` 设为 `ascend_acl`，使用 `batch_size: 1`，并登记正式共享双逻辑头 OM、context 回滚 OM、release manifest 和验证摘要。板端进程监听内部 `18501`，公共 `8501` 由精确 loopback 路由提供；x86 的 `configs/agent_pipeline.yaml` 仍独立监听本机 `8501`。
 
