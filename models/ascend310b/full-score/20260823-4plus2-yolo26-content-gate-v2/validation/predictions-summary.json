@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "input_mode": "unlabeled_images",
+  "labels_read": false,
+  "config": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/config/candidate-seed-100-content-gate.yaml",
+  "config_sha256": "b691cec5bf5793ae4eb6601f7359d3a4d51bb92dc2dbf75402f8a9cc2720c972",
+  "context_override": null,
+  "model_overrides": {},
+  "confidence": 0.1,
+  "encoded": true,
+  "image_count": 89,
+  "prediction_count": 588,
+  "mean_wall_ms": 35.01508308988766,
+  "predictions": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/validation/score-gate-006-t100-content-gate/predictions.jsonl",
+  "predictions_sha256": "e88a58f2725040c10d4f90587622b2262937e487cea9e73441a47fd721308510",
+  "passed": true
+}

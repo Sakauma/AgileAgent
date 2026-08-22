@@ -257,8 +257,101 @@
   },
   "ascend_releases": [
     {
-      "id": "20260816-full-score-1493b04",
+      "id": "20260823-4plus2-yolo26-content-gate-v2",
       "status": "production",
+      "ready_without_training": true,
+      "target": "Ascend310B1",
+      "cann_version": "7.0.RC1",
+      "precision": "mixed_float16",
+      "model_layout": "independent_yolo26_e2e_v1",
+      "context_mode": "model",
+      "dataset_protocol": "strict_4plus2",
+      "package_root": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2",
+      "materialize_script": "scripts/materialize_ascend310b_full_score_release.sh",
+      "fixed_release_root": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2",
+      "models": {
+        "base_detector": {
+          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om",
+          "sha256": "56570c8ccac80beef10d623f40bd20e26dbf310dc1ba93c80ff607b9f6df7ae0",
+          "output_contract": "yolo26_e2e_v1",
+          "class_ids": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "incremental_detector": {
+          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om",
+          "sha256": "d12ccf5b4c07ea97b8be09ff4cdea02463cf83ec68736ae6fd7451a3e0fcd87b",
+          "output_contract": "yolo26_e2e_v1",
+          "class_ids": [
+            4,
+            5
+          ]
+        },
+        "scene_sensor_net": {
+          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om",
+          "sha256": "c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9"
+        }
+      },
+      "content_execution_gate": {
+        "policy": "skip_specialist_on_scene_and_base_evidence_v1",
+        "scene": "air",
+        "scene_probability_min": 0.5,
+        "base_evidence_class_ids": [
+          1
+        ],
+        "online_inputs": [
+          "scene_probabilities",
+          "base_detections"
+        ],
+        "label_aware_online_routing": false,
+        "filename_aware_online_routing": false
+      },
+      "metrics": {
+        "base_map50": 0.8256706046553274,
+        "new_map50": 0.6188591827942598,
+        "krr": 1.0,
+        "full_map50": 0.7249274786671415,
+        "candidate_batch_median_fps": [
+          39.34684241589613,
+          39.424403705893944
+        ],
+        "post_promotion_batch_rounds": [
+          [
+            39.57261574990107,
+            39.580447259054026,
+            39.393342525113255
+          ],
+          [
+            39.5882818685669,
+            39.502271380604384,
+            39.666798889329634
+          ]
+        ],
+        "post_promotion_batch_median_fps": [
+          39.57261574990107,
+          39.5882818685669
+        ],
+        "lock_precision": 0.6775510204081632,
+        "lock_recall": 0.6611111111111111,
+        "false_activation_rate": 0.4666666666666667
+      },
+      "validation": {
+        "score": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/score.json",
+        "benchmark": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark.json",
+        "repeat_benchmark": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-repeat-1.json",
+        "post_promotion_benchmarks": [
+          "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-post-promotion.json",
+          "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-post-promotion-repeat.json"
+        ],
+        "frozen_predictions": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/frozen-predictions.jsonl"
+      }
+    },
+    {
+      "id": "20260816-full-score-1493b04",
+      "status": "historical",
       "ready_without_training": true,
       "target": "Ascend310B1",
       "cann_version": "7.0.RC1",
@@ -316,7 +409,7 @@
     "六类逐类阈值和场景惩罚只由 mixed dev 选择；线上只读取 Scene-SensorNet 概率，不读取文件名或标签。",
     "precision 与误激活率是非阻断诊断；当前场景感知运行点已显著改善二者。",
     "仓库不包含竞赛数据集和标签。",
-    "Ascend 3+1 不可变包仅为历史板端发布；当前 4+2 场景感知策略尚未转换为 OM。"
+    "Ascend 4+2 独立 YOLO26 E2E 三 OM release 已在公共 8501 正式提升并完成两轮部署后复验；旧 3+1 包仅作历史参考。"
   ],
   "phase_contract": {
     "base_learning": {

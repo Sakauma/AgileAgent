@@ -7,8 +7,8 @@ usage() {
   ./scripts/build_ascend_yolo26_e2e_oms.sh ONNX_DIR OUTPUT_DIR CONTEXT_BUILD_MANIFEST
 
 在 CANN 7.0.RC1 / Ascend310B1 上构建 4+2 YOLO26 E2E Base 与
-Specialist OM。两个模型固定输入 608x736，固定输出 [1,300,6]；Scene
-资产只从给定父构建清单复用，fixed_neutral_v1 运行时不会执行其前向。
+Specialist OM。两个模型固定输入 608x736，固定输出 [1,300,6]；真实
+Scene-SensorNet 资产从给定父构建清单复用，并由 context_mode=model 执行。
 
 设置 AGILE_AGENT_RESUME=1 可复用命令和成功日志均严格匹配的现有 OM。
 EOF

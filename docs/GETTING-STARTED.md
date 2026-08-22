@@ -109,7 +109,7 @@ cd AgileAgent
 chmod +x scripts/materialize_ascend310b_full_score_release.sh
 ./scripts/materialize_ascend310b_full_score_release.sh
 
-RELEASE=/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
 AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
 AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
 AGILE_AGENT_ASCEND_PORT=8501 \
@@ -122,7 +122,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
 
 物化脚本先用包内 `SHA256SUMS` 校验全部资产，再生成固定 release 并执行 `tools/95_verify_ascend_release.py --require-validation`。目标目录已存在时默认拒绝覆盖；可用 `--verify-existing` 做只读复核。脚本本身不启动或停止服务。
 
-新板可以让满分 release 直接监听 `8501`。已有旧三 OM 回滚服务的板使用双实例拓扑：公共 `8501` 精确路由到满分主实例 `18501`，旧 listener 仍物理监听 `8501`，删除路由即可即时回滚；`8502` 永远只用于下一轮候选。健康响应应包含 `validated: true`、`model_layout: shared_backbone_dual_head_v1` 和 `context_mode: fixed_neutral_v1`。
+新板可以让满分 release 直接监听 `8501`。已有旧 listener 的板使用双实例拓扑：公共 `8501` 精确路由到 4+2 主实例 `18501`，旧 listener 仍物理监听 `8501`，删除路由即可即时回滚；`8502` 只用于下一轮候选。健康响应应包含 `validated: true`、`model_layout: independent_yolo26_e2e_v1` 和 `context_mode: model`。
 
 无竞赛数据集时仍可完成模型包哈希、release 校验、服务启动和历史报告核对。重新测量 batch FPS 需要 20 张符合契约的 PNG；重新计算 Base/New/KRR 需要合法取得的 89 图和标签。包内已带同一候选的冻结预测，因此有标签后无需重新推理或训练即可重新评分。
 
@@ -131,24 +131,25 @@ curl -fsS -F "file=@sample.png;type=image/png" \
 本节只适用于比赛更换数据集、需要重新训练和搜索阈值的情况，不是部署当前满分模型的前置步骤。满分方法开发使用当前 WSL 仓库已有 `.venv`，不要为了运行这些入口重新安装依赖或下载 CPU 版 PyTorch：
 
 ```bash
-.venv/bin/python tools/107_train_shared_dual_head.py --help
-.venv/bin/python tools/108_export_ascend_dual_head.py --help
-.venv/bin/python tools/109_materialize_ascend_full_score_candidate.py --help
+.venv/bin/python tools/04_train_base_4plus2.py --help
+.venv/bin/python tools/06_train_incremental_4plus2.py --help
+.venv/bin/python tools/112_materialize_ascend_yolo26_candidate.py --help
 .venv/bin/python tools/110_select_ascend_full_score_candidate.py --help
 .venv/bin/python tools/111_promote_ascend_full_score_release.py --help
 ```
 
 开始新数据集前先阅读 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)，并确认以下边界：
 
-1. 公共 `8501` 已路由到正式共享双头主线 `18501`；三 OM 监听器继续作为即时回滚，候选只能使用 `8502`。
-2. Base backbone、neck/FPN、old head、BN 统计和 EMA 必须冻结；训练输入只来自新增类数据。
-3. 先训练并记录 best/last，再选择一个 checkpoint 导出双输出 ONNX；当前历史满分参考实际使用 `last.pt`。
-4. OM 只在板端 CANN `7.0.RC1` 下以 `mixed_float16` 构建，不升级 CANN、不用 INT8、不降分辨率。
-5. 每个阈值候选依次执行无标签预测冻结、Base/New/KRR 评分、30 次预热和三轮 20 图 batch。
-6. 只有四项比赛指标同时满分才可宣称满分候选；其他检测和时延指标只作诊断。
-7. 胜出候选由 `tools/111` 物化并通过正式 release 校验后，才允许使用 systemd 双实例和精确路由脚本提升；不要手工把 `validated` 改为 `true`。
+1. 公共 `8501` 已路由到正式 4+2 主线 `18501`；旧 listener 继续作为即时回滚，候选只能使用 `8502`。
+2. Base 阶段只用 Base train/dev；增量阶段只用当轮 Increment train/dev，并保持 Base 与历史专家冻结。
+3. Base 和 Specialist 分别导出 `608×736`、`[1,300,6]` 的 YOLO26 E2E ONNX。
+4. OM 只在板端 CANN `7.0.RC1` 下以 `mixed_float16` 构建，不升级 CANN，也不替换关键运行依赖。
+5. 候选必须使用真实 Scene-SensorNet 和双证据执行门控，线上不得读取标签或文件名。
+6. 每个阈值候选依次执行无标签预测冻结、Base/New/KRR 评分、30 次预热和三轮 20 图 batch。
+7. 只有四项比赛指标同时满分才可宣称满分候选；precision、误激活率和单请求时延只作诊断。
+8. 胜出候选由 `tools/111` 物化并通过正式 release 校验后，才允许使用 systemd 和精确路由提升；不要手工把 `validated` 改为 `true`。
 
-候选配置由方法 YAML、基础 Ascend 配置、dual/context OM 和 build manifest 生成，不手工复制板端绝对路径到 `full_score_method.yaml`。
+候选配置由方法 YAML、基础 Ascend 配置、Base/Specialist/Scene OM、候选代际和 build manifest 生成，不手工复制板端绝对路径到 `full_score_method.yaml`。
 
 ## 下一步
 

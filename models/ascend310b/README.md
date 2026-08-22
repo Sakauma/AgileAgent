@@ -1,26 +1,27 @@
 # Ascend 310B 预构建模型
 
-`full-score/20260816-full-score-1493b04/` 是已在 Ascend310B1、CANN `7.0.RC1` 上通过满分门禁的不可变发布资产。它不是训练输出目录，也不是候选模型；其中的 OM 可直接用于板端部署。
+当前活动包是 [`full-score/20260823-4plus2-yolo26-content-gate-v2/`](full-score/20260823-4plus2-yolo26-content-gate-v2/README.md)。它包含已经在 Ascend310B1 公共 `8501` 上完成部署后复验的 4+2 三-OM release，可直接零训练物化。
 
-包内容包括：
+活动结构：
 
-- 正式 `shared_backbone_dual_head.om` 和 context 回滚 OM；
-- 与 OM 严格关联的 ONNX、源 checkpoint、AIPP 配置、ATC 日志和构建清单；
-- 字节级正式配置、验证摘要、三项精度报告、两轮候选性能报告和发布后性能报告；
-- 89 图冻结预测，便于在合法获得标签后重新计分；
-- `SHA256SUMS`，用于在启动 ACL 前验证所有资产。
+- 四类 Base YOLO26s OM：`soldier/small_aircraft/warship/tank`；
+- 二类增量 YOLO26s OM：`patrol_boat/armored_vehicle`；
+- Scene-SensorNet OM：真实场景与 IR/SAR 概率；
+- 双证据执行门控：只有空域概率和 Base 小型飞行器检测同时成立才跳过增量专家；
+- 正式公共 `8501` 经原子路由进入内部 `18501`，旧 listener 保留为回滚，`8502` 保留给候选。
 
 零训练部署：
 
 ```bash
 ./scripts/materialize_ascend310b_full_score_release.sh
-RELEASE=/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
 AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
 AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
 AGILE_AGENT_ASCEND_PORT=8501 \
   "$RELEASE/src/scripts/start_agent_ascend310b.sh"
 ```
 
-物化脚本不启动服务；上面的直接 `8501` 方式适合没有旧回滚 listener 的新板。已有正式旧三 OM 服务的板使用 `18501` 主实例加 `8501` 回滚 listener 的双实例拓扑。完整步骤见 [`docs/ascend-310b-deployment.md`](../../docs/ascend-310b-deployment.md)。
+活动包的 Base mAP50、New-mAP50、KRR 分别为 `0.825671/0.618859/1.0`；公共 `8501` 两轮 `30 + 3×20` 的中位 FPS 为 `39.573/39.588`。完整证据和部署边界见 [`docs/ascend-310b-current-status.md`](../../docs/ascend-310b-current-status.md)。
 
-仓库不发布竞赛原始图像和标签。不需要数据集即可完成资产哈希、release 验证和服务健康检查；重新计算 Base/New/KRR 需要按文档放置有权使用的 89 图及标签，重新测量 FPS 需要 20 张符合输入契约的 PNG。
+`full-score/20260816-full-score-1493b04/` 是旧 3+1 共享双头历史发布，不再是 production 指针，仅保留复盘与兼容参考。

@@ -94,9 +94,25 @@ def validate_method(method: Mapping[str, Any]) -> None:
     if (
         runtime.get("encoded_preprocessing") != "dvpp"
         or runtime.get("execution_mode") != "async_stream"
-        or runtime.get("context_mode") != "fixed_neutral_v1"
+        or runtime.get("schedule_mode") != "unified_enqueue"
+        or runtime.get("context_mode") != "model"
     ):
-        raise ValueError("4+2满分方法必须使用DVPP/async/fixed-neutral运行契约")
+        raise ValueError("4+2满分方法必须使用DVPP/async/unified/context-model运行契约")
+    content_gate = runtime.get("content_execution_gate") or {}
+    if content_gate != {
+        "enabled": True,
+        "policy": "skip_specialist_on_scene_and_base_evidence_v1",
+        "action": "skip_specialist",
+        "scene": "air",
+        "scene_probability_min": 0.5,
+        "base_evidence_class_ids": [1],
+        "base_evidence_mode": "any",
+        "online_inputs": ["scene_probabilities", "base_detections"],
+        "label_aware_online_routing": False,
+        "filename_aware_online_routing": False,
+        "learning_data_scope": "frozen_system_calibration",
+    }:
+        raise ValueError("4+2满分方法的双证据执行门控非法")
     competition = method.get("competition") or {}
     accuracy = competition.get("accuracy_gates") or {}
     performance = competition.get("performance_gate") or {}
@@ -145,7 +161,10 @@ def _verify_artifact(
 
 
 def materialize_registry(
-    source: Mapping[str, Any], old_threshold: float, new_threshold: float
+    source: Mapping[str, Any],
+    old_threshold: float,
+    new_threshold: float,
+    content_execution_gate: Mapping[str, Any],
 ) -> dict[str, Any]:
     registry = copy.deepcopy(dict(source))
     models = registry.get("models") or []
@@ -167,6 +186,12 @@ def materialize_registry(
         row["context_gate"] = {"enabled": False}
         row.pop("positive_prototype", None)
         row.pop("positive_prototypes", None)
+        if model_id == "incremental_detector":
+            row["content_execution_gate"] = copy.deepcopy(
+                dict(content_execution_gate)
+            )
+        else:
+            row.pop("content_execution_gate", None)
     return registry
 
 
@@ -341,7 +366,10 @@ def main() -> int:
         args.generation_registry.resolve().read_text(encoding="utf-8")
     )
     registry = materialize_registry(
-        registry_source, old_threshold, new_threshold
+        registry_source,
+        old_threshold,
+        new_threshold,
+        method["runtime"]["content_execution_gate"],
     )
     args.output_registry.parent.mkdir(parents=True, exist_ok=True)
     args.output_registry.write_text(

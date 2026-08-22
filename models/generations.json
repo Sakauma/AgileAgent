@@ -477,7 +477,19 @@
     "production": "incremental_detection_generation_4plus2",
     "candidate": "incremental_detection_generation_4plus2"
   },
-  "external_blockers": [
-    "ascend_310b_4plus2_release_not_built"
-  ]
+  "ascend310b_release": {
+    "status": "promoted",
+    "release_id": "20260823-4plus2-yolo26-content-gate-v2",
+    "model_layout": "independent_yolo26_e2e_v1",
+    "context_mode": "model",
+    "base_map50": 0.8256706046553274,
+    "new_map50": 0.6188591827942598,
+    "krr": 1.0,
+    "full_map50": 0.7249274786671415,
+    "public_8501_batch_median_fps": [
+      39.57261574990107,
+      39.5882818685669
+    ]
+  },
+  "external_blockers": []
 }

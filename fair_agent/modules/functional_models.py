@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import yaml
 
@@ -67,6 +67,77 @@ def _incremental_protocol_contract_valid(protocol: Any) -> bool:
     return bool(protocol.get("class_name")) and 0.01 <= threshold <= 1.0
 
 
+def _load_production_ascend_models(
+    registry: Mapping[str, Any], errors: list[str]
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    deployment_cfg = registry.get("deployment_manifest")
+    if not isinstance(deployment_cfg, Mapping) or not deployment_cfg.get("path"):
+        errors.append("functional_deployment_manifest_missing")
+        return {}, {}
+
+    manifest_path = resolve_path(str(deployment_cfg["path"]))
+    status = hash_if_exists(manifest_path)
+    expected_sha256 = str(deployment_cfg.get("sha256") or "")
+    if not status.get("exists"):
+        errors.append("functional_deployment_manifest_missing")
+        return {}, {
+            "path": rel_path(manifest_path),
+            **status,
+            "expected_sha256": expected_sha256,
+        }
+    if not expected_sha256 or status.get("sha256") != expected_sha256:
+        errors.append("functional_deployment_manifest_hash_mismatch")
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"functional_deployment_manifest_invalid:{exc}")
+        return {}, {
+            "path": rel_path(manifest_path),
+            **status,
+            "expected_sha256": expected_sha256,
+        }
+    if not isinstance(manifest, dict):
+        errors.append("functional_deployment_manifest_invalid:top_level_not_mapping")
+        return {}, {
+            "path": rel_path(manifest_path),
+            **status,
+            "expected_sha256": expected_sha256,
+        }
+
+    releases = manifest.get("ascend_releases")
+    production = [
+        row
+        for row in releases
+        if isinstance(row, dict) and row.get("status") == "production"
+    ] if isinstance(releases, list) else []
+    if len(production) != 1:
+        errors.append("functional_ascend_production_release_invalid")
+        return {}, {
+            "path": rel_path(manifest_path),
+            **status,
+            "expected_sha256": expected_sha256,
+        }
+    release = production[0]
+    models = release.get("models")
+    if (
+        release.get("target") != "Ascend310B1"
+        or release.get("ready_without_training") is not True
+        or not isinstance(models, dict)
+        or not models
+    ):
+        errors.append("functional_ascend_production_release_invalid")
+        models = {}
+    return dict(models), {
+        "path": rel_path(manifest_path),
+        **status,
+        "expected_sha256": expected_sha256,
+        "release_id": release.get("id"),
+        "target": release.get("target"),
+        "model_keys": sorted(str(key) for key in models),
+    }
+
+
 def validate_functional_models(path: str | Path) -> Dict[str, Any]:
     registry_path = resolve_path(path)
     errors: list[str] = []
@@ -87,6 +158,10 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
         errors.append("functional_model_ids_invalid")
     if len(functions) != len(set(functions)) or any(not value for value in functions):
         errors.append("functional_model_functions_not_distinct")
+
+    production_ascend_models, deployment_manifest = _load_production_ascend_models(
+        registry, errors
+    )
 
     strict_profiles = discover_experiment_profiles()
     if strict_profiles["errors"]:
@@ -161,15 +236,74 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                 errors.append(f"functional_artifact_entry_invalid:{model_id}")
                 continue
             artifact_path = resolve_path(artifact.get("path", ""))
-            artifact_paths.append(rel_path(artifact_path))
+            relative_artifact_path = rel_path(artifact_path)
+            artifact_paths.append(relative_artifact_path)
             status = hash_if_exists(artifact_path)
             expected = str(artifact.get("sha256") or "")
+            artifact_runtime = str(artifact.get("runtime") or "")
+            if artifact_runtime not in {"x86_gpu", "ascend_310b"}:
+                errors.append(
+                    f"functional_artifact_runtime_invalid:{model_id}:"
+                    f"{relative_artifact_path}"
+                )
             matches = bool(status.get("exists")) and status.get("sha256") == expected
-            artifacts.append({"path": rel_path(artifact_path), **status, "expected_sha256": expected, "matches_expected": matches})
+            artifacts.append(
+                {
+                    "path": relative_artifact_path,
+                    "runtime": artifact_runtime,
+                    **status,
+                    "expected_sha256": expected,
+                    "matches_expected": matches,
+                }
+            )
             if not matches:
-                errors.append(f"functional_artifact_invalid:{model_id}:{rel_path(artifact_path)}")
+                errors.append(
+                    f"functional_artifact_invalid:{model_id}:"
+                    f"{relative_artifact_path}"
+                )
         if not artifacts:
             errors.append(f"functional_artifacts_missing:{model_id}")
+
+        runtime = item.get("runtime", {})
+        x86_artifacts = [
+            artifact for artifact in artifacts if artifact["runtime"] == "x86_gpu"
+        ]
+        ascend_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact["runtime"] == "ascend_310b"
+        ]
+        if runtime.get("x86_gpu") is True and not x86_artifacts:
+            errors.append(f"functional_x86_artifact_missing:{model_id}")
+        if runtime.get("ascend_310b") is True:
+            ascend_model_key = str(runtime.get("ascend_model_key") or "")
+            production_model = production_ascend_models.get(ascend_model_key)
+            if not isinstance(production_model, Mapping):
+                errors.append(f"functional_ascend_model_not_production:{model_id}")
+            else:
+                expected_path = str(production_model.get("path") or "")
+                expected_hash = str(production_model.get("sha256") or "")
+                matching_artifacts = [
+                    artifact
+                    for artifact in ascend_artifacts
+                    if artifact["path"] == expected_path
+                    and artifact["expected_sha256"] == expected_hash
+                ]
+                if len(ascend_artifacts) != 1 or len(matching_artifacts) != 1:
+                    errors.append(
+                        f"functional_ascend_artifact_not_production:{model_id}"
+                    )
+        elif ascend_artifacts:
+            errors.append(f"functional_ascend_runtime_mismatch:{model_id}")
+
+        evidence_artifacts = x86_artifacts or artifacts
+        evidence_artifact_paths = [
+            str(artifact["path"]) for artifact in evidence_artifacts
+        ]
+        evidence_artifact_hashes = {
+            str(artifact["path"]): str(artifact["expected_sha256"])
+            for artifact in evidence_artifacts
+        }
 
         evidence_cfg = item.get("evidence", {})
         evidence_path = resolve_path(evidence_cfg.get("path", ""))
@@ -197,11 +331,12 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
             function_name = item.get("function")
             if function_name == "context_perception":
                 lock = evidence_data.get("lock", {})
-                expected_artifact_hash = artifacts[0].get("expected_sha256") if artifacts else None
+                evidence_weights = str(evidence_data.get("weights") or "")
                 if (
                     evidence_data.get("model_id") != model_id
-                    or evidence_data.get("weights") not in artifact_paths
-                    or evidence_data.get("weights_sha256") != expected_artifact_hash
+                    or evidence_weights not in evidence_artifact_paths
+                    or evidence_data.get("weights_sha256")
+                    != evidence_artifact_hashes.get(evidence_weights)
                 ):
                     errors.append(f"functional_evidence_model_mismatch:{model_id}")
                 evidence_summary = {
@@ -219,10 +354,11 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     ),
                     {},
                 )
-                expected_artifact_hash = artifacts[0].get("expected_sha256") if artifacts else None
+                base_path = str(base.get("path") or "")
                 if (
-                    base.get("path") not in artifact_paths
-                    or base.get("sha256") != expected_artifact_hash
+                    base_path not in evidence_artifact_paths
+                    or base.get("sha256")
+                    != evidence_artifact_hashes.get(base_path)
                     or manifest_entry.get("function") != function_name
                     or manifest_entry.get("status") != item.get("status")
                 ):
@@ -249,10 +385,11 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                     if isinstance(protocol, dict) and protocol.get("path")
                 }
                 if (
-                    protocol_paths != set(artifact_paths)
+                    protocol_paths != set(evidence_artifact_paths)
                     or manifest_entry.get("function") != function_name
                     or manifest_entry.get("status") != item.get("status")
-                    or manifest_entry.get("model_count") != len(artifact_paths)
+                    or manifest_entry.get("model_count")
+                    != len(evidence_artifact_paths)
                     or manifest_entry.get("protocol_count") != len(protocols)
                     or manifest_entry.get("task_type") != "incremental_object_detection"
                     or set(manifest_entry.get("supported_modes", [])) != {"class_incremental", "target_incremental"}
@@ -305,8 +442,6 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
                         for profile in strict_profiles["profiles"]
                     ],
                 }
-
-        runtime = item.get("runtime", {})
         summaries.append(
             {
                 "id": model_id,
@@ -354,6 +489,7 @@ def validate_functional_models(path: str | Path) -> Dict[str, Any]:
         "distinct_function_count": len(set(functions)),
         "all_x86_gpu_ready": bool(summaries) and all(item["x86_gpu"] for item in summaries),
         "all_ascend_310b_ready": bool(summaries) and all(item["ascend_310b"] for item in summaries),
+        "deployment_manifest": deployment_manifest,
         "models": summaries,
         "collaboration": collaboration,
         "strict_class_incremental": effective_strict_profiles,

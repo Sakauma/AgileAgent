@@ -10,7 +10,7 @@ usage() {
 不训练、不运行 ATC、不升级 CANN，也不修改 8501/8502 上的进程。
 
 固定目标：
-  /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+  /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
 EOF
 }
 
@@ -29,9 +29,10 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PACKAGE_ROOT="${REPO_ROOT}/models/ascend310b/full-score/20260816-full-score-1493b04"
+RELEASE_ID=20260823-4plus2-yolo26-content-gate-v2
+PACKAGE_ROOT="${REPO_ROOT}/models/ascend310b/full-score/${RELEASE_ID}"
 RELEASE_PARENT=/home/HwHiAiUser/agileagent/releases
-RELEASE_ROOT="${RELEASE_PARENT}/20260816-full-score-1493b04"
+RELEASE_ROOT="${RELEASE_PARENT}/${RELEASE_ID}"
 PYTHON=/usr/local/miniconda3/envs/agileagent/bin/python
 CONFIG="${RELEASE_ROOT}/configs/agent_pipeline_ascend310b.yaml"
 STAGING=""

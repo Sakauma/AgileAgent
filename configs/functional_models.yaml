@@ -1,5 +1,8 @@
-schema_version: 1
+schema_version: 2
 generation_registry: models/generations.json
+deployment_manifest:
+  path: models/manifest.json
+  sha256: cd587ef4869614ea1240d210e5e0a5f5f2797669df11f3360d7921bfe14936e3
 
 models:
   - id: scene_sensor_net_v1
@@ -14,13 +17,19 @@ models:
     artifacts:
       - path: models/context/scene_sensor_net.pt
         sha256: aa99a0e58db1f80b0b6e0cc0e5049b6dc39e88f4349d2e7c362b1e2a25b83a7e
+        runtime: x86_gpu
+      - path: models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om
+        sha256: c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9
+        runtime: ascend_310b
     evidence:
       path: models/context/scene_sensor_metrics.json
       sha256: 561524130d4e18101d19934cce14a86132b23fef70f2b81267892519eee66e52
       require_acceptance_passed: true
     runtime:
       x86_gpu: true
-      ascend_310b: false
+      ascend_310b: true
+      ascend_model_key: scene_sensor_net
+      ascend_context_mode: model
 
   - id: four_class_base_detector
     function: multimodal_target_detection
@@ -34,13 +43,20 @@ models:
     artifacts:
       - path: models/production/incremental_detection/four_class_base_detector.pt
         sha256: 105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd
+        runtime: x86_gpu
+      - path: models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om
+        sha256: 56570c8ccac80beef10d623f40bd20e26dbf310dc1ba93c80ff607b9f6df7ae0
+        runtime: ascend_310b
     evidence:
       path: models/manifest.json
-      sha256: cef6f1b70d89ae5a1cc9e34e771905863752c9487b70f1feae5e9999dc9c49ef
+      sha256: cd587ef4869614ea1240d210e5e0a5f5f2797669df11f3360d7921bfe14936e3
     runtime:
       x86_gpu: true
-      ascend_310b: false
+      ascend_310b: true
+      ascend_model_key: base_detector
       imgsz: 1280
+      ascend_imgsz: [608, 736]
+      ascend_output_contract: yolo26_e2e_v1
 
   - id: incremental_model_bank_v1
     function: incremental_object_detection
@@ -54,13 +70,20 @@ models:
     artifacts:
       - path: models/production/incremental_detection/incremental_detector.pt
         sha256: 0ab0c6ed0117b75ab9ee105e9f109ccad96d988156d00fa4c4c0b9599e424a2a
+        runtime: x86_gpu
+      - path: models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om
+        sha256: d12ccf5b4c07ea97b8be09ff4cdea02463cf83ec68736ae6fd7451a3e0fcd87b
+        runtime: ascend_310b
     evidence:
       path: models/manifest.json
-      sha256: cef6f1b70d89ae5a1cc9e34e771905863752c9487b70f1feae5e9999dc9c49ef
+      sha256: cd587ef4869614ea1240d210e5e0a5f5f2797669df11f3360d7921bfe14936e3
     runtime:
       x86_gpu: true
-      ascend_310b: false
+      ascend_310b: true
+      ascend_model_key: incremental_detector
       imgsz: 1280
+      ascend_imgsz: [608, 736]
+      ascend_output_contract: yolo26_e2e_v1
 
 collaboration:
   - from: scene_sensor_net_v1
@@ -72,12 +95,12 @@ collaboration:
     to: incremental_model_bank_v1
     payload: known_scene_probabilities
     status: implemented
-    purpose: 已知场景概率与Increment逐类训练先验计算亲和度，并软提升全局类4至5的有效阈值；专家仍对每张图执行
+    purpose: x86以已知场景概率软提升全局类4至5阈值；Ascend只在air概率和Base类1检测双证据同时成立时跳过专家
   - from: four_class_base_detector
     to: incremental_model_bank_v1
     payload: parallel_base_class_predictions
     status: implemented
-    purpose: Base owner 与二类增量专家对每张未知图并行推理
+    purpose: Base保持全局类0至3 owner；Ascend先收集Base证据，再决定是否需要二类专家
   - from: incremental_model_bank_v1
     to: four_class_base_detector
     payload: fixed_class_owner_box_fusion

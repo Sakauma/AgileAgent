@@ -23,10 +23,15 @@ def load_tool(name: str):
 
 
 MATERIALIZE = load_tool("109_materialize_ascend_full_score_candidate.py")
+MATERIALIZE_YOLO26 = load_tool("112_materialize_ascend_yolo26_candidate.py")
 SELECT = load_tool("110_select_ascend_full_score_candidate.py")
 SCORE = load_tool("94_score_ascend_agent.py")
 TRAIN = load_tool("107_train_shared_dual_head.py")
 PROMOTE = load_tool("111_promote_ascend_full_score_release.py")
+LEGACY_METHOD_PATH = (
+    ROOT
+    / "models/ascend310b/full-score/20260816-full-score-1493b04/provenance/full_score_method.yaml"
+)
 
 
 def digest(path: Path) -> str:
@@ -39,60 +44,73 @@ def method_config() -> dict:
     )
 
 
+def legacy_method_config() -> dict:
+    return yaml.safe_load(LEGACY_METHOD_PATH.read_text(encoding="utf-8"))
+
+
 def test_full_score_method_preserves_reference_and_has_no_machine_paths() -> None:
     method = method_config()
 
-    MATERIALIZE.validate_method(method)
+    MATERIALIZE_YOLO26.validate_method(method)
 
-    assert method["training"]["method"] == "residual_adapter"
+    assert method["training"]["method"] == "phase_separated_independent_yolo26s"
     assert method["training"]["checkpoint_metric"] == "map50"
-    assert method["training"]["export_checkpoints"] == ["best", "last"]
-    assert method["training"]["reference_export_checkpoint"] == "last"
-    assert method["export"]["model_layout"] == "shared_backbone_dual_head_v1"
-    assert method["export"]["output_contract"] == "raw_dual_head_v1"
-    assert method["runtime"]["context_mode"] == "fixed_neutral_v1"
-    assert (
-        method["export"]["aipp_config"] == "configs/ascend310b/aipp/base_detector.cfg"
-    )
+    assert method["training"]["reference_export_checkpoint"] == "best"
+    assert method["training"]["epochs"] == 500
+    assert method["training"]["patience"] == 50
+    assert method["export"]["model_layout"] == "independent_yolo26_e2e_v1"
+    assert method["export"]["output_contract"] == "yolo26_e2e_v1"
+    assert method["export"]["input_shape_nchw"] == [1, 3, 608, 736]
+    assert method["export"]["input_shape_aipp_nhwc"] == [1, 608, 736, 3]
+    assert method["runtime"]["context_mode"] == "model"
+    assert method["runtime"]["schedule_mode"] == "unified_enqueue"
+    assert method["runtime"]["content_execution_gate"] == {
+        "enabled": True,
+        "policy": "skip_specialist_on_scene_and_base_evidence_v1",
+        "action": "skip_specialist",
+        "scene": "air",
+        "scene_probability_min": 0.5,
+        "base_evidence_class_ids": [1],
+        "base_evidence_mode": "any",
+        "online_inputs": ["scene_probabilities", "base_detections"],
+        "label_aware_online_routing": False,
+        "filename_aware_online_routing": False,
+        "learning_data_scope": "frozen_system_calibration",
+    }
     assert method["benchmark"]["image_contract"] == {
         "root_glob": "*.png",
         "width": 640,
         "height": 512,
         "bit_depth": 8,
-        "color_types": [2, 6],
+        "color_types": [0, 2, 6],
     }
     assert method["threshold_search"]["current_seed"] == {
-        "old": 0.05,
-        "new": 0.30,
+        "old": 0.10,
+        "new": 0.10,
     }
     assert method["threshold_search"]["stage_1_new"]["values"] == [
-        0.20,
-        0.25,
-        0.30,
-        0.35,
-        0.40,
+        0.05,
+        0.075,
+        0.10,
+        0.125,
+        0.15,
     ]
     assert method["threshold_search"]["stage_2_old"]["values"] == [
-        0.03,
         0.05,
+        0.075,
         0.10,
-        0.20,
-        0.30,
+        0.125,
+        0.15,
     ]
-    assert method["reference_result"]["base_map50"] == pytest.approx(0.8049006528)
-    assert method["reference_result"]["new_map50"] == pytest.approx(0.6050327631)
+    assert method["reference_result"]["base_map50"] == pytest.approx(0.8256706047)
+    assert method["reference_result"]["new_map50"] == pytest.approx(0.6188591828)
     assert method["reference_result"]["krr"] == 1.0
-    assert method["reference_result"]["dual_head_onnx_sha256"] == (
-        "5d6651a25cdc227a6feaf3135d754f1d132f0740117156f9b6d0651c32104c5e"
-    )
-    assert method["reference_result"]["export_checkpoint_sha256"] == (
-        "6d1e7098015134615b32a7cedeeab9352bb83adf812f227b85044a3e64da9c6a"
-    )
+    assert min(method["reference_result"]["public_8501_batch_median_fps"]) >= 30
 
     invalid = copy.deepcopy(method)
     invalid["reference_result"]["artifact"] = "/home/user/candidate.om"
     with pytest.raises(ValueError, match="绝对路径"):
-        MATERIALIZE.validate_method(invalid)
+        MATERIALIZE_YOLO26.validate_method(invalid)
 
 
 def test_score_class_contract_can_follow_a_new_dataset_mapping() -> None:
@@ -104,7 +122,7 @@ def test_score_class_contract_can_follow_a_new_dataset_mapping() -> None:
 def test_training_and_score_tools_read_the_single_method_contract(
     tmp_path: Path,
 ) -> None:
-    method = method_config()
+    method = legacy_method_config()
     method["competition"]["accuracy_gates"]["base_map50_min"] = 0.83
     path = tmp_path / "method.yaml"
     path.write_text(yaml.safe_dump(method, sort_keys=False), encoding="utf-8")
@@ -128,7 +146,7 @@ def write_build_inputs(tmp_path: Path, method: dict) -> tuple[Path, Path, Path]:
     export_manifest = tmp_path / "export-manifest.json"
     training_report.write_text("{}", encoding="utf-8")
     export_manifest.write_text("{}", encoding="utf-8")
-    method_path = ROOT / "configs/ascend310b/full_score_method.yaml"
+    method_path = LEGACY_METHOD_PATH
     heads = copy.deepcopy(method["export"]["logical_heads"])
     for head in heads.values():
         head.pop("output_shape")
@@ -173,7 +191,7 @@ def write_build_inputs(tmp_path: Path, method: dict) -> tuple[Path, Path, Path]:
 
 
 def test_materialize_forces_8502_and_injects_verified_dual_head(tmp_path: Path) -> None:
-    method = method_config()
+    method = legacy_method_config()
     dual, context, manifest = write_build_inputs(tmp_path, method)
     base = yaml.safe_load(
         (ROOT / "configs/agent_pipeline_ascend310b.yaml").read_text(encoding="utf-8")
@@ -188,7 +206,7 @@ def test_materialize_forces_8502_and_injects_verified_dual_head(tmp_path: Path) 
         old_threshold=0.05,
         new_threshold=0.30,
         report_root="reports/ascend310b/test",
-        method_config=ROOT / "configs/ascend310b/full_score_method.yaml",
+        method_config=LEGACY_METHOD_PATH,
     )
 
     assert result["runtime"]["server_port"] == 8502
@@ -210,7 +228,7 @@ def test_materialize_forces_8502_and_injects_verified_dual_head(tmp_path: Path) 
         old_threshold=0.03,
         new_threshold=0.20,
         report_root="reports/ascend310b/test-search",
-        method_config=ROOT / "configs/ascend310b/full_score_method.yaml",
+        method_config=LEGACY_METHOD_PATH,
     )
     searched_model = next(iter(searched["ascend_backend"]["models"].values()))
     assert searched_model["logical_heads"]["old"]["candidate_confidence"] == 0.03
@@ -230,7 +248,7 @@ def test_materialize_forces_8502_and_injects_verified_dual_head(tmp_path: Path) 
             old_threshold=0.05,
             new_threshold=0.30,
             report_root="reports/ascend310b/test-method-mismatch",
-            method_config=ROOT / "configs/ascend310b/full_score_method.yaml",
+            method_config=LEGACY_METHOD_PATH,
         )
     manifest.write_text(original_manifest, encoding="utf-8")
 
@@ -245,7 +263,7 @@ def test_materialize_forces_8502_and_injects_verified_dual_head(tmp_path: Path) 
             old_threshold=0.05,
             new_threshold=0.30,
             report_root="reports/ascend310b/test",
-            method_config=ROOT / "configs/ascend310b/full_score_method.yaml",
+            method_config=LEGACY_METHOD_PATH,
         )
 
 
@@ -449,7 +467,15 @@ def test_selector_reads_score_thresholds_from_method_config(tmp_path: Path) -> N
 
 def test_score_gate_authorizes_candidates_and_uses_method_contract() -> None:
     gate = (ROOT / "scripts/run_ascend310b_score_gate.sh").read_text(encoding="utf-8")
-    build = (ROOT / "scripts/build_ascend_dual_head_om.sh").read_text(encoding="utf-8")
+    legacy_build = (ROOT / "scripts/build_ascend_dual_head_om.sh").read_text(
+        encoding="utf-8"
+    )
+    yolo26_build = (ROOT / "scripts/build_ascend_yolo26_e2e_oms.sh").read_text(
+        encoding="utf-8"
+    )
+    yolo26_materialize = (
+        ROOT / "tools/112_materialize_ascend_yolo26_candidate.py"
+    ).read_text(encoding="utf-8")
     freeze = (ROOT / "tools/98_freeze_ascend_predictions.py").read_text(
         encoding="utf-8"
     )
@@ -460,10 +486,14 @@ def test_score_gate_authorizes_candidates_and_uses_method_contract() -> None:
     assert '--batch-rounds "$BATCH_ROUNDS"' in gate
     assert 'pattern != "*.png"' in gate
     assert "atc --version" in gate
-    assert "candidate_confidence" not in build
-    assert "AGILE_AGENT_LOGICAL_HEADS_JSON" in build
-    assert "fixed_reference_evidence_compatibility" in build
-    assert 'training_report.get("checkpoints")' in build
+    assert "candidate_confidence" not in legacy_build
+    assert "AGILE_AGENT_LOGICAL_HEADS_JSON" in legacy_build
+    assert "fixed_reference_evidence_compatibility" in legacy_build
+    assert 'training_report.get("checkpoints")' in legacy_build
+    assert "context_mode=model" in yolo26_build
+    assert "--input_shape=images:1,3,608,736" in yolo26_build
+    assert "skip_specialist_on_scene_and_base_evidence_v1" in yolo26_materialize
+    assert '"label_aware_online_routing": False' in yolo26_materialize
     assert '"passed": len(records) == args.expected_images' in freeze
 
 

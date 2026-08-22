@@ -222,8 +222,10 @@ def test_static_release_verification_passes() -> None:
     assert all(item["exists"] for item in result["required_assets"].values())
     assert result["functional_models"]["valid"] is True
     assert result["functional_models"]["distinct_function_count"] == 3
-    assert result["model_generations"]["production"] == "incremental_detection_generation"
-    assert result["model_generations"]["production_classes"] == [0, 1, 2, 3]
+    assert result["model_generations"]["production"] == (
+        "incremental_detection_generation_4plus2"
+    )
+    assert result["model_generations"]["production_classes"] == [0, 1, 2, 3, 4, 5]
     assert result["model_generations"]["candidate_status"] == "active"
 
 

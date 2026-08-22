@@ -1,0 +1,170 @@
+schema_version: 1
+kind: ascend310b_full_score_method
+
+target:
+  soc_version: Ascend310B1
+  cann_version: 7.0.RC1
+  precision: mixed_float16
+  candidate_port: 8502
+  formal_port: 8501
+
+competition:
+  accuracy_gates:
+    base_map50_min: 0.80
+    new_map50_min: 0.60
+    krr_min: 0.95
+  performance_gate:
+    batch_image_count: 20
+    batch_rounds: 3
+    median_fps_min: 30.0
+  diagnostics_only:
+    - per_box_equivalence
+    - business_json_equivalence
+    - lock_precision
+    - false_activation_rate
+    - single_request_mean_ms
+    - single_request_p95_ms
+    - single_request_p99_ms
+    - scene_sensor_accuracy
+  validity_prerequisites:
+    predictions_frozen_before_labels: true
+    old_raw_image_count: 0
+    old_raw_label_count: 0
+    old_feature_cache_count: 0
+    original_data_modified: false
+    shared_max_drift: 0.0
+    verify_asset_sha256: true
+
+training:
+  method: phase_separated_independent_yolo26s
+  checkpoint_metric: map50
+  reference_export_checkpoint: best
+  base_data_scope: base_train_dev_only
+  incremental_data_scope: incremental_train_dev_only
+  base_components_frozen:
+    - backbone
+    - neck
+    - old_head
+    - batch_norm_statistics
+    - base_ema
+  incremental_data_only: true
+  input_size: [608, 736]
+  epochs: 500
+  patience: 50
+  seed: 3407
+  optimizer: AdamW
+  lr0: 0.001
+  lrf: 0.01
+  weight_decay: 0.0005
+  deterministic: true
+  cache: false
+  plots: true
+  amp: true
+  cos_lr: true
+  warmup_epochs: 0.0
+  warmup_bias_lr: 0.0
+  close_mosaic: 10
+  mosaic: 1.0
+  mixup: 0.0
+  copy_paste: 0.0
+  multi_scale: 0.0
+  degrees: 3.0
+  translate: 0.15
+  scale: 0.50
+  fliplr: 0.50
+  hsv_h: 0.0
+  hsv_s: 0.0
+  hsv_v: 0.30
+
+export:
+  model_layout: independent_yolo26_e2e_v1
+  output_contract: yolo26_e2e_v1
+  input_name: images
+  input_shape_nchw: [1, 3, 608, 736]
+  input_shape_aipp_nhwc: [1, 608, 736, 3]
+  opset: 17
+  max_det: 300
+  models:
+    base:
+      owner: frozen_base_model
+      source: models/production/incremental_detection/four_class_base_detector.pt
+      class_map: {"0": 0, "1": 1, "2": 2, "3": 3}
+      class_count: 4
+      aipp_config: configs/ascend310b/aipp/base_detector.cfg
+      output_shape: [1, 300, 6]
+    specialist:
+      owner: incremental_model
+      source: models/production/incremental_detection/incremental_detector.pt
+      class_map: {"0": 4, "1": 5}
+      class_count: 2
+      aipp_config: configs/ascend310b/aipp/incremental_detector.cfg
+      output_shape: [1, 300, 6]
+
+runtime:
+  encoded_preprocessing: dvpp
+  memory_mode: pageable
+  schedule_mode: unified_enqueue
+  execution_mode: async_stream
+  context_mode: model
+  neutral_context_score: 0.5
+  content_execution_gate:
+    enabled: true
+    policy: skip_specialist_on_scene_and_base_evidence_v1
+    action: skip_specialist
+    scene: air
+    scene_probability_min: 0.5
+    base_evidence_class_ids: [1]
+    base_evidence_mode: any
+    online_inputs: [scene_probabilities, base_detections]
+    label_aware_online_routing: false
+    filename_aware_online_routing: false
+    learning_data_scope: frozen_system_calibration
+  detailed_event_timing: false
+  fast_bounded_multipart: true
+  neutral_scheduling_elision: true
+  image_copy_elision: true
+
+threshold_search:
+  scoring_request_confidence: 0.10
+  current_seed:
+    old: 0.10
+    new: 0.10
+  stage_1_new:
+    fixed_old: 0.10
+    values: [0.05, 0.075, 0.10, 0.125, 0.15]
+  stage_2_old:
+    values: [0.05, 0.075, 0.10, 0.125, 0.15]
+  cross_check_top_pairs: 2
+  selection_order:
+    - largest_minimum_accuracy_headroom
+    - smallest_batch_fps_spread
+    - highest_batch_median_fps
+  no_full_score_policy: highest_fps_accuracy_pass_is_intermediate_only
+
+benchmark:
+  base_url: http://127.0.0.1:8502
+  official_url: http://127.0.0.1:8501
+  warmup_requests: 30
+  batch_probe_size: 20
+  batch_rounds: 3
+  target_batch_fps: 30.0
+  encoded: true
+  run_web_pytest_on_board: false
+  image_contract:
+    root_glob: "*.png"
+    width: 640
+    height: 512
+    bit_depth: 8
+    color_types: [0, 2, 6]
+
+reference_result:
+  date: "2026-08-22"
+  validation_stage: onnxruntime_pre_atc
+  old_candidate_confidence: 0.001
+  new_candidate_confidence: 0.001
+  base_map50: 0.8481209959869742
+  new_map50: 0.630215592276582
+  full_map50: 0.7438986983507652
+  krr_expected: 1.0
+  board_accuracy_pending: true
+  board_batch_fps_pending: true

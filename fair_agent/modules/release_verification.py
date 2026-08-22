@@ -209,6 +209,8 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         errors.append("functional_model_count_invalid")
     if not functional["all_x86_gpu_ready"]:
         errors.append("functional_models_not_x86_gpu_ready")
+    if not functional["all_ascend_310b_ready"]:
+        errors.append("functional_models_not_ascend_310b_ready")
     incremental_functional = next(
         (
             row
@@ -224,6 +226,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
             if isinstance(incremental_functional, Mapping)
             else []
         )
+        if item.get("runtime") == "x86_gpu"
     }
     if production_expert_paths != functional_expert_paths:
         errors.append("functional_incremental_assets_not_production_generation")

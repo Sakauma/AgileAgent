@@ -38,6 +38,7 @@ venv/
 !/models/**
 /models/**/*.onnx
 !/models/ascend310b/full-score/20260816-full-score-1493b04/provenance/*.onnx
+!/models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/provenance/*.onnx
 /models/**/*.engine
 /data/
 

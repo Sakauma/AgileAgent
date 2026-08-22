@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "kind": "ascend310b_full_score_release_validation",
+  "build_manifest_sha256": "35385da4ad3365eaa847e590814ef1af0f835e11071ad08e79680d15ebb11eda",
+  "method_config": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/full_score_method.yaml",
+    "sha256": "f204dd70d64182069e383c3c1331f5f32a0dfae1522ecf0ff35c5361163301ee"
+  },
+  "source_candidate": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/candidate-8502.yaml",
+    "sha256": "b691cec5bf5793ae4eb6601f7359d3a4d51bb92dc2dbf75402f8a9cc2720c972"
+  },
+  "accuracy": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/validation/score.json",
+    "sha256": "e56349fb547d725bb8c2517f31236d98a1251e0563beed2495d582e90e65fd05",
+    "passed": true,
+    "metrics": {
+      "base_map50": 0.8256706046553274,
+      "new_map50": 0.6188591827942598,
+      "krr": 1.0
+    }
+  },
+  "performance": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark.json",
+    "sha256": "9e72fd07907d226ee59375b99bc6e4b7be3fa05f55cd5285ae561379c124cc0a",
+    "passed": true,
+    "batch_fps": 39.34684241589613
+  },
+  "repeat_performance": [
+    {
+      "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-repeat-1.json",
+      "sha256": "1990a5e8fb61f789c48948deb5ffcf524de9165181048f2bddad8372365f14fd",
+      "passed": true,
+      "batch_fps": 39.424403705893944
+    }
+  ],
+  "validity": {
+    "incremental_data_isolation": true,
+    "base_model_frozen": true,
+    "phase_separated_training": true,
+    "asset_hashes_verified": true,
+    "predictions_frozen_before_labels": true
+  },
+  "diagnostics_block_release": false,
+  "passed": true
+}

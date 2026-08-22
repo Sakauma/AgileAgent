@@ -1,0 +1,74 @@
+{
+  "schema_version": 2,
+  "provider": "Ascend ACL",
+  "unlabeled_predictions_frozen_before_labels": true,
+  "image_count": 89,
+  "base_image_count": 75,
+  "prediction_count": 588,
+  "class_contract": {
+    "old_class_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "new_class_ids": [
+      4,
+      5
+    ]
+  },
+  "metrics": {
+    "base_map50": 0.8256706046553274,
+    "new_map50": 0.6188591827942598,
+    "krr": 1.0,
+    "old_map50_before": 0.7779616266035823,
+    "old_map50_after": 0.7779616266035823,
+    "old_prediction_equivalent": true,
+    "full_map50": 0.7249274786671415,
+    "per_class_ap50": {
+      "0": 0.47118448157770665,
+      "1": 0.9363855815726766,
+      "2": 0.8910922936591283,
+      "3": 0.8131841496048173,
+      "4": 0.4066351434405916,
+      "5": 0.8310832221479281
+    },
+    "lock_precision": 0.6775510204081632,
+    "lock_recall": 0.6611111111111111,
+    "lock_precision_recall_by_class": {
+      "4": {
+        "precision": 0.6,
+        "recall": 0.5
+      },
+      "5": {
+        "precision": 0.7551020408163265,
+        "recall": 0.8222222222222222
+      }
+    },
+    "false_activation_rate": 0.4666666666666667,
+    "false_activation_rate_by_class": {
+      "4": 0.2073170731707317,
+      "5": 0.2682926829268293
+    }
+  },
+  "competition_gates": {
+    "base_map50": true,
+    "new_map50": true,
+    "krr": true
+  },
+  "competition_gate_thresholds": {
+    "base_map50": 0.8,
+    "new_map50": 0.6,
+    "krr": 0.95
+  },
+  "diagnostic_checks": {
+    "lock_precision": false,
+    "false_activation_rate": false
+  },
+  "diagnostic_warnings": [
+    "lock_precision",
+    "false_activation_rate"
+  ],
+  "score_passed": true,
+  "passed": true
+}

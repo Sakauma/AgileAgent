@@ -1,176 +1,179 @@
 # 系统架构
 
-AgileAgent 将配置、模型代际、在线推理、增量学习、审计和设备部署组织为一套统一运行时。
+AgileAgent 将配置、模型代际、在线推理、增量学习、系统校准、审计和 Ascend 部署组织为统一运行时。
 
 ## 组件分层
 
 | 层级 | 主要模块 | 职责 |
 | --- | --- | --- |
 | 接口层 | `fair_agent/web/`、`fair_agent/cli.py` | Web API、工作台、CLI 和健康检查 |
-| 编排层 | `fair_agent/modules/web_inference.py` | production 代际解析、三模型执行、类别映射与融合 |
-| 生命周期层 | `incremental_workbench.py`、`incremental_lifecycle.py` | 编排数据审计、增量训练、系统校准、联合复核、注册与切换 |
-| 模型层 | `fair_agent/models/`、`models/` | Scene-SensorNet、基础检测器、增量检测器和模型元数据 |
-| 后端层 | `fair_agent/backends/` | Ultralytics CUDA 与 Ascend ACL/OM 运行时 |
-| 状态层 | `data/`、`reports/`、`models/generations.json` | 批次状态、审计事件、报告和 production 代际 |
+| 编排层 | `fair_agent/modules/web_inference.py` | production 代际解析、模型执行、门控、类别映射与融合 |
+| 生命周期层 | `incremental_workbench.py`、`incremental_lifecycle.py` | 数据审计、增量训练、系统校准、联合复核、注册与切换 |
+| 模型层 | `fair_agent/models/`、`models/` | Scene-SensorNet、Base、增量专家和发布元数据 |
+| 后端层 | `fair_agent/backends/` | Ultralytics CUDA 与 Ascend ACL/OM |
+| 状态层 | `data/`、`reports/`、`models/generations.json` | 批次状态、审计事件、指标和 production 代际 |
 
-## 在线推理流程
+## 固定类别所有权
+
+| 全局类 | 名称 | owner |
+| ---: | --- | --- |
+| 0 | soldier | `frozen_base_model` |
+| 1 | small_aircraft | `frozen_base_model` |
+| 2 | warship | `frozen_base_model` |
+| 3 | tank | `frozen_base_model` |
+| 4 | patrol_boat | `incremental_model` |
+| 5 | armored_vehicle | `incremental_model` |
+
+Base 与增量专家的输出先映射为全局 ID，再做冲突仲裁和 class-aware NMS。场景模型不会改变 owner。
+
+## x86/CUDA 在线流程
 
 ```text
-图像输入
+图像
   -> production 代际解析
-  -> Scene-SensorNet 场景与传感器认知
-  -> 四类 Base 检测器
-  -> 二类增量专家
+  -> Scene-SensorNet、四类 Base、二类专家
   -> 全局类别映射
-  -> 六类逐类场景先验亲和度
-  -> 六类逐类 dev 基础阈值 + 场景软惩罚
-  -> 固定 owner 直接合并
+  -> 六类场景先验亲和度
+  -> dev 冻结的逐类基础阈值 + 场景软惩罚
+  -> 固定 owner 合并
   -> class-aware NMS
-  -> API、黑板与审计事件
+  -> API 与审计事件
 ```
 
-每张图像使用同一 production 代际。四类 Base 固定负责 soldier、small_aircraft、warship 和 tank（全局类 0–3），二类增量专家固定负责 patrol_boat 与 armored_vehicle（全局类 4–5）。两个检测 owner 对每张图并行推理，专家局部类 `0/1` 映射为全局类 `4/5`。当前基础阈值为 `0=.21, 1=.14, 2=.36, 3=.05, 4=.57, 5=.82`，逐类最大场景惩罚为 `0=.15, 1=.88, 2=.26, 3=.19, 4=.65, 5=0`。
+x86 使用六类场景软阈值。Scene-SensorNet 对 air/forest/sea/urban 做闭集概率预测；Base 类先验只来自 Base train 正样本，新增类先验只来自 Increment train 正样本。在线不读取文件名或真值标签。
 
-Scene-SensorNet 对 air/forest/sea/urban 四个已知场景做闭集概率预测。Base 类先验只从 Base train 正样本学习，新增类先验只从 Increment train 正样本学习；在线亲和度由场景概率与对应类别先验计算，有效阈值为 `min(1, 基础阈值 + 最大惩罚 × (1 - 亲和度))`。该信号会同时影响新旧类，但只软抑制低亲和度候选：不读取文件名或真值标签、不改变 owner、不做场景硬路由，也不跳过 Base 或 Increment。
+## Ascend310B1 正式流程
 
-当前 x86/CUDA 4+2 production 与下述 Ascend 结构属于不同发布代际。Ascend 不可变包仍是已验证的 3+1 板端 release；在新的 4+2 head 完成 ONNX/ATC 构建与板端评分前，不把 `.pt` 指针变化解释为 OM 已更新。
-
-历史 3+1 Ascend 正式满分主线保留相同的三个逻辑职责，但物理执行不同：Base backbone/neck 只运行一次，一个 `shared_backbone_dual_head_v1` OM 同时返回 old/new raw head；`fixed_neutral_v1` 用 Sensor `0.5/0.5`、Scene 四类各 `0.25` 的均匀上下文保持响应和审计结构。context OM 仍加载用于资产回滚，但正常路径不执行其前向推理；old/new 仍分别记录为 `frozen_base_model` 和 `incremental_model`。
-
-### 历史 3+1 Ascend 正式主线、回滚与候选拓扑
+当前 release：
 
 ```text
-                    POST /api/detect 或 /api/batch
-                                  |
-                     公共入口 127.0.0.1:8501
-                                  |
-                 loopback NAT 精确原子路由（新连接）
-                    /                              \
-        无规则：即时回滚                       有规则：正式主线
-              |                                      |
-    三 OM 监听器 :8501                     满分实例 :18501
-    Base + Incremental + Scene                DVPP encoded batch
-                                                    |
-                                           shared backbone/neck
-                                             /             \
-                                         old head       new head
-                                            |                |
-                                  frozen_base_model  incremental_model
-                                             \              /
-                                           fixed_neutral_v1
-
-                    :8502 始终留给下一轮隔离候选
+/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
 ```
 
-该 Ascend 主线结构的“物理合并”不改变其 3+1 逻辑责任：
+```text
+640×512 PNG
+  -> bounded multipart
+  -> DVPP encoded preprocessing
+  -> 并发提交 Scene-SensorNet 与四类 Base YOLO26s
+  -> 收集真实场景概率与 Base 检测
+  -> 双证据执行门控
+       air >= 0.5 且 Base 检出 small_aircraft：跳过专家
+       其他情况：执行/收集二类专家
+  -> 固定 owner、冲突仲裁、class-aware NMS
+  -> 六类响应与审计
+```
 
-| 逻辑功能 | 物理实现 | owner/输出语义 |
+门控输入只有 `scene_probabilities` 和 `base_detections`，不读取标签或文件名。它属于冻结后的 system calibration，不更新任何检测器权重。
+
+### Ascend 模型契约
+
+| 模型 | 输入 | 输出 |
 | --- | --- | --- |
-| 旧类检测 | 冻结 Base backbone、neck/FPN 和 old Detect head | `frozen_base_model`，局部 `0/1/2` 映射全局 `0/1/3` |
-| 新类检测 | 共享特征上的 residual `1×1` adapter 与 new Detect head | `incremental_model`，当前局部 `0` 映射全局 `2` |
-| Scene/Sensor | `fixed_neutral_v1`；context OM 作为回滚资产加载但不前向 | Sensor `0.5/0.5`、Scene 四类各 `0.25` |
+| Base YOLO26s | uint8 NHWC `[1,608,736,3]` | E2E `[1,300,6]`，4 类 |
+| Incremental YOLO26s | uint8 NHWC `[1,608,736,3]` | E2E `[1,300,6]`，2 类 |
+| Scene-SensorNet | uint8 NHWC `[1,160,160,3]` | sensor 与 scene 概率 |
 
-old/new 的 `candidate_confidence` 是 Host 运行时参数，不参与 ONNX/OM 身份。更换数据集时可以复用同一 build manifest 搜索阈值，但不能改变 logical owner、class map、anchor 数或 output contract。
+`fair_agent/backends/ascend_acl.py` 负责 CANN 初始化、ACL context、OM 加载、DVPP、统一 enqueue、E2E 输出接收和耗时统计。`fair_agent/modules/web_inference.py` 负责全局类别、内容门控、融合和 API 语义。
+
+### 正式拓扑
+
+```text
+                     公共 127.0.0.1:8501
+                               |
+             精确 loopback NAT，comment 固定
+                     /                     \
+             无规则：回滚              有规则：正式
+                  |                         |
+        旧 listener :8501           4+2 主实例 :18501
+                                           |
+                          Base + Specialist + Scene 三 OM
+
+                   :8502 仅用于隔离候选
+```
+
+三个 systemd unit 分别管理主实例、回滚 listener 与路由。正式提升保留旧 listener 的物理监听，删除唯一规则即可即时回滚。
 
 ## 学习、校准与评估阶段
 
 ```text
 base_learning
-  Base train/dev -> Base 检测器权重
+  Base train/dev -> 四类 Base 权重
         |
-        v
 incremental_learning
-  当轮 Increment train/dev -> 新类专家权重与全局 ID 映射
-  Base 与历史专家权重冻结；不读取 Base/历史增量样本
+  当轮 Increment train/dev -> 当轮新类专家
+  Base 与历史专家冻结
         |
-        v
 system_calibration
-  Base/Increment train/dev + mixed dev
-  -> Scene-SensorNet、逐类场景先验、阈值与场景惩罚
-  -> 不更新 Base 或 Increment 检测器权重
+  Scene-SensorNet、场景先验、门控与阈值
+  不更新任何检测器
         |
-        v
 joint_evaluation
-  参数冻结 -> 截至当轮全部已学类别的累计 lock/test 评分
+  参数冻结 -> 截至当轮全部类别的 lock/test
   -> New-mAP50、KRR、Full-mAP50 与父子代际
-  -> 禁止训练和选参 -> 候选登记、shadow、production 切换
 ```
 
-`incremental_learning` 的定义只覆盖新类检测器训练、新类映射及新类专属学习。Scene-SensorNet 训练、Base/Increment 场景先验学习和六类门控搜索属于独立的 `system_calibration`；它们即使读取 Base train/dev，也不构成旧类样本回放，因为两个检测器权重都保持冻结。工作台状态机会串联这些步骤，但编排范围不等于增量学习统计范围。
+`incremental_learning` 只包括新类检测器训练、新类映射及新类专属学习。Scene-SensorNet 和场景门控属于独立功能模型校准。完整契约见 `docs/compliant-incremental-learning.md`。
 
-训练快照绑定数据清单、类别注册表、父代际和训练配置。正式 4+2 注册表按 patrol_boat → armored_vehicle 形成两个不同新增类别轮次；每轮专家只读该轮 56/7 的 Increment train/dev，预测冻结后在 Base lock 加截至当轮全部 Increment lock 上复核。Base 类先验只来自 Base train，新增类先验只来自 Increment train，门控参数只由 mixed dev 选择。模型权重与校准参数冻结后进入联合复核，复核结果写入候选代际。
-
-当前在线 production 的二类联合专家是此前已通过六类指标的兼容基线，不被回写成两轮顺序训练产物。注册表驱动的两个单轮专家完成训练和逐轮复核后，`tools/13` 逐轮复制可提交资产并登记 candidate，`tools/12` 验证完整父子链；只有 `tools/10` 在最终系统校准和 lock 通过后切换 production。切换后运行时从 `models/generations.json` 加载两个独立协议，类 `4/5` 分别由 Round 1/2 专家拥有，联合二类代际仅保留为 `retired_baseline`。
+正式 4+2 注册表按 patrol_boat → armored_vehicle 记录两个新类别轮次。每轮只读当轮 Increment train/dev；`tools/13_register_incremental_round_candidate.py` 逐轮登记候选，`tools/12_summarize_incremental_rounds.py` 验证父子链，最终由 `tools/10_promote_scene_aware_4plus2.py` 切换 production。
 
 ## 模型代际
 
 `models/generations.json` 维护：
 
 - production 与 candidate 通道；
-- 父子代际关系；
-- 基础类、新增类和更新类集合；
-- 每个类别的模型所有权；
-- 权重、配置和证据文件哈希；
-- 每轮 New-mAP50、KRR、Full-mAP50，以及 precision 和误激活率；
-- 冲突融合策略与场景软阈值配置。
+- 父子代际和轮次；
+- 类别 owner；
+- 权重、配置和证据身份；
+- New-mAP50、KRR、Full-mAP50；
+- 阈值、场景配置和执行门控；
+- 数据隔离、Base 冻结与验收状态。
 
-严格候选的状态流是 `registered_candidate -> active`。逐轮登记不会触碰 production；最终晋级要求 `sequential_round_evidence.json`、最终 candidate 通道和所有专家权重身份同时匹配。默认 Web 服务与 `--profile` CLI 均支持多个 `class_incremental_expert`，并对每张未标注图执行全部新增类 owner。
-
-Web 服务启动时加载 production 代际，代际切换时构建并预热新引擎，再更新进程内运行实例。
+Web 服务启动时加载 production 代际。新代际必须先构建并预热引擎，再原子替换进程内运行实例。
 
 ## 配置系统
 
-`fair_agent/core/config.py` 负责 schema 3 加载、环境变量展开、路径解析、命令行覆盖、字段校验和敏感值脱敏。默认配置用于 x86/CUDA 开发与训练，Ascend 配置用于板端 OM 推理。
+`fair_agent/core/config.py` 负责 schema 3 加载、环境变量展开、路径解析、命令行覆盖、字段校验和敏感值脱敏：
 
-## Ascend 310B 运行时
+- `configs/agent_pipeline.yaml`：x86/CUDA production；
+- `configs/agent_pipeline_ascend310b.yaml`：当前 Ascend 正式配置；
+- `configs/ascend310b/full_score_method.yaml`：训练、导出、ATC、运行时与评分契约；
+- release-local 配置：不可变发布身份。
 
-`fair_agent/backends/ascend_acl.py` 使用 PyACL/AscendCL 完成：
+## Ascend 候选到正式控制流
 
-- CANN 初始化与设备上下文；
-- 三 OM 回滚或共享双逻辑头主线/候选的加载和静态输入契约校验；
-- 图像预处理与输入缓冲区管理；
-- Base、Incremental、Scene 三模型执行，或单次共享骨干双 head 执行；
-- YOLO 输出解码、类别映射和耗时统计；
-- Web 健康状态与请求级指标。
+```text
+4+2 冻结权重
+  -> 两个 YOLO26 E2E ONNX
+  -> build_ascend_yolo26_e2e_oms.sh
+  -> Base / Incremental OM + 真实 Scene 资产 + build manifest
+  -> tools/112：生成 :8502 候选与候选代际
+  -> run_ascend310b_score_gate.sh
+  -> tools/110：候选排序
+  -> tools/111：validated release
+  -> systemd + loopback NAT：公共 :8501 提升
+  -> 公共入口部署后 FPS 复验
+```
 
-正式板端配置已切换为 `raw_dual_head_v1`、DVPP encoded batch、pageable memory、threaded execution 和固定中性上下文；release manifest 同时登记 dual OM 与 context 回滚资产。原三 OM release 由独立 systemd 服务保留，公共 `8501` 通过精确 loopback NAT 路由到满分实例 `18501`。结构、阈值搜索和评分门禁见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
+结果有效性要求数据隔离、预测先冻结、Base 权重冻结与资产身份一致。比赛淘汰门禁只使用 Base mAP50、New-mAP50、KRR 和 batch FPS；precision、误激活率和单请求延迟保留为诊断。
 
-### 可移植正式模型包
+## 可移植正式模型包
 
-`models/ascend310b/full-score/20260816-full-score-1493b04/` 是正式 release 的版本化副本，不是需要继续加工的训练目录。它把两个 OM 与其 source checkpoint、ONNX、AIPP、ATC 日志、训练/导出/build manifest、字节级配置和原始验收报告绑定在同一 SHA256 清单中。
+`models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/` 保存三个 OM、source checkpoint、ONNX、AIPP、ATC 日志、构建清单、正式配置、冻结预测和原始验收报告。
 
 ```text
 Git clone
-  -> SHA256SUMS 校验
+  -> 包完整性检查
   -> materialize_ascend310b_full_score_release.sh
-  -> 固定 release 根 /home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04
+  -> 固定 release 根
   -> tools/95 --require-validation
-  -> 新板直接 :8501，或既有板主实例 :18501 + :8501 回滚 listener
+  -> 新板直接 :8501，或 :18501 主实例 + :8501 回滚 listener
 ```
 
-这条消费路径只加载已构建资产，不调用训练、ONNX 导出或 ATC。固定绝对 release 根是正式配置和 manifest 身份的一部分；物化器拒绝覆盖已有目录，避免把不同字节伪装成同一 release。
-
-### 新数据集的候选到正式控制流
-
-```text
-full_score_method.yaml
-  -> tools/107：训练 best/last + 数据隔离/零漂移报告
-  -> tools/108：dual-head ONNX + export manifest
-  -> build_ascend_dual_head_om.sh：CANN 7.0.RC1 OM + build manifest
-  -> tools/109：注入 owner/class map/Host 阈值并生成 8502 配置
-  -> run_ascend310b_score_gate.sh：冻结预测 -> 三项精度 -> 三轮 batch
-  -> tools/110：按精度余量、FPS 波动、中位 FPS 选择候选
-  -> tools/111：物化 validated release 与不可变证据
-  -> systemd 双实例 + loopback NAT：8501 原子提升/即时回滚
-```
-
-构建阶段把方法配置、training report、export manifest、source checkpoint、ONNX、AIPP、OM、ATC 命令和 context 回滚资产通过 SHA256 串成一条证据链。新 training report schema v2 授权同轮 best/last 且要求二者共享参数漂移均为零；2026-08-16 参考候选因为历史报告是 schema v1，只允许方法配置中固定的 report/export/`last.pt` 哈希组合兼容。
-
-评分阶段只把 Base mAP50、New-mAP50、KRR 与三轮 20 图 batch 中位 FPS 作为比赛门禁。数据隔离、预测先冻结和资产哈希是结果有效性的前置条件；precision、误激活率、逐框/JSON 差异和单请求时延继续记录，但不改变四项满分判定。
+该消费路径不训练、不导出 ONNX、不运行 ATC、不升级 CANN。
 
 ## 审计与证据
 
-运行事件写入 `reports/agent_logs/`，并使用 `trace_id`、`batch_id`、`job_id` 和 `generation_id` 串联。增量批次在 `data/incremental_batches/` 保存源包、训练视图、封存样本、快照、任务记录和类别注册表。
+运行事件写入 `reports/agent_logs/`，用 `trace_id`、`batch_id`、`job_id` 和 `generation_id` 串联。增量批次在 `data/incremental_batches/` 保存源包、训练视图、封存样本、快照、任务记录和类别注册表。板端 release 的正式证据位于包内 `provenance/` 与 `validation/`。
 
 ## 目录结构
 
@@ -182,7 +185,7 @@ fair_agent/web/        FastAPI 服务与前端资源
 configs/               主配置、模型配置与实验配置
 models/                发布模型与代际元数据
 scripts/               环境准备、启动和发布校验
-tools/                 数据、实验和设备验收工具
+tools/                 数据、实验、导出和设备验收工具
 tests/                 单元测试与集成回归
 splits/                固定数据清单
 ```

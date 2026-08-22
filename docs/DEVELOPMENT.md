@@ -78,56 +78,35 @@ Ascend 相关变更使用：
 
 配置变更同步更新 schema 校验、两套主配置、测试和配置文档。模型变更同步更新 manifest、generation registry、SHA256、指标证据和发布校验。Ascend 正式资产还必须同步更新 `models/ascend310b/` 包、包内 `SHA256SUMS`、`models/SHA256SUMS.txt`、`models/manifest.json` 和 `tests/test_ascend_packaged_release.py`；不得只更新板端 release。
 
-当前 `20260816-full-score-1493b04` 是不可变发布包。普通功能开发不得覆盖其中任一文件；新模型先生成新的 release ID 和目录，完成哈希及评分验证后再更新 manifest 的 production 指针。`.om/.onnx/.pt` 通常被忽略，只有正式包路径允许精确白名单，提交前必须用 `git check-ignore -v` 和 `git ls-files` 确认二进制确实进入版本控制。
+当前 `20260823-4plus2-yolo26-content-gate-v2` 是 production 不可变发布包；`20260816-full-score-1493b04` 是历史包。普通功能开发不得覆盖任一已发布包；新模型先生成新的 release ID 和目录，完成评分与包验证后再更新 manifest 的 production 指针。`.om/.onnx/.pt` 通常被忽略，只有正式包路径允许精确白名单，提交前必须用 `git check-ignore -v` 和 `git ls-files` 确认二进制确实进入版本控制。
 
 ## Ascend 满分方法维护
 
-部署或复核当前满分模型优先使用 `scripts/materialize_ascend310b_full_score_release.sh`，不运行本节的训练/构建入口。本节用于比赛更换数据集或形成新 release。
+部署或复核当前模型使用 `scripts/materialize_ascend310b_full_score_release.sh`，不重新训练或运行 ATC。形成新 release 时，`configs/ascend310b/full_score_method.yaml` 是单一方法源。
 
-`configs/ascend310b/full_score_method.yaml` 是满分流程的单一方法源。修改共享双头训练、导出、运行时或评分逻辑时，至少同步检查：
-
-| 变更范围 | 必须同步的实现/证据 |
+| 变更范围 | 必须同步的实现或证据 |
 | --- | --- |
-| 训练参数或冻结范围 | `tools/107_train_shared_dual_head.py`、training report schema、best/last 零漂移测试 |
-| 输入、输出或 logical head | `tools/108_export_ascend_dual_head.py`、build 脚本、Ascend release 校验、owner/class map 测试 |
-| CANN/ATC/AIPP | `scripts/build_ascend_dual_head_om.sh`、build manifest 哈希契约；CANN 仍固定 `7.0.RC1` |
-| 候选配置 | `tools/109_materialize_ascend_full_score_candidate.py`、`8501` 保护和 `validated: false` 测试 |
-| 比赛门禁或排序 | `tools/94_score_ascend_agent.py`、`tools/97_benchmark_ascend_api.py`、`tools/110_select_ascend_full_score_candidate.py` |
-| 板端评分协议 | `scripts/run_ascend310b_score_gate.sh`、score/benchmark schema 和正式服务健康检查 |
-| 正式发布与回滚 | `tools/111_promote_ascend_full_score_release.py`、双 systemd service、精确 loopback NAT 和失败撤销测试 |
+| Base/Incremental 训练与类别轮次 | `tools/04`–`tools/13`、类别注册表和数据隔离证据 |
+| Scene 与系统校准 | `tools/60`–`tools/61`、`tools/09`–`tools/10` |
+| YOLO26 E2E 输入/输出 | ONNX、AIPP、`scripts/build_ascend_yolo26_e2e_oms.sh`、build manifest |
+| 候选配置与内容门控 | `tools/112_materialize_ascend_yolo26_candidate.py`、generation registry、配置校验 |
+| 比赛门禁与排序 | `tools/94_score_ascend_agent.py`、`tools/97_benchmark_ascend_api.py`、`tools/110_select_ascend_full_score_candidate.py` |
+| 正式发布与回滚 | `tools/111_promote_ascend_full_score_release.py`、systemd 安装器、路由脚本 |
+| 预构建包 | `models/manifest.json`、全局/包内清单、package test 和文档 |
 
 开发约束：
 
-- 不把阈值写入 OM/build manifest 身份；old/new 阈值由 logical head 的 Host 参数承载。
-- 不把板端绝对路径、密码、候选产物或数据集写入方法 YAML 或 Git。
-- 不在候选流程停止、替换或复用未知的 `8501`/`8502` 进程。
-- 不以逐框/业务 JSON、precision、误激活率或单请求 P95/P99 否决四项比赛指标已满分的候选。
-- 数据隔离、预测先冻结、共享参数零漂移和资产哈希仍是结果有效性的前置条件。
-- P7/P10 历史实验保存在本地 ignored archive；活动代码以共享双头满分 release 为 Ascend 主线，同时维护三 OM 即时回滚和 `8502` 后续候选路径。
+- Base 固定负责全局类 0–3，Specialist 固定负责 4–5；
+- 阈值是 Host 配置，不写入 OM 身份；
+- 双证据门控只能读取 Scene 概率与 Base 检测，不读取标签或文件名；
+- 方法 YAML 不写板端绝对候选路径、密码或数据集；
+- 候选只能使用 `8502`，不得停止或复用未知进程；
+- 正式主实例使用 `18501`，公共入口保持 `8501`；
+- 数据隔离、预测先冻结、Base 冻结和资产身份是结果有效性的前置条件；
+- precision、误激活率和单请求时延是诊断，不替代四项比赛门禁；
+- 旧共享双头工具继续作为历史兼容代码，不得误写成当前 production。
 
-修改后优先运行：
-
-```bash
-.venv/bin/python -m pytest -q \
-  tests/test_ascend_full_score_workflow.py \
-  tests/test_shared_dual_head.py \
-  tests/test_configuration_runtime.py \
-  tests/test_ascend_release.py \
-  tests/test_strict_incremental.py
-.venv/bin/python -m ruff check \
-  tools/107_train_shared_dual_head.py \
-  tools/108_export_ascend_dual_head.py \
-  tools/109_materialize_ascend_full_score_candidate.py \
-  tools/110_select_ascend_full_score_candidate.py \
-  tools/111_promote_ascend_full_score_release.py
-bash -n scripts/build_ascend_dual_head_om.sh
-bash -n scripts/run_ascend310b_score_gate.sh
-bash -n scripts/manage_ascend310b_primary_route.sh
-bash -n scripts/install_ascend310b_primary_services.sh
-```
-
-板端只运行探针、预测冻结、三项精度评分和 `30 + 3×20` batch 验收，不运行 Web pytest。完整操作顺序见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
-
+按变更范围选择验证。完整回归可运行 pytest；仅做发布归档时至少执行语法、JSON/YAML、release verifier、包清单和凭据扫描。板端只运行探针、预测冻结、精度评分与 `30 + 3×20` batch，不运行 Web pytest。
 ## 提交
 
 提交主题使用简短英文祈使句，例如：
@@ -136,5 +115,4 @@ bash -n scripts/install_ascend310b_primary_services.sh
 Simplify runtime configuration
 Document current Ascend runtime
 ```
-
 每个提交围绕一个明确目标组织，并在正文中记录关键行为变化与验证命令。

@@ -18,7 +18,10 @@ def test_three_distinct_functional_models_are_registered() -> None:
     assert result["model_count"] == 3
     assert result["distinct_function_count"] == 3
     assert result["all_x86_gpu_ready"] is True
-    assert result["all_ascend_310b_ready"] is False
+    assert result["all_ascend_310b_ready"] is True
+    assert result["deployment_manifest"]["release_id"] == (
+        "20260823-4plus2-yolo26-content-gate-v2"
+    )
     assert result["strict_class_incremental"]["true_class_incremental_verified"] is True
     assert result["strict_class_incremental"]["production_profile"]["model_id"] == "incremental_detector"
     assert {item["function"] for item in result["models"]} == {
@@ -31,13 +34,14 @@ def test_three_distinct_functional_models_are_registered() -> None:
     )
     assert incremental["evidence"]["summary"]["true_class_incremental_verified"] is True
     production = incremental["evidence"]["summary"]["production_class_incremental"]
-    assert production["activation_threshold"] == 0.63
+    assert production["activation_thresholds"] == {4: 0.57, 5: 0.82}
     assert production["deployment_accepted"] is True
-    assert incremental["artifact_count"] == 1
+    assert incremental["artifact_count"] == 2
     assert incremental["evidence"]["summary"]["protocol_count"] == 1
-    assert incremental["runtime"]["imgsz"] == 640
+    assert incremental["runtime"]["imgsz"] == 1280
+    assert incremental["runtime"]["ascend_model_key"] == "incremental_detector"
     base = next(item for item in result["models"] if item["function"] == "multimodal_target_detection")
-    assert base["runtime"]["imgsz"] == 896
+    assert base["runtime"]["imgsz"] == 1280
 
 
 def test_functional_registry_rejects_tampered_hash(tmp_path: Path) -> None:
@@ -49,6 +53,43 @@ def test_functional_registry_rejects_tampered_hash(tmp_path: Path) -> None:
     result = validate_functional_models(path)
     assert result["valid"] is False
     assert any(error.startswith("functional_artifact_invalid") for error in result["errors"])
+
+
+def test_functional_registry_rejects_historical_ascend_artifact(
+    tmp_path: Path,
+) -> None:
+    registry = yaml.safe_load(
+        Path("configs/functional_models.yaml").read_text(encoding="utf-8")
+    )
+    registry = deepcopy(registry)
+    incremental = next(
+        item
+        for item in registry["models"]
+        if item["id"] == "incremental_model_bank_v1"
+    )
+    incremental["artifacts"][1] = {
+        "path": (
+            "models/ascend310b/full-score/20260816-full-score-1493b04/om/"
+            "shared_backbone_dual_head.om"
+        ),
+        "sha256": (
+            "3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89"
+        ),
+        "runtime": "ascend_310b",
+    }
+    registry_path = tmp_path / "functional_models.yaml"
+    registry_path.write_text(
+        yaml.safe_dump(registry, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    result = validate_functional_models(registry_path)
+
+    assert result["valid"] is False
+    assert (
+        "functional_ascend_artifact_not_production:incremental_model_bank_v1"
+        in result["errors"]
+    )
 
 
 def test_context_model_lock_metrics_pass_declared_thresholds() -> None:
@@ -69,7 +110,7 @@ def test_registry_describes_the_real_policy_integration() -> None:
     detector = next(item for item in registry["models"] if item["function"] == "multimodal_target_detection")
     assert detector["inputs"] == ["image_rgb"]
     first_edge = registry["collaboration"][0]
-    assert first_edge["payload"] == "soft_known_context"
+    assert first_edge["payload"] == "known_scene_probabilities"
     assert first_edge["status"] == "implemented"
 
 

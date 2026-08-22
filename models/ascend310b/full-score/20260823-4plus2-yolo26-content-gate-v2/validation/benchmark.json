@@ -1,0 +1,367 @@
+{
+  "schema_version": 5,
+  "created_at": "2026-08-23T00:31:55+08:00",
+  "protocol": {
+    "transport": "loopback_http_multipart_png_keep_alive",
+    "base_url": "http://127.0.0.1:8502",
+    "confidence": 0.1,
+    "image_count": 89,
+    "warmup_requests": 30,
+    "rounds": 0,
+    "single_requests_skipped": true,
+    "sample_count": 0,
+    "concurrency": 1,
+    "gate_profile": "score",
+    "baseline_mean_ms": null,
+    "baseline_p99_ms": null,
+    "p8_reference_report": null,
+    "batch_probe_size": 20,
+    "batch_rounds": 3,
+    "target_batch_fps": 30.0,
+    "png_contracts": {
+      "width": 640,
+      "height": 512,
+      "bit_depth": 8,
+      "color_types": [
+        "grayscale",
+        "rgb",
+        "rgba"
+      ]
+    }
+  },
+  "health": {
+    "status": "ready",
+    "device": "ascend:0",
+    "backend": "ascend_acl",
+    "validated": false,
+    "validation_candidate": true,
+    "model_layout": "independent_yolo26_e2e_v1",
+    "context_mode": "model",
+    "queue": {
+      "waiting": 0,
+      "active": false,
+      "completed": 0
+    },
+    "generation_id": "incremental_detection_generation_4plus2",
+    "generation_name": "4+2 增量检测生产代际",
+    "classes": [
+      "soldier",
+      "small_aircraft",
+      "warship",
+      "tank",
+      "patrol_boat",
+      "armored_vehicle"
+    ]
+  },
+  "distributions": {
+    "server": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "client_wall": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "inference": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "upload_parse_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "decode_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "queue_wait_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "engine_total_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "dvpp_enqueue_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "dvpp_device_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "ascend_submit_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "ascend_wait_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "ascend_input_copy_max_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "ascend_output_copy_max_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_fusion_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_conversion_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_gate_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_conflict_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_nms_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_decision_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    }
+  },
+  "rounds": [],
+  "competition": {
+    "batch_fps": 39.34684241589613,
+    "batch_system_total_ms": 508.3,
+    "batch_wall_ms": 536.380568,
+    "batch_image_count": 20,
+    "batch_rounds": [
+      {
+        "round": 1,
+        "image_count": 20,
+        "system_total_ms": 509.3,
+        "wall_ms": 538.908994,
+        "fps": 39.2695857058708,
+        "timings": {
+          "upload_parse_ms": 12.317,
+          "decode_ms": 0.0,
+          "queue_wait_ms": 0.1,
+          "batch_engine_ms": 495.591,
+          "cache_store_ms": 0.378
+        }
+      },
+      {
+        "round": 2,
+        "image_count": 20,
+        "system_total_ms": 508.2,
+        "wall_ms": 539.815628,
+        "fps": 39.354584809130266,
+        "timings": {
+          "upload_parse_ms": 11.759,
+          "decode_ms": 0.0,
+          "queue_wait_ms": 0.1,
+          "batch_engine_ms": 495.041,
+          "cache_store_ms": 0.399
+        }
+      },
+      {
+        "round": 3,
+        "image_count": 20,
+        "system_total_ms": 508.3,
+        "wall_ms": 536.380568,
+        "fps": 39.34684241589613,
+        "timings": {
+          "upload_parse_ms": 11.836,
+          "decode_ms": 0.0,
+          "queue_wait_ms": 0.1,
+          "batch_engine_ms": 495.053,
+          "cache_store_ms": 0.371
+        }
+      }
+    ],
+    "batch_fps_passed": true
+  },
+  "requests": [],
+  "environment": {
+    "python": "3.9.2 | packaged by conda-forge | (default, Feb 21 2021, 05:02:26) \n[GCC 9.3.0]",
+    "platform": "Linux-5.10.0+-aarch64-with-glibc2.35",
+    "git": {
+      "root": "/home/HwHiAiUser/agileagent/repo",
+      "head": "6018487d1ccad64a31a1dc082e9b2c076001e342",
+      "branch": "main",
+      "origin": "https://github.com/Sakauma/AgileAgent.git",
+      "status_porcelain": "",
+      "clean": true
+    },
+    "config": {
+      "configured": true,
+      "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/config/candidate-seed-100-content-gate.yaml",
+      "exists": true,
+      "sha256": "b691cec5bf5793ae4eb6601f7359d3a4d51bb92dc2dbf75402f8a9cc2720c972"
+    },
+    "build_manifest": {
+      "configured": true,
+      "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/build/build-manifest.json",
+      "exists": true,
+      "sha256": "d3778ac759085a2644acc410e193cfe52529d3ab301edf3b484d43eb00c2351b"
+    },
+    "commands": {
+      "npu_smi": {
+        "command": [
+          "npu-smi",
+          "info"
+        ],
+        "available": true,
+        "returncode": 0,
+        "stdout": "+--------------------------------------------------------------------------------------------------------+\n| npu-smi 23.0.rc3                                 Version: 23.0.rc3                                     |\n+-------------------------------+-----------------+------------------------------------------------------+\n| NPU     Name                  | Health          | Power(W)     Temp(C)           Hugepages-Usage(page) |\n| Chip    Device                | Bus-Id          | AICore(%)    Memory-Usage(MB)                        |\n+===============================+=================+======================================================+\n| 0       310B1                 | OK              | 12.8         63                128   / 128           |\n| 0       0                     | NA              | 0            3789 / 11577                            |\n+===============================+=================+======================================================+",
+        "stderr": ""
+      },
+      "atc": {
+        "command": [
+          "atc",
+          "--help"
+        ],
+        "available": true,
+        "returncode": 0,
+        "stdout": "usage: atc <args>\ngenerate offline model example:\natc --model=./alexnet.prototxt --weight=./alexnet.caffemodel --framework=0 --output=./domi \ngenerate offline model for single op example:\natc --singleop=./op_list.json --output=./op_model \n\n===== Basic Functionality =====\n[General]\n  --h/help            Show this help message\n  --mode              Run mode.\n                       0: default, generate offline model;\n                       1: convert model to JSON format;\n                       3: only pre-check;\n                       5: convert ge dump txt file to JSON format;\n                       6: display model info;\n                       30: convert original graph to execute-om for nano(offline model)\n\n[Input]\n  --distributed_cluster_build            build model for distribute mode or not\n  --model             Model file\n  --weight            Weight file. Required when framework is Caffe\n  --om                The model file to be converted to json\n  --framework         Framework type. 0:Caffe; 1:MindSpore; 3:Tensorflow; 5:Onnx\n  --input_format      Format of input data. E.g.: \"NCHW\"\n  --input_shape       Shape of static input data or shape range of dynamic input. Separate multiple nodes with semicolons (;). Use double quotation marks (\") to enclose each argument.\n                      E.g.: \"input_name1:n1,c1,h1,w1;input_name2:n2,c2,h2,w2\"\n                            \"input_name1:n1~n2,c1,h1,w1;input_name2:n3~n4,c2,h2,w2\"\n  --input_shape_range This option is deprecated and will be removed in future version, please use input_shape instead.Shape range of input data. Separate multiple nodes with semicolons (;).\n                      Use double quotation marks (\") to enclose each argument.\n                      E.g.: \"input_name1:[n1~n2,c1,h1,w1];input_name2:[n2,c2~c3,h2,w2]\"\n  --dynamic_batch_size Set dynamic batch size. E.g.: \"batchsize1,batchsize2,batchsize3\"\n  --dynamic_image_size Set dynamic image size. Separate multiple nodes with semicolons (;). Use double quotation marks (\") to enclose each argument.\n                       E.g.: \"imagesize1_height,imagesize1_width;imagesize2_height,imagesize2_width\"\n  --dynamic_dims      Set dynamic dims. Separate multiple nodes with semicolons (;). Use double quotation marks (\") to enclose each argument.\n                       E.g.: \"dims1_n1,dims1_n2;dims2_n1,dims2_n2\"\n  --singleop          Single op definition file. atc will generate offline.model(s) for single op if --singleop is set.\n  --shard_model_dir              dictionary of split models\n  --model_relation_config        relation of split models\n  --enable_graph_parallel        whether to enable parallel\n  --graph_parallel_option_path   parallel strategy configuration file\n  --cluster_config               logic cluster configuration of target environment\n\n[Output]\n  --output            Output file path&name(needn't suffix, will add .om/.exeom automatically).\n                      If --model is set to 30, an additional dbg file will be generated.\n                      If --singleop is set, this arg specifies the directory to which the single op offline model will be generated.\n  --output_type       Set net output type. Support FP32, FP16, UINT8, INT8. E.g.: FP16, indicates that all out nodes are set to FP16.\n                      \"node1:0:FP16;node2:1:FP32\", indicates setting the datatype of multiple out nodes.\n  --check_report      The pre-checking report file. Default value is: \"check_result.json\"\n  --json              The output json file path&name which is converted from a model\n  --host_env_os            OS type of the target execution environment.\n                           The parameters that support setting are the OS types of the opp package\n                           Supported host env os as list:\n                           minios linux \n                           default: linux\n  --host_env_cpu           CPU type of the target execution environment.\n                           The parameters that support setting are the CPU types of the opp package\n                           Supported host env cpu as list:\n                           support cpu: aarch64 , respond to os: minios\n                           support cpu: aarch64 x86_64 , respond to os: linux\n                           default: aarch64\n\n[Target]\n  --soc_version       The soc version.\n  --virtual_type      Set whether offline model can run on the virtual devices under compute capability allocation.\n                      0 (default) : Disable virtualization; 1 : Enable virtualization.\n  --core_type         Set core type AiCore or VectorCore. VectorCore: use vector core. Default value is: AiCore\n  --aicore_num        Set aicore num\n===== Advanced Functionality =====\n[Feature]\n  --out_nodes         Output nodes designated by users. Separate multiple nodes with semicolons (;).Use double quotation marks (\") to enclose each argument.\n                      E.g.: \"node_name1:0;node_name1:1;node_name2:0\"\n  --input_fp16_nodes  Input node datatype is fp16. Separate multiple nodes with semicolons (;). Use double quotation marks (\") to enclose each argument. E.g.: \"node_name1;node_name2\"\n  --insert_op_conf    Config file to insert new op\n  --op_name_map       Custom op name mapping file\n                      Note: A semicolon(;) cannot be included in each path, otherwise the resolved path will not match the expected one.\n  --is_input_adjust_hw_layout    Intput node datatype is fp16 and format is NC1HWC0, used with input_fp16_nodes. E.g.: \"true,true,false,true\"\n  --is_output_adjust_hw_layout   Net output node datatype is fp16 and format is NC1HWC0, used with out_nodes. E.g.: \"true,true,false,true\"\n  --external_weight        Convert const to file constant, and save weight in file.\n                           0 (default): save weight in om.  1: save weight in file.\n\n[Model Tuning]\n  --disable_reuse_memory    The switch of reuse memory. Default value is : 0. 0 means reuse memory, 1 means do not reuse memory.\n  --fusion_switch_file      Set fusion switch file path\n  --enable_scope_fusion_passes    validate the non-general scope fusion passes, multiple names can be set and separated by ','. E.g.: ScopePass1,ScopePass2,...\n  --enable_single_stream    Enable single stream. true: enable; false(default): disable\n  --enable_small_channel    Set enable small channel. 0(default): disable; 1: enable\n  --enable_compress_weight  Enable compress weight. true: enable; false(default): disable\n  --compress_weight_conf    Config file to compress weight\n  --compression_optimize_conf    Config file to compress optimize\n  --sparsity                Optional; enable structured sparse. 0(default): disable; 1: enable\n  --buffer_optimize         Set buffer optimize. Support \"l2_optimize\" (default), \"l1_optimize\", \"off_optimize\"\n  --mdl_bank_path           Set the path of the custom repository generated after model tuning.\n\n[Operator Tuning]\n  --op_precision_mode     Set the path of operator precision mode configuration file (.ini)\n  --allow_hf32            enable hf32. false: disable; true: enable.\n  --precision_mode        precision mode, support force_fp16(default), force_fp32, cube_fp16in_fp32out, allow_mix_precision, allow_fp32_to_fp16, must_keep_origin_dtype, allow_mix_precision_fp16, allow_mix_precision_bf16, allow_fp32_to_bf16.\n  --precision_mode_v2     precision mode v2, support fp16, origin, cube_fp16in_fp32out, mixed_float16, mixed_bfloat16.\n  --modify_mixlist        Set the path of operator mixed precision configuration file.\n  --keep_dtype            Retains the precision of certain operators in inference scenarios by using a configuration file.\n  --customize_dtypes      Set the path of custom dtypes configuration file.\n  --op_bank_path          Set the path of the custom repository generated after operator tuning with Auto Tune.\n  --op_select_implmode    Set op select implmode. Support high_precision, high_performance, high_precision_for_all, high_performance_for_all. default: high_performance\n  --optypelis",
+        "stderr": ""
+      },
+      "msprof": {
+        "command": [
+          "msprof",
+          "--help"
+        ],
+        "available": true,
+        "returncode": 0,
+        "stdout": "Usage:\n      ./msprof [--options]\n\nOptions:\n      --output                          <Optional> Specify the directory that is used for storing data results.(full-platform)\n      --storage-limit                   <Optional> Specify the output directory volume. range 200MB ~ 4294967296MB.(full-platform)\n      --application                     <Optional> Specify application path, considering the risk of privilege escalation,\n\t\t\t\t\t\t   please pay attention to the group of the application and \n\t\t\t\t\t\t   confirm whether it is the same as the user currently.(full-platform)\n      --ascendcl                        <Optional> Show acl profiling data, the default value is on.(full-platform)\n      --model-execution                 <Optional> Show ge model execution profiling data, the default value is off.(full-platform)\n      --runtime-api                     <Optional> Show runtime api profiling data, the default value is off.(full-platform)\n      --task-time                       <Optional> Show task profiling data, the default value is on.(full-platform)\n\t\t\t\t\t\t   The switch can be set in range [l0, l1, on, off]\n      --environment                     <Optional> User app custom environment variable configuration.(full-platform)\n      --sys-period                      <Optional> Set total sampling period of system profiling in seconds.(full-platform)\n      --sys-devices                     <Optional> Specify the profiling scope by device ID when collect sys profiling.\n\t\t\t\t\t\t   The value is all or ID list (split with ',').(full-platform)\n      --hccl                            <Optional> Show hccl profiling data, the default value is off.(full-platform)\n      --msproftx                        <Optional> Show msproftx data, the default value is off.(full-platform)\n      --ai-core                         <Optional> Turn on / off the ai core profiling, the default value is on when collecting\n\t\t\t\t\t\t   app Profiling.(full-platform)\n      --aic-mode                        <Optional> Set the aic profiling mode to task-based or sample-based.(full-platform)\n\t\t\t\t\t\t   In task-based mode, profiling data will be collected by tasks.\n\t\t\t\t\t\t   In sample-based mode, profiling data will be collected in a specific interval.\n\t\t\t\t\t\t   The default value is task-based.\n      --aic-freq                        <Optional> The aic sampling frequency in hertz, the default value is 100 Hz, the range is\n\t\t\t\t\t\t   1 to 100 Hz.(full-platform)\n      --aic-metrics                     <Optional> The aic metrics groups, include ArithmeticUtilization, PipeUtilization, Memory,\n\t\t\t\t\t\t   MemoryL0, ResourceConflictRatio, MemoryUB, L2Cache, PipelineExecuteUtilization.\n\t\t\t\t\t\t   You can also customize registers in the format of Custom:xx,xx.\n\t\t\t\t\t\t   The default value is PipelineExecuteUtilization.(full-platform)\n      --dynamic                         <Optional> Dynamic profiling switch, the default value is off.(Ascend910)\n      --pid                             <Optional> Dynamic profiling pid of the target process.(Ascend910)\n      --python-path                     <Optional> Specify the python interpreter path that is used for analysis, please\n\t\t\t\t\t\t   ensure the python version is 3.7.5 or later.(full-platform)\n      --analyze                         <Optional> Switch for using msprof to analyze collecting data, the default value\n\t\t\t\t\t\t   is off.(full-platform)\n      --rule                            <Optional> Switch specified rule for using msprof to analyze collecting data, the default value\n\t\t\t\t\t\t   is communication,communication_matrix.(full-platform)\n\t\t\t\t\t\t   The switch can be set in [communication, communication_matrix]\n      --parse                           <Optional> Switch for using msprof to parse collecting data, the default value\n\t\t\t\t\t\t   is off.(full-platform)\n      --query                           <Optional> Switch for using msprof to query collecting data, the default value\n\t\t\t\t\t\t   is off.(full-platform)\n      --export                          <Optional> Switch for using msprof to export collecting data, the default value\n\t\t\t\t\t\t   is off.(full-platform)\n      --clear                           <Optional> Swith for using msprof to analyze or export data in clear mode, the default value\n\t\t\t\t\t\t   is off.(full-platform)\n      --iteration-id                    <Optional> The export iteration id, only uesd when argument export is on,\n\t\t\t\t\t\t   the default value is 1\n      --model-id                        <Optional> The export model id, only uesd when argument export is on, msprof will\n\t\t\t\t\t\t   export minium accessible model by default.(full-platform)\n      --summary-format                  <Optional> The export summary file format, only uesd when argument export is on,\n\t\t\t\t\t\t   include csv, json, the default value is csv.(full-platform)\n      --aicpu                           <Optional> Show aicpu profiling data, the default value is off.(full-platform)\n      --sys-hardware-mem                <Optional> LLC, DDR, HBM acquisition switch, optional on / off, the default value is off.\n\t\t\t\t\t\t   LLC bandwidth(Ascend310 while set llc-profiling to bandwidth).\n\t\t\t\t\t\t   LLC usage by aicpu and control cpu(Ascend310 while set llc-profiling to capacity).\n\t\t\t\t\t\t   LLC read/write speed(Ascend310P, Ascend910, Ascend310B, Ascend910B).\n\t\t\t\t\t\t   DDR read/write speed(Ascend310, Ascend310P, Ascend910, Ascend310B).\n\t\t\t\t\t\t   HBM read/write speed(Ascend910, Ascend910B).\n\t\t\t\t\t\t   Processes-level and system-level device memory usage(full-platform)\n      --sys-hardware-mem-freq           <Optional> LLC, DDR, HBM acquisition frequency, range 1 ~ 100, the default value is 50 Hz\n      --llc-profiling                   <Optional> The llc profiling groups.\n\t\t\t\t\t\t   include capacity, bandwidth. the default value is capacity.(Ascend310)\n\t\t\t\t\t\t   include read, write. the default value is read.(Ascend310P, Ascend910, Ascend310B, Ascend910B)\n      --sys-cpu-profiling               <Optional> The CPU acquisition switch, optional on / off, the default value\n\t\t\t\t\t\t   is off.(full-platform)\n      --sys-cpu-freq                    <Optional> The cpu sampling frequency in hertz. the default value\n\t\t\t\t\t\t   is 50 Hz, the range is 1 to 50 Hz.(full-platform)\n      --sys-profiling                   <Optional> The System CPU usage and system memory acquisition switch,\n\t\t\t\t\t\t   the default value is off.(full-platform)\n      --sys-sampling-freq               <Optional> The sys sampling frequency in hertz. the default value\n\t\t\t\t\t\t   is 10 Hz, the range is 1 to 10 Hz.(full-platform)\n      --sys-pid-profiling               <Optional> The CPU usage of the process and the memory acquisition\n\t\t\t\t\t\t   switch of the process, the default value is off.(full-platform)\n      --sys-pid-sampling-freq           <Optional> The pid sampling frequency in hertz. the default value is 10 Hz,\n\t\t\t\t\t\t   the range is 1 to 10 Hz.(full-platform)\n      --sys-io-profiling                <Optional> NIC ROCE acquisition switch, the default value is off.\n\t\t\t\t\t\t   NIC(Ascend310, Ascend910, Ascend310B, Ascend910B), ROCE(Ascend910, Ascend910B)\n      --sys-io-sampling-freq            <Optional> NIC ROCE acquisition frequency, range 1 ~ 100, the default value is 100 Hz.\n\t\t\t\t\t\t   NIC(Ascend310, Ascend910, Ascend310B, Ascend910B), ROCE(Ascend910, Ascend910B)\n      --dvpp-profiling                  <Optional> DVPP acquisition switch, the default value is off.(full-platform)\n      --dvpp-freq                       <Optional> DVPP acquisition frequency, range 1 ~ 100, the default value is 50 Hz.(full-platform)\n      --l2                              <Optional> L2 Cache acquisition switch. the default value is off.(Ascend310P, Ascend910, Ascend310B, Ascend910B)\n      --help                            <Optional> help message.(full-platform)",
+        "stderr": ""
+      },
+      "aoe": {
+        "command": [
+          "aoe",
+          "-h"
+        ],
+        "available": true,
+        "returncode": 0,
+        "stdout": "\u001b[K[Aoe]usage:  ./aoe [option]...\nexample: \n\t./aoe -f 0 -m ./alexnet.prototxt -w ./alexnet.caffemodel -j 1\n\t./aoe -f 0 -m ./alexnet.prototxt --reload\noptions: \n===== Basic Functionality =====\n[General]\n\t-h, --help                       display this help and exit\n\n[Input]\n\t-m, --model <file>                Model file \n\t-w, --weight <file>               Weight file. Required when framework is caffe\n\t-f, --framework <type>            Framework type (Caffe: 0, MindSpore: 1, Tensorflow: 3, Onnx: 5).\n\t                                  Framework will be automatically identified by the suffix\n\t                                  of the model file if not set.\n\t    --model_path <path>           Model file path \n\t    --singleop <file>             Single op definition file \n\t    --ip <ip>                     Ncs server ip\n\t    --port <port>                 Ncs server port. The value range is [6000-10000].\n\t                                  The default value is 8000.\n\t    --input_format                Format of input data. E.g.: \"NCHW\"\n\t    --input_shape                 Shape of input data. Separate multiple nodes with semicolons (;).\n\t                                  Use double quotation marks (\") to enclose each argument.\n\t                                  E.g.: \"input_name1:n1,c1,h1,w1;input_name2:n2,c2,h2,w2\"\n\t    --dynamic_batch_size          Set dynamic batch size. E.g.: \"batchsize1,batchsize2,batchsize3\". \n\t                                  Need to be used with input_shape. \n\t    --dynamic_image_size          Set dynamic image size. Separate multiple nodes with semicolons (;). \"\n\t                                  Use double quotation marks (\") to enclose each argument.\n\t                                  E.g.: \"imagesize1_height,imagesize1_width;\n\t                                  imagesize2_height,imagesize2_width.\"\n\t                                  Need to be used with input_shape. \n\t    --dynamic_dims                Set dynamic dims. Separate multiple nodes with semicolons (;).\n\t                                  Use double quotation marks (\") to enclose each argument.\n\t                                  E.g.: \"dims1_n1,dims1_n2;dims2_n1,dims2_n2\".\n\t                                  Need to be used with input_shape. \n\t    --reload[=job_path]           Recover from interrupt\n\t-j, --job_type <type>             Job type (sgat: 1, opat: 2, )\n\t    --progress_bar <on/off>       Display progress or not. on(default): dispaly progress,\n\t                                  off: not display progress\n\t    --device <device id>          Specify device by id. The value range is [0~N-1], N is device number.\n\t    --tune_optimization_level     Tune optimization level. The value range is [O1, O2].\n\t                                  O1 means deeper optimization, O2 means default optimization.\n\t    --host_env_os                 OS type of the target execution environment.The parameters that support\n\t                                  setting are the OS types of the opp package. Supported host env os\n\t                                  as list: linux. default: linux\n\t    --host_env_cpu                CPU type of the target execution environment.The parameters that support\n\t                                  setting are the CPU types of the opp package. Supported host env cpu\n\t                                  as list: support cpu: x86_64 aarch64 , respond to os: linux.\n\t                                  default: x86_64.\n\n[Output]\n\t    --output                     Output file path&name(needn't suffix, will add .om automatically).\n\t    --output_type                Set net output type. Support FP32, FP16, UINT8. E.g.: FP16,\n\t                                 indicates that all out nodes are set to FP16. \"node1:0:FP16;node2:1:FP32\",\n\t                                 indicates setting the datatype of multiple out nodes.\n\n[Target]\n\t    --aicore_num                 Set aicore num\n\t    --virtual_type               This parameter is only supported on Ascend 310P-Series.\n\t                                 Enable virtualization. 0(default): disable; 1: enable\n\n===== Advanced Functionality =====\n[Feature]\n\t    --out_nodes                  Output nodes designated by users. Separate multiple nodes with\n\t                                 semicolons (;). Use double quotation marks (\") to enclose each argument.\n\t                                 E.g.: \"node_name1:0;node_name1:1;node_name2:0\".\n\t    --input_fp16_nodes           Input node datatype is fp16. Separate multiple nodes with \n\t                                 semicolons (;). Use double quotation marks (\") to enclose \n\t                                 each argument. E.g.: \"node_name1;node_name2\"\n\t    --insert_op_conf             Config file to insert new op\n\t    --op_name_map                Custom op name mapping file\n\t                                 Note: A semicolon(;) cannot be included in each path,\n\t                                 otherwise the resolved path will not match the expected one.\n\t    --is_input_adjust_hw_layout  Intput node datatype is fp16 and format is NC1HWC0, used with\n\t                                 input_fp16_nodes. E.g.: \"true,true,false,true\".\n\t    --is_output_adjust_hw_layout Net output node datatype is fp16 and format is NC1HWC0, used with\n\t                                 out_nodes. E.g.: \"true,true,false,true\".\n\n[Model Tuning]\n\t    --disable_reuse_memory       The switch of reuse memory. Default value is : 0. 0 means reuse memory,\n\t                                 1 means do not reuse memory.\n\t    --fusion_switch_file         Set fusion switch file path\n\t    --enable_scope_fusion_passes Validate the non-general scope fusion passes, multiple names can\n\t                                 be set and separated by ','. E.g.: ScopePass1,ScopePass2,....\n\t    --enable_single_stream       Enable single stream. true: enable; false(default): disable\n\t    --enable_small_channel       Set enable small channel. 0(default): disable; 1: enable\n\t    --compress_weight_conf       Config file to compress weight.\n\t    --buffer_optimize            Set buffer optimize. \"l2_optimize\" (default) or \"l1_optimize\".\n\t                                 Set \"off_optimize\" to close.\n\t    --compression_optimize_conf  Config file to compress optimize.\n\t    --sparsity                   Optional; enable structured sparse. 0(default): disable; 1: enable\n\t    --Fnonhomo_split             Subgraph nonhomogenous split optimization.\n\n[Operator Tuning]\n\t    --precision_mode             Precision mode, support force_fp16, allow_mix_precision,\n\t                                 allow_fp32_to_fp16, must_keep_origin_dtype.\n\t    --op_select_implmode         Set op select implmode. Support high_precision, high_performance.\n\t                                 default: high_performance.\n\t    --optypelist_for_implmode    Appoint which op to select implmode, cooperated with op_select_implmode.\n\t                                 Separate multiple nodes with commas (,). Use double quotation marks (\")\n\t                                 to enclose each argument. E.g.: \"node_name1,node_name2\".\n\t    --op_precision_mode          Set the path of operator precision mode configuration file (.ini).\n\t    --modify_mixlist             Set the path of operator mixed precision configuration file.\n\t    --keep_dtype                 Retains the precision of certain operators in inference scenarios,\n\t                                 by using a configuration file.\n\t    --customize_dtypes           Set the path of custom dtypes configuration file.\n\t    --op_debug_level             Debug enable for TBE operator building.\n\t                                 0 (default): Disable debug;\n\t                                 1: Enable TBE pipe_all, and generate the operator CCE file\n\t                                 and Python-CCE mapping file (.json);\n\t                                 2: Enable TBE pipe_all, generate the operator CCE file and Python-CCE\n\t                                 mapping file (.j",
+        "stderr": ""
+      }
+    },
+    "guard": {
+      "enabled": false,
+      "before": {
+        "snapshot": null,
+        "evaluation": null
+      },
+      "after": {
+        "snapshot": null,
+        "evaluation": null
+      },
+      "run_consistency": null,
+      "reference_consistency": null
+    }
+  },
+  "gates": {
+    "sample_count": true,
+    "request_failures": true,
+    "batch_fps": true
+  },
+  "passed": true
+}
