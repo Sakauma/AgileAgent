@@ -38,21 +38,32 @@ def parse_targets(path: Path) -> tuple[int, int]:
     return SENSOR_NAMES.index(parts[0]), SCENE_NAMES.index(parts[3])
 
 
-def read_split(path: Path) -> list[Path]:
-    images = [resolve(line.strip()) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+def read_split(path: Path, data_root: Path | None = None) -> list[Path]:
+    images = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        value = line.strip()
+        if not value:
+            continue
+        image = Path(value)
+        if not image.is_absolute():
+            rooted = data_root / image if data_root is not None else None
+            image = rooted if rooted is not None and rooted.exists() else resolve(image)
+        images.append(image.resolve())
     missing = [str(image) for image in images if not image.exists()]
     if missing:
         raise FileNotFoundError(f"划分中存在缺失图像：{missing[:3]}")
     return images
 
 
-def read_split_spec(spec: str | Path | Sequence[str | Path]) -> list[Path]:
+def read_split_spec(
+    spec: str | Path | Sequence[str | Path], data_root: Path | None = None
+) -> list[Path]:
     paths = [spec] if isinstance(spec, (str, Path)) else list(spec)
     if not paths:
         raise ValueError("上下文划分配置不能为空。")
     images: list[Path] = []
     for path in paths:
-        images.extend(read_split(resolve(path)))
+        images.extend(read_split(resolve(path), data_root))
     duplicates = [path for path, count in Counter(images).items() if count > 1]
     if duplicates:
         raise ValueError(f"上下文组合划分包含重复图像：{duplicates[:3]}")
@@ -149,16 +160,21 @@ def context_preflight(config: Dict[str, Any]) -> Dict[str, Any]:
         config.get("data", {}).get("incremental_train")
         and config.get("data", {}).get("incremental_dev")
     )
+    data_root = (
+        resolve(config["data"]["root"])
+        if config.get("data", {}).get("root")
+        else None
+    )
     try:
-        base_train = read_split_spec(config["data"]["train"])
-        base_dev = read_split_spec(config["data"]["dev"])
+        base_train = read_split_spec(config["data"]["train"], data_root)
+        base_dev = read_split_spec(config["data"]["dev"], data_root)
         incremental_train = (
-            read_split_spec(config["data"]["incremental_train"])
+            read_split_spec(config["data"]["incremental_train"], data_root)
             if incremental_enabled
             else []
         )
         incremental_dev = (
-            read_split_spec(config["data"]["incremental_dev"])
+            read_split_spec(config["data"]["incremental_dev"], data_root)
             if incremental_enabled
             else []
         )
@@ -268,6 +284,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, help="覆盖配置中的训练随机种子。")
     parser.add_argument("--device", help="覆盖配置中的单卡 CUDA 设备编号。")
     parser.add_argument("--run-dir", type=Path, help="把三项输出写入独立候选目录。")
+    parser.add_argument("--data-root", type=Path, help="划分 TXT 中相对图像路径的数据包根目录。")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
     if args.seed is not None:
@@ -281,6 +298,8 @@ def main() -> int:
             "metrics": str(run_dir / "scene_sensor_metrics.json"),
             "report": str(run_dir / "scene_sensor_report.md"),
         }
+    if args.data_root is not None:
+        config["data"]["root"] = str(args.data_root.expanduser().resolve())
     if args.check_only:
         result = context_preflight(config)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -304,16 +323,25 @@ def main() -> int:
     if not args.force and (output_weights.exists() or output_metrics.exists()):
         raise SystemExit("认知模型产物已存在；如需覆盖请显式传入 --force。")
 
-    train_images = read_split_spec(config["data"]["train"])
-    dev_images = read_split_spec(config["data"]["dev"])
+    data_root = (
+        resolve(config["data"]["root"])
+        if config.get("data", {}).get("root")
+        else None
+    )
+    train_images = read_split_spec(config["data"]["train"], data_root)
+    dev_images = read_split_spec(config["data"]["dev"], data_root)
     incremental_enabled = bool(config["data"].get("incremental_train") and config["data"].get("incremental_dev"))
     incremental_train_images = (
-        read_split_spec(config["data"]["incremental_train"]) if incremental_enabled else []
+        read_split_spec(config["data"]["incremental_train"], data_root)
+        if incremental_enabled
+        else []
     )
     incremental_dev_images = (
-        read_split_spec(config["data"]["incremental_dev"]) if incremental_enabled else []
+        read_split_spec(config["data"]["incremental_dev"], data_root)
+        if incremental_enabled
+        else []
     )
-    lock_images = read_split_spec(config["data"]["lock"])
+    lock_images = read_split_spec(config["data"]["lock"], data_root)
     image_size = int(config["data"]["image_size"])
     batch_size = int(config["train"]["batch"])
     workers = int(config["data"]["num_workers"])
