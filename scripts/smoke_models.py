@@ -22,6 +22,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="在 x86 NVIDIA GPU 上校验并加载发布的 YOLO 权重。")
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "local_infer_gpu.yaml")
     parser.add_argument("--registry", type=Path, default=ROOT / "configs" / "functional_models.yaml")
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        help="可选的当前数据根；提供时使用 strict_4plus2 mixed_lock 做真实图冒烟。",
+    )
     parser.add_argument("--load-only", action="store_true", help="只把模型加载到 CUDA，不执行合成图或 Web 推理。")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
@@ -119,13 +124,28 @@ def main() -> int:
     lock_paths = []
     if not args.load_only:
         context_prediction = predict_context(context_model, context_checkpoint, image, f"cuda:{device}")
-        lock_split = ROOT / "splits" / "strict_3plus1" / "scene_test.txt"
+        data_root = args.data_root.expanduser().resolve() if args.data_root else ROOT
+        lock_split = (
+            data_root / "splits" / "strict_4plus2" / "mixed_lock.txt"
+            if args.data_root
+            else ROOT / "splits" / "strict_3plus1" / "scene_test.txt"
+        )
         if lock_split.exists():
-            lock_paths = [ROOT / line.strip() for line in lock_split.read_text(encoding="utf-8").splitlines() if line.strip()]
-            context_lock_evaluation = evaluate_context_paths(context_model, context_checkpoint, lock_paths, f"cuda:{device}", batch_size=batch_size)
+            lock_paths = []
+            for raw in lock_split.read_text(encoding="utf-8").splitlines():
+                value = raw.strip()
+                if not value:
+                    continue
+                path = Path(value)
+                if not path.is_absolute():
+                    path = data_root / path
+                if path.is_file():
+                    lock_paths.append(path.resolve())
+            if lock_paths:
+                context_lock_evaluation = evaluate_context_paths(context_model, context_checkpoint, lock_paths, f"cuda:{device}", batch_size=batch_size)
             expected_metrics = json.loads((ROOT / "models" / "context" / "scene_sensor_metrics.json").read_text(encoding="utf-8"))["lock"]
             context_reference_comparable = int(expected_metrics.get("image_count", -1)) == len(lock_paths)
-            if context_reference_comparable:
+            if context_lock_evaluation is not None and context_reference_comparable:
                 for name in ["sensor_accuracy", "scene_accuracy", "joint_accuracy"]:
                     if abs(float(context_lock_evaluation[name]) - float(expected_metrics[name])) > 1e-9:
                         raise RuntimeError(f"Scene-SensorNet lock 指标不一致：{name}")
@@ -161,11 +181,9 @@ def main() -> int:
             unified_class_gates=settings.get("unified_class_gates"),
         )
         samples = []
-        for sensor in ("ir", "sar"):
-            sample = next((path for path in lock_paths if path.name.startswith(f"{sensor}_")), None)
-            if sample is not None:
-                with Image.open(sample) as source:
-                    samples.append((sample.name, source.convert("RGB")))
+        for sample in lock_paths[:2]:
+            with Image.open(sample) as source:
+                samples.append((sample.name, source.convert("RGB")))
         if not samples:
             samples = [("synthetic.png", image)]
         for filename, sample_image in samples:
