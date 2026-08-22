@@ -163,19 +163,8 @@ def materialize_registry(
         row["per_class_thresholds"] = {
             str(class_id): threshold for class_id in class_ids
         }
-        gate = dict(row.get("context_gate") or {})
-        gate.update(
-            {
-                "enabled": False,
-                "policy": "fixed_neutral_no_penalty",
-                "hard_routing": False,
-                "max_threshold_penalty": 0.0,
-                "max_threshold_penalties": {
-                    str(class_id): 0.0 for class_id in class_ids
-                },
-            }
-        )
-        row["context_gate"] = gate
+        row["context_prior"] = {}
+        row["context_gate"] = {"enabled": False}
         row.pop("positive_prototype", None)
         row.pop("positive_prototypes", None)
     return registry

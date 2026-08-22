@@ -155,7 +155,11 @@ def load_generation_registry(path: str | Path) -> Dict[str, Any]:
                 thresholds = model["per_class_thresholds"]
                 active_owned = model["owns_classes"] & set(owners)
                 missing = active_owned - set(thresholds)
-                invalid = [value for value in thresholds.values() if not 0.01 <= float(value) <= 1.0]
+                invalid = [
+                    value
+                    for value in thresholds.values()
+                    if not 0.00001 <= float(value) <= 1.0
+                ]
                 if missing or invalid:
                     raise ValueError(f"active增量专家缺少有效逐类激活阈值：{model_id}")
                 missing_sources = active_owned - set(model["calibration_sources"])
