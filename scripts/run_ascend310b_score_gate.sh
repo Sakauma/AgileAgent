@@ -298,13 +298,11 @@ AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION=1 \
   --new-class-ids "$NEW_CLASS_IDS" \
   --output "$OUTPUT_DIR/score.json"
 
-(
-  cd "$ROOT"
-  AGILE_AGENT_CONFIG="$CONFIG" \
-  AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION=1 \
-  "$PYTHON" -m uvicorn fair_agent.web.app:app \
-    --host 127.0.0.1 --port "$CANDIDATE_PORT" --no-access-log
-) >"$OUTPUT_DIR/candidate.log" 2>&1 &
+AGILE_AGENT_CONFIG="$CONFIG" \
+AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION=1 \
+"$PYTHON" -m uvicorn fair_agent.web.app:app \
+  --host 127.0.0.1 --port "$CANDIDATE_PORT" --no-access-log \
+  >"$OUTPUT_DIR/candidate.log" 2>&1 &
 CANDIDATE_PID=$!
 
 for _ in $(seq 1 120); do

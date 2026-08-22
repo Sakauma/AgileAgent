@@ -3,7 +3,10 @@ from __future__ import annotations
 import copy
 import json
 import runpy
+import struct
 from pathlib import Path
+
+import pytest
 
 from fair_agent.core.hashes import sha256_file
 from fair_agent.modules.ascend_benchmark_guard import (
@@ -203,6 +206,28 @@ def test_p8_relative_stability_uses_two_percent_boundary() -> None:
     within = script["relative_difference_within"]
     assert within(102.0, 100.0, 0.02) is True
     assert within(97.9, 100.0, 0.02) is False
+
+
+@pytest.mark.parametrize(
+    ("color_type", "expected"),
+    [(0, "grayscale"), (2, "rgb"), (6, "rgba")],
+)
+def test_benchmark_png_contract_accepts_supported_dvpp_formats(
+    tmp_path: Path,
+    color_type: int,
+    expected: str,
+) -> None:
+    script = runpy.run_path("tools/97_benchmark_ascend_api.py")
+    path = tmp_path / f"color-{color_type}.png"
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + struct.pack(">I", 13)
+        + b"IHDR"
+        + struct.pack(">IIBBBBB", 640, 512, 8, color_type, 0, 0, 0)
+        + b"\x00\x00\x00\x00"
+    )
+
+    assert script["validate_png"](path)["color_type"] == expected
 
 
 def test_score_batch_multipart_uses_files_field_and_strict_fps_gate(

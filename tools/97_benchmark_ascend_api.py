@@ -144,9 +144,11 @@ def validate_png(path: Path) -> Dict[str, Any]:
     )
     if (width, height) != (640, 512):
         raise ValueError(f"PNG尺寸必须为640x512：{path}: {width}x{height}")
-    if bit_depth != 8 or color_type not in (2, 6):
+    color_type_names = {0: "grayscale", 2: "rgb", 6: "rgba"}
+    if bit_depth != 8 or color_type not in color_type_names:
         raise ValueError(
-            f"PNG必须为8位RGB/RGBA：{path}: bit_depth={bit_depth}, color_type={color_type}"
+            f"PNG必须为8位灰度/RGB/RGBA：{path}: "
+            f"bit_depth={bit_depth}, color_type={color_type}"
         )
     if compression != 0 or filtering != 0:
         raise ValueError(f"PNG压缩/过滤方法不受支持：{path}")
@@ -154,7 +156,7 @@ def validate_png(path: Path) -> Dict[str, Any]:
         "width": width,
         "height": height,
         "bit_depth": bit_depth,
-        "color_type": "rgb" if color_type == 2 else "rgba",
+        "color_type": color_type_names[color_type],
         "interlaced": bool(interlace),
     }
 

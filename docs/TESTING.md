@@ -164,7 +164,7 @@ bash -n scripts/materialize_ascend310b_full_score_release.sh
 
 正式板端还应确认 `8501` 三 OM 回滚监听器、`18501` 共享双头主实例和三个 systemd unit 同时存在；公共 `8501` 健康请求应经精确路由返回共享双头身份。执行 `manage_ascend310b_primary_route.sh remove 18501` 时应恢复旧服务，重新 `apply` 后回到主线。正式验收不需要在板端运行 Web pytest。
 
-板端输入必须是评分目录根层的 `640×512`、8-bit RGB/RGBA PNG，stem 唯一。任一输入契约、CANN 版本、候选端口或 manifest 哈希不一致时，score gate 在正式测量前停止并保留已有报告。
+板端输入必须是评分目录根层的 `640×512`、8-bit 灰度/RGB/RGBA PNG，stem 唯一。任一输入契约、CANN 版本、候选端口或 manifest 哈希不一致时，score gate 在正式测量前停止并保留已有报告。
 
 ## 测试夹具
 
