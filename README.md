@@ -26,17 +26,14 @@ Scene-SensorNet 输出 IR/SAR 传感器概率和 air、forest、sea、urban 闭�
 
 ### x86/CUDA production
 
-评测集由 75 张 Base lock 和 14 张 Increment lock 组成。以下结果来自冻结的 production 权重与场景软阈值运行点：
+一号结果是 75 张 Base lock 与 14 张 Increment lock 组成的独立 mixed lock；二号结果覆盖 Base/Increment 的 train、dev、lock 全部 890 张标注图像，包含训练图像，只作拟合与错误诊断。
 
-| 指标 | 结果 |
-| --- | ---: |
-| Base mAP50 | `0.856067` |
-| New-mAP50 | `0.773368` |
-| Full-mAP50 | `0.794994` |
-| KRR | `0.973126` |
-| Scene-SensorNet sensor / scene / joint accuracy | `0.988764 / 0.831461 / 0.820225` |
+| 结果 | Base mAP50 | New-mAP50 | KRR | Full-mAP50 | TP / FP / precision | 口径 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 一号 | `0.845782` | `0.750368` | `0.997179` | `0.800605` | `335 / 108 / 0.756208` | 独立 mixed lock，正式结果 |
+| 二号 | `0.888703` | `0.737477` | `1.004975` | `0.827444` | `3533 / 986 / 0.781810` | 全部 890 张，诊断结果 |
 
-完整结果位于 [`metrics.json`](models/production/incremental_detection/metrics.json)，production 代际由 [`models/generations.json`](models/generations.json) 登记。
+Scene-SensorNet 在 mixed lock 上的 sensor / scene / joint accuracy 为 `0.988764 / 0.831461 / 0.820225`。双口径及逐类错误结果位于 [`all_images_diagnostics.md`](models/production/incremental_detection/evidence/all_images_diagnostics.md)；原始冻结运行点保存在 [`metrics.json`](models/production/incremental_detection/metrics.json)，production 代际由 [`models/generations.json`](models/generations.json) 登记。包括硬门禁、逐类 P/R/AP、误激活、场景准确率和 310B FPS 的统一账本见 [`docs/current-metrics.md`](docs/current-metrics.md)。
 
 ### Ascend310B v2 release
 
@@ -50,7 +47,7 @@ Scene-SensorNet 输出 IR/SAR 传感器概率和 air、forest、sea、urban 闭�
 | KRR | `1.000000` |
 | 公共 `8501` 两次 batch 中位 FPS | `39.5726 / 39.5883` |
 
-冻结评分见 [`validation/score.json`](models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/score.json)，模型构建、完整性和板端性能证据随 release 一并保存。
+上表是当前 immutable release 在新的跨类别抑制启用前的真实板端结果。新后处理的冻结预测回放为 Base mAP50 `0.825860`、New-mAP50 `0.618859`、KRR `1.000000`，精度门禁均通过；修改后 FPS 尚需在候选 `8502` 重新上板。冻结评分见 [`validation/score.json`](models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/score.json)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
 
 ## 安装
 
@@ -134,6 +131,7 @@ curl -fsS -F "file=@/path/to/image.png;type=image/png" \
 | 累计评测、登记与汇总 | `tools/08_evaluate_4plus2.py`、`tools/13_register_incremental_round_candidate.py`、`tools/12_summarize_incremental_rounds.py` |
 | Scene-SensorNet 与系统校准 | `tools/60_train_scene_sensor.py`、`tools/61_select_scene_sensor_4plus2.py`、`tools/09_optimize_scene_aware_4plus2.py` |
 | production 晋级 | `tools/10_promote_scene_aware_4plus2.py` |
+| 一号 lock 与二号全量诊断 | `tools/14_evaluate_all_images_4plus2.py` |
 
 训练默认采用 `1280` 输入、最多 `500` epoch 和 `50` epoch 无改善早停。数据边界、冻结规则和逐轮证据格式见 [`docs/compliant-incremental-learning.md`](docs/compliant-incremental-learning.md)。
 

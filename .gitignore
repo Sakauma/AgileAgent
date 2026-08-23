@@ -61,6 +61,7 @@ venv/
 !/tools/11_prepare_incremental_round_splits.py
 !/tools/12_summarize_incremental_rounds.py
 !/tools/13_register_incremental_round_candidate.py
+!/tools/14_evaluate_all_images_4plus2.py
 !/tools/42_predict_submission.py
 !/tools/60_train_scene_sensor.py
 !/tools/61_select_scene_sensor_4plus2.py
@@ -113,6 +114,7 @@ venv/
 !/docs/GETTING-STARTED.md
 !/docs/TESTING.md
 !/docs/compliant-incremental-learning.md
+!/docs/current-metrics.md
 !/docs/functional-models.md
 !/docs/incremental-workbench.md
 

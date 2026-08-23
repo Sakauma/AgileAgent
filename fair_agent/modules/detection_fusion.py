@@ -80,6 +80,97 @@ def pairwise_box_overlap_metrics(
     return iou, first_coverage
 
 
+def suppress_cross_class_overlaps(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    iou_threshold: float,
+    smaller_box_coverage: float | None = None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Greedily keep the highest-confidence class for one spatial target.
+
+    This is class-agnostic *between* classes only. Same-class duplicate handling
+    remains the responsibility of the detector backend or the existing
+    class-aware NMS pass. Records are grouped by ``image_id`` when present, so
+    the same function is safe for both online single-image inference and
+    offline split evaluation.
+
+    A containment threshold complements IoU for a small box that is almost
+    entirely inside a larger prediction of the same physical target. The
+    original input order is restored after greedy arbitration to keep API
+    output stable; confidence sorting is used only to select each winner.
+    """
+    iou_limit = float(iou_threshold)
+    coverage_limit = (
+        None if smaller_box_coverage is None else float(smaller_box_coverage)
+    )
+    if not 0.0 <= iou_limit <= 1.0:
+        raise ValueError("cross-class IoU threshold must be within [0, 1]")
+    if coverage_limit is not None and not 0.0 <= coverage_limit <= 1.0:
+        raise ValueError("smaller-box coverage threshold must be within [0, 1]")
+
+    rows = [dict(row) for row in records]
+    grouped_indices: Dict[str, List[int]] = {}
+    for index, row in enumerate(rows):
+        image_id = str(row.get("image_id", "__single_image__"))
+        grouped_indices.setdefault(image_id, []).append(index)
+
+    suppressed_indices: set[int] = set()
+    decisions: List[Dict[str, Any]] = []
+    for image_id, indices in grouped_indices.items():
+        ordered = sorted(
+            indices,
+            key=lambda index: (-float(rows[index].get("confidence", 0.0)), index),
+        )
+        winner_indices: List[int] = []
+        for candidate_index in ordered:
+            candidate = rows[candidate_index]
+            conflict: tuple[int, Dict[str, float]] | None = None
+            for winner_index in winner_indices:
+                winner = rows[winner_index]
+                if int(candidate["class_id"]) == int(winner["class_id"]):
+                    continue
+                overlap = box_overlap_metrics(candidate["xyxy"], winner["xyxy"])
+                if overlap["iou"] >= iou_limit or (
+                    coverage_limit is not None
+                    and overlap["smaller_coverage"] >= coverage_limit
+                ):
+                    conflict = winner_index, overlap
+                    break
+            if conflict is None:
+                winner_indices.append(candidate_index)
+                continue
+
+            winner_index, overlap = conflict
+            winner = rows[winner_index]
+            suppressed_indices.add(candidate_index)
+            decisions.append(
+                {
+                    "action": "suppress_cross_class_duplicate",
+                    "reason": "global_highest_confidence_overlap",
+                    "image_id": image_id,
+                    "kept_class_id": int(winner["class_id"]),
+                    "suppressed_class_id": int(candidate["class_id"]),
+                    "kept_confidence": round(
+                        float(winner.get("confidence", 0.0)), 6
+                    ),
+                    "suppressed_confidence": round(
+                        float(candidate.get("confidence", 0.0)), 6
+                    ),
+                    "iou": round(float(overlap["iou"]), 6),
+                    "smaller_box_coverage": round(
+                        float(overlap["smaller_coverage"]), 6
+                    ),
+                    "kept_source": winner.get("source"),
+                    "suppressed_source": candidate.get("source"),
+                }
+            )
+
+    return (
+        [row for index, row in enumerate(rows) if index not in suppressed_indices],
+        decisions,
+    )
+
+
 def context_affinity(
     context: Mapping[str, Any],
     prior: Mapping[str, Any] | None,

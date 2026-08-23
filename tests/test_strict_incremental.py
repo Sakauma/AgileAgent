@@ -117,6 +117,29 @@ def test_fusion_never_renms_the_frozen_base_owner_stream() -> None:
     assert box_iou(new[0]["xyxy"], new[1]["xyxy"]) > 0.5
 
 
+def test_formal_fusion_can_apply_global_cross_class_suppression_after_owner_merge() -> None:
+    old = [prediction("a", 3, 0.70, [0, 0, 20, 20])]
+    new = [prediction("a", 5, 0.92, [1, 1, 19, 19])]
+
+    fused, decisions = fuse_old_new_predictions(
+        old,
+        new,
+        nms_iou=0.60,
+        cross_class_suppression={
+            "enabled": True,
+            "strategy": "highest_confidence",
+            "scope": "all_classes",
+            "iou": 0.50,
+            "smaller_box_coverage": 0.95,
+        },
+    )
+
+    assert fused == new
+    assert decisions[0]["action"] == "suppress_cross_class_duplicate"
+    assert decisions[0]["kept_class_id"] == 5
+    assert decisions[0]["suppressed_class_id"] == 3
+
+
 def test_threshold_calibration_can_meet_a_precision_target() -> None:
     ground_truth = [
         {"image_id": "a", "class_id": 4, "xyxy": [0, 0, 10, 10]}

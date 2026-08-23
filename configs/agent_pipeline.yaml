@@ -42,6 +42,13 @@ routing:
   conflict_base_confidence: 0.01
   specialist_margin: 0.00
   preserve_base_class_owners: true
+  # 对所有类别和所有输入统一执行；仅合并高度重叠的跨类别重复框。
+  cross_class_suppression:
+    enabled: true
+    strategy: highest_confidence
+    scope: all_classes
+    iou: 0.50
+    smaller_box_coverage: 0.95
   detection_evidence_weight: 1.00
   context_evidence_weight: 0.00
   neutral_context_score: 0.50

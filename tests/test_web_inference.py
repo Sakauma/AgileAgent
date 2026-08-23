@@ -618,6 +618,52 @@ def test_vectorized_fusion_preserves_stable_ties_and_input_audit() -> None:
     assert summary == {"input_count": 8, "output_count": 7, "suppressed_count": 1}
 
 
+def test_runtime_fusion_applies_configured_global_cross_class_suppression() -> None:
+    rows = [
+        {
+            "class_id": 3,
+            "confidence": 0.70,
+            "xyxy": [0, 0, 20, 20],
+            "source": "frozen_base_model",
+        },
+        {
+            "class_id": 5,
+            "confidence": 0.92,
+            "xyxy": [1, 1, 19, 19],
+            "source": "incremental_model",
+        },
+        {
+            "class_id": 0,
+            "confidence": 0.80,
+            "xyxy": [40, 40, 60, 60],
+            "source": "frozen_base_model",
+        },
+    ]
+
+    fused, summary = class_aware_nms(
+        rows,
+        0.60,
+        {
+            "enabled": True,
+            "strategy": "highest_confidence",
+            "scope": "all_classes",
+            "iou": 0.50,
+            "smaller_box_coverage": 0.95,
+        },
+    )
+
+    assert {(int(row["class_id"]), row["confidence"]) for row in fused} == {
+        (0, 0.80),
+        (5, 0.92),
+    }
+    assert summary["input_count"] == 3
+    assert summary["output_count"] == 2
+    assert summary["suppressed_count"] == 1
+    assert summary["same_class_suppressed_count"] == 0
+    assert summary["cross_class_suppressed_count"] == 1
+    assert summary["cross_class_suppressions"][0]["suppressed_class_id"] == 3
+
+
 def test_dynamic_new_class_mapping_and_neutral_context() -> None:
     remapped = remap_specialist_records(
         [{"class_id": 0, "confidence": 0.9, "xyxy": [1, 1, 2, 2]}],

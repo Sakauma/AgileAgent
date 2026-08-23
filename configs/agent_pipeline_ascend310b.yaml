@@ -37,6 +37,13 @@ routing:
   conflict_base_confidence: 0.5
   specialist_margin: 0.15
   preserve_base_class_owners: true
+  # 736 OM 的置信度分布独立校准，先采用更保守的全类别 IoU 仲裁。
+  cross_class_suppression:
+    enabled: true
+    strategy: highest_confidence
+    scope: all_classes
+    iou: 0.9
+    smaller_box_coverage: null
   detection_evidence_weight: 0.7
   context_evidence_weight: 0.3
   neutral_context_score: 0.5

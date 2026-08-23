@@ -22,6 +22,7 @@ from fair_agent.modules.detection_fusion import (
     context_penalty_for_class,
     context_prior_for_class,
     pairwise_box_overlap_metrics,
+    suppress_cross_class_overlaps,
 )
 from fair_agent.modules.incremental_rejection import apply_positive_prototype_to_image
 
@@ -806,7 +807,8 @@ def plan_specialist_routes(
 def class_aware_nms(
     records: Iterable[Dict[str, Any]],
     iou_threshold: float = 0.60,
-) -> tuple[List[Dict[str, Any]], Dict[str, int]]:
+    cross_class_policy: Mapping[str, Any] | None = None,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     rows = list(records)
     kept: List[Dict[str, Any]] = []
     suppressed = 0
@@ -849,8 +851,35 @@ def class_aware_nms(
                     pairwise_iou[index, index + 1 :] >= float(iou_threshold)
                 )
         kept.extend(class_kept)
+    policy = dict(cross_class_policy or {})
+    cross_class_decisions: List[Dict[str, Any]] = []
+    if policy.get("enabled") is True:
+        kept, cross_class_decisions = suppress_cross_class_overlaps(
+            kept,
+            iou_threshold=float(policy["iou"]),
+            smaller_box_coverage=(
+                float(policy["smaller_box_coverage"])
+                if policy.get("smaller_box_coverage") is not None
+                else None
+            ),
+        )
+        suppressed += len(cross_class_decisions)
     kept.sort(key=lambda row: (int(row["class_id"]), -float(row.get("confidence", 0.0))))
-    return kept, {"input_count": len(rows), "output_count": len(kept), "suppressed_count": suppressed}
+    summary: Dict[str, Any] = {
+        "input_count": len(rows),
+        "output_count": len(kept),
+        "suppressed_count": suppressed,
+    }
+    if policy.get("enabled") is True:
+        summary.update(
+            {
+                "same_class_suppressed_count": suppressed
+                - len(cross_class_decisions),
+                "cross_class_suppressed_count": len(cross_class_decisions),
+                "cross_class_suppressions": cross_class_decisions,
+            }
+        )
+    return kept, summary
 
 
 def annotate_records(image: Image.Image, records: Iterable[Dict[str, Any]]) -> Image.Image:
@@ -1011,6 +1040,9 @@ class WebInferenceEngine:
         self.quantize = options["quantize"]
         self.compile = bool(options["compile"])
         self.fusion_iou = float(routing["fusion_iou"])
+        self.cross_class_suppression = dict(
+            routing.get("cross_class_suppression") or {"enabled": False}
+        )
         self.max_specialists = int(routing["max_specialists_per_image"])
         self.conflict_iou = float(routing["conflict_iou"])
         self.conflict_incremental_coverage = (
@@ -1610,7 +1642,9 @@ class WebInferenceEngine:
                 getattr(self, "unified_class_gates", {}),
             )
             records, fusion_summary = class_aware_nms(
-                base_with_source + specialists_by_image[index], self.fusion_iou
+                base_with_source + specialists_by_image[index],
+                self.fusion_iou,
+                getattr(self, "cross_class_suppression", None),
             )
             fusion_summary["conflict_suppressed_count"] = len(conflicts_by_image[index])
             eligible, executed, skipped = route_rows[index]
@@ -2219,6 +2253,7 @@ class WebInferenceEngine:
         records, fusion_summary = class_aware_nms(
             base_with_source + specialist_records,
             self.fusion_iou,
+            getattr(self, "cross_class_suppression", None),
         )
         routing_nms_ms = (time.perf_counter() - nms_started) * 1000
         fusion_summary["conflict_suppressed_count"] = len(conflict_rejections)

@@ -822,7 +822,7 @@ def main() -> int:
         "incremental_learning_data_scope": "incremental_dataset_only",
         "inference": {
             **dict(old_metrics.get("inference") or {}),
-            "fusion": "fixed_class_owners_with_class_specific_scene_soft_gate",
+            "fusion": "fixed_class_owners_with_scene_gate_and_cross_class_suppression",
             "fusion_iou": float(candidate.get("fusion_iou", 0.60)),
             "context_gate_enabled": True,
             "hard_scene_routing": False,
@@ -833,6 +833,9 @@ def main() -> int:
                 str(key): value for key, value in penalties.items()
             },
             "conflict_policy": dict(candidate["conflict_policy"]),
+            "cross_class_suppression": dict(
+                candidate.get("cross_class_suppression") or {"enabled": False}
+            ),
         },
         "dev": dev_metrics,
         "lock": lock_metrics,
@@ -1019,6 +1022,10 @@ def main() -> int:
                 ),
                 "preserve_base_class_owners": True,
                 "class_aware_nms_iou": float(candidate.get("fusion_iou", 0.60)),
+                "cross_class_suppression": dict(
+                    candidate.get("cross_class_suppression")
+                    or {"enabled": False}
+                ),
             },
             "context_prior": dict(candidate["incremental_context_prior"]),
             "context_gate": incremental_gate,

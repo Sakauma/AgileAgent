@@ -11,7 +11,10 @@ from PIL import Image
 
 from fair_agent.core.config import ROOT, rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
-from fair_agent.modules.detection_fusion import arbitrate_cross_class_conflicts
+from fair_agent.modules.detection_fusion import (
+    arbitrate_cross_class_conflicts,
+    suppress_cross_class_overlaps,
+)
 
 
 CLASS_NAMES = {
@@ -277,6 +280,7 @@ def fuse_old_new_predictions(
     *,
     nms_iou: float,
     cross_class: Mapping[str, Any] | None = None,
+    cross_class_suppression: Mapping[str, Any] | None = None,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     settings = dict(cross_class or {})
     if settings.get("enabled", False):
@@ -304,6 +308,18 @@ def fuse_old_new_predictions(
     # second NMS pass before the two disjoint ownership streams are concatenated.
     fused = [dict(row) for row in old_kept]
     fused.extend(class_aware_nms(new_kept, float(nms_iou)))
+    suppression = dict(cross_class_suppression or {})
+    if suppression.get("enabled") is True:
+        fused, suppression_decisions = suppress_cross_class_overlaps(
+            fused,
+            iou_threshold=float(suppression["iou"]),
+            smaller_box_coverage=(
+                float(suppression["smaller_box_coverage"])
+                if suppression.get("smaller_box_coverage") is not None
+                else None
+            ),
+        )
+        decisions.extend(suppression_decisions)
     return fused, decisions
 
 

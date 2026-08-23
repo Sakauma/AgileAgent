@@ -104,6 +104,7 @@ inference:
 - `runtime.mode` 必须为 `local`，`runtime.server_host` 必须是回环地址，`default_device` 必须是非负设备编号。
 - `inference.backend` 可以是 `ultralytics_cuda`、`tensorrt_engine`、`tensorrt_native` 或 `ascend_acl`；置信度默认值必须位于 `confidence_min` 和 `confidence_max` 之间。
 - `routing.detection_evidence_weight + routing.context_evidence_weight` 必须等于 `1.0`。
+- `routing.cross_class_suppression` 仅接受 `highest_confidence` 与 `all_classes`；`iou` 必须位于 `[0.01, 1.0]`，`smaller_box_coverage` 可为同一范围内的数值或 `null`。
 - `logging.request_bodies` 必须为 `false`；上传的图像和数据包不写入请求日志。
 - `incremental.learning_data_scope` 必须为 `incremental_dataset_only`，支持模式必须同时包含 `class_incremental` 和 `target_incremental`。
 - `model.expected_sha256`、已验收后端的模型资产和发布报告必须登记有效身份。
@@ -131,6 +132,7 @@ inference:
 | 图像解码 | OpenCV，`4` workers，OpenCV 内部线程数 `0` |
 | 模型并行 | Base、Incremental 和 context 并行，最多 `6` 个 model workers |
 | 类别 owner | Base 固定负责全局类 `0–3`，Incremental 专家固定负责 `4–5` |
+| 全类别重叠抑制 | 对所有输入启用；跨类别 `IoU >= 0.50` 或小框覆盖率 `>= 0.95` 时保留最高置信度框 |
 | 性能目标 | API `30 FPS`，p95 `50 ms`，`8` 并发请求 |
 | 评分门禁 | Base mAP50 `>=0.80`，New-mAP50 `>=0.60`，KRR `>=0.95`，old-data overlap `=0` |
 
@@ -146,6 +148,8 @@ inference:
 | 5 | `armored_vehicle` | Incremental | 0.82 | 0.00 |
 
 x86 的 `soft_threshold_penalty` 根据 Scene-SensorNet 的 `air/forest/sea/urban` 已知类概率调整逐类有效阈值，`hard_routing: false` 使 Base 和 Incremental 类别 owner 保持固定。
+
+`routing.cross_class_suppression` 是数据来源无关的正式后处理：Web、CLI、训练集回放、dev、lock 和未来无标签图像走同一规则，不读取文件名或标签，也不维护类别对白名单。同类重复框仍由模型后端和 class-aware NMS 处理；这一层只在不同类别框高度重叠时按置信度仲裁。Ascend 736 OM 使用独立校准的保守参数 `iou=0.90`、`smaller_box_coverage=null`。
 
 增量工作台的默认训练值为 `imgsz=1280`、`batch=18`、`epochs=500`、`patience=50`、`optimizer=AdamW`、`lr0=0.001`、`seed=20260821`、`deterministic=true` 和 `amp=true`。数据拆分使用 `validation_fraction=0.20`、`lock_fraction=0.20` 与 `split_seed=20260821`。
 
@@ -168,7 +172,7 @@ Scene-SensorNet 的单独训练配置使用 `224` 输入、`batch=256`、`epochs
 
 ## Ascend310B v2 当前值
 
-正式发布 ID 为 `20260823-4plus2-yolo26-content-gate-v2`。仓库根 Ascend 配置与发布包内配置登记了同一组 release-local 资产、构建清单和验证摘要。
+正式发布 ID 为 `20260823-4plus2-yolo26-content-gate-v2`。仓库根 Ascend 配置与发布包内配置登记了同一组 release-local 模型资产、构建清单和验证摘要，但当前不再字节相同：根配置已加入待上板验证的全类别跨类别重叠抑制，immutable release 仍保留上一次通过四项门禁的配置。在候选 `8502` 重跑精度与 FPS gate 并产生新 release 前，正式 `8501` 不替换。
 
 | 配置 | 当前值 |
 | --- | --- |
@@ -191,6 +195,8 @@ Scene-SensorNet 的单独训练配置使用 `224` 输入、`batch=256`、`epochs
 | `om/scene_sensor_net.om` | 已知类场景/传感器模型 | `air/forest/sea/urban` 与 `ir/sar` |
 
 Ascend 内容执行门控使用 `skip_specialist_on_scene_and_base_evidence_v1`：当 `air` 概率至少 `0.5` 且 Base 出现全局类 `1` 证据时跳过 Incremental 专家。线上输入只包含场景概率和 Base 检测结果。
+
+当前 x86 根配置使用全类别 `IoU=0.50` 与小框覆盖率 `0.95` 抑制；Ascend 候选根配置考虑 736 OM 的置信度分布，使用更保守的全类别 `IoU=0.90`，不启用小框覆盖率条件。
 
 `configs/ascend310b/full_score_method.yaml` 的训练契约使用独立 YOLO26s、`input_size=[608,736]`、`epochs=500`、`patience=50`、`seed=3407`、`optimizer=AdamW`、`lr0=0.001` 和确定性 AMP 训练。候选端口为 `8502`，正式公共端口为 `8501`，阈值搜索从 old/new `0.10/0.10` 开始。
 

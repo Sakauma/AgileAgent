@@ -10,6 +10,8 @@
 - `scene_aware_dev_search.*`：`system_calibration` 证据，使用 Scene-SensorNet 实际概率完成六类逐类 dev 搜索，未读取 lock 标签；
 - `scene_aware_candidate.json`：dev 选择并冻结的 `guarded_precision` 候选；
 - `scene_aware_lock_recheck.json`：`joint_evaluation` 证据，记录冻结候选的一次性 mixed lock 复核。
+- `all_images_diagnostics.json/.md`：使用当前正式后处理并列记录一号 mixed lock 与二号全部 890 张标注图像；二号包含 train，只是诊断结果。
+- `ascend310b_cross_class_replay.json`：对当前 310B release 的 89 张冻结板端预测执行新的全类别重叠抑制回放；它证明精度门禁仍通过，不包含修改后的板端 FPS。
 
 严格两轮候选晋级后，本目录会新增 `rounds/<round_id>/` 与 `sequential_round_evidence.json/.md`，`incremental_selection.*` 会替换为两轮聚合记录；`models/generations.json` 成为两个单类专家的唯一运行来源，当前联合二类代际改为 `retired_baseline`。
 
@@ -17,6 +19,13 @@
 
 场景识别是 air/forest/sea/urban 四个已知类的闭集识别。`../base_context_prior.json` 只由 Base train 正样本学习，`../incremental_context_prior.json` 只由 Increment train 正样本学习。线上只读取 Scene-SensorNet 概率；场景亲和度同时软调节 Base `0–3` 和 Increment `4–5` 的有效阈值，但不读取文件名或标签、不改变 owner，也不做硬路由。
 
-当前冻结阈值为 `0=.21, 1=.14, 2=.36, 3=.05, 4=.57, 5=.82`，最大场景惩罚为 `0=.15, 1=.88, 2=.26, 3=.19, 4=.65, 5=0`。lock 结果为 Base mAP50 `0.856067`、New-mAP50 `0.773368`、KRR `0.973126`；六类 `342 TP / 170 FP / 0.667969 precision`，新类 `69 TP / 10 FP / 0.873418 precision`，89 张图中有 14 张至少发生一次六类误激活。
+当前冻结阈值为 `0=.21, 1=.14, 2=.36, 3=.05, 4=.57, 5=.82`，最大场景惩罚为 `0=.15, 1=.88, 2=.26, 3=.19, 4=.65, 5=0`。全类别重叠抑制前的 lock 基线仍保存在 `operating_point_diagnostics.md`；正式推理结果使用下列双口径：
 
-最终运行点的 TP、FP、precision、recall、逐类误激活率和错误图像去重统计见 `operating_point_diagnostics.md`。其中框级 FP 与图像级误激活是两个不同口径，不可直接互换。
+| 结果 | 图像范围 | Full-mAP50 | TP / FP / precision | 六类误激活图像 | 结论 |
+| --- | --- | ---: | ---: | ---: | --- |
+| 一号 | mixed lock，75 Base + 14 Increment | `0.800605` | `335 / 108 / 0.756208` | `11 / 89` | 独立测试口径、正式结果 |
+| 二号 | train/dev/lock 全部 890 张 | `0.827444` | `3533 / 986 / 0.781810` | `88 / 890` | 含训练图像、仅作诊断 |
+
+一号结果来自版本库中冻结的 lock 预测回放。本机全量推理中的 lock 复现值为 `0.800599`，TP/FP 相同，微小数值差异不会覆盖正式一号结果。二号结果不参与模型选择、阈值搜索或正式门禁。
+
+最终后处理的逐类 TP、FP、precision、recall 与误激活率见 `all_images_diagnostics.md`。其中框级 FP 与图像级误激活是两个不同口径，不可直接互换。

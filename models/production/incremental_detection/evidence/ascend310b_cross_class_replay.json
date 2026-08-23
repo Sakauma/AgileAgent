@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "kind": "ascend310b_frozen_prediction_cross_class_replay",
+  "created_at": "2026-08-23",
+  "source_release": "20260823-4plus2-yolo26-content-gate-v2",
+  "scope": {
+    "runtime": "offline_replay",
+    "board_runtime_measurement": false,
+    "image_count": 89,
+    "predictions_frozen_before_labels": true,
+    "detector_outputs_changed": false
+  },
+  "cross_class_suppression": {
+    "enabled": true,
+    "strategy": "highest_confidence",
+    "scope": "all_classes",
+    "iou": 0.9,
+    "smaller_box_coverage": null
+  },
+  "prediction_counts": {
+    "before": 588,
+    "after": 578,
+    "suppressed": 10
+  },
+  "suppressed_by_pair": {
+    "1->3": 2,
+    "3->1": 3,
+    "1->4": 2,
+    "3->5": 1,
+    "1->5": 1,
+    "2->4": 1
+  },
+  "metrics": {
+    "base_map50": 0.8258603079389985,
+    "new_map50": 0.6188591827942598,
+    "krr": 1.0,
+    "old_map50_before": 0.7786102271881905,
+    "old_map50_after": 0.7786102271881905,
+    "old_prediction_equivalent": true,
+    "full_map50": 0.7253598790568803,
+    "lock_precision": 0.6775510204081632,
+    "lock_recall": 0.6611111111111111,
+    "false_activation_rate": 0.4666666666666667,
+    "per_class_ap50": {
+      "0": 0.47118448157770665,
+      "1": 0.9371115432772947,
+      "2": 0.89156496930755,
+      "3": 0.8145799145902106,
+      "4": 0.4066351434405916,
+      "5": 0.8310832221479281
+    },
+    "new_class_precision_recall": {
+      "4": {
+        "precision": 0.6,
+        "recall": 0.5
+      },
+      "5": {
+        "precision": 0.7551020408163265,
+        "recall": 0.8222222222222222
+      }
+    },
+    "false_activation_rate_by_new_class": {
+      "4": 0.2073170731707317,
+      "5": 0.2682926829268293
+    }
+  },
+  "competition_gate_thresholds": {
+    "base_map50": 0.8,
+    "new_map50": 0.6,
+    "krr": 0.95,
+    "batch_fps": 30.0
+  },
+  "competition_gates": {
+    "base_map50": true,
+    "new_map50": true,
+    "krr": true,
+    "batch_fps": null
+  },
+  "host_postprocess_risk_estimate": {
+    "platform": "x86_64 WSL",
+    "image_count": 89,
+    "prediction_count": 588,
+    "repeats": 5,
+    "iterations_per_repeat": 100,
+    "median_ms_per_89_images": 4.854476250002335,
+    "median_ms_per_image": 0.05454467696631837,
+    "is_board_fps_evidence": false
+  },
+  "accuracy_passed": true,
+  "board_fps_recheck_required": true,
+  "full_score_after_change_confirmed": false
+}

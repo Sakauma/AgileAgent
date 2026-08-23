@@ -58,7 +58,7 @@ KNOWN_SECTION_KEYS = {
     "routing": {
         "incremental_enabled", "require_acceptance_passed", "consensus_iou", "fusion_iou",
         "max_specialists_per_image", "conflict_iou", "conflict_incremental_coverage", "conflict_base_confidence",
-        "specialist_margin", "preserve_base_class_owners",
+        "specialist_margin", "preserve_base_class_owners", "cross_class_suppression",
         "detection_evidence_weight", "context_evidence_weight",
         "neutral_context_score", "default_routing_prior",
         "parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution", "max_model_workers",
@@ -401,6 +401,45 @@ def validate_config(
         _number(routing, key, errors, 0.0, 1.0)
     if routing.get("conflict_incremental_coverage") is not None:
         _number(routing, "conflict_incremental_coverage", errors, 0.0, 1.0)
+    cross_class_suppression = routing.get("cross_class_suppression")
+    if cross_class_suppression is not None:
+        if not isinstance(cross_class_suppression, Mapping):
+            errors.append("routing.cross_class_suppression必须是映射")
+        else:
+            unknown_cross_class = sorted(
+                set(cross_class_suppression)
+                - {
+                    "enabled",
+                    "strategy",
+                    "scope",
+                    "iou",
+                    "smaller_box_coverage",
+                }
+            )
+            if unknown_cross_class:
+                errors.append(
+                    "routing.cross_class_suppression包含未知字段："
+                    + ", ".join(unknown_cross_class)
+                )
+            if not isinstance(cross_class_suppression.get("enabled"), bool):
+                errors.append("routing.cross_class_suppression.enabled必须为布尔值")
+            if cross_class_suppression.get("strategy") != "highest_confidence":
+                errors.append(
+                    "routing.cross_class_suppression.strategy必须为highest_confidence"
+                )
+            if cross_class_suppression.get("scope") != "all_classes":
+                errors.append(
+                    "routing.cross_class_suppression.scope必须为all_classes"
+                )
+            _number(cross_class_suppression, "iou", errors, 0.01, 1.0)
+            if cross_class_suppression.get("smaller_box_coverage") is not None:
+                _number(
+                    cross_class_suppression,
+                    "smaller_box_coverage",
+                    errors,
+                    0.01,
+                    1.0,
+                )
     if abs(float(routing.get("detection_evidence_weight", 0)) + float(routing.get("context_evidence_weight", 0)) - 1.0) > 1e-9:
         errors.append("routing的检测证据权重与上下文证据权重之和必须为1")
     _number(routing, "max_specialists_per_image", errors, 1)

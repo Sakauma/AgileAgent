@@ -114,6 +114,7 @@ round_01_patrol_boat
 | `tools/08_evaluate_4plus2.py` | 在冻结参数下累计评估截至当轮的全部已学类别 |
 | `tools/13_register_incremental_round_candidate.py` | 登记权重、类别 owner、指标和父子代际候选 |
 | `tools/12_summarize_incremental_rounds.py` | 联合校验两轮代际链和逐轮证据 |
+| `tools/14_evaluate_all_images_4plus2.py` | 并列复核一号 mixed lock 与二号全部标注图像诊断指标 |
 
 每轮训练视图只包含当前新增类别的图像和投影标签。四类 Base 与此前轮次专家权重保持冻结；当前轮次的 train/dev 用于训练和选模，lock 在候选参数冻结后用于累计评估。
 

@@ -8,6 +8,7 @@ from fair_agent.modules.detection_fusion import (
     apply_incremental_candidate_gates,
     context_adjusted_threshold,
     learn_context_prior,
+    suppress_cross_class_overlaps,
 )
 from fair_agent.modules.incremental_rejection import (
     apply_positive_prototype,
@@ -171,6 +172,125 @@ def test_covered_incremental_box_with_stronger_evidence_is_not_deleted() -> None
     )
 
     assert fused == old + new
+    assert decisions == []
+
+
+def test_global_cross_class_suppression_reduces_reported_16_boxes_to_7() -> None:
+    tank_boxes = [
+        (0.831, [271.3, 269.0, 304.7, 298.1]),
+        (0.730, [358.7, 316.4, 389.5, 340.4]),
+        (0.708, [494.5, 223.3, 520.2, 244.6]),
+        (0.682, [206.9, 387.4, 241.8, 413.9]),
+        (0.636, [482.1, 450.2, 517.3, 479.6]),
+        (0.573, [318.0, 205.4, 346.3, 228.9]),
+        (0.552, [482.3, 452.0, 516.1, 480.5]),
+        (0.319, [102.1, 257.7, 134.9, 278.7]),
+        (0.258, [114.9, 257.4, 134.3, 272.6]),
+        (0.173, [218.9, 387.1, 240.2, 405.2]),
+    ]
+    armored_boxes = [
+        (0.926, [105.9, 257.3, 134.3, 277.8]),
+        (0.921, [323.3, 208.4, 345.5, 225.8]),
+        (0.912, [208.6, 387.0, 243.5, 414.1]),
+        (0.910, [499.4, 221.8, 521.0, 241.4]),
+        (0.908, [485.1, 447.3, 518.2, 477.4]),
+        (0.894, [362.0, 317.2, 389.1, 339.6]),
+    ]
+    rows = [
+        {
+            "image_id": "ir_r2_inc_forest_000001",
+            "class_id": 3,
+            "confidence": confidence,
+            "xyxy": xyxy,
+            "source": "frozen_base_model",
+        }
+        for confidence, xyxy in tank_boxes
+    ] + [
+        {
+            "image_id": "ir_r2_inc_forest_000001",
+            "class_id": 5,
+            "confidence": confidence,
+            "xyxy": xyxy,
+            "source": "incremental_model",
+        }
+        for confidence, xyxy in armored_boxes
+    ]
+
+    kept, decisions = suppress_cross_class_overlaps(
+        rows,
+        iou_threshold=0.50,
+        smaller_box_coverage=0.95,
+    )
+
+    assert len(kept) == 7
+    assert sum(int(row["class_id"]) == 5 for row in kept) == 6
+    assert [row for row in kept if int(row["class_id"]) == 3] == [rows[0]]
+    assert len(decisions) == 9
+    assert {row["suppressed_class_id"] for row in decisions} == {3}
+    assert {row["kept_class_id"] for row in decisions} == {5}
+
+
+def test_global_cross_class_suppression_has_no_pair_whitelist_or_image_leakage() -> None:
+    rows = [
+        {
+            "image_id": "air",
+            "class_id": 1,
+            "confidence": 0.80,
+            "xyxy": [0, 0, 20, 20],
+        },
+        {
+            "image_id": "air",
+            "class_id": 4,
+            "confidence": 0.90,
+            "xyxy": [1, 1, 19, 19],
+        },
+        {
+            "image_id": "sea",
+            "class_id": 2,
+            "confidence": 0.95,
+            "xyxy": [0, 0, 20, 20],
+        },
+        {
+            "image_id": "sea",
+            "class_id": 0,
+            "confidence": 0.40,
+            "xyxy": [1, 1, 19, 19],
+        },
+        {
+            "image_id": "forest",
+            "class_id": 3,
+            "confidence": 0.70,
+            "xyxy": [40, 40, 60, 60],
+        },
+    ]
+
+    kept, decisions = suppress_cross_class_overlaps(
+        rows,
+        iou_threshold=0.50,
+        smaller_box_coverage=0.95,
+    )
+
+    assert {(row["image_id"], int(row["class_id"])) for row in kept} == {
+        ("air", 4),
+        ("sea", 2),
+        ("forest", 3),
+    }
+    assert len(decisions) == 2
+
+
+def test_global_cross_class_suppression_leaves_same_class_nms_unchanged() -> None:
+    rows = [
+        {"image_id": "one", "class_id": 3, "confidence": 0.9, "xyxy": [0, 0, 20, 20]},
+        {"image_id": "one", "class_id": 3, "confidence": 0.8, "xyxy": [1, 1, 19, 19]},
+    ]
+
+    kept, decisions = suppress_cross_class_overlaps(
+        rows,
+        iou_threshold=0.50,
+        smaller_box_coverage=0.95,
+    )
+
+    assert kept == rows
     assert decisions == []
 
 

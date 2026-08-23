@@ -132,6 +132,24 @@ def test_ascend_yolo26_e2e_contract_is_explicit_and_fully_pinned() -> None:
         validate_config(config)
 
 
+def test_global_cross_class_suppression_configuration_is_explicitly_validated() -> None:
+    config = clean_config()
+    policy = config["routing"]["cross_class_suppression"]
+
+    assert policy == {
+        "enabled": True,
+        "strategy": "highest_confidence",
+        "scope": "all_classes",
+        "iou": 0.50,
+        "smaller_box_coverage": 0.95,
+    }
+    validate_config(config)
+
+    config["routing"]["cross_class_suppression"]["scope"] = "known_pairs"
+    with pytest.raises(ValueError, match="scope必须为all_classes"):
+        validate_config(config)
+
+
 def test_ascend_context_mode_allows_explicit_score_neutral_bypass() -> None:
     config = clean_config()
     config["ascend_backend"]["context_mode"] = "fixed_neutral_v1"

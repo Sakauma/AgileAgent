@@ -352,6 +352,7 @@ def score_policy(
     thresholds: Mapping[int, float],
     penalties: Mapping[int, float],
     conflict: Mapping[str, Any],
+    cross_class_suppression: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from fair_agent.modules.strict_incremental import (
         evaluate_ap50,
@@ -369,15 +370,29 @@ def score_policy(
         gated_base, gated_new, conflict
     )
     fused = [*gated_base, *gated_new]
+    suppression_decisions: list[dict[str, Any]] = []
+    suppression = dict(cross_class_suppression or {})
+    if suppression.get("enabled") is True:
+        from fair_agent.modules.detection_fusion import suppress_cross_class_overlaps
+
+        fused, suppression_decisions = suppress_cross_class_overlaps(
+            fused,
+            iou_threshold=float(suppression["iou"]),
+            smaller_box_coverage=(
+                float(suppression["smaller_box_coverage"])
+                if suppression.get("smaller_box_coverage") is not None
+                else None
+            ),
+        )
     base_ids = {path.stem for path in base_images}
     base_metrics = evaluate_ap50(
-        subset(gated_base, base_ids),
+        subset(fused, base_ids),
         subset(ground_truth, base_ids),
         BASE_CLASS_IDS,
     )
     retention = retention_metrics(
         original_base,
-        gated_base,
+        fused,
         ground_truth,
         BASE_CLASS_IDS,
     )
@@ -449,7 +464,9 @@ def score_policy(
             "new_after": len(gated_new),
             "fused": len(fused),
             "conflict_rejected": conflict_rejected,
+            "cross_class_suppressed": len(suppression_decisions),
         },
+        "cross_class_suppressions": suppression_decisions,
     }
 
 
@@ -630,7 +647,8 @@ def markdown_report(payload: Mapping[str, Any]) -> str:
                 "",
                 f"- 阈值：`{candidate['thresholds']}`",
                 f"- 最大场景惩罚：`{candidate['max_threshold_penalties']}`",
-                f"- 跨类冲突：`{candidate['conflict_policy']}`",
+                f"- 旧/新增 owner 冲突：`{candidate['conflict_policy']}`",
+                f"- 全类别重叠抑制：`{candidate['cross_class_suppression']}`",
                 "",
             ]
         )
@@ -694,6 +712,18 @@ def run_dev(args: argparse.Namespace) -> int:
 
     ground_truth = yolo_ground_truth(mixed_dev, CLASS_NAMES)
 
+    cross_class_suppression = {
+        "enabled": not args.disable_cross_class_suppression,
+        "strategy": "highest_confidence",
+        "scope": "all_classes",
+        "iou": float(args.cross_class_suppression_iou),
+        "smaller_box_coverage": (
+            None
+            if args.cross_class_suppression_smaller_box_coverage is None
+            else float(args.cross_class_suppression_smaller_box_coverage)
+        ),
+    }
+
     def scorer(
         thresholds: Mapping[int, float],
         penalties: Mapping[int, float],
@@ -710,6 +740,7 @@ def run_dev(args: argparse.Namespace) -> int:
             thresholds,
             penalties,
             conflict,
+            cross_class_suppression,
         )
 
     disabled_conflict = {
@@ -719,10 +750,18 @@ def run_dev(args: argparse.Namespace) -> int:
         "specialist_margin": 0.0,
         "preserve_base_class_owners": True,
     }
-    baseline = scorer(
+    baseline = score_policy(
+        base_predictions,
+        new_predictions,
+        ground_truth,
+        base_dev,
+        mixed_dev,
+        dev_contexts,
+        priors,
         CURRENT_THRESHOLDS,
         {class_id: 0.0 for class_id in CLASS_NAMES},
         disabled_conflict,
+        None,
     )
     profiles = {
         "score_first": {
@@ -767,6 +806,7 @@ def run_dev(args: argparse.Namespace) -> int:
                 str(key): value for key, value in penalties.items()
             },
             "conflict_policy": conflict,
+            "cross_class_suppression": cross_class_suppression,
             "fusion_iou": 0.60,
             "base_context_prior": base_prior,
             "incremental_context_prior": incremental_prior,
@@ -888,6 +928,7 @@ def run_lock(args: argparse.Namespace) -> int:
         thresholds,
         penalties,
         candidate["conflict_policy"],
+        candidate.get("cross_class_suppression"),
     )
     baseline = score_policy(
         base_predictions,
@@ -965,7 +1006,27 @@ def main() -> int:
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--device", default="1")
     parser.add_argument("--batch", type=int, default=256)
+    parser.add_argument(
+        "--cross-class-suppression-iou",
+        type=float,
+        default=0.50,
+    )
+    parser.add_argument(
+        "--cross-class-suppression-smaller-box-coverage",
+        type=float,
+        default=0.95,
+    )
+    parser.add_argument("--disable-cross-class-suppression", action="store_true")
     args = parser.parse_args()
+    if not 0.01 <= args.cross_class_suppression_iou <= 1.0:
+        raise ValueError("跨类别抑制 IoU 必须位于 [0.01, 1.0]")
+    if (
+        args.cross_class_suppression_smaller_box_coverage is not None
+        and not 0.01
+        <= args.cross_class_suppression_smaller_box_coverage
+        <= 1.0
+    ):
+        raise ValueError("小框覆盖率必须位于 [0.01, 1.0]")
     registry, target_round, active_rounds = configure_round_contract(
         args.round_registry, args.round_id
     )

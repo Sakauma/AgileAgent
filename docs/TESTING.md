@@ -167,6 +167,19 @@ python tools/60_train_scene_sensor.py \
 4. `tools/13_register_incremental_round_candidate.py` 登记当轮候选，`tools/12_summarize_incremental_rounds.py` 核对两个不同新类的父子代际和累积指标。
 5. `tools/60_train_scene_sensor.py` 与 `tools/61_select_scene_sensor_4plus2.py` 训练/选择封闭集 Scene-SensorNet；`tools/09_optimize_scene_aware_4plus2.py` 先在 dev 冻结候选，再在 lock 模式做一次复核。
 6. `tools/10_promote_scene_aware_4plus2.py` 同时验证候选、dev search、lock result 和顺序 round evidence，通过后更新 production 资产。
+7. `tools/14_evaluate_all_images_4plus2.py` 在不训练、不选参的前提下，用冻结 lock 预测生成一号正式结果，并在 Base/Increment train、dev、lock 全部图像上生成二号诊断结果。
+
+全量诊断首次运行会按 `--batch` 显式分块执行两个检测器；预测缓存只能写入本地工作区。后续可使用 `--reuse-cache` 重算后处理与指标：
+
+```bash
+"$AGENT_PYTHON" tools/14_evaluate_all_images_4plus2.py \
+  --data-root /path/to/tiaozhanbei_4plus2_dataset_20260821 \
+  --output-dir /path/to/local_workspace/all_images_x86 \
+  --device 0 \
+  --batch 8
+```
+
+二号结果包含训练图像，不得用于独立测试集或泛化性能声明，也不参与模型、阈值和门控参数选择。
 
 训练验收以各 run 的 `args.yaml`、`results.csv`、`weights/best.pt`、队列 summary、selection JSON/Markdown、冻结 predictions 和逐轮 evaluation JSON 为证据。不以“训练进程正常退出”代替 dev 复评、lock 冻结和代际链核对。
 

@@ -77,10 +77,11 @@ Base 本地类 0–3 直接映射到全局类 0–3，增量专家本地类 0–
   -> 按已冻结的逐类阈值和场景亲和度计算有效阈值
   -> 固定 owner 合并与跨类冲突仲裁
   -> class-aware NMS
+  -> 全类别最高置信度重叠抑制
   -> 六类检测、场景信息、路由轨迹和耗时
 ```
 
-`configs/agent_pipeline.yaml` 选择 `ultralytics_cuda`，检测输入尺寸为 1280。`models/generations.json` 保存六类逐类阈值、Base/Increment 场景先验和软阈值惩罚；`WebInferenceEngine` 对所有候选应用同一套冻结运行参数。
+`configs/agent_pipeline.yaml` 选择 `ultralytics_cuda`，检测输入尺寸为 1280。`models/generations.json` 保存六类逐类阈值、Base/Increment 场景先验和软阈值惩罚；`WebInferenceEngine` 对所有候选应用同一套冻结运行参数。最后一层重叠抑制不区分类别对或数据划分：不同类别框满足配置的 IoU/包含关系时，贪心保留最高置信度框，并把删除原因写入 `fusion_summary`。
 
 ### Ascend310B1 v2
 
@@ -92,6 +93,7 @@ Base 本地类 0–3 直接映射到全局类 0–3，增量专家本地类 0–
   -> air 概率与 small_aircraft 检测双证据内容门控
   -> 按门控结果执行或跳过二类增量专家
   -> 固定 owner 融合与 class-aware NMS
+  -> 全类别最高置信度重叠抑制
   -> 六类 API 响应和 ACL/DVPP 耗时
 ```
 
