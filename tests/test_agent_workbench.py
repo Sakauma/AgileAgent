@@ -14,7 +14,7 @@ from fair_agent.policies.decision import build_decision
 
 
 RELEASE_ASSETS_AVAILABLE = Path(
-    "models/production/incremental_detection/three_class_base_detector.pt"
+    "models/production/incremental_detection/four_class_base_detector.pt"
 ).exists()
 
 
@@ -23,7 +23,7 @@ def test_active_inference_uses_verified_frozen_weight() -> None:
     config = load_config()
     state = build_blackboard(config)
     inference = state["frozen_assets"]["inference_weights"]
-    assert inference["path"] == "models/production/incremental_detection/three_class_base_detector.pt"
+    assert inference["path"] == "models/production/incremental_detection/four_class_base_detector.pt"
     assert inference["matches_expected"] is True
     assert inference["same_frozen_path"] is True
     assert state["frozen_assets"]["checksums"]["valid"] is True

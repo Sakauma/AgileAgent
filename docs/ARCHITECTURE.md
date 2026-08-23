@@ -1,191 +1,189 @@
+<!-- generated-by: gsd-doc-writer -->
 # 系统架构
 
-AgileAgent 将配置、模型代际、在线推理、增量学习、系统校准、审计和 Ascend 部署组织为统一运行时。
+## 系统概览
 
-## 组件分层
+AgileAgent 是面向 4+2 多模态目标检测的分层 Python 系统。系统接收 IR/SAR 图像、五列 YOLO 增量数据包以及 YAML 配置，统一编排 Scene-SensorNet、四类 Base YOLO26s 和增量检测专家，输出六类检测结果、场景与传感器概率、路由轨迹、模型代际和审计事件。x86/CUDA 与 Ascend310B1 共用配置 schema、类别所有权、代际和 API 语义，推理执行分别由 Ultralytics CUDA 后端和 Ascend ACL 三-OM 后端完成。
 
-| 层级 | 主要模块 | 职责 |
-| --- | --- | --- |
-| 接口层 | `fair_agent/web/`、`fair_agent/cli.py` | Web API、工作台、CLI 和健康检查 |
-| 编排层 | `fair_agent/modules/web_inference.py` | production 代际解析、模型执行、门控、类别映射与融合 |
-| 生命周期层 | `incremental_workbench.py`、`incremental_lifecycle.py` | 数据审计、增量训练、系统校准、联合复核、注册与切换 |
-| 模型层 | `fair_agent/models/`、`models/` | Scene-SensorNet、Base、增量专家和发布元数据 |
-| 后端层 | `fair_agent/backends/` | Ultralytics CUDA 与 Ascend ACL/OM |
-| 状态层 | `data/`、`reports/`、`models/generations.json` | 批次状态、审计事件、指标和 production 代际 |
+## 组件图
 
-## 固定类别所有权
+```mermaid
+graph TD
+    A[Web API / CLI] --> B[配置与代际注册表]
+    B --> C[AtomicEngineProvider / WebInferenceEngine]
+    C --> D[推理后端抽象]
+    D --> E[四类 Base YOLO26s]
+    D --> F[二类增量专家]
+    C --> G[Scene-SensorNet]
+    E --> H[场景门控与固定 owner 融合]
+    F --> H
+    G --> H
+    H --> I[六类响应与结构化审计]
+    J[4+2 离线训练与发布工具] --> B
+    J --> E
+    J --> F
+    J --> G
+```
 
-| 全局类 | 名称 | owner |
+主要边界如下：
+
+- 接口层由 `fair_agent/cli.py` 和 `fair_agent/web/app.py` 提供命令行、Starlette API、静态工作台、健康检查和增量数据入口。
+- 编排层由 `fair_agent/modules/web_inference.py` 负责模型调度、局部到全局类别映射、场景门控、冲突仲裁和 class-aware NMS。
+- 后端层由 `fair_agent/backends/inference.py` 与 `fair_agent/backends/ascend_acl.py` 隔离 CUDA、TensorRT 和 Ascend ACL 的执行细节。
+- 状态层以 `models/generations.json`、`configs/functional_models.yaml`、`data/incremental_batches/` 和 `reports/agent_logs/` 保存 production 身份、模型职责、增量批次和审计事件。
+- 离线工具层以 `tools/`、`scripts/` 和 `splits/strict_4plus2/` 固化训练、逐轮增量、系统校准、评分和发布流程。
+
+## 模型职责与类别所有权
+
+三个功能模型在两种运行平台上保持相同职责：
+
+| 功能模型 | x86/CUDA 资产 | Ascend310B1 v2 资产 | 输出与职责 |
+| --- | --- | --- | --- |
+| Scene-SensorNet | `models/context/scene_sensor_net.pt` | `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om` | IR/SAR 概率及 air、forest、sea、urban 闭集场景概率 |
+| 四类 Base YOLO26s | `models/production/incremental_detection/four_class_base_detector.pt` | `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om` | 全局类 0–3 |
+| 二类增量 YOLO26s | `models/production/incremental_detection/incremental_detector.pt` | `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om` | 全局类 4–5 |
+
+类别所有权由 `models/generations.json` 固定：
+
+| 全局类 | 类别 | owner |
 | ---: | --- | --- |
-| 0 | soldier | `frozen_base_model` |
-| 1 | small_aircraft | `frozen_base_model` |
-| 2 | warship | `frozen_base_model` |
-| 3 | tank | `frozen_base_model` |
-| 4 | patrol_boat | `incremental_model` |
-| 5 | armored_vehicle | `incremental_model` |
+| 0 | soldier | `four_class_base_detector` |
+| 1 | small_aircraft | `four_class_base_detector` |
+| 2 | warship | `four_class_base_detector` |
+| 3 | tank | `four_class_base_detector` |
+| 4 | patrol_boat | `incremental_detector` |
+| 5 | armored_vehicle | `incremental_detector` |
 
-Base 与增量专家的输出先映射为全局 ID，再做冲突仲裁和 class-aware NMS。场景模型不会改变 owner。
+Base 本地类 0–3 直接映射到全局类 0–3，增量专家本地类 0–1 映射到全局类 4–5。场景模型只提供概率证据，不改变类别所有权。
 
-## x86/CUDA 在线流程
+## 在线推理数据流
+
+### 公共启动流程
+
+1. `load_config()` 加载 schema 3 配置并完成环境变量展开、路径解析和字段校验。
+2. `build_web_settings()` 读取功能模型注册表和 production 代际，将 Base 权重、增量协议、类别映射、阈值、场景先验及后端配置整理为运行设置。
+3. `AtomicEngineProvider` 按需构建 `WebInferenceEngine`，预热三个功能模型，并在代际提升或回滚时原子替换运行实例。
+4. `/api/detect`、`/api/batch` 或 CLI `detect` 将请求交给 `FairInferenceQueue`，由单一设备队列保持推理请求的执行顺序。
+
+### x86/CUDA
 
 ```text
-图像
-  -> production 代际解析
-  -> Scene-SensorNet、四类 Base、二类专家
-  -> 全局类别映射
-  -> 六类场景先验亲和度
-  -> dev 冻结的逐类基础阈值 + 场景软惩罚
-  -> 固定 owner 合并
+图像解码
+  -> Scene-SensorNet 与四类 Base 并行执行
+  -> 场景概率与 Base 检测双证据内容门控
+  -> 按门控结果执行或跳过二类增量专家
+  -> Base 与专家输出映射到全局类别
+  -> 按已冻结的逐类阈值和场景亲和度计算有效阈值
+  -> 固定 owner 合并与跨类冲突仲裁
   -> class-aware NMS
-  -> API 与审计事件
+  -> 六类检测、场景信息、路由轨迹和耗时
 ```
 
-x86 使用六类场景软阈值。Scene-SensorNet 对 air/forest/sea/urban 做闭集概率预测；Base 类先验只来自 Base train 正样本，新增类先验只来自 Increment train 正样本。在线不读取文件名或真值标签。
+`configs/agent_pipeline.yaml` 选择 `ultralytics_cuda`，检测输入尺寸为 1280。`models/generations.json` 保存六类逐类阈值、Base/Increment 场景先验和软阈值惩罚；`WebInferenceEngine` 对所有候选应用同一套冻结运行参数。
 
-## Ascend310B1 正式流程
-
-当前 release：
-
-```text
-/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
-```
+### Ascend310B1 v2
 
 ```text
 640×512 PNG
-  -> bounded multipart
-  -> DVPP encoded preprocessing
-  -> 并发提交 Scene-SensorNet 与四类 Base YOLO26s
-  -> 收集真实场景概率与 Base 检测
-  -> 双证据执行门控
-       air >= 0.5 且 Base 检出 small_aircraft：跳过专家
-       其他情况：执行/收集二类专家
-  -> 固定 owner、冲突仲裁、class-aware NMS
-  -> 六类响应与审计
+  -> bounded multipart 与 DVPP encoded preprocessing
+  -> Scene-SensorNet 和四类 Base 异步提交
+  -> 收集场景概率与 Base 检测
+  -> air 概率与 small_aircraft 检测双证据内容门控
+  -> 按门控结果执行或跳过二类增量专家
+  -> 固定 owner 融合与 class-aware NMS
+  -> 六类 API 响应和 ACL/DVPP 耗时
 ```
 
-门控输入只有 `scene_probabilities` 和 `base_detections`，不读取标签或文件名。它属于冻结后的 system calibration，不更新任何检测器权重。
+`configs/agent_pipeline_ascend310b.yaml` 选择 `ascend_acl` 和 `independent_yolo26_e2e_v1`。Base 与 Incremental OM 接收 uint8 NHWC `[1,608,736,3]`，各自输出 `[1,300,6]`；Scene-SensorNet OM 接收 uint8 NHWC `[1,160,160,3]`。内容门控策略为：当 `air >= 0.5` 且 Base 检出 `small_aircraft` 时跳过增量专家，其余输入执行增量专家。
 
-### Ascend 模型契约
+正式包 `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/` 自包含三个 OM、正式配置、源 checkpoint、ONNX、AIPP、ATC 日志、构建来源和冻结验证报告。板端主实例监听内部 `18501`，loopback 路由将公共 `8501` 指向主实例，`8502` 用于隔离候选。
 
-| 模型 | 输入 | 输出 |
+## 训练、增量与发布数据流
+
+### x86/CUDA 4+2
+
+```text
+strict_4plus2 Base train/dev
+  -> tools/04 训练 Base 候选
+  -> tools/05 选择四类 Base
+  -> 冻结 Base 权重
+
+increment train/dev
+  -> tools/11 生成逐轮类别视图
+  -> tools/06 与 tools/07 训练、选择当轮专家
+  -> tools/08 累计评估截至当轮的全部类别
+  -> tools/13 登记父子代际候选
+  -> tools/12 汇总两轮证据
+
+Base/Increment train/dev 与 mixed dev
+  -> tools/60 与 tools/61 训练、选择 Scene-SensorNet
+  -> tools/09 搜索冻结场景门控与逐类阈值
+  -> tools/10 提升正式 4+2 production
+```
+
+`configs/incremental_round_registry_4plus2.yaml` 是类别与轮次的权威注册表。它定义 Base 四类、`round_01_patrol_boat`、`round_02_armored_vehicle`、每轮局部到全局映射、父子代际和 train/dev/lock 清单。每轮增量训练只读取当轮 Increment train/dev 视图；Base 与已学专家权重保持冻结。Scene-SensorNet 与场景门控属于 `system_calibration`，冻结参数后的累计评分属于 `joint_evaluation`。
+
+### Ascend310B1 v2 发布
+
+```text
+冻结的 Base / Incremental / Scene 权重
+  -> build_ascend_yolo26_e2e_oms.sh 构建检测 OM
+  -> tools/112 物化三-OM 候选
+  -> run_ascend310b_score_gate.sh 冻结预测并完成精度与性能门禁
+  -> tools/111 生成 validated 正式包
+  -> materialize_ascend310b_full_score_release.sh 物化板端 release
+  -> install_ascend310b_primary_services.sh 安装主实例与原子路由
+```
+
+`fair_agent/modules/ascend_release.py` 校验正式配置、三项 OM 身份、构建清单和验证报告之间的引用关系；`scripts/manage_ascend310b_primary_route.sh` 管理公共端口到主实例的精确路由。
+
+## 关键抽象
+
+| 抽象 | 位置 | 作用 |
 | --- | --- | --- |
-| Base YOLO26s | uint8 NHWC `[1,608,736,3]` | E2E `[1,300,6]`，4 类 |
-| Incremental YOLO26s | uint8 NHWC `[1,608,736,3]` | E2E `[1,300,6]`，2 类 |
-| Scene-SensorNet | uint8 NHWC `[1,160,160,3]` | sensor 与 scene 概率 |
+| `load_config()` | `fair_agent/core/config.py` | 加载、覆盖、校验并解析运行配置 |
+| `load_generation_registry()` / `generation_web_settings()` | `fair_agent/modules/model_generations.py` | 验证权重身份、类别 owner、阈值和代际通道，并生成在线设置 |
+| `AtomicEngineProvider` | `fair_agent/web/app.py` | 延迟构建推理引擎，执行 shadow 加载后的原子提升与回滚 |
+| `WebInferenceEngine` | `fair_agent/modules/web_inference.py` | 编排场景模型、Base、增量专家、门控、融合和批量推理 |
+| `InferenceBackend` / `create_backend()` | `fair_agent/backends/inference.py` | 为 Ultralytics CUDA、TensorRT 与 Ascend ACL 提供统一检测接口 |
+| `AscendAclRuntime` / `AscendAclBackend` | `fair_agent/backends/ascend_acl.py` | 管理 ACL context、stream、OM、DVPP、异步执行和 E2E 检测输出 |
+| `SceneSensorNet` | `fair_agent/models/context.py` | 共享卷积特征并输出传感器与场景两个分类头 |
+| `IncrementalBatchStore` / `TrainingJobManager` | `fair_agent/modules/incremental_workbench.py` | 审计上传数据、生成隔离视图、保存批次状态并管理训练任务 |
+| `IncrementalLifecycle` | `fair_agent/modules/incremental_lifecycle.py` | 串联 dev 校准、候选登记、lock 复核、shadow 加载和 production 切换 |
+| `load_incremental_round_registry()` | `fair_agent/modules/incremental_round_registry.py` | 校验两轮类别注入、数据范围、冻结条件和父子代际契约 |
 
-`fair_agent/backends/ascend_acl.py` 负责 CANN 初始化、ACL context、OM 加载、DVPP、统一 enqueue、E2E 输出接收和耗时统计。`fair_agent/modules/web_inference.py` 负责全局类别、内容门控、融合和 API 语义。
+## 配置与状态边界
 
-### 正式拓扑
+| 文件或目录 | 权威内容 |
+| --- | --- |
+| `configs/agent_pipeline.yaml` | x86/CUDA 服务、推理、路由、工作台和门禁配置 |
+| `configs/agent_pipeline_ascend310b.yaml` | Ascend310B1 v2 服务、OM、DVPP、执行顺序和验证配置 |
+| `configs/functional_models.yaml` | 三个功能模型的职责、平台资产与协作关系 |
+| `configs/incremental_round_registry_4plus2.yaml` | Base 与两轮新增类别的顺序、映射和数据协议 |
+| `models/generations.json` | production/candidate 通道、模型成员、类别 owner、阈值和代际指标 |
+| `splits/strict_4plus2/` | Base、Increment、mixed 及逐轮 train/dev/lock 固定清单 |
+| `data/incremental_batches/` | 上传包、审计结果、训练视图、任务状态和批次级类别注册表 |
+| `reports/agent_logs/` | 以 trace、batch、job 和 generation 标识串联的结构化运行事件 |
 
-```text
-                     公共 127.0.0.1:8501
-                               |
-             精确 loopback NAT，comment 固定
-                     /                     \
-             无规则：回滚              有规则：正式
-                  |                         |
-        旧 listener :8501           4+2 主实例 :18501
-                                           |
-                          Base + Specialist + Scene 三 OM
-
-                   :8502 仅用于隔离候选
-```
-
-三个 systemd unit 分别管理主实例、回滚 listener 与路由。正式提升保留旧 listener 的物理监听，删除唯一规则即可即时回滚。
-
-## 学习、校准与评估阶段
-
-```text
-base_learning
-  Base train/dev -> 四类 Base 权重
-        |
-incremental_learning
-  当轮 Increment train/dev -> 当轮新类专家
-  Base 与历史专家冻结
-        |
-system_calibration
-  Scene-SensorNet、场景先验、门控与阈值
-  不更新任何检测器
-        |
-joint_evaluation
-  参数冻结 -> 截至当轮全部类别的 lock/test
-  -> New-mAP50、KRR、Full-mAP50 与父子代际
-```
-
-`incremental_learning` 只包括新类检测器训练、新类映射及新类专属学习。Scene-SensorNet 和场景门控属于独立功能模型校准。完整契约见 `docs/compliant-incremental-learning.md`。
-
-正式 4+2 注册表按 patrol_boat → armored_vehicle 记录两个新类别轮次。每轮只读当轮 Increment train/dev；`tools/13_register_incremental_round_candidate.py` 逐轮登记候选，`tools/12_summarize_incremental_rounds.py` 验证父子链，最终由 `tools/10_promote_scene_aware_4plus2.py` 切换 production。
-
-## 模型代际
-
-`models/generations.json` 维护：
-
-- production 与 candidate 通道；
-- 父子代际和轮次；
-- 类别 owner；
-- 权重、配置和证据身份；
-- New-mAP50、KRR、Full-mAP50；
-- 阈值、场景配置和执行门控；
-- 数据隔离、Base 冻结与验收状态。
-
-Web 服务启动时加载 production 代际。新代际必须先构建并预热引擎，再原子替换进程内运行实例。
-
-## 配置系统
-
-`fair_agent/core/config.py` 负责 schema 3 加载、环境变量展开、路径解析、命令行覆盖、字段校验和敏感值脱敏：
-
-- `configs/agent_pipeline.yaml`：x86/CUDA production；
-- `configs/agent_pipeline_ascend310b.yaml`：当前 Ascend 正式配置；
-- `configs/ascend310b/full_score_method.yaml`：训练、导出、ATC、运行时与评分契约；
-- release-local 配置：不可变发布身份。
-
-## Ascend 候选到正式控制流
+## 目录结构与职责
 
 ```text
-4+2 冻结权重
-  -> 两个 YOLO26 E2E ONNX
-  -> build_ascend_yolo26_e2e_oms.sh
-  -> Base / Incremental OM + 真实 Scene 资产 + build manifest
-  -> tools/112：生成 :8502 候选与候选代际
-  -> run_ascend310b_score_gate.sh
-  -> tools/110：候选排序
-  -> tools/111：validated release
-  -> systemd + loopback NAT：公共 :8501 提升
-  -> 公共入口部署后 FPS 复验
+AgileAgent/
+├── fair_agent/
+│   ├── core/          配置、审计、运行日志和状态基础设施
+│   ├── backends/      CUDA、TensorRT 与 Ascend ACL 推理适配器
+│   ├── models/        Scene-SensorNet 等模型定义与加载逻辑
+│   ├── modules/       推理融合、增量生命周期、代际和发布业务逻辑
+│   └── web/           Starlette API、静态工作台和运行时切换入口
+├── configs/           x86、Ascend、功能模型和增量轮次配置
+├── models/            production 权重、代际注册表与 Ascend310B1 v2 发布包
+├── splits/            strict 4+2 固定数据清单
+├── tools/             数据处理、训练、评测、候选物化和设备验收入口
+├── scripts/           环境准备、服务启动、模型构建、发布和路由脚本
+├── native/            x86 TensorRT 原生后端接口
+├── native_ascend/     Ascend 原生接口契约
+├── tests/             配置、运行时、增量与 Ascend 发布回归
+└── docs/              当前架构、配置、开发、测试和部署文档
 ```
 
-结果有效性要求数据隔离、预测先冻结、Base 权重冻结与资产身份一致。比赛淘汰门禁只使用 Base mAP50、New-mAP50、KRR 和 batch FPS；precision、误激活率和单请求延迟保留为诊断。
-
-## 可移植正式模型包
-
-`models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/` 保存三个 OM、source checkpoint、ONNX、AIPP、ATC 日志、构建清单、正式配置、冻结预测和原始验收报告。
-
-```text
-Git clone
-  -> 包完整性检查
-  -> materialize_ascend310b_full_score_release.sh
-  -> 固定 release 根
-  -> tools/95 --require-validation
-  -> 新板直接 :8501，或 :18501 主实例 + :8501 回滚 listener
-```
-
-该消费路径不训练、不导出 ONNX、不运行 ATC、不升级 CANN。
-
-## 审计与证据
-
-运行事件写入 `reports/agent_logs/`，用 `trace_id`、`batch_id`、`job_id` 和 `generation_id` 串联。增量批次在 `data/incremental_batches/` 保存源包、训练视图、封存样本、快照、任务记录和类别注册表。板端 release 的正式证据位于包内 `provenance/` 与 `validation/`。
-
-## 目录结构
-
-```text
-fair_agent/core/       配置、哈希、运行日志与审计基础设施
-fair_agent/backends/   CUDA 与 Ascend 推理适配器
-fair_agent/modules/    数据、训练、评测、代际和部署流程
-fair_agent/web/        FastAPI 服务与前端资源
-configs/               主配置、模型配置与实验配置
-models/                发布模型与代际元数据
-scripts/               环境准备、启动和发布校验
-tools/                 数据、实验、导出和设备验收工具
-tests/                 单元测试与集成回归
-splits/                固定数据清单
-```
+该结构将平台无关的业务编排放在 `fair_agent/modules/`，将设备差异收敛到 `fair_agent/backends/`，并让训练资产、运行配置、固定数据清单和可部署模型包分别保持独立、可验证的边界。

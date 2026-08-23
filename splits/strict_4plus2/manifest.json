@@ -521,10 +521,5 @@
     "competition_refit": "train_plus_dev after hyperparameters and thresholds are frozen",
     "full_data_retrain_only": "all may be used only after explicitly giving up local lock independence"
   },
-  "legacy_archive": {
-    "path": "splits/archive/2026-08-21_strict_3plus1",
-    "source_protocol": "full_coverage_strict_3plus1_dataset_partition",
-    "file_count": 21
-  },
   "training_started": false
 }

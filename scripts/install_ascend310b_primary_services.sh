@@ -7,8 +7,8 @@ usage() {
   install_ascend310b_primary_services.sh MAIN_RELEASE_ROOT ROLLBACK_RELEASE_ROOT [MAIN_INTERNAL_PORT]
 
 在已物化并通过release校验的目录上安装两个服务：
-  - 满分主实例：内部端口18501；
-  - 原三OM回滚实例：继续监听8501。
+  - 当前正式主实例：内部端口18501；
+  - 上一正式回滚实例：继续监听8501。
 随后以精确iptables loopback规则原子切换新连接，8502继续保留为候选端口。
 EOF
 }
@@ -102,7 +102,7 @@ import yaml
 
 payload = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
 layout = str((payload.get("ascend_backend") or {}).get("model_layout") or "")
-if layout not in {"shared_backbone_dual_head_v1", "independent_yolo26_e2e_v1"}:
+if layout != "independent_yolo26_e2e_v1":
     raise SystemExit(f"正式主实例布局非法：{layout}")
 print(layout)
 PY
@@ -128,7 +128,7 @@ cleanup_failure() {
           /usr/bin/bash "$ROLLBACK_ROOT/src/scripts/start_agent_ascend310b.sh" \
           >/dev/null 2>&1 &
     fi
-    printf '正式提升失败，已尝试恢复三OM回滚服务；step=%s status=%s\n' \
+    printf '正式提升失败，已尝试恢复回滚服务；step=%s status=%s\n' \
       "$CURRENT_STEP" "$status" >&2
   fi
   exit "$status"
@@ -178,7 +178,7 @@ WantedBy=multi-user.target
 EOF
 cat >"$rollback_tmp" <<EOF
 [Unit]
-Description=AgileAgent Ascend310B three-OM rollback listener
+Description=AgileAgent Ascend310B rollback listener
 After=network.target
 
 [Service]
@@ -232,7 +232,7 @@ require_health_field "$MAIN_PORT" "\"model_layout\":\"$MAIN_LAYOUT\""
 # rollback unit在安装unit前可能已经active；`enable --now`不会重启它，也不能
 # 证明新unit已接管进程。显式restart并在路由切换前等待8501真正ready，保证
 # 任意后续失败都仍有可立即恢复的监听器。
-step "启动并验证三OM回滚service"
+step "启动并验证回滚service"
 systemctl enable agileagent-ascend310b-rollback.service
 systemctl restart agileagent-ascend310b-rollback.service
 for _ in $(seq 1 180); do

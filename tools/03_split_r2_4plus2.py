@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Archive the legacy 3+1 split and create the fixed score-priority 4+2 split.
+"""Create and verify the fixed score-priority 4+2 split.
 
 This command only writes split lists and manifests. It never copies source images,
 rewrites labels, materializes YOLO datasets, or starts model training.
@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import shutil
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -29,7 +28,6 @@ from fair_agent.modules.incremental_round_registry import (  # noqa: E402
 
 SPLITS_ROOT = ROOT / "splits"
 OUTPUT_ROOT = SPLITS_ROOT / "strict_4plus2"
-ARCHIVE_ROOT = SPLITS_ROOT / "archive" / "2026-08-21_strict_3plus1"
 R1_ROOT = ROOT / "datasets_r1_base_train"
 R2_ROOT = ROOT / "datasets_r2_inc_train"
 
@@ -59,21 +57,6 @@ FROZEN_GROUP_RANDOM_SEEDS = {
     },
 }
 
-LEGACY_TOP_LEVEL_NAMES = [
-    "README.md",
-    "manifest.json",
-    "pool_train.txt",
-    "pool_train_ir.txt",
-    "pool_train_sar.txt",
-    "pool_dev.txt",
-    "pool_dev_ir.txt",
-    "pool_dev_sar.txt",
-    "mixed_test.txt",
-    "mixed_test_ir.txt",
-    "mixed_test_sar.txt",
-]
-
-
 def write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -95,62 +78,6 @@ def git_head() -> str:
         universal_newlines=True,
     )
     return result.stdout.strip()
-
-
-def archive_legacy_split() -> Dict[str, Any]:
-    """Create a dated snapshot while keeping compatibility files in place."""
-    source_paths: List[Path] = []
-    for name in LEGACY_TOP_LEVEL_NAMES:
-        path = SPLITS_ROOT / name
-        if not path.is_file():
-            raise FileNotFoundError("Legacy split file is missing: {}".format(path))
-        source_paths.append(path)
-    legacy_protocol = SPLITS_ROOT / "strict_3plus1"
-    if not legacy_protocol.is_dir():
-        raise FileNotFoundError("Legacy strict_3plus1 directory is missing")
-    source_paths.extend(sorted(path for path in legacy_protocol.rglob("*") if path.is_file()))
-
-    snapshot_root = ARCHIVE_ROOT / "snapshot"
-    manifest_path = ARCHIVE_ROOT / "ARCHIVE_MANIFEST.json"
-    if ARCHIVE_ROOT.exists():
-        if not manifest_path.is_file():
-            raise FileExistsError("Archive exists without a manifest: {}".format(ARCHIVE_ROOT))
-        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        for relative in existing.get("files", []):
-            archived = snapshot_root / relative
-            if not archived.is_file():
-                raise RuntimeError("Existing legacy archive is incomplete: {}".format(archived))
-        return existing
-
-    entries: List[str] = []
-    for source in source_paths:
-        relative = source.relative_to(SPLITS_ROOT)
-        target = snapshot_root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(source), str(target))
-        if target.stat().st_size != source.stat().st_size:
-            raise RuntimeError("Archive copy size mismatch: {}".format(relative.as_posix()))
-        entries.append(relative.as_posix())
-
-    manifest: Dict[str, Any] = {
-        "schema_version": 1,
-        "archive_id": "2026-08-21_strict_3plus1",
-        "source_protocol": "full_coverage_strict_3plus1_dataset_partition",
-        "source_git_commit": git_head(),
-        "archived_on": "2026-08-21",
-        "copy_policy": "dated_snapshot_with_compatibility_copy_retained",
-        "file_count": len(entries),
-        "files": entries,
-    }
-    write_json(manifest_path, manifest)
-    (ARCHIVE_ROOT / "README.md").write_text(
-        "# 3+1 数据划分归档\n\n"
-        "该目录是 2026-08-21 开始 4+2 工作前的完整划分快照。\n"
-        "`snapshot/` 保留原始目录结构，`ARCHIVE_MANIFEST.json` 记录归档文件清单。\n"
-        "为了让现有 3+1 配置和测试在 4+2 代码迁移前仍可运行，原路径保留为兼容副本。\n",
-        encoding="utf-8",
-    )
-    return manifest
 
 
 def read_classes(path: Path) -> List[str]:
@@ -470,14 +397,14 @@ def create_readme(manifest: Mapping[str, Any]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="归档 3+1 划分并生成比赛优先的固定 4+2 划分。")
+    parser = argparse.ArgumentParser(description="生成比赛优先的固定 4+2 划分。")
     parser.add_argument(
         "--round-registry", type=Path, default=ROOT / DEFAULT_ROUND_REGISTRY
     )
     parser.add_argument(
         "--verify-only",
         action="store_true",
-        help="只验证已生成的划分与归档是否完整。",
+        help="只验证已生成的 4+2 划分是否完整。",
     )
     args = parser.parse_args()
     round_registry = load_incremental_round_registry(args.round_registry)
@@ -492,24 +419,18 @@ def main() -> int:
     ]
 
     if args.verify_only:
-        archive = json.loads((ARCHIVE_ROOT / "ARCHIVE_MANIFEST.json").read_text(encoding="utf-8"))
-        for relative in archive["files"]:
-            path = ARCHIVE_ROOT / "snapshot" / relative
-            if not path.is_file():
-                raise RuntimeError("Archive verification failed: {}".format(path))
         manifest = json.loads((OUTPUT_ROOT / "manifest.json").read_text(encoding="utf-8"))
         for item in manifest["lists"].values():
             path = ROOT / item["path"]
             rows = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
             if len(rows) != item["count"]:
                 raise RuntimeError("Split verification failed: {}".format(path))
-        print("archive_files={} split_lists={} status=verified".format(archive["file_count"], len(manifest["lists"])))
+        print("split_lists={} status=verified".format(len(manifest["lists"])))
         return 0
 
     if OUTPUT_ROOT.exists() and any(OUTPUT_ROOT.iterdir()):
         raise FileExistsError("Refusing to overwrite fixed 4+2 split: {}".format(OUTPUT_ROOT))
 
-    archive = archive_legacy_split()
     base_rows = scan_dataset(
         R1_ROOT,
         "datasets_r1_base_train",
@@ -630,11 +551,6 @@ def main() -> int:
             "competition_refit": "train_plus_dev after hyperparameters and thresholds are frozen",
             "full_data_retrain_only": "all may be used only after explicitly giving up local lock independence",
         },
-        "legacy_archive": {
-            "path": ARCHIVE_ROOT.relative_to(ROOT).as_posix(),
-            "source_protocol": archive["source_protocol"],
-            "file_count": archive["file_count"],
-        },
         "training_started": False,
     }
     write_json(OUTPUT_ROOT / "manifest.json", manifest)
@@ -643,8 +559,7 @@ def main() -> int:
         "schema_version": 1,
         "active_protocol": "strict_4plus2",
         "manifest": "splits/strict_4plus2/manifest.json",
-        "legacy_compatibility_protocol": "splits/strict_3plus1/manifest.json",
-        "updated_on": "2026-08-21",
+        "updated_on": "2026-08-23",
     }
     write_json(SPLITS_ROOT / "active.json", active)
     print(

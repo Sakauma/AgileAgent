@@ -8,10 +8,6 @@
   "model_layout": "independent_yolo26_e2e_v1",
   "validated": false,
   "validation_basis": "competition_score_pending",
-  "parent_context_build_manifest": {
-    "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/release-build-manifest.json",
-    "sha256": "ffca93c54aa600a268acc31cdee82e14a040f6313427a180c3597e07db5fc2dd"
-  },
   "artifacts": {
     "base_detector": {
       "role": "base",
@@ -150,7 +146,7 @@
   "release_git_sha": "a6a8e1de4a0ac3cadc5069aaee734186cb936001",
   "source_build_manifest": {
     "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/source-build-manifest.json",
-    "sha256": "d3778ac759085a2644acc410e193cfe52529d3ab301edf3b484d43eb00c2351b"
+    "sha256": "66c497a7198433d8669f1de2eadd85ed5552224f3b772e0342392aaec0268d21"
   },
   "method_config": {
     "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/full_score_method.yaml",

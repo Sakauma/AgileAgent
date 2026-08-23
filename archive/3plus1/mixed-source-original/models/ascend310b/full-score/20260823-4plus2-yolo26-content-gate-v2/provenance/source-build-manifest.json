@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-08-22T23:12:49+08:00",
+  "git_sha": "66653d7d69a8f010ee9b46318b749df4804b7005",
+  "soc_version": "Ascend310B1",
+  "cann_version": "7.0.RC1",
+  "precision": "mixed_float16",
+  "model_layout": "independent_yolo26_e2e_v1",
+  "validated": false,
+  "validation_basis": "competition_score_pending",
+  "parent_context_build_manifest": {
+    "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/release-build-manifest.json",
+    "sha256": "ffca93c54aa600a268acc31cdee82e14a040f6313427a180c3597e07db5fc2dd"
+  },
+  "artifacts": {
+    "base_detector": {
+      "role": "base",
+      "source_weight": {
+        "path": "/home/HwHiAiUser/agileagent/repo/models/production/incremental_detection/four_class_base_detector.pt",
+        "sha256": "105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd"
+      },
+      "onnx": {
+        "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/source/base.onnx",
+        "sha256": "09ced76dc7d63348f65a818b0a609e6e603453b7f8f92e6b8462e3b9678b9662"
+      },
+      "aipp": {
+        "path": "/home/HwHiAiUser/agileagent/repo/configs/ascend310b/aipp/base_detector.cfg",
+        "sha256": "a2abc55928d594bc566a3f4fa492bf74880d24738734dbc7c4cb460442a236c6"
+      },
+      "om": {
+        "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/build/base_detector.om",
+        "sha256": "56570c8ccac80beef10d623f40bd20e26dbf310dc1ba93c80ff607b9f6df7ae0"
+      },
+      "atc_log": {
+        "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/build/atc_base_detector.log",
+        "sha256": "248e8242a239c53aae7530c5942f9694deeb2cc398ecb495db4e4449e9e0c19e"
+      },
+      "atc_command": "atc --model=/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/source/base.onnx --framework=5 --output=/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/build/base_detector --input_format=NCHW --input_shape=images:1\\,3\\,608\\,736 --soc_version=Ascend310B1 --precision_mode_v2=mixed_float16 --insert_op_conf=/home/HwHiAiUser/agileagent/repo/configs/ascend310b/aipp/base_detector.cfg",
+      "input_contract": {
+        "dtype": "uint8",
+        "layout": "NHWC",
+        "shape": [
+          1,
+          608,
+          736,
+          3
+        ]
+      },
+      "output_contract": "yolo26_e2e_v1",
+      "postprocess_contract": {
+        "max_det": 300,
+        "class_count": 4,
+        "outputs": {
+          "detections": {
+            "shape": [
+              1,
+              300,
+              6
+            ],
+            "dtype": "float32"
+          }
+        }
+      }
+    },
+    "incremental_detector": {
+      "role": "specialist",
+      "source_weight": {
+        "path": "/home/HwHiAiUser/agileagent/repo/models/production/incremental_detection/incremental_detector.pt",
+        "sha256": "0ab0c6ed0117b75ab9ee105e9f109ccad96d988156d00fa4c4c0b9599e424a2a"
+      },
+      "onnx": {
+        "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/source/specialist.onnx",
+        "sha256": "f5a292b11a8fc075740afd1d59afe91a3a4e08b05df809d607ced18c6e7831d1"
+      },
+      "aipp": {
+        "path": "/home/HwHiAiUser/agileagent/repo/configs/ascend310b/aipp/incremental_detector.cfg",
+        "sha256": "a2abc55928d594bc566a3f4fa492bf74880d24738734dbc7c4cb460442a236c6"
+      },
+      "om": {
+        "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/build/incremental_detector.om",
+        "sha256": "d12ccf5b4c07ea97b8be09ff4cdea02463cf83ec68736ae6fd7451a3e0fcd87b"
+      },
+      "atc_log": {
+        "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/build/atc_incremental_detector.log",
+        "sha256": "248e8242a239c53aae7530c5942f9694deeb2cc398ecb495db4e4449e9e0c19e"
+      },
+      "atc_command": "atc --model=/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/source/specialist.onnx --framework=5 --output=/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/build/incremental_detector --input_format=NCHW --input_shape=images:1\\,3\\,608\\,736 --soc_version=Ascend310B1 --precision_mode_v2=mixed_float16 --insert_op_conf=/home/HwHiAiUser/agileagent/repo/configs/ascend310b/aipp/incremental_detector.cfg",
+      "input_contract": {
+        "dtype": "uint8",
+        "layout": "NHWC",
+        "shape": [
+          1,
+          608,
+          736,
+          3
+        ]
+      },
+      "output_contract": "yolo26_e2e_v1",
+      "postprocess_contract": {
+        "max_det": 300,
+        "class_count": 2,
+        "outputs": {
+          "detections": {
+            "shape": [
+              1,
+              300,
+              6
+            ],
+            "dtype": "float32"
+          }
+        }
+      }
+    },
+    "scene_sensor_net": {
+      "role": "context",
+      "source_weight": {
+        "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/context-source_weight.pt",
+        "sha256": "d75d67725061f93133218461441603de5a5dd52964a742a1466c5d9ecfce9333"
+      },
+      "onnx": {
+        "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/context-onnx.onnx",
+        "sha256": "caec6fc7266328c76f1a10ad44d4f8d2eec1e4a2e9bbb22792cc1e0aaa6d46a5"
+      },
+      "aipp": {
+        "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/context-aipp.cfg",
+        "sha256": "b090ae6ec7402c7117aca6cfe29ce261024b84c3ddbc6d64888658ede3e664ae"
+      },
+      "om": {
+        "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/om/scene_sensor_net.om",
+        "sha256": "c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9"
+      },
+      "atc_log": {
+        "path": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04/provenance/context-atc_log.log",
+        "sha256": "9042574d6869960675193f93be479d116017a9e7639a0361a796291d471a60d0"
+      },
+      "atc_command": "atc --model=/home/HwHiAiUser/agileagent/releases/212705a26d4414eff4e00604ce37c54d2ae729b2/onnx/scene_sensor_net.onnx --framework=5 --output=/home/HwHiAiUser/agileagent/candidates/20260814-wave0-p0-7c61f2b/build/p0-aipp-r3/scene_sensor_net --input_format=NCHW --input_shape=images:1,3,160,160 --soc_version=Ascend310B1 --precision_mode_v2=mixed_float16 --insert_op_conf=/home/HwHiAiUser/agileagent/candidates/20260814-wave0-p0-7c61f2b/src/configs/ascend310b/aipp/scene_sensor_net.cfg",
+      "input_contract": {
+        "dtype": "uint8",
+        "layout": "NHWC",
+        "shape": [
+          1,
+          160,
+          160,
+          3
+        ]
+      }
+    }
+  }
+}

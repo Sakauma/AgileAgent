@@ -73,7 +73,7 @@ incremental_workbench:
   - .tiff
   validation_fraction: 0.2
   lock_fraction: 0.2
-  split_seed: 20260705
+  split_seed: 20260821
   minimum_images: 2
   preview_limit: 12
   job_log_tail_lines: 300
@@ -82,7 +82,7 @@ incremental_workbench:
     required: true
     root: data/incremental_lineage
     base_manifest: data/incremental_lineage/base_dataset.json
-    base_experiment_config: configs/incremental/warship_3plus1.yaml
+    base_split_manifest: splits/strict_4plus2/manifest.json
     auto_initialize_base: true
     cache_roots: []
   lifecycle:
@@ -93,16 +93,16 @@ incremental_workbench:
     threshold_step: 0.01
   training:
     python: null
-    initial_weights: models/production/incremental_detection/three_class_base_detector.pt
+    initial_weights: models/production/incremental_detection/four_class_base_detector.pt
     device: '0'
-    imgsz: 640
-    batch: 32
-    epochs: 80
-    patience: 0
-    workers: 8
+    imgsz: 1280
+    batch: 18
+    epochs: 500
+    patience: 50
+    workers: 6
     optimizer: AdamW
     lr0: 0.001
-    seed: 20260705
+    seed: 20260821
     deterministic: true
     amp: true
 ui:
@@ -119,17 +119,17 @@ performance:
   request_timeout_seconds: 180
   benchmark_rounds: 10
   warmup_requests: 30
-  benchmark_split: splits/strict_3plus1/mixed_test.txt
+  benchmark_split: splits/strict_4plus2/mixed_lock.txt
   report_root: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/reports
   concurrent_requests: 1
   batch_probe_size: 20
 generation:
   registry: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/generations.json
   runtime_registry: data/generation_registry/runtime.json
-  recheck_lock_split: splits/strict_3plus1/base_test.txt
+  recheck_lock_split: splits/strict_4plus2/base_lock.txt
   report_root: reports/generation_rechecks
-  candidate_id: incremental_detection_generation
-  calibrated_threshold: 0.63
+  candidate_id: incremental_detection_generation_4plus2
+  calibrated_threshold: 0.08
   auto_promote: true
   shadow_smoke_images: 1
 gates:
@@ -184,11 +184,11 @@ incremental_guardian:
     - evaluate_quantization
 native_backend:
   library: build/native/libagile_agent_tensorrt.so
-  base_engine: runs/engines/local/three_class_base_detector.engine
+  base_engine: runs/engines/local/four_class_base_detector.engine
   context_engine: runs/engines/local/scene_sensor_net.engine
   engines:
-    models/production/incremental_detection/three_class_base_detector.pt:
-      path: runs/engines/local/three_class_base_detector.engine
+    models/production/incremental_detection/four_class_base_detector.pt:
+      path: runs/engines/local/four_class_base_detector.engine
       sha256: null
     models/production/incremental_detection/incremental_detector.pt:
       path: runs/engines/local/incremental_detector.engine
@@ -224,9 +224,9 @@ ascend_backend:
   validated: true
   validation_candidate: false
   validation_report: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/validation/validation-summary.json
-  validation_report_sha256: 5b670ff9db458cf05e1feffd677a2aef161ac2e8b91d3598b470295ed1d3dc8f
+  validation_report_sha256: e2d210bf4e263abb523eaabf30633123a05de7b53608c588614c460a57a90671
   build_manifest: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/release-build-manifest.json
-  build_manifest_sha256: 35385da4ad3365eaa847e590814ef1af0f835e11071ad08e79680d15ebb11eda
+  build_manifest_sha256: ff443710df7a2a9f5cd7b10c0247b1e19dc324dc099db10f084244ea811a5d8b
   models:
     models/production/incremental_detection/four_class_base_detector.pt:
       path: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om
@@ -268,13 +268,13 @@ tensorrt_backend:
   int8_calibration:
     enabled: true
     auto_quantize_incremental: true
-    representative_split: splits/strict_3plus1/increment_train.txt
-    threshold_split: splits/strict_3plus1/increment_dev.txt
+    representative_split: splits/strict_4plus2/increment_train.txt
+    threshold_split: splits/strict_4plus2/increment_dev.txt
     cache_root: runs/tensorrt_calibration
     batch_size: 8
     max_images: 256
     minimum_images_per_class: 8
-    seed: 20260705
+    seed: 20260821
   export:
     device: '0'
     overwrite: false
@@ -284,29 +284,29 @@ tensorrt_backend:
   context_engine:
     path: runs/engines/local/scene_sensor_net.engine
     sha256: null
-    imgsz: 160
+    imgsz: 224
     min_batch_size: 1
     opt_batch_size: 8
-    batch_size: 20
+    batch_size: 32
   engines:
-    models/production/incremental_detection/three_class_base_detector.pt:
-      path: runs/engines/local/three_class_base_detector.engine
+    models/production/incremental_detection/four_class_base_detector.pt:
+      path: runs/engines/local/four_class_base_detector.engine
       sha256: null
-      imgsz: 896
-      opt_height: 896
-      opt_width: 896
+      imgsz: 1280
+      opt_height: 1280
+      opt_width: 1280
       min_batch_size: 1
       opt_batch_size: 8
-      batch_size: 20
+      batch_size: 32
     models/production/incremental_detection/incremental_detector.pt:
       path: runs/engines/local/incremental_detector.engine
       sha256: null
-      imgsz: 640
-      opt_height: 640
-      opt_width: 640
+      imgsz: 1280
+      opt_height: 1280
+      opt_width: 1280
       min_batch_size: 1
       opt_batch_size: 8
-      batch_size: 20
+      batch_size: 32
 model:
   weights: models/production/incremental_detection/four_class_base_detector.pt
   expected_sha256: 105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd
@@ -315,15 +315,16 @@ assets:
   generation_registry: models/generations.json
   checksums: models/SHA256SUMS.txt
   required:
-  - models/pretrained/yolo11s.pt
-  - models/production/incremental_detection/three_class_base_detector.pt
-  - models/production/incremental_detection/incremental_detector.pt
-  - models/production/incremental_detection/calibration.json
-  - models/production/incremental_detection/context_prior.json
-  - models/production/incremental_detection/metrics.json
+  - models/production/incremental_detection/four_class_base_detector.pt
+    - models/production/incremental_detection/incremental_detector.pt
+    - models/production/incremental_detection/calibration.json
+    - models/production/incremental_detection/base_context_prior.json
+    - models/production/incremental_detection/incremental_context_prior.json
+    - models/production/incremental_detection/metrics.json
   - models/production/incremental_detection/profile.json
   - models/context/scene_sensor_net.pt
   - models/context/scene_sensor_metrics.json
+  - models/context/scene_selection.json
   - models/manifest.json
   - models/generations.json
   - demo_artifacts/agent_demo_state.json
@@ -352,13 +353,13 @@ blackboard:
   report_md: agent_preparation_report.md
   demo_evidence: demo_artifacts/agent_demo_state.json
 detector:
-  name: three_class_base_yolo11s_imgsz896
-  weights: models/production/incremental_detection/three_class_base_detector.pt
-  config: configs/submission_infer_base_3class.yaml
+  name: four_class_base_yolo26s_imgsz1280
+  weights: models/production/incremental_detection/four_class_base_detector.pt
+  config: configs/submission_infer_base_4class.yaml
   candidate_status: verified
   metric: mAP50
-  base_test_map50: 0.8141423771111025
-  evaluation_split: splits/strict_3plus1/base_test.txt
+  base_test_map50: 0.8875500761448091
+  evaluation_split: splits/strict_4plus2/base_lock.txt
 functional_models:
   registry: configs/functional_models.yaml
   required_count: 3

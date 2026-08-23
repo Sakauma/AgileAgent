@@ -109,6 +109,7 @@ def test_packaged_release_config_and_manifests_are_self_contained() -> None:
 def test_model_manifest_promotes_packaged_ascend_release() -> None:
     manifest = json.loads((ROOT / "models/manifest.json").read_text(encoding="utf-8"))
     releases = manifest["ascend_releases"]
+    assert len(releases) == 1
     release = next(row for row in releases if row["status"] == "production")
 
     assert release["id"] == RELEASE_ID
@@ -124,9 +125,6 @@ def test_model_manifest_promotes_packaged_ascend_release() -> None:
         model_path = ROOT / row["path"]
         assert model_path.is_file()
         assert sha256_file(model_path) == row["sha256"]
-
-    historical = next(row for row in releases if row["id"] == "20260816-full-score-1493b04")
-    assert historical["status"] == "historical"
 
 
 def test_functional_registry_references_current_model_manifest() -> None:

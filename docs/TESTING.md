@@ -1,182 +1,254 @@
-# 测试指南
+<!-- generated-by: gsd-doc-writer -->
+# 测试与验收
 
-AgileAgent 使用 Pytest 覆盖配置、数据、增量生命周期、模型代际、Web API、推理融合和 Ascend 契约。
+AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模型与训练验收、Ascend310B1 板端候选与正式 release 验收。Pytest 测试使用仿真后端和临时文件验证契约；真实 CUDA、ACL、DVPP、CANN 与性能结果由对应硬件上的专用工具验证。
 
-## 完整回归
+## 本次整理的验证状态
 
-```bash
-.venv/bin/python -m pytest -q
-```
+本次工程整理按用户要求没有运行 pytest，也没有重跑 GPU 训练或 Ascend310B 板端评分。本次对测试范围的核对仅包括：
 
-测试数量会随功能增长，提交记录应写明本次实际通过数量，不在本文维护容易过期的固定计数。
+- 盘点 `tests/test_*.py` 中当前存在的收集目标和顶层 `test_*` 节点；
+- 将测试文件与当前 4+2、顺序增量、场景校准、Web/CLI 和 Ascend310B v2 源码入口逐项对应；
+- 扫描文档中的测试路径，并对 `docs/TESTING.md` 执行 `git diff --check`。
 
-## 发布校验
+下文命令是后续代码、模型或发布变更时的标准验收入口，不表示它们已在本次整理中执行。
 
-```bash
-.venv/bin/python scripts/verify_release.py
-```
+## 测试框架与安装
 
-发布校验核对：
+项目使用 `pytest>=8.0`，`pyproject.toml` 将收集根设为 `tests`。测试文件命名为 `test_*.py`，测试函数命名为 `test_*`。仓库没有全局 `conftest.py`，各测试文件直接构造本地 fixture。
 
-- schema 3 主配置；
-- 发布模型路径与 SHA256；
-- `models/manifest.json`；
-- `models/generations.json`；
-- 三个功能模型、Base/Increment 场景先验及其证据；
-- production 类别所有权和指标；
-- 增量检测策略、轮次登记/汇总/晋级源码入口。
-
-当前发布校验状态为 `passed`。
-
-## 模型冒烟
+在 WSL/Linux 仓库根目录使用已配置的 Python 3.10–3.12 环境：
 
 ```bash
-.venv/bin/python scripts/smoke_models.py
+./scripts/bootstrap_x86.sh
+python -m pip install -c constraints-agent.txt -e ".[dev,workbench,inference]"
 ```
 
-该脚本加载 Scene-SensorNet、四类 Base 检测器和二类增量专家，并执行当前 4+2 production 模型组合冒烟。当前编排中，场景头输出 air/forest/sea/urban 已知类概率，Base 与 Increment 都必须执行；配置与推理测试另行覆盖逐类 `soft_threshold_penalty`、固定 owner，以及不使用文件名、标签或场景硬路由的约束。
+`dev` 提供 Pytest 和 TestClient 所需的 `httpx2`，`workbench` 提供 Starlette/Uvicorn/multipart，`inference` 提供 NumPy、OpenCV 和 Ultralytics。`bootstrap_x86.sh` 还会校验 CUDA 版 PyTorch/torchvision 组合。
 
-## 4+2 场景门控证据
+## 默认静态与 CPU 回归
 
-当前 scene-aware production 的证据链位于 `models/production/incremental_detection/evidence/`：
+完整 Pytest 命令是：
 
-- `scene_aware_dev_search.json/.md` 与候选必须声明 `phase: system_calibration`、`counted_as_incremental_learning: false` 和 `detector_weights_updated: false`；
-- `scene_aware_dev_search.json/.md` 记录 mixed dev 上的候选与约束，并明确 `lock_labels_read: false`；
-- `scene_aware_candidate.json` 是由 dev 冻结的 `guarded_precision` 参数；
-- `scene_aware_lock_recheck.json` 记录冻结候选的一次性 mixed lock 复核，并声明 `phase: joint_evaluation` 与 `model_selection_allowed: false`；
-- `base_context_prior.json` 只来自 Base train 正样本，`incremental_context_prior.json` 只来自 Increment train 正样本；
+```bash
+python -m pytest -q
+```
 
-## 4+2 两轮类别增量证据
+这一层不调用真实 GPU 或 Ascend ACL 设备。Ascend async 测试使用 fake runtime/stream/memory，Web 测试使用 fake engine，TensorRT 分支通过 monkeypatch 验证合约。发布权重存在时，部分节点会核对实际文件和登记身份，但不加载模型到加速器。
 
-`configs/incremental_round_registry_4plus2.yaml` 是轮次、类别映射和父子代际的单一来源。发布校验会静态检查：
+静态发布与固定划分验证：
 
-- 至少两轮且每轮注入不同新类别；
-- Round 1/2 的 train/dev/lock 各自非空、互斥，合并后等于固定 Increment 总清单；
-- Scene-SensorNet 明确属于 `system_calibration`，不计入增量学习；
-- 训练和评估入口从注册表读取类别，源码不使用固定 `4/5` 作为协议参数。
+```bash
+python scripts/verify_release.py
+python tools/03_split_r2_4plus2.py --verify-only
+bash -n scripts/*.sh
+git diff --check
+```
 
-实际训练后，每轮 `tools/08_evaluate_4plus2.py` 必须生成 `lineage`、`round_metrics.new_map50/krr/full_map50` 和 `predictions_frozen_before_lock_labels: true`。随后 `tools/13_register_incremental_round_candidate.py` 核对 selection、evaluation、历史专家和父代 owner，只登记 candidate。`tools/12_summarize_incremental_rounds.py` 只在两轮指标及 `models/generations.json` 都满足父子链、模型身份、零旧样本及不同新类别约束时生成完整证据；`tools/10` 缺少该证据时不得晋级。
-- `operating_point_diagnostics.md` 给出逐类 mAP50、TP、FP、precision、recall 和误激活率。
+`scripts/verify_release.py` 加载 schema 3 主配置，核对必需资产、`models/manifest.json`、`models/generations.json`、三个功能模型、当前 production owner/阈值、增量阶段契约与两轮注册表。`--verify-only` 对受控 4+2 train/dev/lock 列表、计数、互斥性和清单做只读核对。
 
-静态发布校验同时检查四阶段范围契约。严格实验档加载器要求当前 schema 的 `calibration.json` 属于 `system_calibration`、不更新检测器权重，并准确声明 Base train、Increment train 与 mixed dev 的用途。参数搜索只允许读取 dev；lock 模式必须接收已冻结 candidate，并在读取 lock 标签前固定候选与模型预测。
+## 当前 Pytest 覆盖范围
 
-## 测试范围
-
-| 范围 | 主要测试 |
-| --- | --- |
-| 配置与 CLI | `test_configuration_runtime.py` |
-| 数据与固定划分 | `test_strict_3plus1_splits.py`、`test_strict_incremental.py` |
-| 增量工作台 | `test_incremental_workbench.py`、`test_incremental_lifecycle_v2.py` |
-| 模型代际 | `test_runtime_maturity.py`、`test_incremental_lifecycle_v2.py` |
-| 推理与融合 | `test_web_inference.py`、`test_incremental_rejection.py`；覆盖 Base/Increment 逐类场景软门控、每图执行与固定 owner |
-| Web API 与 UI | `test_agent_workbench.py`、`test_web_ui_flow.py` |
-| Ascend | `test_ascend_acl.py`、`test_ascend_preflight.py` |
-| Ascend 满分方法 | `test_ascend_full_score_workflow.py`、`test_shared_dual_head.py`、`test_ascend_release.py` |
-| Ascend 预构建发布包 | `test_ascend_packaged_release.py` |
-| 多批次增量 | `test_incremental_guardian.py`、`test_incremental_experiment.py` |
+| 范围 | 当前测试文件 | 主要契约 |
+| --- | --- | --- |
+| 配置、CLI 与运行成熟度 | `test_configuration_runtime.py`、`test_runtime_maturity.py`、`test_agent_workbench.py` | schema/override/脱敏、回环服务、黑板、production 代际、TensorRT 档和发布静态验收 |
+| 4+2 固定划分与评分 | `test_strict_4plus2_splits.py`、`test_strict_incremental.py` | Base/Increment 完整互斥划分、两个不同新类轮次、AP50/KRR 重算、固定 owner 融合和 production profile |
+| 顺序增量生命周期 | `test_incremental_workbench.py`、`test_incremental_lifecycle_v2.py`、`test_incremental_guardian.py` | 数据包审计、自动 lock、父子代际、累积 lock 链、候选重检、提升/回滚与 Base/New/KRR 门禁 |
+| 场景校准与误激活诊断 | `test_incremental_rejection.py`、`test_unlabeled_inference.py`、`test_functional_models.py` | 场景先验来源、软阈值、新类原型/冲突处理、无标签全图推理、Scene-SensorNet 验收和三功能模型注册 |
+| Web 推理和 UI | `test_web_inference.py`、`test_web_ui_flow.py` | 六类映射、内容双证据门控、并行/有序模型执行、批量 ZIP、health、单图/批量 API 和前端交互 |
+| 提交输出安全 | `test_submission_safety.py` | 输出根范围、重复 stem、GPU 设备强制和推理结果计数 |
+| Ascend ACL 与输入/输出 | `test_ascend_acl.py`、`test_ascend_acl_async.py` | `640×512` PNG、AIPP NHWC、`608×736` 检测张量、YOLO26 E2E `[1,300,6]`、async stream 序列与失败恢复 |
+| Ascend 对齐与性能契约 | `test_ascend_alignment.py`、`test_ascend_benchmark.py` | 逐类 IoU 对齐、业务签名硬门禁、DVPP PNG 格式和 20 图 batch FPS 计算 |
+| Ascend310B v2 满分工作流 | `test_ascend_full_score_workflow.py`、`test_ascend_release.py` | `independent_yolo26_e2e_v1`、三 OM 身份、候选 `8502`、三轮 FPS 门禁、候选授权和正式提升 |
+| Ascend310B v2 正式包 | `test_ascend_packaged_release.py` | 31 项完整性清单、release-local 配置/清单、三个 OM、零训练物化、启停默认发布 ID 和提升后证据 |
 
 ## 聚焦运行
 
 单文件：
 
 ```bash
-.venv/bin/python -m pytest -q tests/test_web_inference.py
+python -m pytest -q tests/test_strict_4plus2_splits.py
 ```
 
 单节点：
 
 ```bash
-.venv/bin/python -m pytest -q \
-  tests/test_configuration_runtime.py::test_default_config_loads
+python -m pytest -q \
+  tests/test_strict_incremental.py::test_ap50_and_krr_are_recomputed_from_frozen_prediction_rows
 ```
 
-关键字过滤：
+配置、4+2 划分和增量评分：
 
 ```bash
-.venv/bin/python -m pytest -q -k "generation or incremental"
-```
-
-Ascend 契约：
-
-```bash
-.venv/bin/python -m pytest -q \
-  tests/test_ascend_acl.py \
-  tests/test_runtime_maturity.py
-```
-
-满分方法和候选选择：
-
-```bash
-.venv/bin/python -m pytest -q \
-  tests/test_ascend_full_score_workflow.py \
+python -m pytest -q \
   tests/test_configuration_runtime.py \
-  tests/test_ascend_release.py \
+  tests/test_strict_4plus2_splits.py \
   tests/test_strict_incremental.py
-bash -n scripts/build_ascend_yolo26_e2e_oms.sh
-bash -n scripts/run_ascend310b_score_gate.sh
-bash -n scripts/manage_ascend310b_primary_route.sh
-bash -n scripts/install_ascend310b_primary_services.sh
 ```
 
-克隆后零训练部署包：
+顺序增量、场景校准和无标签运行：
 
 ```bash
-.venv/bin/python -m pytest -q tests/test_ascend_packaged_release.py
-bash -n scripts/materialize_ascend310b_full_score_release.sh
+python -m pytest -q \
+  tests/test_incremental_workbench.py \
+  tests/test_incremental_lifecycle_v2.py \
+  tests/test_incremental_guardian.py \
+  tests/test_incremental_rejection.py \
+  tests/test_unlabeled_inference.py \
+  tests/test_functional_models.py
+```
+
+Web/CLI：
+
+```bash
+python -m pytest -q \
+  tests/test_agent_workbench.py \
+  tests/test_runtime_maturity.py \
+  tests/test_web_inference.py \
+  tests/test_web_ui_flow.py \
+  tests/test_submission_safety.py
+```
+
+Ascend310B v2 的 CPU/契约层：
+
+```bash
+python -m pytest -q \
+  tests/test_ascend_acl.py \
+  tests/test_ascend_acl_async.py \
+  tests/test_ascend_alignment.py \
+  tests/test_ascend_benchmark.py \
+  tests/test_ascend_full_score_workflow.py \
+  tests/test_ascend_release.py \
+  tests/test_ascend_packaged_release.py
+```
+
+## x86/NVIDIA GPU 模型验收
+
+Pytest 通过后，使用 CUDA 加载当前 Base、Incremental 和 Scene-SensorNet 资产：
+
+```bash
+python scripts/smoke_models.py --load-only
+```
+
+拥有完整 4+2 数据根时，增加真实 mixed-lock 场景复核和 Agent 编排冒烟：
+
+```bash
+DATA_ROOT=/path/to/tiaozhanbei_4plus2_dataset_20260821
+python scripts/smoke_models.py --data-root "$DATA_ROOT"
+```
+
+GPU 冒烟必须确认：
+
+- Base/Incremental YOLO26s 权重和 Scene-SensorNet 均加载到 `cuda:<device>`；
+- Base 批量输出数与 `configs/local_infer_gpu.yaml` 中的 `batch` 一致；
+- 当 mixed lock 图像数与参考证据可比时，Scene-SensorNet 的三项指标与当前证据一致；
+- Agent 输出包含当前 generation ID、已执行/跳过协议和融合摘要。
+
+## GPU 训练与顺序增量验收
+
+训练入口使用 `tools/04_train_base_4plus2.py`、`tools/06_train_incremental_4plus2.py` 和 `tools/60_train_scene_sensor.py`。Base 和 Incremental 队列要求每个进程通过 `CUDA_VISIBLE_DEVICES` 只暴露一张物理 GPU，进程内使用 `--device 0`。
+
+训练前只生成/核对数据视图：
+
+```bash
+python tools/04_train_base_4plus2.py --help
+python tools/06_train_incremental_4plus2.py --help
+python tools/60_train_scene_sensor.py \
+  --config configs/scene_sensor_model_4plus2.yaml \
+  --data-root "$DATA_ROOT" \
+  --check-only
+```
+
+完整训练和选模的验收链是：
+
+1. `tools/04_train_base_4plus2.py` 生成多随机种子 Base 队列，`tools/05_select_base_4plus2.py` 仅使用 Base dev 复评并选择权重。
+2. `tools/11_prepare_incremental_round_splits.py` 从类别注册表生成逐轮 split；`tools/06_train_incremental_4plus2.py` 每轮仅读取当轮 Increment train/dev，`tools/07_select_incremental_4plus2.py` 复评当轮专家。
+3. `tools/08_evaluate_4plus2.py` 在读取 lock 标签前冻结预测，输出每轮 New-mAP50、KRR、Full-mAP50 和 lineage。
+4. `tools/13_register_incremental_round_candidate.py` 登记当轮候选，`tools/12_summarize_incremental_rounds.py` 核对两个不同新类的父子代际和累积指标。
+5. `tools/60_train_scene_sensor.py` 与 `tools/61_select_scene_sensor_4plus2.py` 训练/选择封闭集 Scene-SensorNet；`tools/09_optimize_scene_aware_4plus2.py` 先在 dev 冻结候选，再在 lock 模式做一次复核。
+6. `tools/10_promote_scene_aware_4plus2.py` 同时验证候选、dev search、lock result 和顺序 round evidence，通过后更新 production 资产。
+
+训练验收以各 run 的 `args.yaml`、`results.csv`、`weights/best.pt`、队列 summary、selection JSON/Markdown、冻结 predictions 和逐轮 evaluation JSON 为证据。不以“训练进程正常退出”代替 dev 复评、lock 冻结和代际链核对。
+
+## Ascend310B v2 本地静态验证
+
+不连接板卡时，Pytest 契约层覆盖 ACL 假运行时、DVPP/AIPP 输入、YOLO26 E2E 输出、候选与提升 schema、评分门禁和发布包自包含性。包完整性的独立检查命令是：
+
+```bash
 (
   cd models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2
   sha256sum -c SHA256SUMS
 )
 ```
 
-该测试核对完整文件清单、全部 SHA256、正式配置到 OM/manifest/report 的路径映射、满分指标、`ready_without_training` 标记和物化脚本的端口无副作用。它不加载 PyTorch、不连接板卡，也不重新运行 ATC。
+这一层只复核已提交的 31 项文件、release-local 路径、配置、清单和验证报告，不调用 ACL、ATC 或板端性能测量。
 
-### 满分工作流覆盖范围
+## Ascend310B v2 板端验收
 
-| 契约 | 覆盖内容 |
-| --- | --- |
-| 方法配置 | schema、参考指标、无绝对板端路径、训练/导出/运行时/评分协议 |
-| 训练 | Base/Increment 阶段分离、Base 冻结、轮次注册和增量数据隔离 |
-| 导出和构建 | 两个 YOLO26 E2E `[1,300,6]` 输出、owner/class map、CANN/AIPP/ATC 与资产身份 |
-| 候选生成 | `8501` 保护、强制 `8502`、哈希不匹配拒绝、`validated: false` |
-| 评分 | score schema v2、benchmark schema v5、三项精度和三轮 batch FPS |
-| 选择器 | 四项门禁、诊断项不阻断、确定性排名、无满分候选分支 |
-| 正式物化 | `tools/111`、release-local 资产、验证摘要、诊断项不阻断 |
-| 内容执行门控 | 真实 Scene、Base 类 1 双证据、标签/文件名禁用、候选代际注入 |
-| 仓库发布包 | 三个 OM 及 ONNX/checkpoint/AIPP/ATC/报告齐全、固定 release 路径、零训练物化和端口无副作用 |
-| 原子提升/回滚 | main/rollback/route 三个 unit、精确路由、失败自动撤销和 `8502` 保留 |
-
-评分报告的阻断边界：
-
-- `competition_gates` 只包含 Base mAP50、New-mAP50 和 KRR；
-- benchmark 只用三轮 20 图 batch 的中位 FPS 作为性能门禁；
-- `diagnostic_warnings` 可以包含逐框/业务 JSON、precision、误激活率、Scene/Sensor 或单请求时延问题，但不得改变 `full_score`；
-- `predictions_frozen_before_labels`、增量数据隔离、Base 零漂移和资产哈希属于有效性前置条件，失败时结果无效。
-
-### 本机与板端测试边界
-
-| 环境 | 执行内容 | 禁止事项 |
-| --- | --- | --- |
-| WSL 现有 `.venv` | Pytest、Ruff、配置/文档/哈希校验、训练与 ONNX 导出 | 不安装依赖，不下载 CPU PyTorch |
-| 新 310B（环境已配置） | 校验仓库模型包、物化 release、运行 `tools/95 --require-validation`、启动 health/冒烟 | 不训练，不运行 ATC，不安装依赖 |
-| Ascend 候选 `8502` | 探针、无标签预测冻结、三项精度评分、30 次预热、三轮 20 图 batch | 不运行 Web pytest，不停止或替换 `8501` |
-| 正式公共 `8501` | 检查 `/api/health` 的 `validated/model_layout/context_mode`，执行发布后 `30 + 3×20` batch | 不直接停止旧监听器，不把 `8502` 纳入正式路由 |
-
-正式板端还应确认 `8501` 回滚 listener、`18501` 4+2 主实例和三个 systemd unit 同时存在；公共 `8501` 健康请求应经精确路由返回 `independent_yolo26_e2e_v1`、`context_mode:model` 身份。执行 `manage_ascend310b_primary_route.sh remove 18501` 时应恢复旧服务，重新 `apply` 后回到主线。正式验收不需要在板端运行 Web pytest。
-
-板端输入必须是评分目录根层的 `640×512`、8-bit 灰度/RGB/RGBA PNG，stem 唯一。任一输入契约、CANN 版本、候选端口或 manifest 哈希不一致时，score gate 在正式测量前停止并保留已有报告。
-
-## 测试夹具
-
-测试使用 `tmp_path` 创建临时配置、注册表、批次目录和模型占位文件；使用 Pillow 生成小型 PNG；使用 ZIP 构造增量上传包；使用假引擎验证 Web 与代际切换。所有测试状态保留在测试临时目录中。
-
-## 本地发布门禁
-
-仓库不启用 GitHub Actions。发布前必须在 WSL 仓库现有 `.venv` 中执行完整回归与发布校验，不安装依赖，也不下载 CPU 版 PyTorch：
+板端验收在已配置 CANN `7.0.RC1` 和 `/usr/local/miniconda3/envs/agileagent` 的 Ascend310B1 上执行。首次物化与已有 release 只读复核分别使用：
 
 ```bash
-.venv/bin/python -m pytest -q
-.venv/bin/python scripts/verify_release.py
+./scripts/materialize_ascend310b_full_score_release.sh
+./scripts/materialize_ascend310b_full_score_release.sh --verify-existing
 ```
 
-模型冒烟、Ascend 包哈希和 Shell 语法检查仍按本文前述流程执行；本地验证记录是发布判断依据。
+物化脚本会检查预构建包，复制受控源码/资产，并执行正式 release 验证器。也可在 release 目录上直接复核：
+
+```bash
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
+  /usr/local/miniconda3/envs/agileagent/bin/python \
+  "$RELEASE/src/tools/95_verify_ascend_release.py" \
+  --config "$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
+  --require-validation
+```
+
+`tools/95_verify_ascend_release.py` 核对 release build manifest、Base/Incremental/Scene 三个 OM、`independent_yolo26_e2e_v1`、`context_mode=model`、冻结预测、精度报告和性能报告的身份链。
+
+服务启动后检查正式主实例和公共入口：
+
+```bash
+curl -fsS http://127.0.0.1:18501/api/health
+curl -fsS http://127.0.0.1:8501/api/health
+curl -fsS -F "file=@sample.png;type=image/png" \
+  http://127.0.0.1:8501/api/detect
+```
+
+health 必须报告 `status=ready`、`backend=ascend_acl`、`device=ascend:0`、`validated=true`、`validation_candidate=false`、`model_layout=independent_yolo26_e2e_v1`、`context_mode=model` 和当前 4+2 production generation ID。
+
+新候选的完整 score gate 入口是：
+
+```bash
+./scripts/run_ascend310b_score_gate.sh \
+  "$CANDIDATE_CONFIG" \
+  "$IMAGE_ROOT" \
+  "$MIXED_SPLIT" \
+  "$BASE_SPLIT" \
+  "$OUTPUT_DIR"
+```
+
+该 gate 在 `8502` 启动受控候选，冻结无标签预测，计算 Base mAP50、New-mAP50、KRR，并执行 30 次预热和三轮 20 图 batch FPS。执行前后正式 `8501` 都必须 ready，输入必须是根目录内 stem 唯一的 `640×512`、8-bit 灰度/RGB/RGBA PNG。
+
+## 编写新测试
+
+- 在 `tests/test_<area>.py` 中添加职责单一的 `test_<behavior>` 函数。
+- 使用 `tmp_path` 复制配置、注册表和证据后再做变异测试，不修改仓库内 production 文件。
+- 使用 `monkeypatch` 替换子进程、TensorRT/Ultralytics 模块和引擎；Ascend 单元测试扩展现有 fake ACL runtime，不要求开发机安装 CANN。
+- Web 路由使用 `starlette.testclient.TestClient` 与 fake engine；图像使用 Pillow 在内存中生成。
+- 多个合法/非法契约变体使用 `pytest.mark.parametrize`，错误边界使用 `pytest.raises(..., match=...)` 核对。
+- 涉及 lock 的测试先冻结候选与预测，再读取 lock 标签；顺序增量节点从 `configs/incremental_round_registry_4plus2.yaml` 读取轮次和类别。
+
+## 覆盖率要求
+
+仓库没有 `.coveragerc`、`pytest-cov` 依赖或 `coverageThreshold` 配置，因此当前没有自动化覆盖率百分比门禁。验收以契约测试、静态发布校验、GPU 模型冒烟和板端 score gate 为准。
+
+| 类型 | 最低覆盖率 |
+| --- | --- |
+| Lines | 未配置 |
+| Branches | 未配置 |
+| Functions | 未配置 |
+| Statements | 未配置 |
+
+## CI 集成
+
+仓库当前没有 `.github/workflows/` 或其他受版本控制的 CI 工作流，因此不会在 push 或 Pull Request 上自动运行测试。默认回归在 WSL/Linux 环境手动执行，GPU 和 Ascend310B 验收分别在对应硬件上记录产物和报告。

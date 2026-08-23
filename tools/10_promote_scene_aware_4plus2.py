@@ -1407,8 +1407,7 @@ def main() -> int:
         "Base 与截至当前轮的注册专家对每张图并行推理，类别 owner 保持固定。",
         "六类逐类阈值和场景惩罚只由 mixed dev 选择；线上只读取 Scene-SensorNet 概率，不读取文件名或标签。",
         "precision 与误激活率是非阻断诊断；当前场景感知运行点已显著改善二者。",
-        "仓库不包含竞赛数据集和标签。",
-        "Ascend 3+1 不可变包仅为历史板端发布；当前 4+2 场景感知策略尚未转换为 OM。",
+        "Ascend310B v2 使用独立四类 Base、二类 Specialist 与 Scene-SensorNet 三个 OM，并由内容门控调度增量专家。",
     ]
     atomic_json(manifest_path, manifest)
     new_manifest_hash = sha256_file(manifest_path)

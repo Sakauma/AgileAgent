@@ -3,7 +3,7 @@
   "kind": "ascend310b_full_score_primary_release",
   "release_root": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2",
   "config": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/configs/agent_pipeline_ascend310b.yaml",
-  "config_sha256": "0771953527e606e83133013ce48cd59513508e75b89f653f7b42e165b12995a8",
+  "config_sha256": "8f6ca9682e5ca42c8f914606cf608eb6068a0e111590fdfd5c5153b1ff773204",
   "public_port": 8501,
   "internal_port": 18501,
   "candidate_port_reserved": 8502,
@@ -16,26 +16,26 @@
   "repeat_batch_fps": [
     39.424403705893944
   ],
-  "build_manifest_sha256": "35385da4ad3365eaa847e590814ef1af0f835e11071ad08e79680d15ebb11eda",
-  "validation_report_sha256": "5b670ff9db458cf05e1feffd677a2aef161ac2e8b91d3598b470295ed1d3dc8f",
+  "build_manifest_sha256": "ff443710df7a2a9f5cd7b10c0247b1e19dc324dc099db10f084244ea811a5d8b",
+  "validation_report_sha256": "e2d210bf4e263abb523eaabf30633123a05de7b53608c588614c460a57a90671",
   "verification": {
     "status": "passed",
     "errors": [],
     "build_manifest": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/release-build-manifest.json",
-    "build_manifest_sha256": "35385da4ad3365eaa847e590814ef1af0f835e11071ad08e79680d15ebb11eda",
+    "build_manifest_sha256": "ff443710df7a2a9f5cd7b10c0247b1e19dc324dc099db10f084244ea811a5d8b",
     "artifact_count": 3,
     "validation_required": true,
     "validation_summary": {
       "schema_version": 1,
       "kind": "ascend310b_full_score_release_validation",
-      "build_manifest_sha256": "35385da4ad3365eaa847e590814ef1af0f835e11071ad08e79680d15ebb11eda",
+      "build_manifest_sha256": "ff443710df7a2a9f5cd7b10c0247b1e19dc324dc099db10f084244ea811a5d8b",
       "method_config": {
         "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/full_score_method.yaml",
         "sha256": "f204dd70d64182069e383c3c1331f5f32a0dfae1522ecf0ff35c5361163301ee"
       },
       "source_candidate": {
         "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/candidate-8502.yaml",
-        "sha256": "b691cec5bf5793ae4eb6601f7359d3a4d51bb92dc2dbf75402f8a9cc2720c972"
+        "sha256": "d1907d951c13eedb32281c1e7f727c01b5cad6f29e9d7ef6fe59dfa023b8ae93"
       },
       "accuracy": {
         "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/validation/score.json",
@@ -49,14 +49,14 @@
       },
       "performance": {
         "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark.json",
-        "sha256": "9e72fd07907d226ee59375b99bc6e4b7be3fa05f55cd5285ae561379c124cc0a",
+        "sha256": "fda6fcf1fdd719a498b4280440b9717f71721154d6299d4d5deb1e68bab3c483",
         "passed": true,
         "batch_fps": 39.34684241589613
       },
       "repeat_performance": [
         {
           "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-repeat-1.json",
-          "sha256": "1990a5e8fb61f789c48948deb5ffcf524de9165181048f2bddad8372365f14fd",
+          "sha256": "9021b52679b6d7cf16ae3f3bbb0d127ddb07d0221cabbf3bed01a339043082cc",
           "passed": true,
           "batch_fps": 39.424403705893944
         }

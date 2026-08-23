@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # 增量学习数据与评测契约
 
 本文件定义赛题报告、配置和发布证据共同使用的正式术语。`incremental_learning` 只指新类别检测器的训练及新类专属学习；Scene-SensorNet 训练、场景先验学习、六类门控搜索和联合评分不属于增量学习。
@@ -70,7 +71,7 @@ Scene-SensorNet、六类场景先验、门控阈值、场景惩罚、融合参�
 
 当前 production 由四类冻结 Base 检测器、二类增量专家和 Scene-SensorNet 组成。Base 固定负责全局类 `0–3`，增量专家固定负责全局类 `4–5`。两个检测器对每张图都执行；场景概率只软调节逐类有效阈值，不改变类别 owner，也不做硬路由。
 
-该 production 是已经通过六类指标的“一次联合训练二类专家”基线，继续保留并正常部署，但不冒充两轮顺序类别注入证据。严格两轮候选完成训练、逐轮冻结评估和晋级前，不覆盖该 production，也不改写其历史指标。
+当前 production 是已经通过六类指标的联合二类专家正式版本。两轮顺序类别注入作为独立的合规证据链运行；候选完成逐轮训练、冻结评估、登记和晋级后，再按正式发布流程替换 production。
 
 ## 机器可读规则
 
@@ -87,4 +88,4 @@ models/candidates/incremental_detection/<generation_id>/registration.json
 models/production/incremental_detection/evidence/sequential_round_evidence.json
 ```
 
-新产物使用 `phase`、`counted_as_incremental_learning`、`detector_weights_updated`、`round_id`、`parent_generation_id` 和 `generation_id` 显式声明阶段与代际。旧版 3+1 证据仅作为归档兼容；现有联合二类 4+2 production 只作为性能基线，不作为两轮顺序注入证据。
+新产物使用 `phase`、`counted_as_incremental_learning`、`detector_weights_updated`、`round_id`、`parent_generation_id` 和 `generation_id` 显式声明阶段与代际。联合二类 4+2 production 记录当前部署性能；两轮顺序注入产物记录逐类增量合规证据。

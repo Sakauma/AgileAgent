@@ -13,7 +13,6 @@ from fair_agent.backends.ascend_acl import (
     ACL_MEMCPY_HOST_TO_DEVICE,
     AscendAclModel,
     AscendAclRuntime,
-    decoded_output_copy_plan,
 )
 
 
@@ -367,101 +366,6 @@ def test_pinned_async_execution_enqueues_all_work_before_single_wait() -> None:
     assert runtime.acl.operations.index("free_host") < runtime.acl.operations.index(
         "unload_model"
     )
-
-
-def _decoded_output_specs() -> list[tuple[list[int], int]]:
-    return [
-        ([2, 4], 0),
-        ([2], 0),
-        ([2], 3),
-        ([2], 3),
-        ([1], 3),
-        ([1], 3),
-        ([1, 5, 2], 0),
-    ]
-
-
-def _set_decoded_payloads(runtime: FakeRuntime, *, overflow: int) -> None:
-    arrays = [
-        np.zeros((2, 4), dtype=np.float32),
-        np.asarray([0.9, 0.8], dtype=np.float32),
-        np.asarray([0, 0], dtype=np.int32),
-        np.asarray([0, 1], dtype=np.int32),
-        np.asarray([2], dtype=np.int32),
-        np.asarray([overflow], dtype=np.int32),
-        np.zeros((1, 5, 2), dtype=np.float32),
-    ]
-    runtime.acl.mdl.output_payloads = {
-        index: array.tobytes() for index, array in enumerate(arrays)
-    }
-
-
-def test_conditional_output_copy_stages_metadata_then_candidates() -> None:
-    runtime, model = create_model(output_specs=_decoded_output_specs())
-    _set_decoded_payloads(runtime, overflow=0)
-    plan = decoded_output_copy_plan(0.5, candidate_confidence=0.01)
-
-    handle = model.submit(
-        np.asarray([[1, 2, 3, 4]], dtype=np.uint8),
-        plan,
-    )
-    assert runtime.acl.operations.count("memcpy_async_d2h") == 2
-    _outputs, timings = handle.result()
-
-    assert timings["output_copy_mode"] == "decoded_candidates"
-    assert timings["copied_output_indices"] == (4, 5, 0, 1, 2, 3)
-    assert runtime.acl.operations.count("memcpy_async_d2h") == 6
-    assert runtime.acl.rt.synchronize_event_calls == 2
-    model.close()
-
-
-def test_conditional_output_copy_uses_raw_on_overflow_or_low_threshold() -> None:
-    runtime, model = create_model(output_specs=_decoded_output_specs())
-    _set_decoded_payloads(runtime, overflow=1)
-    overflow_plan = decoded_output_copy_plan(0.5, candidate_confidence=0.01)
-
-    _outputs, timings = model.submit(
-        np.asarray([[1, 2, 3, 4]], dtype=np.uint8),
-        overflow_plan,
-    ).result()
-    assert timings["output_copy_mode"] == "raw_fallback"
-    assert timings["copied_output_indices"] == (4, 5, 6)
-    assert runtime.acl.operations.count("memcpy_async_d2h") == 3
-    model.close()
-
-    runtime, model = create_model(output_specs=_decoded_output_specs())
-    _set_decoded_payloads(runtime, overflow=0)
-    low_threshold_plan = decoded_output_copy_plan(
-        0.001,
-        candidate_confidence=0.01,
-    )
-    _outputs, timings = model.submit(
-        np.asarray([[1, 2, 3, 4]], dtype=np.uint8),
-        low_threshold_plan,
-    ).result()
-    assert timings["output_copy_mode"] == "raw_fallback"
-    assert timings["copied_output_indices"] == (6,)
-    assert runtime.acl.operations.count("memcpy_async_d2h") == 1
-    assert runtime.acl.rt.synchronize_event_calls == 1
-    model.close()
-
-
-def test_threaded_conditional_output_copy_never_copies_raw_on_normal_path() -> None:
-    runtime, model = create_model(
-        schedule_mode="threaded_execute",
-        output_specs=_decoded_output_specs(),
-    )
-    _set_decoded_payloads(runtime, overflow=0)
-
-    _outputs, timings = model.execute_threaded(
-        np.asarray([[1, 2, 3, 4]], dtype=np.uint8),
-        decoded_output_copy_plan(0.5, candidate_confidence=0.01),
-    )
-
-    assert timings["output_copy_mode"] == "decoded_candidates"
-    assert timings["copied_output_indices"] == (4, 5, 0, 1, 2, 3)
-    assert runtime.acl.operations.count("memcpy_d2h") == 6
-    model.close()
 
 
 def test_preloaded_execution_waits_on_ready_event_without_h2d() -> None:

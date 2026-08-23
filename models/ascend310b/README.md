@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # Ascend 310B 预构建模型
 
 当前活动包是 [`full-score/20260823-4plus2-yolo26-content-gate-v2/`](full-score/20260823-4plus2-yolo26-content-gate-v2/README.md)。它包含已经在 Ascend310B1 公共 `8501` 上完成部署后复验的 4+2 三-OM release，可直接零训练物化。
@@ -8,7 +9,7 @@
 - 二类增量 YOLO26s OM：`patrol_boat/armored_vehicle`；
 - Scene-SensorNet OM：真实场景与 IR/SAR 概率；
 - 双证据执行门控：只有空域概率和 Base 小型飞行器检测同时成立才跳过增量专家；
-- 正式公共 `8501` 经原子路由进入内部 `18501`，旧 listener 保留为回滚，`8502` 保留给候选。
+- 正式公共 `8501` 经原子路由进入内部 `18501`，回滚 listener 保留，`8502` 用于候选验证。
 
 零训练部署：
 
@@ -23,5 +24,3 @@ AGILE_AGENT_ASCEND_PORT=8501 \
 ```
 
 活动包的 Base mAP50、New-mAP50、KRR 分别为 `0.825671/0.618859/1.0`；公共 `8501` 两轮 `30 + 3×20` 的中位 FPS 为 `39.573/39.588`。完整证据和部署边界见 [`docs/ascend-310b-current-status.md`](../../docs/ascend-310b-current-status.md)。
-
-`full-score/20260816-full-score-1493b04/` 是旧 3+1 共享双头历史发布，不再是 production 指针，仅保留复盘与兼容参考。

@@ -58,4 +58,4 @@ AGILE_AGENT_ASCEND_PORT=8501 \
   "$RELEASE/src/scripts/start_agent_ascend310b.sh"
 ```
 
-物化脚本不训练、不导出 ONNX、不运行 ATC、不升级 CANN，也不自动修改服务端口。已有旧 listener 的板应按 [`docs/ascend-310b-deployment.md`](../../../../docs/ascend-310b-deployment.md) 使用 `18501` 主实例、`8501` 回滚 listener 和原子路由。
+物化脚本不训练、不导出 ONNX、不运行 ATC、不升级 CANN，也不自动修改服务端口。配置了回滚 listener 的板按 [`docs/ascend-310b-deployment.md`](../../../../docs/ascend-310b-deployment.md) 使用 `18501` 主实例、`8501` 回滚 listener 和原子路由。

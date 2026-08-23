@@ -124,10 +124,10 @@ def main() -> int:
     )
     parser.add_argument("--predictions", type=Path, required=True)
     parser.add_argument(
-        "--mixed-split", type=Path, default=Path("splits/strict_3plus1/mixed_test.txt")
+        "--mixed-split", type=Path, default=Path("splits/strict_4plus2/mixed_lock.txt")
     )
     parser.add_argument(
-        "--base-split", type=Path, default=Path("splits/strict_3plus1/base_test.txt")
+        "--base-split", type=Path, default=Path("splits/strict_4plus2/base_lock.txt")
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
@@ -136,16 +136,12 @@ def main() -> int:
         default=ROOT / "configs/ascend310b/full_score_method.yaml",
     )
     parser.add_argument("--expected-images", type=int, default=89)
-    parser.add_argument("--old-class-ids", type=parse_class_ids, default=[0, 1, 3])
+    parser.add_argument("--old-class-ids", type=parse_class_ids, default=[0, 1, 2, 3])
     parser.add_argument(
         "--new-class-ids",
         type=parse_class_ids,
-        help="逗号分隔的新增类ID；4+2使用4,5。",
-    )
-    parser.add_argument(
-        "--new-class-id",
-        type=int,
-        help="兼容旧3+1调用；不能与--new-class-ids同时使用。",
+        default=[4, 5],
+        help="逗号分隔的新增类ID。",
     )
     args = parser.parse_args()
 
@@ -154,13 +150,7 @@ def main() -> int:
     if args.expected_images <= 0:
         raise ValueError("expected-images必须为正整数。")
     old_ids = [int(value) for value in args.old_class_ids]
-    if args.new_class_ids is not None and args.new_class_id is not None:
-        raise ValueError("--new-class-ids与--new-class-id不能同时使用。")
-    new_ids = (
-        [int(value) for value in args.new_class_ids]
-        if args.new_class_ids is not None
-        else [int(args.new_class_id) if args.new_class_id is not None else 2]
-    )
+    new_ids = [int(value) for value in args.new_class_ids]
     if set(new_ids) & set(old_ids):
         raise ValueError("new-class-ids不能与old-class-ids重叠。")
 

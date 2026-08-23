@@ -104,12 +104,7 @@ if (
     raise RuntimeError("候选配置的布局/context/CANN/验证状态与满分方法不一致")
 print(ascend["build_manifest"])
 layout = ascend["model_layout"]
-if layout == "shared_backbone_dual_head_v1":
-    model = next(iter(ascend["models"].values()))
-    heads = model["logical_heads"]
-    old_map = heads["old"]["class_map"]
-    new_map = heads["new"]["class_map"]
-elif layout == "independent_yolo26_e2e_v1":
+if layout == "independent_yolo26_e2e_v1":
     models = ascend["models"]
     base_rows = [
         row for key, row in models.items()
@@ -273,7 +268,7 @@ fi
 cd "$ROOT"
 
 # Freeze in a short-lived isolated engine first. Starting the HTTP candidate
-# afterwards avoids loading the same dual-head OM twice during prediction.
+# afterwards avoids loading the detector OMs twice during prediction.
 ENCODED_FLAG=()
 if [[ "$ENCODED" == "1" ]]; then
   ENCODED_FLAG=(--encoded)
@@ -319,7 +314,6 @@ health_ready "$CANDIDATE_URL" || { printf '候选8502未在120秒内ready。\n' 
 
 "$PYTHON" tools/97_benchmark_ascend_api.py \
   --base-url "$CANDIDATE_URL" \
-  --official-url "$OFFICIAL_URL" \
   --image-root "$IMAGE_ROOT" \
   --output "$OUTPUT_DIR/benchmark.json" \
   --confidence "$SCORING_CONFIDENCE" \

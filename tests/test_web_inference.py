@@ -109,21 +109,18 @@ def test_content_execution_gate_filters_only_double_evidence_route() -> None:
     assert decisions[0]["skip_specialist"] is True
 
 
-def test_shared_dual_head_dvpp_skips_physical_specialist_lookup() -> None:
+def test_active_specialist_backends_follow_available_protocols() -> None:
     protocols = {"incremental_detector": {"available": True}}
-
-    assert _active_specialist_backends(
-        protocols,
-        {},
-        shared_dual_head=True,
-    ) == []
-
     backend = object()
+
     assert _active_specialist_backends(
         protocols,
         {"incremental_detector": backend},
-        shared_dual_head=False,
     ) == [backend]
+    assert _active_specialist_backends(
+        {"incremental_detector": {"available": False}},
+        {"incremental_detector": backend},
+    ) == []
 
 
 def test_p5_ordered_model_groups_separate_submit_and_collect_order() -> None:
@@ -219,32 +216,6 @@ def test_encoded_batch_rejects_invalid_input_before_queue(rows, message) -> None
     engine.queue = FailQueue()
     with pytest.raises(ValueError, match=message):
         engine.predict_encoded_batch(rows)
-
-
-def test_shared_dual_head_batch_uses_single_image_orchestration_path() -> None:
-    engine = WebInferenceEngine.__new__(WebInferenceEngine)
-    engine.shared_dual_head = True
-    calls = []
-
-    def predict_unlocked(image, filename, confidence, protocol):
-        calls.append((image.size, filename, confidence, protocol))
-        return {"filename": filename}
-
-    engine._predict_unlocked = predict_unlocked
-    results = engine._predict_batch_unlocked(
-        [
-            (Image.new("RGB", (10, 20)), "one.png"),
-            (Image.new("RGB", (30, 40)), "two.png"),
-        ],
-        0.37,
-        "auto",
-    )
-
-    assert calls == [
-        ((10, 20), "one.png", 0.37, "auto"),
-        ((30, 40), "two.png", 0.37, "auto"),
-    ]
-    assert results == [{"filename": "one.png"}, {"filename": "two.png"}]
 
 
 def test_p5_ordered_model_groups_drain_after_collection_failure() -> None:
@@ -529,7 +500,7 @@ def test_specialist_candidates_require_spatial_consensus() -> None:
 
 def test_class_incremental_route_does_not_require_base_same_class() -> None:
     protocols = {
-        "p05_new_vehicle": {
+        "round_01_patrol_boat": {
             "available": True,
             "incremental_mode": "class_incremental",
             "global_class_id": 4,
@@ -546,8 +517,8 @@ def test_class_incremental_route_does_not_require_base_same_class() -> None:
         {0, 1, 2, 3},
         *ROUTING_ARGS,
     )
-    assert [item["id"] for item in eligible] == ["p05_new_vehicle"]
-    assert [item["id"] for item in executed] == ["p05_new_vehicle"]
+    assert [item["id"] for item in eligible] == ["round_01_patrol_boat"]
+    assert [item["id"] for item in executed] == ["round_01_patrol_boat"]
     assert skipped == []
 
 
@@ -587,7 +558,7 @@ def test_target_incremental_route_requires_base_class_but_not_scene_match() -> N
         "context_prior": {"scene": {"sea": 1.0, "urban": 0.0}},
     }
     eligible, executed, skipped = plan_specialist_routes(
-        {"p02": protocol},
+        {"warship_refresh": protocol},
         [{"class_id": 2, "confidence": 0.9, "xyxy": [1, 1, 2, 2]}],
         {"scene_probabilities": {"sea": 0.0, "urban": 1.0}},
         {0, 1, 2, 3},
@@ -598,16 +569,16 @@ def test_target_incremental_route_requires_base_class_but_not_scene_match() -> N
     assert skipped == []
 
     _eligible, _executed, skipped = plan_specialist_routes(
-        {"p02": protocol}, [], {}, {0, 1, 2, 3}, *ROUTING_ARGS
+        {"warship_refresh": protocol}, [], {}, {0, 1, 2, 3}, *ROUTING_ARGS
     )
-    assert skipped == [{"id": "p02", "reason": "base_class_not_detected"}]
+    assert skipped == [{"id": "warship_refresh", "reason": "base_class_not_detected"}]
 
 
 def test_fusion_preserves_unmatched_base_and_removes_same_class_duplicate() -> None:
     rows = [
         {"class_id": 2, "class_name": "warship", "confidence": 0.80, "xyxy": [0, 0, 20, 20], "source": "frozen_base_model"},
         {"class_id": 2, "class_name": "warship", "confidence": 0.70, "xyxy": [40, 40, 60, 60], "source": "frozen_base_model"},
-        {"class_id": 2, "class_name": "warship", "confidence": 0.90, "xyxy": [1, 1, 19, 19], "source": "incremental_model", "protocol_id": "p02"},
+        {"class_id": 2, "class_name": "warship", "confidence": 0.90, "xyxy": [1, 1, 19, 19], "source": "incremental_model", "protocol_id": "warship_refresh"},
     ]
     fused, summary = class_aware_nms(rows, 0.60)
     assert len(fused) == 2
@@ -741,7 +712,7 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     engine.parallel_model_execution = False
     engine.parallel_context_execution = False
     engine.context_stream = None
-    engine.class_names = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank", 4: "new_vehicle"}
+    engine.class_names = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank", 4: "patrol_boat"}
     engine.base_class_ids = {0, 1, 2, 3}
     engine.base_local_to_global = {0: 0, 1: 1, 2: 2, 3: 3}
     engine.base_local_names = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
@@ -753,7 +724,7 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     )
     specialist_results = {
         "target.pt": DynamicResult([([1, 1, 19, 19], 0.95, 0)]),
-        "new.pt": DynamicResult([([70, 70, 90, 90], 0.88, 0)]),
+        "patrol.pt": DynamicResult([([70, 70, 90, 90], 0.88, 0)]),
     }
     created_specialists = {}
 
@@ -767,20 +738,20 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     engine.native_options = {}
     engine.specialist_detectors = {}
     engine.incremental_protocols = {
-        "p05_new_vehicle": {
+        "round_01_patrol_boat": {
             "available": True,
             "incremental_mode": "class_incremental",
             "global_class_id": 4,
-            "class_name": "new_vehicle",
+            "class_name": "patrol_boat",
             "activation_threshold": 0.63,
             "calibration_source": "incremental_val/calibration.json",
             "routing_prior": 0.8,
             "context_prior": {},
-            "weights": "new.pt",
+            "weights": "patrol.pt",
             "new_map50": 0.8,
             "krr": 0.95,
         },
-        "p02_warship": {
+        "warship_refresh": {
             "available": True,
             "incremental_mode": "target_incremental",
             "global_class_id": 2,
@@ -796,11 +767,11 @@ def test_full_engine_auto_route_activates_true_new_class_and_preserves_base(monk
     engine.queue = FairInferenceQueue()
 
     result = engine.predict(Image.new("RGB", (100, 100)), "sample.png", 0.5, "auto")
-    assert result["class_counts"] == {"new_vehicle": 1, "warship": 2}
-    assert result["agent"]["decision"]["executed_protocols"] == ["p05_new_vehicle", "p02_warship"]
+    assert result["class_counts"] == {"patrol_boat": 1, "warship": 2}
+    assert result["agent"]["decision"]["executed_protocols"] == ["round_01_patrol_boat", "warship_refresh"]
     assert result["agent"]["decision"]["fusion_summary"]["suppressed_count"] == 1
     assert all("fusion_status" in item for item in result["detections"])
-    assert created_specialists["new.pt"].calls[0]["conf"] == 0.5
+    assert created_specialists["patrol.pt"].calls[0]["conf"] == 0.5
 
 
 def test_ascend_async_path_submits_three_models_before_collecting_results() -> None:
@@ -883,11 +854,11 @@ def test_ascend_async_path_submits_three_models_before_collecting_results() -> N
     engine.parallel_model_execution = True
     engine.parallel_context_execution = True
     engine.context_stream = None
-    engine.class_names = {0: "soldier", 4: "new_vehicle"}
+    engine.class_names = {0: "soldier", 4: "patrol_boat"}
     engine.base_class_ids = {0}
     engine.base_local_to_global = {0: 0}
     engine.base_local_names = {0: "soldier"}
-    engine.class_owners = {0: "test_base_model", 4: "p05_new_vehicle"}
+    engine.class_owners = {0: "test_base_model", 4: "round_01_patrol_boat"}
     engine.unified_class_gates = {}
     engine.backend_name = "ascend_acl"
     engine.native_options = {
@@ -908,7 +879,7 @@ def test_ascend_async_path_submits_three_models_before_collecting_results() -> N
         },
     )
     engine.specialist_detectors = {
-        "p05_new_vehicle": AsyncDetector(
+        "round_01_patrol_boat": AsyncDetector(
             "specialist",
             specialist_result,
             {
@@ -920,12 +891,12 @@ def test_ascend_async_path_submits_three_models_before_collecting_results() -> N
         )
     }
     engine.incremental_protocols = {
-        "p05_new_vehicle": {
+        "round_01_patrol_boat": {
             "available": True,
             "incremental_mode": "class_incremental",
             "global_class_id": 4,
             "local_to_global": {0: 4},
-            "class_name": "new_vehicle",
+            "class_name": "patrol_boat",
             "activation_threshold": 0.63,
             "calibration_source": "incremental_val/calibration.json",
             "routing_prior": 0.8,

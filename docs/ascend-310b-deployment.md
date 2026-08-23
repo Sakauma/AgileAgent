@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # Ascend 310B 部署实现
 
 截至 2026-08-23，Ascend310B1 production 是 4+2 独立 YOLO26s 三-OM release：
@@ -6,7 +7,7 @@
 /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
 ```
 
-它已经完成 ATC 转换、候选评分、独立复跑、正式提升以及公共 `8501` 两轮部署后复验。旧三-OM listener 仍物理监听 `8501`，只承担即时回滚；公共请求由一条精确 loopback NAT 规则进入 `18501` 主实例，`8502` 保留给后续候选。
+它已经完成 ATC 转换、候选评分、独立复跑、正式提升以及公共 `8501` 两轮部署后复验。回滚 listener 物理监听 `8501`；公共请求由一条精确 loopback NAT 规则进入 `18501` 主实例，`8502` 保留给候选。
 
 ## 正式运行结构
 
@@ -46,7 +47,7 @@
 | --- | --- | --- |
 | 公共入口 | `127.0.0.1:8501` | 精确路由到主实例 |
 | 4+2 主实例 | `127.0.0.1:18501` | `independent_yolo26_e2e_v1` |
-| 回滚 listener | 物理监听 `127.0.0.1:8501` | 旧三-OM 服务，正常被路由旁路 |
+| 回滚 listener | 物理监听 `127.0.0.1:8501` | 正常被主线路由旁路 |
 | 候选 | `127.0.0.1:8502` | 正式状态下无 listener |
 
 三个 unit：
@@ -57,7 +58,7 @@ agileagent-ascend310b-rollback.service
 agileagent-ascend310b-route.service
 ```
 
-正式提升不终止回滚 listener。删除唯一带 `AGILE_AGENT_ASCEND310B_PRIMARY` comment 的规则后，新连接会直接进入旧 listener。
+正式提升不终止回滚 listener。删除唯一带 `AGILE_AGENT_ASCEND310B_PRIMARY` comment 的规则后，新连接会直接进入回滚 listener。
 
 ## 从仓库零训练物化
 
@@ -110,9 +111,9 @@ sudo "$PRIMARY/src/scripts/install_ascend310b_primary_services.sh" \
 
 安装器的顺序是：
 
-1. 移除旧主线路由；
+1. 移除现有主线路由；
 2. 启动并等待回滚 listener ready；
-3. 启动并等待 `18501` 新主实例 ready；
+3. 启动并等待 `18501` 主实例 ready；
 4. 安装并应用精确路由；
 5. 通过公共 `8501` 再次验证主实例身份。
 
@@ -171,7 +172,7 @@ sudo /usr/local/sbin/agileagent-ascend310b-primary-route apply 18501
 curl -fsS http://127.0.0.1:8501/api/health
 ```
 
-路由脚本同时检查公共 listener、主实例 health 与支持的正式 layout。回滚之后公共 health 应显示旧 release 身份；重新提升后必须恢复 4+2 正式身份。
+路由脚本同时检查公共 listener、主实例 health 与支持的正式 layout。回滚之后公共 health 应显示回滚 release 身份；重新提升后必须恢复 4+2 正式身份。
 
 ## 当前正式指标
 
@@ -200,7 +201,7 @@ models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/
 
 | 可用输入 | 能完成的复核 |
 | --- | --- |
-| 仅仓库 | 完整性、release verifier、配置和历史报告 |
+| 仅仓库 | 完整性、release verifier、配置和包内报告 |
 | 至少 20 张契约 PNG | 30 次预热与三轮 20 图 batch FPS |
 | 89 图及 YOLO 标签 | 重新冻结预测并计算 Base/New/KRR/Full-mAP50 |
 | 同版 89 图标签 | 对包内 `frozen-predictions.jsonl` 重新计分 |

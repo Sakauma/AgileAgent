@@ -91,10 +91,11 @@ joint_evaluation:
 system_calibration_defaults:
   threshold_by_class: {0: 0.01, 1: 0.01, 2: 0.01, 3: 0.01, 4: 0.18, 5: 0.08}
 
-current_production_compatibility:
+current_production:
   generation_id: incremental_detection_generation_4plus2
   model_id: incremental_detector
-  training_shape: one_joint_two_class_expert
-  sequential_round_evidence: false
-  status: retained_production_baseline
-  note: 当前 production 保留作为已通过六类基线，不冒充两轮顺序注入证据。
+  training_shape: joint_two_class_expert
+  evidence_scope: joint_4plus2_lock
+  status: production
+  sequential_protocol: registered_round_candidates
+  note: 当前 production 记录联合二类专家性能；逐类顺序注入由各轮候选证据链记录。

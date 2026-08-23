@@ -43,7 +43,10 @@ class FakeEngine:
             "queue_wait_ms": 0.4,
             "agent": {
                 "mode": "automatic_orchestration",
-                "models_used": ["scene_sensor_net_v1", "three_class_base_detector"],
+                "models_used": [
+                    "scene_sensor_net_v1",
+                    "four_class_base_detector",
+                ],
                 "protocol": None,
                 "protocols": [],
                 "decision": {
@@ -51,7 +54,7 @@ class FakeEngine:
                     "input_mode": "unlabeled_image",
                     "inference_scope": "production",
                     "routing_basis": "image_content_and_active_generation",
-                    "evaluated_specialists": 3,
+                    "evaluated_specialists": 1,
                     "base_detection_count": 1,
                     "final_detection_count": 1,
                     "activated_classes": [],
@@ -143,9 +146,18 @@ def test_health_and_static_product_contract() -> None:
     assert "registry" not in json.dumps(public_config.json())
     capabilities = client.get("/api/capabilities")
     assert capabilities.status_code == 200
-    assert capabilities.json()["generation_id"] == "incremental_detection_generation"
-    assert capabilities.json()["generation_name"] == "增量检测生产代际"
-    assert capabilities.json()["active_classes"] == ["soldier", "small_aircraft", "warship", "tank"]
+    assert capabilities.json()["generation_id"] == (
+        "incremental_detection_generation_4plus2"
+    )
+    assert capabilities.json()["generation_name"] == "4+2 增量检测生产代际"
+    assert capabilities.json()["active_classes"] == [
+        "soldier",
+        "small_aircraft",
+        "warship",
+        "tank",
+        "patrol_boat",
+        "armored_vehicle",
+    ]
     assert len(capabilities.json()["models"]) == 3
     assert capabilities.json()["protocols"][0]["available"] is True
 
@@ -173,24 +185,33 @@ def test_health_and_static_product_contract() -> None:
 
 def test_web_settings_follow_active_config_and_manifest() -> None:
     settings = build_web_settings()
-    assert settings["detector_path"].name == "three_class_base_detector.pt"
+    assert settings["detector_path"].name == "four_class_base_detector.pt"
     assert settings["device_index"] == "0"
     assert settings["predict"] == {
-            "imgsz": 896, "specialist_imgsz": 640, "iou": 0.7, "max_det": 300, "batch_size": 20,
+            "imgsz": 1280, "specialist_imgsz": 1280, "iou": 0.7, "max_det": 300, "batch_size": 32,
             "warmup_iterations": 1, "warmup_batch_size": 1,
-        "warmup_width": 896, "warmup_height": 896,
-        "confidence_default": 0.5, "preload_specialists": True,
+        "warmup_width": 1280, "warmup_height": 1280,
+        "confidence_default": 0.01, "preload_specialists": True,
         "quantize": None, "cudnn_benchmark": True, "compile": False,
     }
-    assert settings["generation_id"] == "incremental_detection_generation"
-    assert settings["generation_name"] == "增量检测生产代际"
-    assert settings["base_model_id"] == "three_class_base_detector"
-    assert settings["base_model_name"] == "三类基础检测器"
-    assert settings["active_class_ids"] == [0, 1, 2, 3]
-    assert settings["base_local_to_global"] == {0: 0, 1: 1, 2: 3}
+    assert settings["generation_id"] == "incremental_detection_generation_4plus2"
+    assert settings["generation_name"] == "4+2 增量检测生产代际"
+    assert settings["base_model_id"] == "four_class_base_detector"
+    assert settings["base_model_name"] == "四类冻结基础检测器"
+    assert settings["active_class_ids"] == [0, 1, 2, 3, 4, 5]
+    assert settings["base_local_to_global"] == {0: 0, 1: 1, 2: 2, 3: 3}
     assert list(settings["protocols"]) == ["incremental_detector"]
-    assert settings["protocols"]["incremental_detector"]["activation_threshold"] == 0.63
-    assert settings["class_names"] == {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
+    assert settings["protocols"]["incremental_detector"][
+        "activation_thresholds"
+    ] == {4: 0.57, 5: 0.82}
+    assert settings["class_names"] == {
+        0: "soldier",
+        1: "small_aircraft",
+        2: "warship",
+        3: "tank",
+        4: "patrol_boat",
+        5: "armored_vehicle",
+    }
 
 
 def test_health_reports_model_initialization_failure() -> None:
@@ -309,7 +330,7 @@ def test_single_detection_ignores_manual_protocol_and_uses_agent_auto_mode() -> 
     response = client.post(
         "/api/detect",
         files={"file": ("sample.png", image, "image/png")},
-        data={"confidence": "0.20", "incremental_protocol": "p02_new_warship"},
+        data={"confidence": "0.20", "incremental_protocol": "round_01_patrol_boat"},
     )
     assert response.status_code == 200
     assert engine.calls == [("sample.png", 0.20, "auto")]

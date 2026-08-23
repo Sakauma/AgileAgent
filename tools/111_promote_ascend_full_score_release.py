@@ -162,27 +162,6 @@ def validate_benchmark(report: Mapping[str, Any], label: str) -> float:
     return fps
 
 
-def validate_training_report(report: Mapping[str, Any]) -> dict[str, bool]:
-    audit = report.get("dataset_audit") or {}
-    shared_drift = float(
-        report.get("shared_max_drift", (report.get("initialization") or {}).get("shared_max_drift", -1.0))
-    )
-    isolation = (
-        int(audit.get("old_raw_image_count", -1)) == 0
-        and int(audit.get("old_raw_label_count", -1)) == 0
-        and int(audit.get("old_feature_cache_count", -1)) == 0
-        and audit.get("original_data_modified") is False
-    )
-    if report.get("kind") != "shared_backbone_dual_head_training":
-        raise ValueError("training report kind非法")
-    if not isolation or shared_drift != 0.0:
-        raise ValueError("training report未通过增量数据隔离或Base零漂移前置条件")
-    return {
-        "incremental_data_isolation": True,
-        "shared_max_drift_zero": True,
-    }
-
-
 def validate_independent_generation(
     registry: Mapping[str, Any],
     build_manifest: Mapping[str, Any],
@@ -309,10 +288,7 @@ def materialize_release(
         candidate.get("runtime", {}).get("server_port") != 8502
         or ascend.get("validation_candidate") is not True
         or ascend.get("validated") is not False
-        or model_layout not in {
-            "shared_backbone_dual_head_v1",
-            "independent_yolo26_e2e_v1",
-        }
+        or model_layout != "independent_yolo26_e2e_v1"
         or model_layout != expected_layout
         or ascend.get("context_mode") != expected_context_mode
     ):
@@ -331,16 +307,7 @@ def materialize_release(
             f"候选generation registry不存在：{generation_source}"
         )
     generation_registry = read_json(generation_source, "generation registry")
-    if model_layout == "shared_backbone_dual_head_v1":
-        training_path, _ = checked_entry(
-            source_manifest.get("training_report"), "training_report"
-        )
-        training_report = read_json(training_path, "training report")
-        validity = validate_training_report(training_report)
-    else:
-        validity = validate_independent_generation(
-            generation_registry, source_manifest
-        )
+    validity = validate_independent_generation(generation_registry, source_manifest)
 
     for name in ("om", "provenance", "validation", "configs", "reports", "src"):
         target = release_root / name
@@ -372,28 +339,11 @@ def materialize_release(
             },
         }
     )
-    for top_name in ("training_report", "export_manifest"):
-        entry = source_manifest.get(top_name)
-        if entry is None:
-            if model_layout == "shared_backbone_dual_head_v1":
-                raise ValueError(f"共享双头build manifest缺少{top_name}")
-            continue
-        source, _ = checked_entry(entry, top_name)
-        destination = release_root / f"provenance/{top_name}{source.suffix}"
-        release_manifest[top_name] = copy_entry(entry, destination, top_name)
-
     copied_artifacts: dict[str, dict[str, Any]] = {}
     artifact_targets = (
-        (
-            ("dual_detector", "shared_backbone_dual_head.om"),
-            ("context", "scene_sensor_net.om"),
-        )
-        if model_layout == "shared_backbone_dual_head_v1"
-        else (
-            ("base", "base_detector.om"),
-            ("specialist", "incremental_detector.om"),
-            ("context", "scene_sensor_net.om"),
-        )
+        ("base", "base_detector.om"),
+        ("specialist", "incremental_detector.om"),
+        ("context", "scene_sensor_net.om"),
     )
     for role, om_name in artifact_targets:
         model_id, artifact = artifact_by_role(source_manifest, role)
@@ -491,33 +441,24 @@ def materialize_release(
     context_entry = next(
         row for row in copied_artifacts.values() if row.get("role") == "context"
     )
-    if model_layout == "shared_backbone_dual_head_v1":
-        dual_entry = next(
+    role_suffixes = {
+        "base": "four_class_base_detector.pt",
+        "specialist": "incremental_detector.pt",
+    }
+    for role, suffix in role_suffixes.items():
+        configured = [
+            row
+            for source, row in production_ascend["models"].items()
+            if str(source).endswith(suffix)
+        ]
+        if len(configured) != 1:
+            raise ValueError(f"正式配置无法唯一定位{role}检测器")
+        artifact = next(
             row
             for row in copied_artifacts.values()
-            if row.get("role") == "dual_detector"
+            if row.get("role") == role
         )
-        detector = next(iter(production_ascend["models"].values()))
-        detector.update(dual_entry["om"])
-    else:
-        role_suffixes = {
-            "base": "four_class_base_detector.pt",
-            "specialist": "incremental_detector.pt",
-        }
-        for role, suffix in role_suffixes.items():
-            configured = [
-                row
-                for source, row in production_ascend["models"].items()
-                if str(source).endswith(suffix)
-            ]
-            if len(configured) != 1:
-                raise ValueError(f"正式配置无法唯一定位{role}检测器")
-            artifact = next(
-                row
-                for row in copied_artifacts.values()
-                if row.get("role") == role
-            )
-            configured[0].update(artifact["om"])
+        configured[0].update(artifact["om"])
     production_ascend["context_model"] = dict(context_entry["om"])
     validate_config(production)
     verification = verify_ascend_artifacts(production_ascend, require_validation=True)

@@ -364,7 +364,7 @@ def validate_config(
     if not isinstance(lineage, Mapping):
         errors.append("incremental_workbench.lineage必须是映射")
     else:
-        required_lineage = {"required", "root", "base_manifest", "base_experiment_config", "auto_initialize_base", "cache_roots"}
+        required_lineage = {"required", "root", "base_manifest", "base_split_manifest", "auto_initialize_base", "cache_roots"}
         missing_lineage = sorted(required_lineage - set(lineage))
         if missing_lineage:
             errors.append("incremental_workbench.lineage缺少：" + ", ".join(missing_lineage))
@@ -493,13 +493,9 @@ def validate_config(
                 errors.append(f"TensorRT后端缺少 native_backend.{key}")
 
     ascend = _require_mapping(config, "ascend_backend", errors)
-    model_layout = ascend.get("model_layout", "independent_models_v1")
-    if model_layout not in {
-        "independent_models_v1",
-        "shared_backbone_dual_head_v1",
-        "independent_yolo26_e2e_v1",
-    }:
-        errors.append("ascend_backend.model_layout非法")
+    model_layout = ascend.get("model_layout")
+    if model_layout != "independent_yolo26_e2e_v1":
+        errors.append("ascend_backend.model_layout必须为independent_yolo26_e2e_v1")
     if not str(ascend.get("device_id", "")).isdigit():
         errors.append("ascend_backend.device_id必须是非负设备编号")
     if ascend.get("soc_version") != "Ascend310B1":
@@ -510,25 +506,16 @@ def validate_config(
         errors.append("ascend_backend.validation_candidate必须为布尔值")
     if ascend.get("precision") not in {"mixed_float16", "origin"}:
         errors.append("ascend_backend.precision非法")
-    if ascend.get("execution_mode", "synchronous") not in {
-        "synchronous",
-        "async_stream",
-    }:
-        errors.append("ascend_backend.execution_mode非法")
-    if ascend.get("encoded_preprocessing", "cpu") not in {"cpu", "dvpp"}:
-        errors.append("ascend_backend.encoded_preprocessing非法")
-    if ascend.get("context_mode", "model") not in {
-        "model",
-        "fixed_neutral_v1",
-    }:
-        errors.append("ascend_backend.context_mode非法")
+    if ascend.get("execution_mode") != "async_stream":
+        errors.append("ascend_backend.execution_mode必须为async_stream")
+    if ascend.get("encoded_preprocessing") != "dvpp":
+        errors.append("ascend_backend.encoded_preprocessing必须为dvpp")
+    if ascend.get("context_mode") != "model":
+        errors.append("ascend_backend.context_mode必须为model")
     if ascend.get("memory_mode", "pageable") not in {"pageable", "pinned"}:
         errors.append("ascend_backend.memory_mode非法")
-    if ascend.get("schedule_mode", "threaded_execute") not in {
-        "threaded_execute",
-        "unified_enqueue",
-    }:
-        errors.append("ascend_backend.schedule_mode非法")
+    if ascend.get("schedule_mode") != "unified_enqueue":
+        errors.append("ascend_backend.schedule_mode必须为unified_enqueue")
     if not isinstance(ascend.get("detailed_event_timing", True), bool):
         errors.append("ascend_backend.detailed_event_timing必须为布尔值")
     model_roles = {"scene", "base", "specialist"}
@@ -617,91 +604,19 @@ def validate_config(
             if not isinstance(source, str) or not isinstance(entry, Mapping) or not entry.get("path"):
                 errors.append("ascend_backend.models条目非法")
                 continue
-            unknown = sorted(set(entry) - {
-                "path", "sha256", "output_contract", "candidate_confidence",
-                "iou_threshold", "max_det", "candidate_capacity",
-                "anchor_count", "class_count", "logical_heads",
-            })
+            unknown = sorted(
+                set(entry) - {"path", "sha256", "output_contract", "max_det", "class_count"}
+            )
             if unknown:
                 errors.append(f"ascend_backend.models.{source}包含未知字段：" + ", ".join(unknown))
-            output_contract = entry.get("output_contract", "raw_yolo_v1")
-            if output_contract not in {
-                "raw_yolo_v1", "decoded_candidates_v1", "detections_v1",
-                "raw_dual_head_v1", "yolo26_e2e_v1",
-            }:
-                errors.append(f"ascend_backend.models.{source}.output_contract非法")
-            contract_fields = {
-                "candidate_confidence", "iou_threshold", "max_det",
-                "candidate_capacity", "anchor_count", "class_count",
-            }
+            output_contract = entry.get("output_contract")
+            if output_contract != "yolo26_e2e_v1":
+                errors.append(
+                    f"ascend_backend.models.{source}.output_contract必须为yolo26_e2e_v1"
+                )
+            contract_fields = {"max_det", "class_count"}
             configured_contract_fields = contract_fields & set(entry)
-            if output_contract == "detections_v1":
-                required_fields = {
-                    "candidate_confidence", "iou_threshold", "max_det",
-                }
-                if configured_contract_fields != required_fields:
-                    errors.append(
-                        f"ascend_backend.models.{source}.detections_v1缺少固定后处理参数"
-                    )
-                candidate_confidence = entry.get("candidate_confidence")
-                iou_threshold = entry.get("iou_threshold")
-                contract_max_det = entry.get("max_det")
-                if (
-                    isinstance(candidate_confidence, bool)
-                    or not isinstance(candidate_confidence, (int, float))
-                    or not 0.0 <= float(candidate_confidence) < 1.0
-                ):
-                    errors.append(f"ascend_backend.models.{source}.candidate_confidence非法")
-                if (
-                    isinstance(iou_threshold, bool)
-                    or not isinstance(iou_threshold, (int, float))
-                    or not 0.0 < float(iou_threshold) < 1.0
-                ):
-                    errors.append(f"ascend_backend.models.{source}.iou_threshold非法")
-                if (
-                    isinstance(contract_max_det, bool)
-                    or not isinstance(contract_max_det, int)
-                    or contract_max_det <= 0
-                ):
-                    errors.append(f"ascend_backend.models.{source}.max_det非法")
-            elif output_contract == "decoded_candidates_v1":
-                required_fields = {
-                    "candidate_confidence", "candidate_capacity",
-                    "anchor_count", "class_count",
-                }
-                if configured_contract_fields != required_fields:
-                    errors.append(
-                        f"ascend_backend.models.{source}.decoded_candidates_v1缺少固定解码参数"
-                    )
-                candidate_confidence = entry.get("candidate_confidence")
-                candidate_capacity = entry.get("candidate_capacity")
-                anchor_count = entry.get("anchor_count")
-                class_count = entry.get("class_count")
-                if (
-                    isinstance(candidate_confidence, bool)
-                    or not isinstance(candidate_confidence, (int, float))
-                    or float(candidate_confidence) != 0.01
-                ):
-                    errors.append(
-                        f"ascend_backend.models.{source}.candidate_confidence必须固定为0.01"
-                    )
-                for name, value in (
-                    ("candidate_capacity", candidate_capacity),
-                    ("anchor_count", anchor_count),
-                    ("class_count", class_count),
-                ):
-                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                        errors.append(f"ascend_backend.models.{source}.{name}非法")
-                if (
-                    isinstance(candidate_capacity, int)
-                    and isinstance(anchor_count, int)
-                    and isinstance(class_count, int)
-                    and candidate_capacity > anchor_count * class_count
-                ):
-                    errors.append(
-                        f"ascend_backend.models.{source}.candidate_capacity超出候选总数"
-                    )
-            elif output_contract == "yolo26_e2e_v1":
+            if output_contract == "yolo26_e2e_v1":
                 required_fields = {"max_det", "class_count"}
                 if configured_contract_fields != required_fields:
                     errors.append(
@@ -711,146 +626,20 @@ def validate_config(
                     value = entry.get(name)
                     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                         errors.append(f"ascend_backend.models.{source}.{name}非法")
-                if "logical_heads" in entry:
-                    errors.append(
-                        f"ascend_backend.models.{source}.yolo26_e2e_v1禁止logical_heads"
-                    )
-            elif output_contract == "raw_dual_head_v1":
-                if configured_contract_fields:
-                    errors.append(
-                        f"ascend_backend.models.{source}.raw_dual_head_v1禁止配置设备后处理参数"
-                    )
-                logical_heads = entry.get("logical_heads")
-                if not isinstance(logical_heads, Mapping) or set(logical_heads) != {
-                    "old", "new",
-                }:
-                    errors.append(
-                        f"ascend_backend.models.{source}.logical_heads必须包含old/new"
-                    )
-                else:
-                    expected_owners = {
-                        "old": "frozen_base_model",
-                        "new": "incremental_model",
-                    }
-                    output_indices = set()
-                    for head_name, head in logical_heads.items():
-                        required_head_fields = {
-                            "owner", "class_map", "class_count",
-                            "anchor_count", "output_index",
-                        }
-                        if (
-                            not isinstance(head, Mapping)
-                            or not required_head_fields.issubset(head)
-                            or set(head) - required_head_fields
-                            - {"candidate_confidence"}
-                        ):
-                            errors.append(
-                                f"ascend_backend.models.{source}.logical_heads.{head_name}字段非法"
-                            )
-                            continue
-                        if head.get("owner") != expected_owners[head_name]:
-                            errors.append(
-                                f"ascend_backend.models.{source}.logical_heads.{head_name}.owner非法"
-                            )
-                        class_map = head.get("class_map")
-                        class_count = head.get("class_count")
-                        anchor_count = head.get("anchor_count")
-                        output_index = head.get("output_index")
-                        candidate_confidence = head.get("candidate_confidence")
-                        if (
-                            not isinstance(class_map, Mapping)
-                            or not class_map
-                            or any(
-                                isinstance(key, bool)
-                                or not str(key).isdigit()
-                                or isinstance(value, bool)
-                                or not isinstance(value, int)
-                                or value < 0
-                                for key, value in class_map.items()
-                            )
-                        ):
-                            errors.append(
-                                f"ascend_backend.models.{source}.logical_heads.{head_name}.class_map非法"
-                            )
-                        if (
-                            isinstance(class_count, bool)
-                            or not isinstance(class_count, int)
-                            or class_count <= 0
-                            or isinstance(class_map, Mapping)
-                            and len(class_map) != class_count
-                        ):
-                            errors.append(
-                                f"ascend_backend.models.{source}.logical_heads.{head_name}.class_count非法"
-                            )
-                        elif isinstance(class_map, Mapping) and {
-                            int(key) for key in class_map
-                        } != set(range(class_count)):
-                            errors.append(
-                                f"ascend_backend.models.{source}.logical_heads.{head_name}.class_map本地类别必须连续"
-                            )
-                        if (
-                            isinstance(anchor_count, bool)
-                            or not isinstance(anchor_count, int)
-                            or anchor_count <= 0
-                        ):
-                            errors.append(
-                                f"ascend_backend.models.{source}.logical_heads.{head_name}.anchor_count非法"
-                            )
-                        if (
-                            isinstance(output_index, bool)
-                            or not isinstance(output_index, int)
-                            or output_index not in {0, 1}
-                        ):
-                            errors.append(
-                                f"ascend_backend.models.{source}.logical_heads.{head_name}.output_index非法"
-                            )
-                        else:
-                            output_indices.add(output_index)
-                        if candidate_confidence is not None and (
-                            isinstance(candidate_confidence, bool)
-                            or not isinstance(candidate_confidence, (int, float))
-                            or not 0.0 <= float(candidate_confidence) < 1.0
-                        ):
-                            errors.append(
-                                f"ascend_backend.models.{source}.logical_heads.{head_name}.candidate_confidence非法"
-                            )
-                    if output_indices != {0, 1}:
-                        errors.append(
-                            f"ascend_backend.models.{source}.logical_heads.output_index必须为0/1"
-                        )
-            elif configured_contract_fields or "logical_heads" in entry:
-                errors.append(
-                    f"ascend_backend.models.{source}.raw_yolo_v1禁止配置设备后处理参数"
-                )
             digest = entry.get("sha256")
             if (ascend.get("validated") is True or ascend.get("validation_candidate") is True) and (
                 not isinstance(digest, str) or len(digest) != 64
             ):
                 errors.append(f"已验收Ascend OM缺少SHA256：{source}")
-        dual_entries = sum(
+        e2e_entries = sum(
             isinstance(entry, Mapping)
-            and entry.get("output_contract") == "raw_dual_head_v1"
+            and entry.get("output_contract") == "yolo26_e2e_v1"
             for entry in ascend_models.values()
         )
-        if model_layout == "shared_backbone_dual_head_v1":
-            if dual_entries != 1:
-                errors.append("shared_backbone_dual_head_v1要求恰好一个raw_dual_head_v1 OM")
-            if inference.get("imgsz") != inference.get("specialist_imgsz"):
-                errors.append("共享双head要求Base与Specialist推理分辨率一致")
-        elif dual_entries:
-            errors.append("raw_dual_head_v1要求shared_backbone_dual_head_v1布局")
-        if model_layout == "independent_yolo26_e2e_v1":
-            e2e_entries = sum(
-                isinstance(entry, Mapping)
-                and entry.get("output_contract") == "yolo26_e2e_v1"
-                for entry in ascend_models.values()
-            )
-            if e2e_entries != 2 or len(ascend_models) != 2:
-                errors.append(
-                    "independent_yolo26_e2e_v1要求恰好两个yolo26_e2e_v1 OM"
-                )
-            if inference.get("imgsz") != inference.get("specialist_imgsz"):
-                errors.append("YOLO26 E2E独立布局要求Base与Specialist推理分辨率一致")
+        if e2e_entries != 2 or len(ascend_models) != 2:
+            errors.append("independent_yolo26_e2e_v1要求恰好两个yolo26_e2e_v1 OM")
+        if inference.get("imgsz") != inference.get("specialist_imgsz"):
+            errors.append("YOLO26 E2E独立布局要求Base与Specialist推理分辨率一致")
     context_model = ascend.get("context_model")
     if not isinstance(context_model, Mapping) or not context_model.get("path"):
         errors.append("ascend_backend.context_model非法")

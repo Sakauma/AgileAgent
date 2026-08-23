@@ -85,7 +85,7 @@ incremental_workbench:
     required: true
     root: data/incremental_lineage
     base_manifest: data/incremental_lineage/base_dataset.json
-    base_experiment_config: configs/incremental/warship_3plus1.yaml
+    base_split_manifest: splits/strict_4plus2/manifest.json
     auto_initialize_base: true
     cache_roots: []
   lifecycle:
@@ -196,9 +196,15 @@ ascend_backend:
   soc_version: Ascend310B1
   cann_version: 7.0.RC1
   precision: mixed_float16
-  execution_mode: synchronous
-  encoded_preprocessing: cpu
+  execution_mode: async_stream
+  model_layout: independent_yolo26_e2e_v1
+  encoded_preprocessing: dvpp
+  context_mode: model
   memory_mode: pageable
+  schedule_mode: unified_enqueue
+  detailed_event_timing: false
+  submit_order: [scene, base, specialist]
+  collect_order: [scene, base, specialist]
   dvpp_scene_resize_stages: []
   validated: false
   validation_candidate: false
@@ -210,9 +216,15 @@ ascend_backend:
     models/production/incremental_detection/four_class_base_detector.pt:
       path: runs/ascend310b/om/four_class_base_detector.om
       sha256: null
+      output_contract: yolo26_e2e_v1
+      max_det: 300
+      class_count: 4
     models/production/incremental_detection/incremental_detector.pt:
       path: runs/ascend310b/om/incremental_detector.om
       sha256: null
+      output_contract: yolo26_e2e_v1
+      max_det: 300
+      class_count: 2
   context_model:
     path: runs/ascend310b/om/scene_sensor_net.om
     sha256: null
@@ -295,6 +307,8 @@ assets:
     - models/production/incremental_detection/four_class_base_detector.pt
     - models/production/incremental_detection/incremental_detector.pt
     - models/production/incremental_detection/calibration.json
+    - models/production/incremental_detection/base_context_prior.json
+    - models/production/incremental_detection/incremental_context_prior.json
     - models/production/incremental_detection/metrics.json
     - models/production/incremental_detection/profile.json
     - models/production/incremental_detection/evidence/frozen/base_dev_predictions.jsonl
@@ -321,7 +335,7 @@ automation:
   allowed_output_roots: [reports/agent_runs, reports/agent_blackboard, runs/submission]
 
 submission:
-  # 可选的本地提交编排输入；不表示赛题方提供了所谓“隐藏测试集”。
+  # 可选的本地提交编排输入。
   official_test_ready: false
   official_format_confirmed: false
   official_format: null

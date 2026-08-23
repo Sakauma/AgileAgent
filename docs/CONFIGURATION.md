@@ -1,233 +1,237 @@
+<!-- generated-by: gsd-doc-writer -->
 # 配置参考
 
-AgileAgent 使用 UTF-8 YAML 配置。主运行配置采用 schema 3，并由 `fair_agent/core/config.py` 统一加载、校验和解析。
+AgileAgent 以 UTF-8 YAML 管理运行、训练、增量协议和 Ascend310B 发布契约，以受版本控制的 JSON 注册表管理当前 production 代际、类别 owner 与逐类阈值。主运行配置的 schema 版本为 `3`，由 `fair_agent/core/config.py` 统一加载和校验。
 
-## 配置文件
+## 配置源
 
-| 文件 | 用途 |
-| --- | --- |
-| `configs/agent_pipeline.yaml` | x86/CUDA 开发、训练和 Web 服务 |
-| `configs/agent_pipeline_ascend310b.yaml` | Ascend 310B OM 推理服务 |
-| `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/configs/agent_pipeline_ascend310b.yaml` | 当前 4+2 满分 release 的字节级正式配置；由物化脚本复制，不手工修改 |
-| `configs/ascend310b/full_score_method.yaml` | Ascend 310B 满分结构、阈值搜索、评分门禁和参考证据 |
-| `configs/functional_models.yaml` | 三个功能模型及发布资产 |
-| `configs/incremental_detection_policy.yaml` | `base_learning`、`incremental_learning`、`system_calibration`、`joint_evaluation` 的统一范围契约 |
-| `configs/incremental_round_registry_4plus2.yaml` | 两轮类别注册、逐轮 split、局部/全局类别映射及父子代际契约 |
-| `configs/strict_class_incremental_3plus1.yaml` | 旧 3+1 兼容实验参数，不是当前 production |
-| `configs/scene_sensor_model.yaml` | 旧 3+1 Scene-SensorNet 兼容参数 |
-| `configs/scene_sensor_model_4plus2.yaml` | 当前 4+2 Scene-SensorNet 训练参数 |
-| `configs/local_infer_gpu.yaml` | 本机 GPU 推理参数 |
-| `configs/submission_infer_base_4class.yaml` | 当前四类 Base 检测提交参数 |
-| `configs/submission_infer_base_3class.yaml` | 旧三类 Base 兼容参数；对应权重已归档 |
-
-## 增量协议字段
-
-`configs/incremental_detection_policy.yaml` 的 `scope_definition` 是术语单一来源：
-
-| `phase` | `counted_as_incremental_learning` | 权重更新与数据口径 |
+| 路径 | 格式 | 用途 |
 | --- | --- | --- |
-| `base_learning` | `false` | Base train/dev，只更新 Base 检测器 |
-| `incremental_learning` | `true` | 只用当轮 Increment train/dev，只更新 Increment 检测器，Base 冻结 |
-| `system_calibration` | `false` | 可用 Base/Increment train/dev 和 mixed dev，两个检测器都冻结 |
-| `joint_evaluation` | `false` | 在全已学类别 lock/test 上只评分，禁止训练和选参 |
+| `configs/agent_pipeline.yaml` | YAML, schema 3 | x86/NVIDIA CUDA 服务、增量工作台、路由、性能和发布门禁的主配置 |
+| `configs/agent_pipeline_ascend310b.yaml` | YAML, schema 3 | Ascend310B1 正式服务配置，登记 Base、Incremental 和 Scene-SensorNet 三个 OM |
+| `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/configs/agent_pipeline_ascend310b.yaml` | YAML, schema 3 | Ascend310B v2 发布包内的自包含配置；当前与仓库根配置字节一致 |
+| `configs/functional_models.yaml` | YAML, schema 2 | Scene-SensorNet、四类 Base 检测器和二类 Incremental 专家的功能模型注册表 |
+| `configs/incremental_detection_policy.yaml` | YAML, schema 4 | Base learning、Incremental learning、System calibration 和 Joint evaluation 的数据与权重更新边界 |
+| `configs/incremental_round_registry_4plus2.yaml` | YAML, schema 1 | 4+2 类别注册表、两轮注入顺序、split、局部/全局 ID 映射和父子代际 |
+| `configs/scene_sensor_model_4plus2.yaml` | YAML | 封闭集场景/传感器模型的数据、训练、输出与验收参数 |
+| `configs/local_infer_gpu.yaml` | YAML | x86 GPU 本地四类 Base 批量推理和结果打包 |
+| `configs/submission_infer_base_4class.yaml` | YAML | 四类 Base 数据提交推理的输入、阈值和输出格式 |
+| `configs/ascend310b/full_score_method.yaml` | YAML, schema 1 | Ascend310B v2 的训练、E2E 导出、ATC、内容门控、阈值搜索、评分和性能契约 |
+| `configs/ascend310b/aipp/*.cfg` | ATC AIPP | Base、Incremental 和 Scene-SensorNet 的板端图像预处理参数 |
+| `models/generations.json` | JSON, schema 2 | x86/CUDA production 代际、六类 owner、模型身份、阈值、场景先验和验收结果 |
+| `models/profiles/incremental-detection/active.json` | JSON, schema 1 | `incremental-detection` 运行档的展开快照 |
+| `models/production/incremental_detection/calibration.json` | JSON, schema 4 | 新类逐类阈值和场景软惩罚的 system-calibration 结果 |
 
-`configs/scene_sensor_model_4plus2.yaml` 的 `protocol.phase` 固定为 `system_calibration`。新生成的场景模型、门控候选、`calibration.json` 和联合评估证据均显式记录 `phase`、`counted_as_incremental_learning` 与 `detector_weights_updated`。其中 `calibration.json.data_scope` 分别声明 Scene-SensorNet、Base 先验、Increment 先验和 mixed dev 门控搜索的数据用途，不再把 mixed dev 校准误写成 `incremental_dataset_only`。
+`models/manifest.json`、`models/SHA256SUMS.txt` 和 Ascend v2 包内的 `release.json`、`SHA256SUMS` 负责发布资产身份与完整性，不作为运行时调参入口。
 
-`incremental.round_registry` 是正式多轮源码入口。训练和评估工具不接受源码内固定的新类集合，而是从注册表读取 `round_id`、`new_class_ids`、`local_to_global`、`parent_generation_id` 与 `generation_id`。当前顺序为 `round_01_patrol_boat` → `round_02_armored_vehicle`；每轮 Base 和历史专家冻结，只使用该轮 Increment train/dev。`incremental.round_candidate_registration_tool`、`round_summary_tool` 与 `strict_promotion_tool` 固定登记、汇总和晋级入口；运行时模型唯一来源为 `models/generations.json`。Scene-SensorNet、场景先验与门控搜索仍属于 `system_calibration`，可以使用其声明的数据范围，不受增量检测器“不得回放 Base”规则约束。
+## 加载与覆盖顺序
 
-候选登记只允许更新 `channels.candidate`。只有最终轮次已登记、两轮 `round_evidence.json` 完整且最终 scene-aware lock 通过时，晋级工具才会更新 `channels.production`；旧联合二类代际随后标记为 `retired_baseline`。实验档 schema 2 同时登记 `specialist_models[]`，命令行 `--profile incremental-detection` 与默认 Web 运行时都按相同的多专家 owner 加载。
+`load_config()` 按以下顺序得到有效配置：
 
-## 加载顺序
+1. 读取调用方指定的 YAML；`load_config()` 的默认值是 `configs/agent_pipeline.yaml`。当调用方使用默认 `DEFAULT_CONFIG` 时，`AGILE_AGENT_CONFIG` 可以替换它；CLI 使用顶层 `--config` 显式选择文件。
+2. 对值完全等于 `${ENV_NAME}` 的字符串做环境变量展开。当前受控配置没有这类占位符。
+3. 应用重复的 `--set KEY=VALUE` 或 `AGILE_AGENT_OVERRIDES` 中的临时覆盖。值使用 YAML 语义解析，因此数字、布尔值和 `null` 保留其类型。
+4. 校验 schema、已知字段、数值范围、后端契约和发布资产身份。
+5. 添加 `_config_path`、`_config_overrides` 和 `_config_sha256` 运行时元数据。
 
-配置加载器依次执行：
+相对路径以仓库根目录为基准。`runtime.local_python: null` 表示使用当前 Python 解释器。
 
-1. 读取 YAML；
-2. 展开完整字符串形式的 `${ENV_NAME}`；
-3. 应用 `--set key=value` 临时覆盖；
-4. 校验 schema、章节和字段；
-5. 将相对路径解析到仓库根目录；
-6. 生成脱敏的有效配置视图。
+常用查看和校验命令：
+
+```bash
+agile-agent --config configs/agent_pipeline.yaml config validate
+agile-agent --config configs/agent_pipeline_ascend310b.yaml config validate
+agile-agent --config configs/agent_pipeline.yaml config show --effective
+agile-agent --config configs/agent_pipeline.yaml config get inference.backend
+agile-agent --config configs/agent_pipeline.yaml \
+  --set runtime.server_port=8503 \
+  --set inference.confidence_default=0.05 \
+  config diff
+```
+
+持久修改会先完整校验新配置，再将原文件备份到 `reports/config_audit/backups/` 并记录 `reports/config_audit/events.jsonl`：
+
+```bash
+agile-agent --config configs/agent_pipeline.yaml config set runtime.server_port 8503
+agile-agent --config configs/agent_pipeline.yaml config unset runtime.local_python
+```
+
+模型哈希、代际注册表、production 通道及已验收后端属性是受保护配置，持久变更由代际或发布工具完成。
+
+## 主配置格式
+
+主 YAML 是完整配置，不与隐式默认值深度合并。新建设备配置时，复制对应的受控主文件并修改所需字段。下面是需要修改的局部示例：
+
+```yaml
+schema_version: 3
+
+runtime:
+  mode: local
+  local_python: null
+  default_device: "1"
+  server_host: 127.0.0.1
+  server_port: 8503
+
+inference:
+  backend: ultralytics_cuda
+  imgsz: 1280
+  specialist_imgsz: 1280
+  batch_size: 32
+  confidence_default: 0.01
+```
+
+| 章节 | 作用 |
+| --- | --- |
+| `runtime`, `web` | 解释器、设备、回环监听地址、端口和 production 注册表 |
+| `inference`, `routing`, `decoding` | 推理后端、输入尺寸、阈值边界、类别 owner、证据权重、并行和图像解码 |
+| `storage`, `logging`, `ui` | 结果缓存上限/TTL、日志轮转和 Web 界面行为 |
+| `incremental_workbench` | 增量数据包限额、train/dev/lock 拆分、血缘、训练和生命周期参数 |
+| `performance` | API 性能目标、预热、并发、batch probe 和报告路径 |
+| `generation`, `gates`, `incremental_guardian` | 代际复核/提升、官方硬门禁、诊断阈值和恢复动作 |
+| `native_backend`, `tensorrt_backend`, `ascend_backend` | CUDA native/TensorRT/Ascend ACL 的设备、引擎或 OM、精度、输出契约和验收状态 |
+| `model`, `assets`, `functional_models` | 模型入口、必需资产和三个功能模型注册表 |
+| `automation`, `submission`, `blackboard`, `decision` | 受控动作、提交输入、黑板报告与决策输出 |
+| `detector`, `inputs`, `incremental` | Base 检测器证据、数据审计输入和增量协议入口 |
+
+## 必填与可选设置
+
+主配置加载器要求 `schema_version: 3` 以及以下映射：`runtime`、`web`、`inference`、`routing`、`decoding`、`storage`、`logging`、`incremental_workbench`、`ui`、`performance`、`generation`、`gates`、`incremental_guardian`、`native_backend`、`ascend_backend`、`tensorrt_backend`、`model`、`assets`、`functional_models`、`incremental` 和 `automation`。`decision.actions` 也必须非空。
+
+关键启动约束：
+
+- `runtime.mode` 必须为 `local`，`runtime.server_host` 必须是回环地址，`default_device` 必须是非负设备编号。
+- `inference.backend` 可以是 `ultralytics_cuda`、`tensorrt_engine`、`tensorrt_native` 或 `ascend_acl`；置信度默认值必须位于 `confidence_min` 和 `confidence_max` 之间。
+- `routing.detection_evidence_weight + routing.context_evidence_weight` 必须等于 `1.0`。
+- `logging.request_bodies` 必须为 `false`；上传的图像和数据包不写入请求日志。
+- `incremental.learning_data_scope` 必须为 `incremental_dataset_only`，支持模式必须同时包含 `class_incremental` 和 `target_incremental`。
+- `model.expected_sha256`、已验收后端的模型资产和发布报告必须登记有效身份。
+- `inference.backend: ascend_acl` 需要 `ascend_backend.validated: true` 或在受控评分进程中使用 `validation_candidate: true`。`independent_yolo26_e2e_v1` 布局要求恰好两个 YOLO26 E2E 检测 OM 和一个 context OM。
+- `inference.backend: tensorrt_engine` 需要设备匹配的 TensorRT 版本、GPU 计算能力、engine 身份和验收报告。
+
+可选值在受控文件中也显式写出。当前使用的 `null` 语义如下：
+
+| 字段 | `null` 含义 |
+| --- | --- |
+| `runtime.local_python` | 使用当前运行 Agent 的 Python |
+| `inference.quantize` | 不在 Ultralytics 运行时动态量化 |
+| `tensorrt_backend.expected_version` / `expected_compute_capability` | 当 TensorRT engine 后端未启用且未验收时不绑定设备档 |
+| `submission.official_format` | 提交格式由提交编排层在准备完成后填入 |
+
+## 默认值（x86/CUDA）
+
+| 配置 | 当前值 |
+| --- | --- |
+| 服务 | `127.0.0.1:8501` |
+| 推理后端 | `ultralytics_cuda` |
+| Base / Incremental 输入尺寸 | `1280 / 1280` |
+| batch | `32` |
+| IoU / 请求默认置信度 | `0.70 / 0.01` |
+| 图像解码 | OpenCV，`4` workers，OpenCV 内部线程数 `0` |
+| 模型并行 | Base、Incremental 和 context 并行，最多 `6` 个 model workers |
+| 类别 owner | Base 固定负责全局类 `0–3`，Incremental 专家固定负责 `4–5` |
+| 性能目标 | API `30 FPS`，p95 `50 ms`，`8` 并发请求 |
+| 评分门禁 | Base mAP50 `>=0.80`，New-mAP50 `>=0.60`，KRR `>=0.95`，old-data overlap `=0` |
+
+`models/generations.json` 的 `channels.production` 和 `channels.candidate` 均指向 `incremental_detection_generation_4plus2`。当前六类基础阈值为：
+
+| 全局类 | 名称 | owner | 基础阈值 | 最大场景惩罚 |
+| ---: | --- | --- | ---: | ---: |
+| 0 | `soldier` | Base | 0.21 | 0.15 |
+| 1 | `small_aircraft` | Base | 0.14 | 0.88 |
+| 2 | `warship` | Base | 0.36 | 0.26 |
+| 3 | `tank` | Base | 0.05 | 0.19 |
+| 4 | `patrol_boat` | Incremental | 0.57 | 0.65 |
+| 5 | `armored_vehicle` | Incremental | 0.82 | 0.00 |
+
+x86 的 `soft_threshold_penalty` 根据 Scene-SensorNet 的 `air/forest/sea/urban` 已知类概率调整逐类有效阈值，`hard_routing: false` 使 Base 和 Incremental 类别 owner 保持固定。
+
+增量工作台的默认训练值为 `imgsz=1280`、`batch=18`、`epochs=500`、`patience=50`、`optimizer=AdamW`、`lr0=0.001`、`seed=20260821`、`deterministic=true` 和 `amp=true`。数据拆分使用 `validation_fraction=0.20`、`lock_fraction=0.20` 与 `split_seed=20260821`。
+
+Scene-SensorNet 的单独训练配置使用 `224` 输入、`batch=256`、`epochs=200`、`patience=30` 和 `seed=20260821`；它的 `protocol.phase` 为 `system_calibration`。
+
+## 4+2 增量协议配置
+
+`configs/incremental_detection_policy.yaml` 直接定义四个阶段：
+
+| 阶段 | 是否计入增量学习 | 数据与更新边界 |
+| --- | --- | --- |
+| `base_learning` | 否 | 仅 Base 数据，更新 Base 检测器 |
+| `incremental_learning` | 是 | 仅当轮 Increment train/dev，只更新当轮新类专家，Base 和已学轮次专家冻结 |
+| `system_calibration` | 否 | 检测器冻结，训练 Scene-SensorNet 并选择场景先验、逐类阈值与门控参数 |
+| `joint_evaluation` | 否 | 对截至当轮的全部已学类别评分，无梯度、无选参、无权重更新 |
+
+`configs/incremental_round_registry_4plus2.yaml` 将 Base 类登记为 `0–3`，将 `patrol_boat` 登记为 round 1 的全局类 `4`，将 `armored_vehicle` 登记为 round 2 的全局类 `5`。每轮都指定独立 train/dev/lock split、父子 generation ID 和专家局部到全局映射。
+
+当前 x86 production 代际使用一个二类 Incremental 专家同时负责全局类 `4` 和 `5`；两轮注册表是新一轮训练、候选登记和逐轮证据的权威输入。
+
+## Ascend310B v2 当前值
+
+正式发布 ID 为 `20260823-4plus2-yolo26-content-gate-v2`。仓库根 Ascend 配置与发布包内配置登记了同一组 release-local 资产、构建清单和验证摘要。
+
+| 配置 | 当前值 |
+| --- | --- |
+| SoC / CANN | `Ascend310B1` / `7.0.RC1` |
+| 服务监听 | 正式主实例 `127.0.0.1:18501`，公共入口由路由脚本绑定到 `8501` |
+| 推理后端 | `ascend_acl` |
+| 模型布局 | `independent_yolo26_e2e_v1` |
+| 检测输入 | NCHW `[1,3,608,736]`，AIPP NHWC `[1,608,736,3]` |
+| 检测输出 | Base 和 Incremental 均为 `[1,300,6]` (`yolo26_e2e_v1`) |
+| context | 真实 `scene_sensor_net.om`，`context_mode=model` |
+| 预处理/调度 | `dvpp`、`async_stream`、`unified_enqueue`、`pageable` |
+| 请求默认置信度 | `0.10` |
+| batch | `1` |
+| 性能目标 | `30 FPS`，p95 `35 ms`，30 次预热 |
+
+| OM | owner/功能 | 全局类 |
+| --- | --- | --- |
+| `om/base_detector.om` | 冻结 Base 检测器 | `0–3` |
+| `om/incremental_detector.om` | Incremental 检测器 | 局部 `0/1` 映射到全局 `4/5` |
+| `om/scene_sensor_net.om` | 已知类场景/传感器模型 | `air/forest/sea/urban` 与 `ir/sar` |
+
+Ascend 内容执行门控使用 `skip_specialist_on_scene_and_base_evidence_v1`：当 `air` 概率至少 `0.5` 且 Base 出现全局类 `1` 证据时跳过 Incremental 专家。线上输入只包含场景概率和 Base 检测结果。
+
+`configs/ascend310b/full_score_method.yaml` 的训练契约使用独立 YOLO26s、`input_size=[608,736]`、`epochs=500`、`patience=50`、`seed=3407`、`optimizer=AdamW`、`lr0=0.001` 和确定性 AMP 训练。候选端口为 `8502`，正式公共端口为 `8501`，阈值搜索从 old/new `0.10/0.10` 开始。
 
 ## 环境变量
 
-| 变量 | 用途 |
-| --- | --- |
-| `AGILE_AGENT_PYTHON` | 为环境引导与启动脚本指定 Python 解释器 |
-| `PYTHON_BIN` | 为环境引导指定 Python 3.10–3.12 可执行文件 |
-| `AGILE_RUNTIME_PYTHON` | 作为 YAML 中 `${AGILE_RUNTIME_PYTHON}` 的运行时解释器值 |
+当前仓库没有 `.env` 文件，默认 x86 启动不要求环境变量。环境变量用于选择配置、解释器、发布目录或构建/评分入口。
 
-环境准备完成后，解释器绝对路径写入 `.agent-python`，日常启动脚本直接读取该文件。
+| 变量 | 必需性 | 默认值 | 用途 |
+| --- | --- | --- | --- |
+| `AGILE_AGENT_CONFIG` | 可选 | `configs/agent_pipeline.yaml` | 替换 Web/app 调用 `load_config()` 时的默认主配置；Ascend systemd 服务将它设为 release-local YAML |
+| `AGILE_AGENT_OVERRIDES` | 可选 | 空列表 | JSON 字符串数组，例如 `["runtime.server_port=8503"]` |
+| `AGILE_AGENT_PYTHON` | 可选 | 启动/导出读取 `.agent-python`，其次 `.venv/bin/python` | 显式指定 x86 环境引导、启动与 TensorRT 导出所用 Python |
+| `PYTHON_BIN` | 可选 | 自动寻找 Python 3.12/3.11/3.10 | `bootstrap_x86.sh` 创建 `.venv` 时的 Python |
+| `VIRTUAL_ENV` | 可选 | 未设置 | `bootstrap_x86.sh` 可复用的已激活 venv |
+| `CONDA_PREFIX` | 可选 | 未设置 | `bootstrap_x86.sh` 可复用的已激活 Conda 环境 |
+| `PYTORCH_INDEX_URL` | 可选 | `https://download.pytorch.org/whl/cu124` | x86 bootstrap 的 PyTorch wheel 索引 |
+| `TORCH_VERSION` | 可选 | `2.5.1+cu124` | x86 bootstrap 在 CUDA 栈不可用时安装的 PyTorch 版本 |
+| `TORCHVISION_VERSION` | 可选 | `0.20.1+cu124` | 与 `TORCH_VERSION` 配套的 torchvision 版本 |
+| `AGILE_AGENT_ASCEND_RELEASE` | 可选 | `/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2` | Ascend 启停脚本使用的 release 根目录 |
+| `AGILE_AGENT_ASCEND_ENV` | 可选 | `/usr/local/miniconda3/envs/agileagent` | Ascend 服务的 Conda 环境 |
+| `AGILE_AGENT_ASCEND_PID_FILE` | 可选 | `$AGILE_AGENT_ASCEND_RELEASE/agent-web.pid` | Ascend 启停脚本的 PID 文件 |
+| `AGILE_AGENT_ASCEND_PORT` | 可选 | `8501` | Ascend 直接启动端口；systemd 正式主实例设为 `18501` |
+| `AGILE_AGENT_ASCEND_USER` | 可选 | `HwHiAiUser` | 安装 Ascend 主/回滚 systemd 服务的运行用户 |
+| `AGILE_AGENT_ASCEND_PYTHON` | 可选 | `/usr/local/miniconda3/envs/agileagent/bin/python` | Ascend OM 构建和 score gate 使用的 Python |
+| `AGILE_AGENT_FULL_SCORE_METHOD` | 可选 | `configs/ascend310b/full_score_method.yaml` | 替换 score gate 的方法契约 |
+| `AGILE_AGENT_AIPP_DIR` | 可选 | `configs/ascend310b/aipp` | OM 构建使用的 AIPP 配置目录 |
+| `AGILE_AGENT_RESUME` | 可选 | `0` | 设为 `1` 时复用命令和成功日志均匹配的现有 OM |
+| `AGILE_AGENT_IPTABLES` | 可选 | `/usr/sbin/iptables-legacy` | Ascend 公共 `8501` 回环路由工具 |
+| `AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION` | score gate 内部必需 | 未设置 | 候选验证进程由 score gate 设为 `1`，使 `validation_candidate: true` 配置可加载 |
+| `AGILE_AGENT_BUILD_ROOT` | 构建脚本内部 | 仓库根目录 | 传给 OM 构建清单生成器的源码根路径 |
+| `AGILE_AGENT_ONNX_DIR` | 构建脚本内部 | 第一个位置参数 | 已解析的 Base/Incremental ONNX 目录 |
+| `AGILE_AGENT_OUTPUT_DIR` | 构建脚本内部 | 第二个位置参数 | OM、ATC 日志和构建清单输出目录 |
+| `AGILE_AGENT_CONTEXT_BUILD_MANIFEST` | 构建脚本内部 | 第三个位置参数 | Scene-SensorNet 父构建清单路径 |
 
-## 主配置章节
+`build_ascend_yolo26_e2e_oms.sh` 在同一进程内设置上述四个内部变量，并将已解析的路径传给构建清单生成器。
 
-| 章节 | 内容 |
-| --- | --- |
-| `runtime` | 运行模式、解释器、设备、监听地址和端口 |
-| `web` | 代际注册表、production 通道和功能模型注册表 |
-| `inference` | 后端、输入尺寸、批量、置信度、预热和并行参数 |
-| `routing` | 类别所有权、冲突阈值、融合和软上下文参数 |
-| `decoding` | 图像解码与线程设置 |
-| `storage` | 数据、报告和模型目录 |
-| `incremental_workbench` | 上传限制、数据拆分、训练和生命周期参数 |
-| `gates` | Base mAP50、New-mAP50、KRR 和质量阈值 |
-| `incremental_guardian` | 数据审计、混淆图和候选评估 |
-| `generation` | 代际注册表、通道、recheck 和 shadow 参数 |
-| `ascend_backend` | OM 路径、SHA256、输入契约与执行模式 |
-| `logging` | 日志目录、轮转和请求记录设置 |
-| `decision` | 自动动作及输入输出 |
+## 按环境选择配置
 
-## 配置命令
+仓库使用独立 YAML 表示平台配置，不使用 `.env.development`、`.env.test` 或 `.env.production` 文件。
 
-校验与查看：
+- x86/CUDA 日常运行使用 `configs/agent_pipeline.yaml`。
+- x86/CUDA 设备专用 TensorRT 档从主配置复制，填入当前 TensorRT 版本、GPU 计算能力和 engine 路径后，交给 `scripts/export_tensorrt_engines.sh <profile.yaml>`。
+- Ascend310B v2 源码校验使用 `configs/agent_pipeline_ascend310b.yaml`；物化后的服务使用 release-local `configs/agent_pipeline_ascend310b.yaml`。
+- Ascend 候选验证由 `run_ascend310b_score_gate.sh` 在 `8502` 启动独立进程；通过的发布配置由提升工具生成。
 
-```bash
-agile-agent config validate --config configs/agent_pipeline.yaml
-agile-agent config show --config configs/agent_pipeline.yaml --effective
-agile-agent config get routing.conflict_iou
-```
-
-持久修改：
-
-```bash
-agile-agent config set routing.conflict_iou 0.50
-agile-agent config unset runtime.local_python
-```
-
-单次运行覆盖：
-
-```bash
-agile-agent --set inference.confidence_default=0.60 serve
-```
-
-代际命令管理 production 通道、类别所有权和模型身份：
-
-```bash
-agile-agent generation recheck --candidate CANDIDATE_ID
-agile-agent generation promote \
-  --candidate CANDIDATE_ID \
-  --manifest reports/generation_audit/CANDIDATE_ID/recheck_manifest.json
-agile-agent generation rollback --to GENERATION_ID
-```
-
-## 当前默认值
-
-| 配置 | 值 |
-| --- | --- |
-| `schema_version` | `3` |
-| `inference.backend` | `ultralytics_cuda` |
-| `inference.imgsz` / `specialist_imgsz` | `1280 / 1280` |
-| `inference.confidence_default` | `0.01` |
-| `inference.batch_size` | `32` |
-| `incremental_workbench.validation_fraction` | `0.20` |
-| `incremental_workbench.lock_fraction` | `0.20` |
-| `incremental_workbench.split_seed` | `20260821` |
-| `web.generation_channel` | `production` |
-
-当前 CUDA production 的固定 owner 为 Base `0–3`、Increment `4–5`。`models/generations.json` 提供六类逐类基础阈值：`0=.21, 1=.14, 2=.36, 3=.05, 4=.57, 5=.82`；逐类最大场景惩罚为 `0=.15, 1=.88, 2=.26, 3=.19, 4=.65, 5=0`。Base 的 `context_prior` 绑定 `base_context_prior.json` 且 `learning_data_scope=base_train_only`，Increment 绑定 `incremental_context_prior.json` 且 `learning_data_scope=incremental_train_only`。
-
-两个 `context_gate` 均使用 `soft_threshold_penalty`，线上输入为 Scene-SensorNet 的 air/forest/sea/urban 已知场景概率。有效阈值按 `min(1, 基础阈值 + 最大场景惩罚 × (1 - 场景亲和度))` 计算；`hard_routing: false` 保证场景只影响候选阈值，不跳过 Base 或 Increment。`routing.conflict_iou: 1.0` 关闭跨 owner 冲突抑制，`context_evidence_weight: 0.0` 不参与可选专家排名；class-incremental 专家仍是每图必执行。
-
-Ascend 配置将 `inference.backend` 设为 `ascend_acl`，登记 Base、Incremental、Scene 三个正式 OM、release manifest 和验证摘要。板端主实例监听内部 `18501`，公共 `8501` 由精确 loopback 路由提供；x86 的 `configs/agent_pipeline.yaml` 仍独立监听本机 `8501`。
-
-仓库根部的 `configs/agent_pipeline_ascend310b.yaml` 与当前正式包配置保持一致，也是下一轮候选生成的基础 schema 3 配置。零训练部署仍应使用物化后的 release-local 配置；固定 release 路径、资产身份、`validated: true` 和 validation summary 构成同一验证链，不能只复制 OM 后手工改路径。
-
-## Ascend 满分方法配置
-
-`configs/ascend310b/full_score_method.yaml` 不是可直接启动的服务配置，而是训练、导出、ATC、运行时和评分的单一机器可读契约。
-
-| 章节 | 当前固化内容 | 主要消费者 |
-| --- | --- | --- |
-| `target` | Ascend310B1、CANN `7.0.RC1`、`mixed_float16`、正式/候选端口 | build、materialize、score gate |
-| `competition` | Base/New/KRR 与三轮 20 图 batch 门槛；诊断和有效性前置条件 | score、benchmark、selector |
-| `training` | 独立 YOLO26s、1280 训练、500 epoch、patience 50、阶段数据范围 | x86 训练与文档核验 |
-| `export` | `independent_yolo26_e2e_v1`、`608×736`、两个 `[1,300,6]` E2E 输出、类别映射 | build、materialize |
-| `runtime` | DVPP、async/unified enqueue、真实 context 和双证据执行门控 | materialize、Ascend backend |
-| `threshold_search` | 评分阈值、old/new 搜索序列与选优顺序 | materialize、selector |
-| `benchmark` | 30 次预热、`3×20` batch、PNG 契约和端口 | score gate |
-| `reference_result` | 当前正式精度、诊断与公共 `8501` FPS | 文档和发布核验 |
-
-不可变约束：
-
-- `target.candidate_port=8502`，`target.formal_port=8501`；
-- `export.model_layout=independent_yolo26_e2e_v1`；
-- `export.output_contract=yolo26_e2e_v1`；
-- 检测输入 NCHW `[1,3,608,736]`，AIPP 输入 NHWC `[1,608,736,3]`；
-- Base 局部类 `0–3` 映射全局 `0–3`，Specialist 局部类 `0/1` 映射全局 `4/5`；
-- `runtime.context_mode=model` 与 `schedule_mode=unified_enqueue`；
-- 门控必须同时使用 Scene air 概率和 Base 全局类 1 检测，且不得读取标签或文件名；
-- 候选必须保持 `validated:false`、`validation_candidate:true`；
-- 只有正式提升工具可以生成 `validated:true` release。
-
-当前六类活动阈值和计分请求阈值均为 `0.10`。更换权重或数据集后按 `threshold_search` 重新搜索，不把该值视为通用阈值。
-
-### 方法配置到候选配置
-
-`tools/112_materialize_ascend_yolo26_candidate.py` 合并：
-
-1. schema 3 基础配置；
-2. `full_score_method.yaml`；
-3. Base、Specialist、Scene 三个 OM；
-4. build manifest；
-5. production 代际注册表；
-6. old/new 阈值。
-
-生成器写入固定 owner、E2E 输出契约、真实 context、双证据门控、`8502` 和候选代际。它拒绝资产身份、类别映射、门控或端口不一致的输入。
-
-### 候选到正式配置
-
-`tools/111_promote_ascend_full_score_release.py` 读取候选、score schema v2、benchmark schema v5 和复轮报告，复制三组 OM/provenance/validation，重写 release-local 路径并生成验证摘要。正式配置边界：
-
-- `runtime.server_port: 18501`；
-- 公共客户端仍访问 `127.0.0.1:8501`；
-- `validated:true`、`validation_candidate:false`；
-- `model_layout:independent_yolo26_e2e_v1`；
-- `context_mode:model`；
-- 旧 listener 由独立回滚 service 保留；
-- `8502` 不进入正式路由。
-
-systemd 安装器管理 main、rollback 和 route 三个 unit；路由脚本只管理一条带固定 comment 的 loopback NAT 规则。
-
-相关环境变量：
-
-| 环境变量 | 默认值/用途 |
-| --- | --- |
-| `AGILE_AGENT_FULL_SCORE_METHOD` | 覆盖方法 YAML；默认仓库内 `full_score_method.yaml` |
-| `AGILE_AGENT_ASCEND_PYTHON` | 板端构建/评分解释器；默认命名环境 Python |
-| `AGILE_AGENT_ASCEND_CANDIDATE_VALIDATION` | 仅 score gate 临时设为 `1`，授权候选加载 |
-| `AGILE_AGENT_ASCEND_RELEASE` | 启停脚本的 release 根；默认当前 4+2 release |
-| `AGILE_AGENT_ASCEND_PORT` | 直启监听端口；systemd 主实例固定使用 `18501` |
-
-## 配置验证
-
-```bash
-.venv/bin/python -m fair_agent.cli --config configs/agent_pipeline.yaml config validate
-.venv/bin/python -m fair_agent.cli --config configs/agent_pipeline_ascend310b.yaml config validate
-.venv/bin/python scripts/verify_release.py
-```
-
-发布校验同时核对主配置、模型资产、模型 manifest、功能模型注册表和 production 代际。
-
-预构建 Ascend 发布包校验：
-
-```bash
-cd models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2
-sha256sum -c SHA256SUMS
-cd ../../../..
-./scripts/materialize_ascend310b_full_score_release.sh --verify-existing
-```
-
-这两步均不训练、不运行 ATC，也不启动或停止 `8501/8502`。
-
-满分候选生成和选优入口：
-
-```bash
-.venv/bin/python tools/112_materialize_ascend_yolo26_candidate.py --help
-.venv/bin/python tools/110_select_ascend_full_score_candidate.py --help
-.venv/bin/python tools/111_promote_ascend_full_score_release.py --help
-bash -n scripts/build_ascend_yolo26_e2e_oms.sh
-bash -n scripts/run_ascend310b_score_gate.sh
-bash -n scripts/manage_ascend310b_primary_route.sh
-bash -n scripts/install_ascend310b_primary_services.sh
-```
-
-完整参数顺序和候选索引格式见 [`ascend-310b-full-score-method.md`](ascend-310b-full-score-method.md)。
+临时差异使用 `--set`，长期平台差异使用独立 YAML。配置更改后重启对应服务，使新的有效配置与运行时注册表同步。

@@ -143,8 +143,6 @@ def _runtime_evidence(config: Mapping[str, Any], health: Mapping[str, Any]) -> D
         "commands": {
             "npu_smi": _command_snapshot(["npu-smi", "info"]),
             "atc": _command_snapshot(["atc", "--help"]),
-            "msprof": _command_snapshot(["msprof", "--help"]),
-            "aoe": _command_snapshot(["aoe", "-h"]),
         },
     }
 
@@ -397,16 +395,6 @@ def _benchmark_running_server(
     output = resolve_path(performance["report_root"]) / run_id
     output.mkdir(parents=True, exist_ok=False)
     clean_config = {key: value for key, value in config.items() if not str(key).startswith("_")}
-    p0_gates = {
-        "mean_server_ms": float(summary["server_distribution"]["mean_ms"]) <= 40.0,
-        "p95_server_ms": float(summary["server_distribution"]["p95_ms"]) <= 42.0,
-        "request_failures": int(summary["request_failure_count"]) == 0,
-    }
-    final_gates = {
-        "mean_server_ms": float(summary["server_distribution"]["mean_ms"]) <= 33.33,
-        "p95_server_ms": float(summary["server_distribution"]["p95_ms"]) <= 35.0,
-        "request_failures": int(summary["request_failure_count"]) == 0,
-    }
     report = {
         "schema_version": 2,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -420,13 +408,9 @@ def _benchmark_running_server(
         "requests": request_rows,
         "environment": _runtime_evidence(config, health_payload),
         "competition_gates": competition_gates,
-        "ascend_p0_gates": p0_gates,
-        "ascend_final_gates": final_gates,
         "diagnostic_checks": diagnostic_checks,
         "warnings": [name for name, passed in diagnostic_checks.items() if not passed],
         "accepted": all(competition_gates.values()),
-        "ascend_p0_accepted": all(p0_gates.values()),
-        "ascend_final_accepted": all(final_gates.values()),
     }
     manifest = output / "benchmark.json"
     manifest.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

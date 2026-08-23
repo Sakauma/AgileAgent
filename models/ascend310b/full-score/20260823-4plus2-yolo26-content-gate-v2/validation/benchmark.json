@@ -294,13 +294,13 @@
       "configured": true,
       "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/config/candidate-seed-100-content-gate.yaml",
       "exists": true,
-      "sha256": "b691cec5bf5793ae4eb6601f7359d3a4d51bb92dc2dbf75402f8a9cc2720c972"
+      "sha256": "d1907d951c13eedb32281c1e7f727c01b5cad6f29e9d7ef6fe59dfa023b8ae93"
     },
     "build_manifest": {
       "configured": true,
       "path": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/build/build-manifest.json",
       "exists": true,
-      "sha256": "d3778ac759085a2644acc410e193cfe52529d3ab301edf3b484d43eb00c2351b"
+      "sha256": "66c497a7198433d8669f1de2eadd85ed5552224f3b772e0342392aaec0268d21"
     },
     "commands": {
       "npu_smi": {

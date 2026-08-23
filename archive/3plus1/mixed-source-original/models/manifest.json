@@ -1,0 +1,448 @@
+{
+  "schema_version": 2,
+  "release": "competition-4plus2-agent-scene-aware-v2-20260822",
+  "created_at": "2026-08-22T18:19:28.905530+08:00",
+  "run_id": "strict-4plus2-scene-aware-20260822-181928",
+  "base_model": {
+    "architecture": "YOLO26s",
+    "path": "models/production/incremental_detection/four_class_base_detector.pt",
+    "imgsz": 1280,
+    "classes": [
+      "soldier",
+      "small_aircraft",
+      "warship",
+      "tank"
+    ],
+    "class_map": {
+      "0": "soldier",
+      "1": "small_aircraft",
+      "2": "warship",
+      "3": "tank"
+    },
+    "local_to_global": {
+      "0": 0,
+      "1": 1,
+      "2": 2,
+      "3": 3
+    },
+    "status": "verified",
+    "metric": "mAP50",
+    "base_dev_map50": 0.8899785910691257,
+    "base_test_map50": 0.8560669777957763,
+    "evaluation_split": "splits/strict_4plus2/base_lock.txt",
+    "sha256": "105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd",
+    "raw_base_test_map50": 0.8875500761448091,
+    "per_class_thresholds": {
+      "0": 0.21,
+      "1": 0.14,
+      "2": 0.36,
+      "3": 0.05
+    },
+    "max_threshold_penalties": {
+      "0": 0.15,
+      "1": 0.88,
+      "2": 0.26,
+      "3": 0.19
+    },
+    "context_prior_source": "models/production/incremental_detection/base_context_prior.json",
+    "training_phase": "base_learning",
+    "counted_as_incremental_learning": false
+  },
+  "functional_models": [
+    {
+      "id": "scene_sensor_net_v1",
+      "function": "context_perception",
+      "path": "models/context/scene_sensor_net.pt",
+      "metrics_path": "models/context/scene_sensor_metrics.json",
+      "status": "verified",
+      "train_image_count": 712,
+      "dev_image_count": 89,
+      "lock_image_count": 89,
+      "lock_sensor_accuracy": 0.9887640449438202,
+      "lock_scene_accuracy": 0.8314606741573034,
+      "lock_joint_accuracy": 0.8202247191011236,
+      "sha256": "aa99a0e58db1f80b0b6e0cc0e5049b6dc39e88f4349d2e7c362b1e2a25b83a7e",
+      "metrics_sha256": "561524130d4e18101d19934cce14a86132b23fef70f2b81267892519eee66e52",
+      "competition_phase": "system_calibration",
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": false
+    },
+    {
+      "id": "four_class_base_detector",
+      "function": "multimodal_target_detection",
+      "path": "models/production/incremental_detection/four_class_base_detector.pt",
+      "status": "verified",
+      "base_test_map50": 0.8560669777957763,
+      "sha256": "105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd",
+      "raw_base_test_map50": 0.8875500761448091,
+      "scene_soft_gating": true,
+      "competition_phase": "base_learning",
+      "counted_as_incremental_learning": false
+    },
+    {
+      "id": "incremental_model_bank_v1",
+      "function": "incremental_object_detection",
+      "task_type": "incremental_object_detection",
+      "primary_mode": "class_incremental",
+      "current_evidence_mode": "class_incremental",
+      "supported_modes": [
+        "class_incremental",
+        "target_incremental"
+      ],
+      "learning_data_scope": "incremental_dataset_only",
+      "model_count": 1,
+      "protocol_count": 1,
+      "status": "verified",
+      "passed_protocols": 1,
+      "total_protocols": 1,
+      "old_raw_image_count": 0,
+      "true_class_incremental_verified": true,
+      "competition_accepted": true,
+      "deployment_accepted": true,
+      "competition_phase": "incremental_learning",
+      "counted_as_incremental_learning": true
+    }
+  ],
+  "incremental_models": [
+    {
+      "protocol": "incremental_detector",
+      "display_name": "二类增量检测专家",
+      "task_type": "incremental_object_detection",
+      "incremental_mode": "class_incremental",
+      "learning_data_scope": "incremental_dataset_only",
+      "class_names": {
+        "4": "patrol_boat",
+        "5": "armored_vehicle"
+      },
+      "global_class_ids": [
+        4,
+        5
+      ],
+      "base_model_id": "four_class_base_detector",
+      "base_class_ids": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "activation_thresholds": {
+        "4": 0.57,
+        "5": 0.82
+      },
+      "calibration_source": "models/production/incremental_detection/calibration.json",
+      "calibration_sources": {
+        "4": "models/production/incremental_detection/calibration.json",
+        "5": "models/production/incremental_detection/calibration.json"
+      },
+      "calibration_sha256": "c94be3385f9efa8e0457ce4c0a7d55802f90109ea71e11e9628b3e32b11a8738",
+      "metrics_source": "models/production/incremental_detection/metrics.json",
+      "metrics_sha256": "b651a6f4ca2557798a8cb4c185aad77936f5540a7ce8b41f30983c7ad94e8981",
+      "evidence_level": "verified",
+      "available": true,
+      "context_prior": {
+        "schema_version": 2,
+        "source_split": "incremental_train_only",
+        "dimensions": [
+          "scene"
+        ],
+        "online_inputs": [
+          "scene_probabilities"
+        ],
+        "label_aware_online_routing": false,
+        "filename_aware_online_routing": false,
+        "per_class": {
+          "4": {
+            "schema_version": 1,
+            "class_id": 4,
+            "class_name": "patrol_boat",
+            "sample_count": 56,
+            "scene": {
+              "air": 0.12243071165448241,
+              "forest": 0.16440275625333164,
+              "sea": 1.0,
+              "urban": 0.16303575719315921
+            }
+          },
+          "5": {
+            "schema_version": 1,
+            "class_id": 5,
+            "class_name": "armored_vehicle",
+            "sample_count": 56,
+            "scene": {
+              "air": 0.09149927230400841,
+              "forest": 0.93914792299818,
+              "sea": 0.48745347124642435,
+              "urban": 1.0
+            }
+          }
+        }
+      },
+      "context_gate": {
+        "enabled": true,
+        "policy": "soft_threshold_penalty",
+        "hard_routing": false,
+        "learning_data_scope": "incremental_train_only",
+        "dimensions": [
+          "scene"
+        ],
+        "max_threshold_penalty": 0.65,
+        "max_threshold_penalties": {
+          "4": 0.65,
+          "5": 0.0
+        },
+        "prior_source": "models/production/incremental_detection/incremental_context_prior.json",
+        "prior_sha256": "c102f4b6d1a7de7b712ce117239c3fe20f77fe991f85b6d82b1d15b3e3eb3f29",
+        "online_input": "scene_sensor_net_probabilities"
+      },
+      "path": "models/production/incremental_detection/incremental_detector.pt",
+      "sha256": "0ab0c6ed0117b75ab9ee105e9f109ccad96d988156d00fa4c4c0b9599e424a2a",
+      "evaluation_semantics": "all_owners_scene_probability_gated_on_mixed_dev_then_frozen_mixed_lock_v2",
+      "rechecked_at": "2026-08-22T18:19:28.905530+08:00",
+      "base_test_map50": 0.8560669777957763,
+      "old_map50_before": 0.8280599094822771,
+      "old_map50_after": 0.8058064769386335,
+      "new_map50": 0.7733677094868956,
+      "new_per_class_ap50": {
+        "4": 0.6910000000000001,
+        "5": 0.855735418973791
+      },
+      "full_map50": 0.7949935544547209,
+      "krr": 0.9731258182061283,
+      "lock_precision_by_class": {
+        "4": 0.9666666666666667,
+        "5": 0.8163265306122449
+      },
+      "lock_recall_by_class": {
+        "4": 0.6904761904761905,
+        "5": 0.8888888888888888
+      },
+      "false_activation_rate_by_class": {
+        "4": 0.012195121951219513,
+        "5": 0.08536585365853659
+      },
+      "diagnostic_warnings": [
+        "lock_precision_below_0_90",
+        "false_activation_rate_above_0_05"
+      ],
+      "competition_accepted": true,
+      "deployment_accepted": true,
+      "acceptance": "passed",
+      "overall_lock_precision": 0.66796875,
+      "new_class_lock_precision": 0.8734177215189873,
+      "training_phase": "incremental_learning",
+      "counted_as_incremental_learning": true,
+      "training_data_scope": "incremental_dataset_only",
+      "base_detector_weights_frozen": true,
+      "system_calibration_source": "models/production/incremental_detection/calibration.json"
+    }
+  ],
+  "frozen_prediction_evidence": {
+    "base_dev": {
+      "path": "models/production/incremental_detection/evidence/frozen/base_dev_predictions.jsonl",
+      "sha256": "aefe08381fdfeba62b40acb9a69f617073ee559ab49644a83b6704ca6c6fe93a"
+    },
+    "base_lock": {
+      "path": "models/production/incremental_detection/evidence/frozen/base_lock_predictions.jsonl",
+      "sha256": "38a23eb5e1565a21c579512cdaa273bfb23528f9b150c69bd3c99a7e8a631cbd"
+    },
+    "specialist_dev": {
+      "path": "models/production/incremental_detection/evidence/frozen/specialist_dev_predictions.jsonl",
+      "sha256": "8009960b6639e552e6af479d041d2d0259e819195cc91ffc58374f9ec0a967d0"
+    },
+    "specialist_lock": {
+      "path": "models/production/incremental_detection/evidence/frozen/specialist_lock_predictions.jsonl",
+      "sha256": "f149a97865fc6cd834bf43563132333c35079aa59cea3ab8ce0dcc851c39e595"
+    },
+    "predictions_frozen_before_lock_labels": true
+  },
+  "ascend_releases": [
+    {
+      "id": "20260823-4plus2-yolo26-content-gate-v2",
+      "status": "production",
+      "ready_without_training": true,
+      "target": "Ascend310B1",
+      "cann_version": "7.0.RC1",
+      "precision": "mixed_float16",
+      "model_layout": "independent_yolo26_e2e_v1",
+      "context_mode": "model",
+      "dataset_protocol": "strict_4plus2",
+      "package_root": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2",
+      "materialize_script": "scripts/materialize_ascend310b_full_score_release.sh",
+      "fixed_release_root": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2",
+      "models": {
+        "base_detector": {
+          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om",
+          "sha256": "56570c8ccac80beef10d623f40bd20e26dbf310dc1ba93c80ff607b9f6df7ae0",
+          "output_contract": "yolo26_e2e_v1",
+          "class_ids": [
+            0,
+            1,
+            2,
+            3
+          ]
+        },
+        "incremental_detector": {
+          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om",
+          "sha256": "d12ccf5b4c07ea97b8be09ff4cdea02463cf83ec68736ae6fd7451a3e0fcd87b",
+          "output_contract": "yolo26_e2e_v1",
+          "class_ids": [
+            4,
+            5
+          ]
+        },
+        "scene_sensor_net": {
+          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om",
+          "sha256": "c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9"
+        }
+      },
+      "content_execution_gate": {
+        "policy": "skip_specialist_on_scene_and_base_evidence_v1",
+        "scene": "air",
+        "scene_probability_min": 0.5,
+        "base_evidence_class_ids": [
+          1
+        ],
+        "online_inputs": [
+          "scene_probabilities",
+          "base_detections"
+        ],
+        "label_aware_online_routing": false,
+        "filename_aware_online_routing": false
+      },
+      "metrics": {
+        "base_map50": 0.8256706046553274,
+        "new_map50": 0.6188591827942598,
+        "krr": 1.0,
+        "full_map50": 0.7249274786671415,
+        "candidate_batch_median_fps": [
+          39.34684241589613,
+          39.424403705893944
+        ],
+        "post_promotion_batch_rounds": [
+          [
+            39.57261574990107,
+            39.580447259054026,
+            39.393342525113255
+          ],
+          [
+            39.5882818685669,
+            39.502271380604384,
+            39.666798889329634
+          ]
+        ],
+        "post_promotion_batch_median_fps": [
+          39.57261574990107,
+          39.5882818685669
+        ],
+        "lock_precision": 0.6775510204081632,
+        "lock_recall": 0.6611111111111111,
+        "false_activation_rate": 0.4666666666666667
+      },
+      "validation": {
+        "score": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/score.json",
+        "benchmark": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark.json",
+        "repeat_benchmark": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-repeat-1.json",
+        "post_promotion_benchmarks": [
+          "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-post-promotion.json",
+          "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-post-promotion-repeat.json"
+        ],
+        "frozen_predictions": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/frozen-predictions.jsonl"
+      }
+    },
+    {
+      "id": "20260816-full-score-1493b04",
+      "status": "historical",
+      "ready_without_training": true,
+      "target": "Ascend310B1",
+      "cann_version": "7.0.RC1",
+      "precision": "mixed_float16",
+      "model_layout": "shared_backbone_dual_head_v1",
+      "context_mode": "fixed_neutral_v1",
+      "dataset_protocol": "strict_3plus1",
+      "package_root": "models/ascend310b/full-score/20260816-full-score-1493b04",
+      "materialize_script": "scripts/materialize_ascend310b_full_score_release.sh",
+      "fixed_release_root": "/home/HwHiAiUser/agileagent/releases/20260816-full-score-1493b04",
+      "models": {
+        "dual_detector": {
+          "path": "models/ascend310b/full-score/20260816-full-score-1493b04/om/shared_backbone_dual_head.om",
+          "sha256": "3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89",
+          "output_contract": "raw_dual_head_v1"
+        },
+        "context_rollback": {
+          "path": "models/ascend310b/full-score/20260816-full-score-1493b04/om/scene_sensor_net.om",
+          "sha256": "c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9"
+        }
+      },
+      "metrics": {
+        "base_map50": 0.8049006527998962,
+        "new_map50": 0.6050327630685391,
+        "krr": 1.0,
+        "candidate_batch_median_fps": [
+          30.066145520144314,
+          30.079711234772148
+        ],
+        "post_promotion_batch_fps": [
+          30.234,
+          30.243,
+          30.294
+        ]
+      },
+      "validation": {
+        "score": "models/ascend310b/full-score/20260816-full-score-1493b04/validation/score.json",
+        "benchmark": "models/ascend310b/full-score/20260816-full-score-1493b04/validation/benchmark.json",
+        "repeat_benchmark": "models/ascend310b/full-score/20260816-full-score-1493b04/validation/benchmark-repeat-1.json",
+        "post_promotion_benchmark": "models/ascend310b/full-score/20260816-full-score-1493b04/validation/benchmark-post-promotion.json",
+        "frozen_predictions": "models/ascend310b/full-score/20260816-full-score-1493b04/validation/frozen-predictions.jsonl"
+      }
+    }
+  ],
+  "archive": {
+    "previous_x86_release": "models/archive/2026-08-22_strict_3plus1",
+    "recoverable": true
+  },
+  "notes": [
+    "所有检测选择和验收硬指标均为 mAP50。",
+    "incremental_learning 仅指使用当轮增量 train/dev 训练新类检测器及新类专属学习；Base 检测器权重保持冻结。",
+    "Scene-SensorNet 训练和六类场景门控搜索属于 system_calibration，可使用 Base/Increment train/dev，但不更新任何检测器权重。",
+    "六类检测的 mixed lock 只用于参数冻结后的 joint_evaluation，不训练也不选参；Scene-SensorNet 的 context lock 仅做冻结功能模型复核。",
+    "Base 与二类专家对每张图并行推理，类别 owner 保持固定。",
+    "六类逐类阈值和场景惩罚只由 mixed dev 选择；线上只读取 Scene-SensorNet 概率，不读取文件名或标签。",
+    "precision 与误激活率是非阻断诊断；当前场景感知运行点已显著改善二者。",
+    "仓库不包含竞赛数据集和标签。",
+    "Ascend 4+2 独立 YOLO26 E2E 三 OM release 已在公共 8501 正式提升并完成两轮部署后复验；旧 3+1 包仅作历史参考。"
+  ],
+  "phase_contract": {
+    "base_learning": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": [
+        "base_detector"
+      ],
+      "training_data_scope": "base_dataset_only"
+    },
+    "incremental_learning": {
+      "counted_as_incremental_learning": true,
+      "detector_weights_updated": [
+        "incremental_detector"
+      ],
+      "training_data_scope": "incremental_dataset_only",
+      "validation_data_scope": "incremental_dataset_only",
+      "base_detector_weights_frozen": true
+    },
+    "system_calibration": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": false,
+      "data_scope": {
+        "scene_sensor_model_training": "base_and_incremental_train_dev",
+        "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
+        "base_context_prior": "base_train_only",
+        "incremental_context_prior": "incremental_train_only",
+        "gate_selection": "mixed_dev_only"
+      }
+    },
+    "joint_evaluation": {
+      "counted_as_incremental_learning": false,
+      "detector_weights_updated": false,
+      "model_selection_allowed": false
+    }
+  }
+}

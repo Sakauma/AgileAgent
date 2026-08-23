@@ -55,7 +55,7 @@ def test_functional_registry_rejects_tampered_hash(tmp_path: Path) -> None:
     assert any(error.startswith("functional_artifact_invalid") for error in result["errors"])
 
 
-def test_functional_registry_rejects_historical_ascend_artifact(
+def test_functional_registry_rejects_wrong_production_ascend_artifact(
     tmp_path: Path,
 ) -> None:
     registry = yaml.safe_load(
@@ -67,14 +67,13 @@ def test_functional_registry_rejects_historical_ascend_artifact(
         for item in registry["models"]
         if item["id"] == "incremental_model_bank_v1"
     )
+    wrong_path = (
+        "models/ascend310b/full-score/"
+        "20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om"
+    )
     incremental["artifacts"][1] = {
-        "path": (
-            "models/ascend310b/full-score/20260816-full-score-1493b04/om/"
-            "shared_backbone_dual_head.om"
-        ),
-        "sha256": (
-            "3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89"
-        ),
+        "path": wrong_path,
+        "sha256": hashlib.sha256(Path(wrong_path).read_bytes()).hexdigest(),
         "runtime": "ascend_310b",
     }
     registry_path = tmp_path / "functional_models.yaml"

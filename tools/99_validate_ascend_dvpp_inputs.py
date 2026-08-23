@@ -67,7 +67,7 @@ def copy_input(model: Any) -> np.ndarray:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="从310B DVPP设备缓冲回读Base/Specialist/Scene输入并与CPU契约逐元素比较。"
+        description="回读Ascend310B v2三-OM输入并与当前CPU预处理契约逐元素比较。"
     )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--image", type=Path, action="append", required=True)
@@ -85,6 +85,9 @@ def main() -> int:
     if preprocessor is None:
         engine.close()
         raise RuntimeError("配置未创建DVPP encoded preprocessor。")
+    if preprocessor.specialist_model is None:
+        engine.close()
+        raise RuntimeError("Ascend310B v2配置缺少二类Specialist OM。")
 
     if args.dump_dir is not None:
         args.dump_dir.mkdir(parents=True, exist_ok=False)
@@ -105,11 +108,17 @@ def main() -> int:
             actual_specialist = copy_input(preprocessor.specialist_model)
             actual_base = copy_input(preprocessor.base_model)
             actual_context = copy_input(preprocessor.context_model)
-            expected_specialist = np.ascontiguousarray(np.asarray(image), dtype=np.uint8)[
-                None, ...
-            ]
             expected_base, _info = detector_tensor(
-                image, 736, 896, input_mode="nhwc_uint8_aipp"
+                image,
+                preprocessor.base_height,
+                preprocessor.base_width,
+                input_mode="nhwc_uint8_aipp",
+            )
+            expected_specialist, _specialist_info = detector_tensor(
+                image,
+                int(preprocessor.specialist_model.input_shape[1]),
+                int(preprocessor.specialist_model.input_shape[2]),
+                input_mode="nhwc_uint8_aipp",
             )
             expected_context = context_tensor(
                 image, 160, input_mode="nhwc_uint8_aipp"

@@ -3,7 +3,7 @@
   "input_mode": "unlabeled_images",
   "labels_read": false,
   "config": "/home/HwHiAiUser/agileagent/candidates/20260822-4plus2-yolo26-e2e-736/config/candidate-seed-100-content-gate.yaml",
-  "config_sha256": "b691cec5bf5793ae4eb6601f7359d3a4d51bb92dc2dbf75402f8a9cc2720c972",
+  "config_sha256": "d1907d951c13eedb32281c1e7f727c01b5cad6f29e9d7ef6fe59dfa023b8ae93",
   "context_override": null,
   "model_overrides": {},
   "confidence": 0.1,

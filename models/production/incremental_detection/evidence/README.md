@@ -1,8 +1,8 @@
 # strict 4+2 production 证据
 
-本目录绑定当前 4+2 Base 与联合二类增量专家的 dev 选模、训练参数和冻结预测。它是已通过六类指标的 production 性能基线，不冒充两轮顺序类别注入证据；正式两轮流程由 `configs/incremental_round_registry_4plus2.yaml` 和 `tools/06`–`tools/13` 驱动，完成逐轮训练、复核、候选登记和证据汇总后再生成独立证据。
+本目录绑定当前 4+2 Base 与联合二类增量专家的 dev 选模、训练参数和冻结预测，记录已通过六类指标的 production 性能。两轮顺序类别注入由 `configs/incremental_round_registry_4plus2.yaml` 和 `tools/06`–`tools/13` 驱动，其逐轮训练、复核、候选登记和证据汇总保存在独立证据链中。
 
-本基线的联合二类专家权重训练只使用 Increment train/dev，属于 `incremental_learning`；Scene-SensorNet 与六类场景门控是 `system_calibration`，可用 Base/Increment train/dev 与 mixed dev，但不更新任何检测器权重；冻结候选的 mixed lock 复核是 `joint_evaluation`，不训练也不选参。严格多轮证据还要求两个不同新类分轮训练、父子代际与逐轮 New-mAP50/KRR/Full-mAP50，当前目录不作该项声明。
+联合二类专家权重训练只使用 Increment train/dev，属于 `incremental_learning`；Scene-SensorNet 与六类场景门控是 `system_calibration`，可用 Base/Increment train/dev 与 mixed dev，但不更新任何检测器权重；冻结候选的 mixed lock 复核是 `joint_evaluation`，不训练也不选参。顺序增量证据包含两个不同新类的分轮训练、父子代际与逐轮 New-mAP50/KRR/Full-mAP50。
 
 - `base_selection.*` / `incremental_selection.*`：只按 dev mAP50 选模，未读取 lock；
 - `base_training/` / `incremental_training/`：胜出模型的 `args.yaml` 与 `results.csv`；

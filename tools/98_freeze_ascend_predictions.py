@@ -62,12 +62,12 @@ def main() -> int:
     parser.add_argument(
         "--context-om",
         type=Path,
-        help="仅用于隔离的历史staging对照；当前受控候选仍会执行构建清单门禁。",
+        help="使用指定的候选 Scene-SensorNet OM。",
     )
     parser.add_argument(
         "--base-om",
         type=Path,
-        help="仅用于隔离数值实验，覆盖three_class_base_detector对应OM。",
+        help="使用指定的四类 Base 候选 OM。",
     )
     parser.add_argument(
         "--specialist-om",
@@ -90,7 +90,7 @@ def main() -> int:
     config = copy.deepcopy(load_config(args.config))
     model_overrides = {}
     for label, suffix, override in (
-        ("base", "three_class_base_detector.pt", args.base_om),
+        ("base", "four_class_base_detector.pt", args.base_om),
         ("specialist", "incremental_detector.pt", args.specialist_om),
     ):
         if override is None:
@@ -105,10 +105,9 @@ def main() -> int:
         ]
         if len(keys) != 1:
             raise RuntimeError(f"无法唯一定位{label}模型配置：{keys}")
-        config["ascend_backend"]["models"][keys[0]] = {
-            "path": str(resolved),
-            "sha256": sha256(resolved),
-        }
+        entry = dict(config["ascend_backend"]["models"][keys[0]])
+        entry.update({"path": str(resolved), "sha256": sha256(resolved)})
+        config["ascend_backend"]["models"][keys[0]] = entry
         model_overrides[label] = {"path": str(resolved), "sha256": sha256(resolved)}
     context_override = None
     if args.context_om is not None:

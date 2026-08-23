@@ -12,9 +12,8 @@ from fair_agent.core.hashes import sha256_file
 
 
 EXPECTED_CONTRACTS = {
-    "base": ([1, 736, 896, 3], [1, 608, 736, 3]),
-    "specialist": ([1, 512, 640, 3], [1, 608, 736, 3]),
-    "dual_detector": ([1, 736, 896, 3],),
+    "base": ([1, 608, 736, 3],),
+    "specialist": ([1, 608, 736, 3],),
     "context": ([1, 160, 160, 3],),
 }
 REQUIRED_VALIDATION_REPORTS = ("golden", "accuracy", "performance")
@@ -27,45 +26,6 @@ FULL_SCORE_ACCURACY_GATES = {
 FULL_SCORE_BATCH_IMAGE_COUNT = 20
 FULL_SCORE_BATCH_ROUNDS = 3
 FULL_SCORE_BATCH_FPS_MIN = 30.0
-DETECTIONS_V1_OUTPUTS = {
-    "boxes": {"shape": [300, 4], "dtype": "float32"},
-    "scores": {"shape": [300], "dtype": "float32"},
-    "class_ids": {"shape": [300], "dtype": "int32"},
-    "valid_count": {"shape": [1], "dtype": "int32"},
-}
-
-
-def _decoded_candidates_v1_outputs(
-    candidate_capacity: int,
-    anchor_count: int,
-    class_count: int,
-) -> Dict[str, Dict[str, Any]]:
-    return {
-        "boxes": {
-            "shape": [int(candidate_capacity), 4],
-            "dtype": "float32",
-        },
-        "scores": {
-            "shape": [int(candidate_capacity)],
-            "dtype": "float32",
-        },
-        "class_ids": {
-            "shape": [int(candidate_capacity)],
-            "dtype": "int32",
-        },
-        "anchor_ids": {
-            "shape": [int(candidate_capacity)],
-            "dtype": "int32",
-        },
-        "valid_count": {"shape": [1], "dtype": "int32"},
-        "overflow": {"shape": [1], "dtype": "int32"},
-        "raw_output": {
-            "shape": [1, 4 + int(class_count), int(anchor_count)],
-            "dtype": "float32",
-        },
-    }
-
-
 def _load_json(path: Path, errors: List[str], label: str) -> Dict[str, Any]:
     if not path.is_file():
         errors.append(f"missing_{label}:{path}")
@@ -231,38 +191,17 @@ def _configured_detector_contracts(
     }
 
 
-def _structural_logical_heads(value: Any) -> Dict[str, Any]:
-    """Return the OM-bound dual-head contract without Host-only thresholds."""
-
-    if not isinstance(value, Mapping):
-        return {}
-    normalized: Dict[str, Any] = {}
-    for name, raw in value.items():
-        if not isinstance(raw, Mapping):
-            normalized[str(name)] = raw
-            continue
-        head = dict(raw)
-        head.pop("candidate_confidence", None)
-        normalized[str(name)] = head
-    return normalized
-
-
 def verify_ascend_artifacts(
     options: Mapping[str, Any],
     *,
     require_validation: bool | None = None,
 ) -> Dict[str, Any]:
-    """Verify a DVPP/AIPP candidate without loading ACL or an OM.
-
-    The build manifest is device-produced and immutable. The separate validation
-    summary links golden, 89-image accuracy, and 890-request performance reports.
-    """
+    """Verify an Ascend v2 candidate without loading ACL or an OM."""
 
     errors: List[str] = []
-    model_layout = str(
-        options.get("model_layout", "independent_models_v1")
-    )
-    shared_dual_head = model_layout == "shared_backbone_dual_head_v1"
+    model_layout = str(options.get("model_layout") or "")
+    if model_layout != "independent_yolo26_e2e_v1":
+        errors.append("model_layout_invalid")
     require_validation = (
         options.get("validated") is True
         if require_validation is None
@@ -333,11 +272,7 @@ def verify_ascend_artifacts(
             or contract.get("shape") not in expected_shapes
         ):
             errors.append(f"input_contract_mismatch:{model_id}:{role}")
-    expected_role_counts = (
-        {"base": 0, "specialist": 0, "dual_detector": 1, "context": 1}
-        if shared_dual_head
-        else {"base": 1, "specialist": 1, "dual_detector": 0, "context": 1}
-    )
+    expected_role_counts = {"base": 1, "specialist": 1, "context": 1}
     for role, expected_count in expected_role_counts.items():
         rows = by_role[role]
         if len(rows) != expected_count:
@@ -345,9 +280,7 @@ def verify_ascend_artifacts(
 
     configured_detectors, configured_context = _configured_om_rows(options)
     configured_contracts = _configured_detector_contracts(options)
-    detector_roles = (
-        ("dual_detector",) if shared_dual_head else ("base", "specialist")
-    )
+    detector_roles = ("base", "specialist")
     manifest_detectors = {
         (
             str(resolve_path(str(row.get("om", {}).get("path") or ""))),
@@ -372,60 +305,13 @@ def verify_ascend_artifacts(
                 str(row.get("om", {}).get("sha256") or ""),
             )
             configured = configured_contracts.get(key)
-            configured_name = str(
-                (configured or {}).get("output_contract", "raw_yolo_v1")
-            )
-            manifest_name = str(row.get("output_contract", "raw_yolo_v1"))
+            configured_name = str((configured or {}).get("output_contract") or "")
+            manifest_name = str(row.get("output_contract") or "")
             if manifest_name != configured_name:
                 errors.append(f"output_contract_mismatch:{role}")
                 continue
             contract = row.get("postprocess_contract")
-            if configured_name == "raw_dual_head_v1":
-                configured_heads = dict(
-                    (configured or {}).get("logical_heads") or {}
-                )
-                if _structural_logical_heads(
-                    row.get("logical_heads")
-                ) != _structural_logical_heads(configured_heads):
-                    errors.append(f"logical_heads_contract_mismatch:{role}")
-                if contract is not None:
-                    errors.append(f"raw_output_has_postprocess_contract:{role}")
-            elif configured_name == "detections_v1":
-                expected = {
-                    "candidate_confidence": float(
-                        (configured or {}).get("candidate_confidence", -1.0)
-                    ),
-                    "iou_threshold": float(
-                        (configured or {}).get("iou_threshold", -1.0)
-                    ),
-                    "max_det": int((configured or {}).get("max_det", 0)),
-                    "outputs": DETECTIONS_V1_OUTPUTS,
-                }
-                if contract != expected:
-                    errors.append(f"postprocess_contract_mismatch:{role}")
-            elif configured_name == "decoded_candidates_v1":
-                expected = {
-                    "candidate_confidence": float(
-                        (configured or {}).get("candidate_confidence", -1.0)
-                    ),
-                    "candidate_capacity": int(
-                        (configured or {}).get("candidate_capacity", 0)
-                    ),
-                    "anchor_count": int(
-                        (configured or {}).get("anchor_count", 0)
-                    ),
-                    "class_count": int(
-                        (configured or {}).get("class_count", 0)
-                    ),
-                    "outputs": _decoded_candidates_v1_outputs(
-                        int((configured or {}).get("candidate_capacity", 0)),
-                        int((configured or {}).get("anchor_count", 0)),
-                        int((configured or {}).get("class_count", 0)),
-                    ),
-                }
-                if contract != expected:
-                    errors.append(f"postprocess_contract_mismatch:{role}")
-            elif configured_name == "yolo26_e2e_v1":
+            if configured_name == "yolo26_e2e_v1":
                 max_det = int((configured or {}).get("max_det", 0))
                 class_count = int((configured or {}).get("class_count", 0))
                 expected = {
@@ -440,8 +326,8 @@ def verify_ascend_artifacts(
                 }
                 if max_det <= 0 or class_count <= 0 or contract != expected:
                     errors.append(f"postprocess_contract_mismatch:{role}")
-            elif contract is not None:
-                errors.append(f"raw_output_has_postprocess_contract:{role}")
+            else:
+                errors.append(f"output_contract_invalid:{role}")
     if manifest_context != {configured_context}:
         errors.append("configured_context_om_does_not_match_manifest")
 
@@ -477,11 +363,7 @@ def verify_ascend_artifacts(
                     "asset_hashes_verified",
                     "predictions_frozen_before_labels",
                 }
-                required_validity.add(
-                    "shared_max_drift_zero"
-                    if shared_dual_head
-                    else "base_model_frozen"
-                )
+                required_validity.add("base_model_frozen")
                 if (
                     not isinstance(validity, Mapping)
                     or any(validity.get(name) is not True for name in required_validity)

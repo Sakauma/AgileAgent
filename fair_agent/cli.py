@@ -489,187 +489,83 @@ def cmd_detect(args: argparse.Namespace) -> int:
         settings = build_web_settings(config)
         if args.profile:
             profile = load_experiment_profile(args.profile)
-            class_names = {int(key): str(value) for key, value in profile["class_names"].items()}
+            profile_id = str(profile["profile_id"])
+            class_names = {
+                int(key): str(value)
+                for key, value in profile["class_names"].items()
+            }
             base_mapping = {
                 int(key): int(value)
                 for key, value in profile["base_local_to_global"].items()
             }
-            if profile.get("deployment") == "single_detector":
-                student_id = f"{profile['profile_id']}_student"
-                prototype = profile.get("positive_prototype")
-                new_global_id = int(profile["new_global_id"])
-                old_global_ids = sorted(
-                    set(base_mapping.values()) - {new_global_id}
-                )
-                settings.update({
-                    "detector_path": resolve_path(profile["model_weight"]),
-                    "class_names": class_names,
-                    "base_class_ids": old_global_ids,
-                    "base_local_to_global": base_mapping,
-                    "generation_id": f"experiment-{profile['profile_id']}",
-                    "base_model_id": student_id,
-                    "class_owners": {
-                        **{
-                            global_id: "frozen_base_model"
-                            for global_id in old_global_ids
-                        },
-                        new_global_id: "incremental_model",
-                    },
-                    "protocols": {},
-                    "unified_class_gates": {
-                        "activation_thresholds": {
-                            new_global_id: float(profile["activation_threshold"])
-                        },
-                        "incremental_class_ids": [new_global_id],
-                        "protocol_id": str(profile["profile_id"]),
-                        "class_names": {
-                            new_global_id: class_names[new_global_id]
-                        },
-                        "new_map50": float(profile.get("new_map50", 0.0)),
-                        "krr": float(profile.get("krr", 0.0)),
-                        "context_prior": dict(profile.get("context_prior") or {}),
-                        "context_gate": dict(
-                            profile.get("context_gate") or {"enabled": False}
-                        ),
-                        "positive_prototypes": (
-                            {new_global_id: prototype}
-                            if isinstance(prototype, dict) else {}
-                        ),
-                    },
-                })
-            else:
-                profile_id = profile["profile_id"]
-                new_global_ids = [
-                    int(value)
-                    for value in profile.get(
-                        "new_global_ids", [profile.get("new_global_id")]
-                    )
-                ]
-                activation_thresholds = {
-                    int(key): float(value)
-                    for key, value in profile.get(
-                        "activation_thresholds",
-                        {profile.get("new_global_id"): profile.get("activation_threshold")},
-                    ).items()
-                }
-                calibration_sources = {
-                    int(key): str(value)
-                    for key, value in profile.get(
-                        "calibration_sources",
-                        {profile.get("new_global_id"): profile.get("calibration_source")},
-                    ).items()
-                }
-                base_activation_thresholds = {
-                    int(key): float(value)
-                    for key, value in dict(
-                        profile.get("base_activation_thresholds") or {}
-                    ).items()
-                }
-                raw_specialists = profile.get("specialist_models")
-                if isinstance(raw_specialists, list) and raw_specialists:
-                    specialist_specs = [dict(item) for item in raw_specialists]
-                else:
-                    specialist_mapping = {
-                        int(key): int(value)
-                        for key, value in dict(
-                            profile.get("specialist_local_to_global")
-                            or {
-                                index: global_id
-                                for index, global_id in enumerate(new_global_ids)
-                            }
-                        ).items()
-                    }
-                    specialist_specs = [
-                        {
-                            "model_id": profile_id,
-                            "weight": profile["specialist_weight"],
-                            "local_to_global": specialist_mapping,
-                            "global_class_ids": sorted(
-                                specialist_mapping.values()
-                            ),
-                            "new_map50": profile.get("new_map50", 0.0),
-                        }
-                    ]
-                protocols = {}
-                class_owners = {
-                    global_id: f"{profile_id}_base"
-                    for global_id in base_mapping.values()
-                }
-                for specialist in specialist_specs:
-                    specialist_id = str(specialist["model_id"])
-                    specialist_mapping = {
-                        int(key): int(value)
-                        for key, value in dict(
-                            specialist["local_to_global"]
-                        ).items()
-                    }
-                    owned_ids = sorted(set(specialist_mapping.values()))
-                    owned_names = {
-                        global_id: class_names[global_id]
-                        for global_id in owned_ids
-                    }
-                    for global_id in owned_ids:
-                        class_owners[global_id] = specialist_id
-                    protocols[specialist_id] = {
+            specialist_mapping = {
+                int(key): int(value)
+                for key, value in profile[
+                    "specialist_local_to_global"
+                ].items()
+            }
+            new_global_ids = sorted(specialist_mapping.values())
+            activation_thresholds = {
+                int(key): float(value)
+                for key, value in profile["activation_thresholds"].items()
+            }
+            calibration_sources = {
+                int(key): str(value)
+                for key, value in profile["calibration_sources"].items()
+            }
+            base_activation_thresholds = {
+                int(key): float(value)
+                for key, value in profile[
+                    "base_activation_thresholds"
+                ].items()
+            }
+            specialist_id = "incremental_detector"
+            owned_names = {
+                class_id: class_names[class_id]
+                for class_id in new_global_ids
+            }
+            class_owners = {
+                class_id: settings["base_model_id"]
+                for class_id in base_mapping.values()
+            }
+            class_owners.update(
+                {class_id: specialist_id for class_id in new_global_ids}
+            )
+            settings.update({
+                "detector_path": resolve_path(profile["base_weight"]),
+                "class_names": class_names,
+                "base_class_ids": list(base_mapping.values()),
+                "base_local_to_global": base_mapping,
+                "class_owners": class_owners,
+                "protocols": {
+                    specialist_id: {
                         "id": specialist_id,
                         "class_name": "、".join(owned_names.values()),
                         "new_class": "、".join(owned_names.values()),
                         "class_names": owned_names,
-                        "global_class_ids": owned_ids,
+                        "global_class_ids": new_global_ids,
                         "local_to_global": specialist_mapping,
                         "incremental_mode": "class_incremental",
-                        "weights": resolve_path(specialist["weight"]),
-                        "new_map50": float(
-                            specialist.get("new_map50", profile["new_map50"])
-                        ),
+                        "weights": resolve_path(profile["specialist_weight"]),
+                        "new_map50": float(profile["new_map50"]),
                         "krr": float(profile["krr"]),
                         "available": True,
-                        "activation_thresholds": {
-                            class_id: activation_thresholds[class_id]
-                            for class_id in owned_ids
-                        },
-                        "calibration_sources": {
-                            class_id: calibration_sources[class_id]
-                            for class_id in owned_ids
-                        },
+                        "activation_thresholds": activation_thresholds,
+                        "calibration_sources": calibration_sources,
                         "routing_prior": float(
                             config["routing"]["default_routing_prior"]
                         ),
-                        "context_prior": dict(
-                            profile.get("context_prior") or {}
-                        ),
-                        "context_gate": dict(
-                            profile.get("context_gate") or {"enabled": False}
-                        ),
-                        "positive_prototype": (
-                            profile.get("positive_prototype")
-                            if len(specialist_specs) == 1
-                            else None
-                        ),
+                        "context_prior": dict(profile["context_prior"]),
+                        "context_gate": dict(profile["context_gate"]),
                     }
-                settings.update({
-                    "detector_path": resolve_path(profile["base_weight"]),
-                    "class_names": class_names,
-                    "base_class_ids": list(base_mapping.values()),
-                    "base_local_to_global": base_mapping,
-                    "generation_id": str(
-                        profile.get("generation_id") or f"experiment-{profile_id}"
-                    ),
-                    "base_model_id": f"{profile_id}_base",
-                    "class_owners": class_owners,
-                    "protocols": protocols,
-                    "unified_class_gates": {
-                        "activation_thresholds": base_activation_thresholds,
-                        "incremental_class_ids": [],
-                        "context_prior": dict(
-                            profile.get("base_context_prior") or {}
-                        ),
-                        "context_gate": dict(
-                            profile.get("base_context_gate")
-                            or {"enabled": False}
-                        ),
-                    },
-                })
+                },
+                "unified_class_gates": {
+                    "activation_thresholds": base_activation_thresholds,
+                    "incremental_class_ids": [],
+                    "context_prior": dict(profile["base_context_prior"]),
+                    "context_gate": dict(profile["base_context_gate"]),
+                },
+            })
         engine = WebInferenceEngine(
             settings["detector_path"],
             settings["context_path"],
@@ -699,27 +595,6 @@ def cmd_detect(args: argparse.Namespace) -> int:
     public = {key: value for key, value in result.items() if key != "annotated_png"}
     print(json.dumps(public, ensure_ascii=False, indent=2))
     return 0
-
-
-def cmd_experiment(args: argparse.Namespace) -> int:
-    from fair_agent.modules.incremental_experiment import (
-        reproduce_experiment,
-        run_experiment,
-        validate_experiment,
-    )
-
-    try:
-        if args.experiment_action == "validate":
-            result = validate_experiment(args.experiment_config)
-        elif args.experiment_action == "run":
-            result = run_experiment(args.experiment_config, run_id=args.run_id)
-        else:
-            result = reproduce_experiment(args.manifest, run_id=args.run_id)
-    except (OSError, RuntimeError, ValueError) as exc:
-        print(f"增量实验失败：{exc}")
-        return 1
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result.get("valid", result.get("returncode", 0) == 0) else 1
 
 
 def cmd_config(args: argparse.Namespace) -> int:
@@ -1027,20 +902,6 @@ def build_parser() -> argparse.ArgumentParser:
     detect.add_argument("--confidence", type=float)
     detect.add_argument("--profile", choices=["incremental-detection"], help="使用已注册并通过验收的增量检测档。")
     detect.set_defaults(func=cmd_detect)
-
-    experiment = sub.add_parser("experiment", help="验证、执行或复现可审计的增量学习实验。")
-    experiment_sub = experiment.add_subparsers(dest="experiment_action", required=True)
-    experiment_validate = experiment_sub.add_parser("validate", help="只读校验配置、数据划分和访问边界。")
-    experiment_validate.add_argument("--config", dest="experiment_config", required=True)
-    experiment_validate.set_defaults(func=cmd_experiment)
-    experiment_run = experiment_sub.add_parser("run", help="创建不可变run并执行训练适配器。")
-    experiment_run.add_argument("--config", dest="experiment_config", required=True)
-    experiment_run.add_argument("--run-id")
-    experiment_run.set_defaults(func=cmd_experiment)
-    experiment_reproduce = experiment_sub.add_parser("reproduce", help="按父manifest和相同数据指纹复现实验。")
-    experiment_reproduce.add_argument("--manifest", required=True)
-    experiment_reproduce.add_argument("--run-id")
-    experiment_reproduce.set_defaults(func=cmd_experiment)
 
     generation = sub.add_parser("generation", help="复核、上线或回滚模型代际。")
     generation_sub = generation.add_subparsers(dest="generation_action", required=True)

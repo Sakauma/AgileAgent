@@ -8,8 +8,8 @@ usage() {
   manage_ascend310b_primary_route.sh remove [MAIN_INTERNAL_PORT]
   manage_ascend310b_primary_route.sh status [MAIN_INTERNAL_PORT]
 
-通过精确的loopback NAT规则，把板端公共8501的新连接原子转发到满分主实例。
-旧三OM进程继续监听8501；删除规则即可立即回滚。8502不参与正式路由。
+通过精确的loopback NAT规则，把板端公共8501的新连接原子转发到当前正式主实例。
+回滚实例继续监听8501；删除规则即可立即回滚。8502不参与正式路由。
 EOF
 }
 
@@ -18,10 +18,7 @@ MAIN_PORT="${2:-18501}"
 PUBLIC_PORT=8501
 COMMENT="AGILE_AGENT_ASCEND310B_PRIMARY"
 IPTABLES="${AGILE_AGENT_IPTABLES:-/usr/sbin/iptables-legacy}"
-SUPPORTED_PRIMARY_LAYOUTS=(
-  shared_backbone_dual_head_v1
-  independent_yolo26_e2e_v1
-)
+SUPPORTED_PRIMARY_LAYOUTS=(independent_yolo26_e2e_v1)
 
 if [[ ! "$ACTION" =~ ^(apply|remove|status)$ ]]; then
   usage >&2
@@ -107,7 +104,7 @@ case "$ACTION" in
     else
       # 规则删除是remove的原子职责。回滚监听器可能正在systemd重启，
       # 这不应让ExecStop被标记为failed；严格健康验收由status或安装器执行。
-      printf '已删除主线路由，但三OM回滚服务尚未ready，请检查rollback service。\n' >&2
+      printf '已删除主线路由，但回滚服务尚未ready，请检查rollback service。\n' >&2
       printf 'public=%s route=removed rollback=not_ready\n' "$PUBLIC_PORT"
     fi
     ;;

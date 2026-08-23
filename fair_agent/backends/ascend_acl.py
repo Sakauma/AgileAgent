@@ -311,7 +311,6 @@ class AscendAclExecutionHandle:
         submit_ms: float,
         input_reference: np.ndarray | None,
         preloaded: bool,
-        output_copy_plan: Mapping[str, Any] | None = None,
     ) -> None:
         self.model = model
         self.submit_ms = float(submit_ms)
@@ -320,9 +319,6 @@ class AscendAclExecutionHandle:
         # allocation through the model lifetime.
         self.input_reference = input_reference
         self.preloaded = bool(preloaded)
-        self.output_copy_plan = (
-            dict(output_copy_plan) if output_copy_plan is not None else None
-        )
         self._lock = threading.Lock()
         self._completed = False
         self._result: tuple[list[np.ndarray], dict[str, Any]] | None = None
@@ -344,43 +340,7 @@ class AscendAclExecutionHandle:
                         acl.rt.synchronize_event(self.model.output_copy_end_event),
                         "acl.rt.synchronize_event(model completion)",
                     )
-                    copied_indices = list(
-                        self.model._initial_output_indices(self.output_copy_plan)
-                    )
-                    output_copy_mode = "all"
-                    if (
-                        self.output_copy_plan is not None
-                        and not bool(self.output_copy_plan["force_raw"])
-                    ):
-                        follow_indices, output_copy_mode = (
-                            self.model._conditional_output_indices(
-                                self.output_copy_plan
-                            )
-                        )
-                        _require(
-                            acl.rt.reset_event(
-                                self.model.output_copy_end_event,
-                                self.model.stream,
-                            ),
-                            "acl.rt.reset_event(conditional output copy)",
-                        )
-                        self.model._enqueue_output_indices(follow_indices)
-                        _require(
-                            acl.rt.record_event(
-                                self.model.output_copy_end_event,
-                                self.model.stream,
-                            ),
-                            "acl.rt.record_event(conditional output copy)",
-                        )
-                        _require(
-                            acl.rt.synchronize_event(
-                                self.model.output_copy_end_event
-                            ),
-                            "acl.rt.synchronize_event(conditional output copy)",
-                        )
-                        copied_indices.extend(follow_indices)
-                    elif self.output_copy_plan is not None:
-                        output_copy_mode = "raw_fallback"
+                    copied_indices = list(range(len(self.model.output_contracts)))
                     wait_ms = (time.perf_counter_ns() - wait_started) / 1_000_000.0
                     input_copy_ms = 0.0
                     if self.model.detailed_event_timing and not self.preloaded:
@@ -410,7 +370,7 @@ class AscendAclExecutionHandle:
                         "input_copy_ms": input_copy_ms,
                         "inference_ms": inference_ms,
                         "output_copy_ms": output_copy_ms,
-                        "output_copy_mode": output_copy_mode,
+                        "output_copy_mode": "all",
                         "copied_output_indices": tuple(copied_indices),
                     },
                 )
@@ -637,67 +597,6 @@ class AscendAclModel:
             for contract, host in zip(self.output_contracts, self.output_hosts)
         ]
 
-    def _normalize_output_copy_plan(
-        self, plan: Mapping[str, Any] | None
-    ) -> dict[str, Any] | None:
-        if plan is None:
-            return None
-        required = {
-            "candidate_indices", "metadata_indices", "raw_index",
-            "overflow_index", "force_raw",
-        }
-        if set(plan) != required:
-            raise RuntimeError("Ascend条件输出复制计划字段非法")
-        normalized = {
-            "candidate_indices": tuple(int(value) for value in plan["candidate_indices"]),
-            "metadata_indices": tuple(int(value) for value in plan["metadata_indices"]),
-            "raw_index": int(plan["raw_index"]),
-            "overflow_index": int(plan["overflow_index"]),
-            "force_raw": bool(plan["force_raw"]),
-        }
-        candidate = normalized["candidate_indices"]
-        metadata = normalized["metadata_indices"]
-        raw_index = normalized["raw_index"]
-        indices = (*candidate, *metadata, raw_index)
-        if (
-            not candidate
-            or not metadata
-            or len(set(indices)) != len(indices)
-            or any(index < 0 or index >= len(self.output_contracts) for index in indices)
-            or normalized["overflow_index"] not in metadata
-        ):
-            raise RuntimeError("Ascend条件输出复制计划索引非法")
-        overflow_contract = self.output_contracts[normalized["overflow_index"]]
-        if (
-            tuple(overflow_contract["shape"]) != (1,)
-            or overflow_contract["dtype"] != np.dtype(np.int32)
-        ):
-            raise RuntimeError("Ascend overflow输出契约必须是int32[1]")
-        return normalized
-
-    def _initial_output_indices(
-        self, plan: Mapping[str, Any] | None
-    ) -> tuple[int, ...]:
-        if plan is None:
-            return tuple(range(len(self.output_contracts)))
-        if bool(plan["force_raw"]):
-            return (int(plan["raw_index"]),)
-        return tuple(int(value) for value in plan["metadata_indices"])
-
-    def _conditional_output_indices(
-        self, plan: Mapping[str, Any]
-    ) -> tuple[tuple[int, ...], str]:
-        overflow_view = self._output_views()[int(plan["overflow_index"])]
-        overflow = int(overflow_view.reshape(-1)[0])
-        if overflow not in {0, 1}:
-            raise RuntimeError(f"Ascend候选overflow非法：{overflow}")
-        if overflow:
-            return (int(plan["raw_index"]),), "raw_fallback"
-        return (
-            tuple(int(value) for value in plan["candidate_indices"]),
-            "decoded_candidates",
-        )
-
     def _copy_output_indices_synchronous(
         self, indices: Sequence[int]
     ) -> list[np.ndarray]:
@@ -785,11 +684,9 @@ class AscendAclModel:
         self,
         batch: np.ndarray | None,
         ready_event: Any | None,
-        output_copy_plan: Mapping[str, Any] | None = None,
     ) -> AscendAclExecutionHandle:
         if self.execution_mode != "async_stream" or self.stream is None:
             raise RuntimeError("Ascend异步提交要求async_stream执行模式")
-        normalized_output_plan = self._normalize_output_copy_plan(output_copy_plan)
         self._claim_submission()
         acl = self.runtime.acl
         submit_started = time.perf_counter_ns()
@@ -859,9 +756,7 @@ class AscendAclModel:
                     acl.rt.record_event(self.inference_end_event, self.stream),
                     "acl.rt.record_event(inference end)",
                 )
-                self._enqueue_output_indices(
-                    self._initial_output_indices(normalized_output_plan)
-                )
+                self._enqueue_output_indices(tuple(range(len(self.output_contracts))))
                 _require(
                     acl.rt.record_event(self.output_copy_end_event, self.stream),
                     "acl.rt.record_event(output copy end)",
@@ -872,7 +767,6 @@ class AscendAclModel:
                 (time.perf_counter_ns() - submit_started) / 1_000_000.0,
                 input_reference,
                 ready_event is not None,
-                normalized_output_plan,
             )
             with self.execution_condition:
                 if self._outstanding is not None:
@@ -894,11 +788,7 @@ class AscendAclModel:
                 self.execution_condition.notify_all()
             raise
 
-    def submit(
-        self,
-        array: np.ndarray,
-        output_copy_plan: Mapping[str, Any] | None = None,
-    ) -> AscendAclExecutionHandle:
+    def submit(self, array: np.ndarray) -> AscendAclExecutionHandle:
         batch = np.ascontiguousarray(array, dtype=self.input_dtype)
         if tuple(batch.shape) != self.input_shape:
             raise RuntimeError(
@@ -908,31 +798,20 @@ class AscendAclModel:
             raise RuntimeError(
                 f"{self.path.name}输入字节数错误：{batch.nbytes} != {self.input_size}"
             )
-        return self._enqueue(batch, None, output_copy_plan)
+        return self._enqueue(batch, None)
 
-    def submit_preloaded(
-        self,
-        ready_event: Any,
-        output_copy_plan: Mapping[str, Any] | None = None,
-    ) -> AscendAclExecutionHandle:
-        return self._enqueue(None, ready_event, output_copy_plan)
+    def submit_preloaded(self, ready_event: Any) -> AscendAclExecutionHandle:
+        return self._enqueue(None, ready_event)
 
     def _execute_threaded_async(
         self,
         batch: np.ndarray | None,
         ready_event: Any | None,
-        output_copy_plan: Mapping[str, Any] | None = None,
     ) -> tuple[list[np.ndarray], dict[str, Any]]:
-        """Reproduce the pre-P3 per-model execute/wait/D2H path.
-
-        ThreadPool workers enqueue one model each, immediately wait for that
-        model stream, and then perform synchronous D2H. Keeping this path next
-        to unified enqueue makes the P4 memory/schedule ablation reversible.
-        """
+        """Execute one async stream and copy all outputs synchronously."""
 
         if self.execution_mode != "async_stream" or self.stream is None:
             raise RuntimeError("Ascend threaded_execute要求async_stream执行模式")
-        normalized_output_plan = self._normalize_output_copy_plan(output_copy_plan)
         self._claim_submission()
         acl = self.runtime.acl
         submit_started = time.perf_counter_ns()
@@ -1014,22 +893,8 @@ class AscendAclModel:
                     "model threaded_execute",
                 )
                 output_copy_started = time.perf_counter_ns()
-                copied_indices = list(
-                    self._initial_output_indices(normalized_output_plan)
-                )
-                outputs = self._copy_output_indices_synchronous(copied_indices)
-                output_copy_mode = "all"
-                if (
-                    normalized_output_plan is not None
-                    and not bool(normalized_output_plan["force_raw"])
-                ):
-                    follow_indices, output_copy_mode = (
-                        self._conditional_output_indices(normalized_output_plan)
-                    )
-                    self._copy_output_indices_synchronous(follow_indices)
-                    copied_indices.extend(follow_indices)
-                elif normalized_output_plan is not None:
-                    output_copy_mode = "raw_fallback"
+                copied_indices = list(range(len(self.output_contracts)))
+                outputs = self._copy_outputs_synchronous()
                 output_copy_ms = (
                     time.perf_counter_ns() - output_copy_started
                 ) / 1_000_000.0
@@ -1040,7 +905,7 @@ class AscendAclModel:
                 "input_copy_ms": input_copy_ms,
                 "inference_ms": inference_ms,
                 "output_copy_ms": output_copy_ms,
-                "output_copy_mode": output_copy_mode,
+                "output_copy_mode": "all",
                 "copied_output_indices": tuple(copied_indices),
             }
         except BaseException:
@@ -1059,7 +924,6 @@ class AscendAclModel:
     def execute_threaded(
         self,
         array: np.ndarray,
-        output_copy_plan: Mapping[str, Any] | None = None,
     ) -> tuple[list[np.ndarray], dict[str, Any]]:
         batch = np.ascontiguousarray(array, dtype=self.input_dtype)
         if tuple(batch.shape) != self.input_shape:
@@ -1070,14 +934,13 @@ class AscendAclModel:
             raise RuntimeError(
                 f"{self.path.name}输入字节数错误：{batch.nbytes} != {self.input_size}"
             )
-        return self._execute_threaded_async(batch, None, output_copy_plan)
+        return self._execute_threaded_async(batch, None)
 
     def execute_preloaded_threaded(
         self,
         ready_event: Any,
-        output_copy_plan: Mapping[str, Any] | None = None,
     ) -> tuple[list[np.ndarray], dict[str, Any]]:
-        return self._execute_threaded_async(None, ready_event, output_copy_plan)
+        return self._execute_threaded_async(None, ready_event)
 
     def execute(self, array: np.ndarray) -> tuple[list[np.ndarray], float]:
         if self.execution_mode == "async_stream":
@@ -1297,10 +1160,10 @@ class AscendEncodedPreprocessor:
                     f"Ascend {name}设备预处理输入契约错误："
                     f"shape={model.input_shape}, dtype={model.input_dtype}"
                 )
-        supported_base_shapes = {(1, 736, 896, 3), (1, 608, 736, 3)}
-        if tuple(base_model.input_shape) not in supported_base_shapes:
+        detector_shape = (1, 608, 736, 3)
+        if tuple(base_model.input_shape) != detector_shape:
             raise RuntimeError(
-                "Ascend Base DVPP当前只支持旧896x736或4+2的736x608输入："
+                "Ascend310B v2 Base DVPP输入必须为1x608x736x3："
                 f"{base_model.input_shape}"
             )
         specialist_shape = (
@@ -1308,13 +1171,9 @@ class AscendEncodedPreprocessor:
             if specialist_model is not None
             else None
         )
-        if specialist_shape not in {
-            None,
-            (1, self.source_height, self.source_width, 3),
-            tuple(base_model.input_shape),
-        }:
+        if specialist_shape not in {None, detector_shape}:
             raise RuntimeError(
-                "Ascend Specialist DVPP必须使用原图640x512或与Base相同的输入："
+                "Ascend310B v2 Specialist DVPP输入必须与Base相同："
                 f"{specialist_shape}"
             )
         self.runtime = runtime
@@ -1323,12 +1182,6 @@ class AscendEncodedPreprocessor:
         self.context_model = context_model
         self.base_height = int(base_model.input_shape[1])
         self.base_width = int(base_model.input_shape[2])
-        self.specialist_direct_decode = specialist_shape == (
-            1,
-            self.source_height,
-            self.source_width,
-            3,
-        )
         self.specialist_clone_from_base = (
             specialist_model is not None
             and specialist_shape == tuple(base_model.input_shape)
@@ -1485,16 +1338,10 @@ class AscendEncodedPreprocessor:
             * 3
             * _align(self.source_height, 2)
         )
-        if self.specialist_direct_decode:
-            assert self.specialist_model is not None
-            decoded_pointer = self.specialist_model.input_device
-            if expected_decoded_size != self.specialist_model.input_size:
-                raise RuntimeError("Ascend增量OM输入大小与RGB888 PNGD输出不一致")
-        else:
-            decoded_pointer = self._dvpp_buffer(
-                expected_decoded_size,
-                "acl.media.dvpp_malloc(decoded input)",
-            )
+        decoded_pointer = self._dvpp_buffer(
+            expected_decoded_size,
+            "acl.media.dvpp_malloc(decoded input)",
+        )
         self.decoded_desc, self.decoded_width_stride, _, decoded_size = (
             self._picture_desc(
                 decoded_pointer,
@@ -1677,11 +1524,6 @@ class AscendEncodedPreprocessor:
                 ),
                 "acl.media.dvpp_png_decode_async",
             )
-            if self.specialist_direct_decode:
-                _require(
-                    acl.rt.record_event(self.specialist_ready_event, self.stream),
-                    "acl.rt.record_event(specialist input)",
-                )
             _require(
                 acl.media.dvpp_vpc_resize_async(
                     self.channel,
@@ -1906,60 +1748,6 @@ def detector_tensor(
     }
 
 
-def _box_iou(one: np.ndarray, many: np.ndarray) -> np.ndarray:
-    top_left = np.maximum(one[:2], many[:, :2])
-    bottom_right = np.minimum(one[2:], many[:, 2:])
-    intersection = np.prod(np.maximum(bottom_right - top_left, 0.0), axis=1)
-    one_area = max(0.0, float((one[2] - one[0]) * (one[3] - one[1])))
-    many_area = np.maximum(many[:, 2] - many[:, 0], 0.0) * np.maximum(
-        many[:, 3] - many[:, 1], 0.0
-    )
-    return intersection / np.maximum(one_area + many_area - intersection, 1e-9)
-
-
-def yolo_detections(
-    raw: np.ndarray,
-    info: Mapping[str, float | int],
-    confidence: float,
-    iou: float,
-    max_det: int,
-) -> list[dict[str, Any]]:
-    if raw.ndim != 3 or raw.shape[0] != 1 or raw.shape[1] < 5:
-        raise RuntimeError(f"YOLO输出契约错误：{raw.shape}")
-    prediction = raw[0]
-    scores = prediction[4:].T
-    anchor_ids, class_ids = np.where(scores > float(confidence))
-    if not len(anchor_ids):
-        return []
-    xywh = prediction[:4, anchor_ids].T
-    boxes = np.empty_like(xywh, dtype=np.float32)
-    boxes[:, :2] = xywh[:, :2] - xywh[:, 2:] / 2.0
-    boxes[:, 2:] = xywh[:, :2] + xywh[:, 2:] / 2.0
-    confidences = scores[anchor_ids, class_ids]
-    # Ultralytics multi-label NMS ranks all class candidates globally and only
-    # suppresses boxes inside the same class.  Keeping the global confidence
-    # order matters when max_det truncates a busy image.
-    candidates = np.argsort(-confidences, kind="stable")
-    kept: list[int] = []
-    while len(candidates) and len(kept) < int(max_det):
-        current = int(candidates[0])
-        kept.append(current)
-        if len(candidates) == 1:
-            break
-        remaining = candidates[1:]
-        same_class = class_ids[remaining] == class_ids[current]
-        suppressed = np.zeros(len(remaining), dtype=np.bool_)
-        if np.any(same_class):
-            suppressed[same_class] = (
-                _box_iou(boxes[current], boxes[remaining[same_class]]) > float(iou)
-            )
-        candidates = remaining[~suppressed]
-    selected = kept[: int(max_det)]
-    return _restore_detection_rows(
-        boxes[selected], confidences[selected], class_ids[selected], info
-    )
-
-
 def _restore_detection_rows(
     boxes: np.ndarray,
     scores: np.ndarray,
@@ -1990,72 +1778,6 @@ def _restore_detection_rows(
     return rows
 
 
-def detections_v1_records(
-    outputs: Sequence[np.ndarray],
-    info: Mapping[str, float | int],
-    confidence: float,
-    iou: float,
-    max_det: int,
-    *,
-    candidate_confidence: float,
-    contract_iou: float,
-    contract_max_det: int,
-) -> list[dict[str, Any]]:
-    """Decode the fixed P6 outputs without inferring a contract from shape."""
-    if len(outputs) != 4:
-        raise RuntimeError(f"detections_v1输出数量错误：{len(outputs)} != 4")
-    boxes, scores, class_ids, valid_count = tuple(np.asarray(value) for value in outputs)
-    expected_shapes = (
-        (int(contract_max_det), 4),
-        (int(contract_max_det),),
-        (int(contract_max_det),),
-        (1,),
-    )
-    actual_shapes = tuple(
-        tuple(value.shape) for value in (boxes, scores, class_ids, valid_count)
-    )
-    if actual_shapes != expected_shapes:
-        raise RuntimeError(f"detections_v1输出shape错误：{actual_shapes} != {expected_shapes}")
-    expected_dtypes = (
-        np.dtype(np.float32), np.dtype(np.float32),
-        np.dtype(np.int32), np.dtype(np.int32),
-    )
-    actual_dtypes = (boxes.dtype, scores.dtype, class_ids.dtype, valid_count.dtype)
-    if actual_dtypes != expected_dtypes:
-        raise RuntimeError(f"detections_v1输出dtype错误：{actual_dtypes} != {expected_dtypes}")
-    requested_confidence = float(confidence)
-    if requested_confidence < float(candidate_confidence):
-        raise RuntimeError(
-            "detections_v1运行阈值低于设备候选阈值："
-            f"{requested_confidence} < {candidate_confidence}"
-        )
-    if not math.isclose(float(iou), float(contract_iou), rel_tol=0.0, abs_tol=1e-9):
-        raise RuntimeError(f"detections_v1 IoU与设备契约不一致：{iou} != {contract_iou}")
-    requested_max_det = int(max_det)
-    if requested_max_det <= 0 or requested_max_det > int(contract_max_det):
-        raise RuntimeError(
-            f"detections_v1 max_det超出设备契约：{requested_max_det} not in [1, {contract_max_det}]"
-        )
-    count = int(valid_count[0])
-    if count < 0 or count > int(contract_max_det):
-        raise RuntimeError(f"detections_v1 valid_count非法：{count}")
-    valid_boxes = boxes[:count]
-    valid_scores = scores[:count]
-    valid_classes = class_ids[:count]
-    if not (np.all(np.isfinite(valid_boxes)) and np.all(np.isfinite(valid_scores))):
-        raise RuntimeError("detections_v1包含非有限检测值")
-    if np.any(valid_classes < 0):
-        raise RuntimeError("detections_v1包含负类别ID")
-    if np.any(valid_scores <= float(candidate_confidence)):
-        raise RuntimeError("detections_v1包含未通过严格候选阈值的记录")
-    if len(valid_scores) > 1 and np.any(valid_scores[1:] > valid_scores[:-1]):
-        raise RuntimeError("detections_v1记录没有按置信度稳定降序输出")
-    selected = np.flatnonzero(valid_scores > requested_confidence)[:requested_max_det]
-    return _restore_detection_rows(
-        valid_boxes[selected], valid_scores[selected], valid_classes[selected], info
-    )
-
-
 def yolo26_e2e_v1_records(
     outputs: Sequence[np.ndarray],
     info: Mapping[str, float | int],
@@ -2069,8 +1791,7 @@ def yolo26_e2e_v1_records(
 
     YOLO26 exports a single fixed ``[1, max_det, 6]`` tensor whose rows are
     ``xyxy, score, class_id`` in letterboxed input coordinates.  Selection and
-    duplicate suppression are already part of the exported graph; applying the
-    legacy raw-YOLO Host NMS here would change both accuracy and latency.
+    duplicate suppression are already part of the exported graph.
     """
 
     if len(outputs) != 1:
@@ -2116,136 +1837,6 @@ def yolo26_e2e_v1_records(
         raise RuntimeError("yolo26_e2e_v1有效记录没有按置信度降序输出")
     return _restore_detection_rows(
         boxes[selected], scores[selected], class_ids[selected], info
-    )
-
-
-def decoded_output_copy_plan(
-    confidence: float,
-    *,
-    candidate_confidence: float,
-) -> dict[str, Any]:
-    """Select raw fallback up front or stage metadata before candidate D2H."""
-
-    return {
-        "candidate_indices": (0, 1, 2, 3),
-        "metadata_indices": (4, 5),
-        "raw_index": 6,
-        "overflow_index": 5,
-        "force_raw": float(confidence) < float(candidate_confidence),
-    }
-
-
-def decoded_candidates_v1_records(
-    outputs: Sequence[np.ndarray],
-    info: Mapping[str, float | int],
-    confidence: float,
-    iou: float,
-    max_det: int,
-    *,
-    candidate_confidence: float,
-    candidate_capacity: int,
-    anchor_count: int,
-    class_count: int,
-) -> list[dict[str, Any]]:
-    """Run the existing strict Host sort/NMS over device-decoded candidates."""
-
-    if len(outputs) != 7:
-        raise RuntimeError(f"decoded_candidates_v1输出数量错误：{len(outputs)} != 7")
-    boxes, scores, class_ids, anchor_ids, valid_count, overflow = (
-        np.asarray(value) for value in outputs[:6]
-    )
-    capacity = int(candidate_capacity)
-    expected_shapes = (
-        (capacity, 4),
-        (capacity,),
-        (capacity,),
-        (capacity,),
-        (1,),
-        (1,),
-    )
-    actual_shapes = tuple(
-        tuple(value.shape)
-        for value in (boxes, scores, class_ids, anchor_ids, valid_count, overflow)
-    )
-    if actual_shapes != expected_shapes:
-        raise RuntimeError(
-            f"decoded_candidates_v1输出shape错误：{actual_shapes} != {expected_shapes}"
-        )
-    expected_dtypes = (
-        np.dtype(np.float32),
-        np.dtype(np.float32),
-        np.dtype(np.int32),
-        np.dtype(np.int32),
-        np.dtype(np.int32),
-        np.dtype(np.int32),
-    )
-    actual_dtypes = (
-        boxes.dtype,
-        scores.dtype,
-        class_ids.dtype,
-        anchor_ids.dtype,
-        valid_count.dtype,
-        overflow.dtype,
-    )
-    if actual_dtypes != expected_dtypes:
-        raise RuntimeError(
-            f"decoded_candidates_v1输出dtype错误：{actual_dtypes} != {expected_dtypes}"
-        )
-    if float(confidence) < float(candidate_confidence):
-        raise RuntimeError("decoded_candidates_v1低阈值请求必须使用raw回滚路径")
-    overflow_value = int(overflow[0])
-    if overflow_value != 0:
-        raise RuntimeError("decoded_candidates_v1溢出时必须使用raw回滚路径")
-    count = int(valid_count[0])
-    if count < 0 or count > capacity:
-        raise RuntimeError(f"decoded_candidates_v1 valid_count非法：{count}")
-    valid_boxes = boxes[:count]
-    valid_scores = scores[:count]
-    valid_classes = class_ids[:count]
-    valid_anchors = anchor_ids[:count]
-    if not (np.all(np.isfinite(valid_boxes)) and np.all(np.isfinite(valid_scores))):
-        raise RuntimeError("decoded_candidates_v1包含非有限候选")
-    if np.any(valid_scores <= float(candidate_confidence)):
-        raise RuntimeError("decoded_candidates_v1包含未通过严格候选阈值的记录")
-    if (
-        np.any(valid_classes < 0)
-        or np.any(valid_classes >= int(class_count))
-        or np.any(valid_anchors < 0)
-        or np.any(valid_anchors >= int(anchor_count))
-    ):
-        raise RuntimeError("decoded_candidates_v1候选ID越界")
-    tie_keys = valid_anchors.astype(np.int64) * int(class_count) + valid_classes
-    if len(tie_keys) > 1 and np.any(tie_keys[1:] <= tie_keys[:-1]):
-        raise RuntimeError("decoded_candidates_v1候选未按anchor-major/class-minor排序")
-
-    eligible = np.flatnonzero(valid_scores > float(confidence))
-    if not len(eligible):
-        return []
-    ordered = eligible[np.argsort(-valid_scores[eligible], kind="stable")]
-    kept: list[int] = []
-    while len(ordered) and len(kept) < int(max_det):
-        current = int(ordered[0])
-        kept.append(current)
-        if len(ordered) == 1:
-            break
-        remaining = ordered[1:]
-        same_class = valid_classes[remaining] == valid_classes[current]
-        suppressed = np.zeros(len(remaining), dtype=np.bool_)
-        if np.any(same_class):
-            suppressed[same_class] = (
-                _box_iou(
-                    valid_boxes[current],
-                    valid_boxes[remaining[same_class]],
-                )
-                > float(iou)
-            )
-        ordered = remaining[~suppressed]
-    selected = kept[: int(max_det)]
-    return _restore_detection_rows(
-        valid_boxes[selected],
-        valid_scores[selected],
-        valid_classes[selected],
-        info,
     )
 
 
@@ -2316,38 +1907,6 @@ class AscendDetectorExecutionHandle:
             return self._result
 
 
-class AscendDualDetectorExecutionHandle:
-    def __init__(
-        self,
-        backend: "AscendAclBackend",
-        model_handle: AscendAclExecutionHandle,
-        info: Mapping[str, float | int],
-        options: Mapping[str, Any],
-        preprocess_ms: float,
-    ) -> None:
-        self.backend = backend
-        self.model_handle = model_handle
-        self.info = dict(info)
-        self.options = dict(options)
-        self.preprocess_ms = float(preprocess_ms)
-        self._result: tuple[AscendResult, AscendResult] | None = None
-        self._lock = threading.Lock()
-
-    def result(self) -> tuple[AscendResult, AscendResult]:
-        with self._lock:
-            if self._result is not None:
-                return self._result
-            outputs, execution = self.model_handle.result()
-            self._result = self.backend._dual_results_from_outputs(
-                outputs,
-                self.info,
-                self.options,
-                self.preprocess_ms,
-                execution,
-            )
-            return self._result
-
-
 class AscendAclBackend:
     name = "ascend_acl"
 
@@ -2361,108 +1920,22 @@ class AscendAclBackend:
         if stream_role not in {"base", "specialist"}:
             raise RuntimeError(f"Ascend检测模型stream角色非法：{stream_role}")
         self.model = _load_model(options, entry, stream_role)
-        self.output_contract = str(entry.get("output_contract", "raw_yolo_v1"))
-        if self.output_contract not in {
-            "raw_yolo_v1", "decoded_candidates_v1", "detections_v1",
-            "raw_dual_head_v1", "yolo26_e2e_v1",
-        }:
-            raise RuntimeError(f"Ascend检测输出契约非法：{self.output_contract}")
-        self.candidate_confidence = float(entry.get("candidate_confidence", 0.0))
-        self.contract_iou = float(entry.get("iou_threshold", 0.0))
+        self.output_contract = str(entry.get("output_contract") or "")
+        if self.output_contract != "yolo26_e2e_v1":
+            raise RuntimeError(
+                f"Ascend v2 检测输出契约必须是yolo26_e2e_v1：{self.output_contract}"
+            )
         self.contract_max_det = int(entry.get("max_det", 0))
-        self.candidate_capacity = int(entry.get("candidate_capacity", 0))
-        self.anchor_count = int(entry.get("anchor_count", 0))
         self.class_count = int(entry.get("class_count", 0))
-        self.logical_heads = dict(entry.get("logical_heads") or {})
-        self.is_shared_dual_head = self.output_contract == "raw_dual_head_v1"
-        if self.output_contract == "raw_yolo_v1":
-            if len(self.model.output_contracts) != 1:
-                raise RuntimeError("raw_yolo_v1 OM必须只有一个原始检测输出")
-        elif self.output_contract == "raw_dual_head_v1":
-            expected = []
-            for name in ("old", "new"):
-                head = dict(self.logical_heads.get(name) or {})
-                expected.append(
-                    (
-                        int(head.get("output_index", -1)),
-                        (
-                            1,
-                            4 + int(head.get("class_count", 0)),
-                            int(head.get("anchor_count", 0)),
-                        ),
-                        np.dtype(np.float32),
-                    )
-                )
-            expected.sort(key=lambda row: row[0])
-            actual = tuple(
-                (index, tuple(contract["shape"]), contract["dtype"])
-                for index, contract in enumerate(self.model.output_contracts)
+        expected = (((1, self.contract_max_det, 6), np.dtype(np.float32)),)
+        actual = tuple(
+            (tuple(contract["shape"]), contract["dtype"])
+            for contract in self.model.output_contracts
+        )
+        if self.contract_max_det <= 0 or self.class_count <= 0 or actual != expected:
+            raise RuntimeError(
+                f"yolo26_e2e_v1 OM输出契约错误：{actual} != {expected}"
             )
-            if (
-                len(self.logical_heads) != 2
-                or [row[0] for row in expected] != [0, 1]
-                or actual != tuple(expected)
-            ):
-                raise RuntimeError(
-                    f"raw_dual_head_v1 OM输出契约错误：{actual} != {tuple(expected)}"
-                )
-        elif self.output_contract == "detections_v1":
-            expected = (
-                ((self.contract_max_det, 4), np.dtype(np.float32)),
-                ((self.contract_max_det,), np.dtype(np.float32)),
-                ((self.contract_max_det,), np.dtype(np.int32)),
-                ((1,), np.dtype(np.int32)),
-            )
-            actual = tuple(
-                (tuple(contract["shape"]), contract["dtype"])
-                for contract in self.model.output_contracts
-            )
-            if self.contract_max_det <= 0 or actual != expected:
-                raise RuntimeError(f"detections_v1 OM输出契约错误：{actual} != {expected}")
-        elif self.output_contract == "yolo26_e2e_v1":
-            expected = (((1, self.contract_max_det, 6), np.dtype(np.float32)),)
-            actual = tuple(
-                (tuple(contract["shape"]), contract["dtype"])
-                for contract in self.model.output_contracts
-            )
-            if (
-                self.contract_max_det <= 0
-                or self.class_count <= 0
-                or actual != expected
-            ):
-                raise RuntimeError(
-                    f"yolo26_e2e_v1 OM输出契约错误：{actual} != {expected}"
-                )
-        else:
-            if self.model.execution_mode != "async_stream":
-                raise RuntimeError("decoded_candidates_v1要求async_stream执行模式")
-            expected = (
-                ((self.candidate_capacity, 4), np.dtype(np.float32)),
-                ((self.candidate_capacity,), np.dtype(np.float32)),
-                ((self.candidate_capacity,), np.dtype(np.int32)),
-                ((self.candidate_capacity,), np.dtype(np.int32)),
-                ((1,), np.dtype(np.int32)),
-                ((1,), np.dtype(np.int32)),
-                (
-                    (1, 4 + self.class_count, self.anchor_count),
-                    np.dtype(np.float32),
-                ),
-            )
-            actual = tuple(
-                (tuple(contract["shape"]), contract["dtype"])
-                for contract in self.model.output_contracts
-            )
-            if (
-                self.candidate_confidence != 0.01
-                or self.candidate_capacity <= 0
-                or self.anchor_count <= 0
-                or self.class_count <= 0
-                or actual != expected
-            ):
-                raise RuntimeError(
-                    "decoded_candidates_v1 OM输出契约错误："
-                    f"{actual} != {expected}"
-                )
         if (
             self.model.input_dtype == np.dtype(np.uint8)
             and len(self.model.input_shape) == 4
@@ -2488,14 +1961,6 @@ class AscendAclBackend:
             )
         self._last_timings: dict[str, float] = {}
 
-    def _output_copy_plan(self, options: Mapping[str, Any]) -> dict[str, Any] | None:
-        if self.output_contract != "decoded_candidates_v1":
-            return None
-        return decoded_output_copy_plan(
-            float(options.get("conf", 0.5)),
-            candidate_confidence=self.candidate_confidence,
-        )
-
     def _result_from_outputs(
         self,
         outputs: Sequence[np.ndarray],
@@ -2506,53 +1971,15 @@ class AscendAclBackend:
     ) -> AscendResult:
         postprocess_started = time.perf_counter_ns()
         confidence = float(options.get("conf", 0.5))
-        iou = float(options.get("iou", 0.7))
         max_det = int(options.get("max_det", 300))
-        if self.output_contract == "raw_dual_head_v1":
-            return self._dual_results_from_outputs(
-                outputs, info, options, preprocess_ms, execution
-            )[0]
-        if self.output_contract == "raw_yolo_v1":
-            rows = yolo_detections(outputs[0], info, confidence, iou, max_det)
-        elif self.output_contract == "detections_v1":
-            rows = detections_v1_records(
-                outputs, info, confidence, iou, max_det,
-                candidate_confidence=self.candidate_confidence,
-                contract_iou=self.contract_iou,
-                contract_max_det=self.contract_max_det,
-            )
-        elif self.output_contract == "yolo26_e2e_v1":
-            rows = yolo26_e2e_v1_records(
-                outputs,
-                info,
-                confidence,
-                max_det,
-                contract_max_det=self.contract_max_det,
-                class_count=self.class_count,
-            )
-        else:
-            copy_mode = str(execution.get("output_copy_mode") or "")
-            if copy_mode == "raw_fallback":
-                rows = yolo_detections(
-                    outputs[6], info, confidence, iou, max_det
-                )
-            elif copy_mode == "decoded_candidates":
-                rows = decoded_candidates_v1_records(
-                    outputs,
-                    info,
-                    confidence,
-                    iou,
-                    max_det,
-                    candidate_confidence=self.candidate_confidence,
-                    candidate_capacity=self.candidate_capacity,
-                    anchor_count=self.anchor_count,
-                    class_count=self.class_count,
-                )
-            else:
-                raise RuntimeError(
-                    "decoded_candidates_v1缺少条件输出复制证据："
-                    f"{copy_mode or 'missing'}"
-                )
+        rows = yolo26_e2e_v1_records(
+            outputs,
+            info,
+            confidence,
+            max_det,
+            contract_max_det=self.contract_max_det,
+            class_count=self.class_count,
+        )
         postprocess_ms = (
             time.perf_counter_ns() - postprocess_started
         ) / 1_000_000.0
@@ -2573,63 +2000,6 @@ class AscendAclBackend:
         self._last_timings = timings
         return AscendResult(rows, timings)
 
-    def _dual_results_from_outputs(
-        self,
-        outputs: Sequence[np.ndarray],
-        info: Mapping[str, float | int],
-        options: Mapping[str, Any],
-        preprocess_ms: float,
-        execution: Mapping[str, float],
-    ) -> tuple[AscendResult, AscendResult]:
-        if not self.is_shared_dual_head or len(outputs) != 2:
-            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
-        confidence = float(options.get("conf", 0.5))
-        iou = float(options.get("iou", 0.7))
-        max_det = int(options.get("max_det", 300))
-        parsed: dict[str, tuple[list[dict[str, Any]], float]] = {}
-        for name in ("old", "new"):
-            head = dict(self.logical_heads[name])
-            head_confidence = max(
-                confidence,
-                float(head.get("candidate_confidence", confidence)),
-            )
-            started = time.perf_counter_ns()
-            rows = yolo_detections(
-                outputs[int(head["output_index"])],
-                info,
-                head_confidence,
-                iou,
-                max_det,
-            )
-            parsed[name] = (
-                rows,
-                (time.perf_counter_ns() - started) / 1_000_000.0,
-            )
-        old_timings = {
-            "preprocess": float(preprocess_ms),
-            "inference": float(execution["inference_ms"]),
-            "postprocess": parsed["old"][1],
-        }
-        if "submit_ms" in execution:
-            old_timings.update(
-                {
-                    "ascend_submit": float(execution["submit_ms"]),
-                    "ascend_wait": float(execution["wait_ms"]),
-                    "ascend_input_copy": float(execution["input_copy_ms"]),
-                    "ascend_output_copy": float(execution["output_copy_ms"]),
-                }
-            )
-        new_timings = {
-            "preprocess": 0.0,
-            "inference": 0.0,
-            "postprocess": parsed["new"][1],
-        }
-        self._last_timings = old_timings
-        return (
-            AscendResult(parsed["old"][0], old_timings),
-            AscendResult(parsed["new"][0], new_timings),
-        )
-
     def _detector_input(
         self, image: Image.Image, options: Mapping[str, Any]
     ) -> tuple[np.ndarray, dict[str, float | int], float]:
@@ -2645,71 +2015,6 @@ class AscendAclBackend:
             time.perf_counter_ns() - preprocess_started
         ) / 1_000_000.0
         return batch, info, preprocess_ms
-
-    def predict_dual(
-        self, image: Image.Image, **options: Any
-    ) -> tuple[AscendResult, AscendResult]:
-        if not self.is_shared_dual_head:
-            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
-        if (
-            self.model.execution_mode == "async_stream"
-            and self.model.schedule_mode == "unified_enqueue"
-        ):
-            return self.submit_dual(image, **options).result()
-        batch, info, preprocess_ms = self._detector_input(image, options)
-        if self.model.execution_mode == "async_stream":
-            outputs, execution = self.model.execute_threaded(batch)
-        else:
-            outputs, inference_ms = self.model.execute(batch)
-            execution = {"inference_ms": inference_ms}
-        return self._dual_results_from_outputs(
-            outputs, info, options, preprocess_ms, execution
-        )
-
-    def submit_dual(
-        self, image: Image.Image, **options: Any
-    ) -> AscendDualDetectorExecutionHandle:
-        if not self.is_shared_dual_head:
-            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
-        batch, info, preprocess_ms = self._detector_input(image, options)
-        return AscendDualDetectorExecutionHandle(
-            self,
-            self.model.submit(batch),
-            info,
-            options,
-            preprocess_ms,
-        )
-
-    def predict_dual_preloaded(
-        self,
-        info: Mapping[str, float | int],
-        ready_event: Any,
-        **options: Any,
-    ) -> tuple[AscendResult, AscendResult]:
-        if not self.is_shared_dual_head:
-            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
-        if self.model.schedule_mode == "unified_enqueue":
-            return self.submit_dual_preloaded(
-                info, ready_event, **options
-            ).result()
-        outputs, execution = self.model.execute_preloaded_threaded(ready_event)
-        return self._dual_results_from_outputs(outputs, info, options, 0.0, execution)
-
-    def submit_dual_preloaded(
-        self,
-        info: Mapping[str, float | int],
-        ready_event: Any,
-        **options: Any,
-    ) -> AscendDualDetectorExecutionHandle:
-        if not self.is_shared_dual_head:
-            raise RuntimeError("当前Ascend模型不是raw_dual_head_v1")
-        return AscendDualDetectorExecutionHandle(
-            self,
-            self.model.submit_preloaded(ready_event),
-            info,
-            options,
-            0.0,
-        )
 
     def predict(self, image: Image.Image, **options: Any) -> AscendResult:
         if (
@@ -2727,10 +2032,7 @@ class AscendAclBackend:
         )
         preprocess_ms = (time.perf_counter_ns() - preprocess_started) / 1_000_000.0
         if self.model.execution_mode == "async_stream":
-            outputs, execution = self.model.execute_threaded(
-                batch,
-                self._output_copy_plan(options),
-            )
+            outputs, execution = self.model.execute_threaded(batch)
         else:
             outputs, inference_ms = self.model.execute(batch)
             execution = {"inference_ms": inference_ms}
@@ -2752,7 +2054,7 @@ class AscendAclBackend:
         ) / 1_000_000.0
         return AscendDetectorExecutionHandle(
             self,
-            self.model.submit(batch, self._output_copy_plan(options)),
+            self.model.submit(batch),
             info,
             options,
             preprocess_ms,
@@ -2766,10 +2068,7 @@ class AscendAclBackend:
     ) -> AscendResult:
         if self.model.schedule_mode == "unified_enqueue":
             return self.submit_preloaded(info, ready_event, **options).result()
-        outputs, execution = self.model.execute_preloaded_threaded(
-            ready_event,
-            self._output_copy_plan(options),
-        )
+        outputs, execution = self.model.execute_preloaded_threaded(ready_event)
         return self._result_from_outputs(outputs, info, options, 0.0, execution)
 
     def submit_preloaded(
@@ -2780,10 +2079,7 @@ class AscendAclBackend:
     ) -> AscendDetectorExecutionHandle:
         return AscendDetectorExecutionHandle(
             self,
-            self.model.submit_preloaded(
-                ready_event,
-                self._output_copy_plan(options),
-            ),
+            self.model.submit_preloaded(ready_event),
             info,
             options,
             0.0,

@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # Ascend 310B 4+2 满分方法与复现手册
 
 本文描述当前正式 4+2 Ascend310B1 方法。唯一机器可读契约是 `configs/ascend310b/full_score_method.yaml`，正式发布包是：
@@ -5,8 +6,6 @@
 ```text
 models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/
 ```
-
-旧 `20260816-full-score-1493b04` 共享双头 3+1 release 只保留为历史参考，不是当前 production。
 
 ## 1. 当前结论
 
@@ -68,20 +67,18 @@ Scene:       [1,160,160,3] uint8 NHWC -> sensor + scene probabilities
 
 两个检测 OM 均为 `yolo26_e2e_v1`，框解码和 NMS 已包含在图中；Python 侧只做阈值、全局类别映射、冲突仲裁与最终 class-aware NMS。
 
-## 4. 为什么没有照搬 YOLO11 优化
+## 4. 端侧结构选择
 
-历史 YOLO11 方案依赖共享 backbone 的双 raw head、固定中性 context 和 Python raw-head 解码。YOLO26 的正式方案保留了其中可迁移的系统级思路，但没有复用模型结构：
-
-| 历史思路 | YOLO26 处理 |
+| 目标 | 当前实现 |
 | --- | --- |
-| 减少重复预处理 | 继续使用 bounded multipart、DVPP 与图像复制消除 |
-| 并发执行 | Base 与 Scene 先并发提交 |
-| 合并检测计算 | 不强行拼接两个已独立训练的 YOLO26 权重；保持固定 owner 的两个 E2E OM |
-| 固定中性场景 | 改为真实 Scene-SensorNet，支持已知场景对新旧类的影响 |
-| 每图执行全部模型 | 引入只依赖模型输出的双证据执行门控 |
-| raw head Python 解码 | 使用 E2E `[1,300,6]` 输出，降低后处理成本 |
+| 复用预处理 | bounded multipart、DVPP 解码与一次 letterbox，Specialist 直接复制 Base 设备输入 |
+| 提高并行度 | Base 与 Scene 首先并发提交，按内容证据决定是否收集 Specialist |
+| 保持类别所有权 | 四类 Base 与二类 Specialist 使用独立 E2E OM，类别 owner 固定 |
+| 使用场景信息 | Scene-SensorNet 输出真实 IR/SAR 与四类已知场景概率 |
+| 控制增量计算 | 双证据内容门控只依赖 Scene 概率与 Base 检测 |
+| 降低 Host 后处理 | 两个检测 OM 均直接输出 E2E `[1,300,6]` 检测结果 |
 
-因此当前优化是“独立 E2E 检测器 + 真实 context + 内容执行门控”，不是历史共享双头方案的换名版本。
+正式运行结构为“独立 E2E 检测器 + Scene-SensorNet + 内容执行门控”。
 
 ## 5. 板端性能优化
 

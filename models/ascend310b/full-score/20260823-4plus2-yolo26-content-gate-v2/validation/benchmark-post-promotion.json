@@ -294,13 +294,13 @@
       "configured": true,
       "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/configs/agent_pipeline_ascend310b.yaml",
       "exists": true,
-      "sha256": "0771953527e606e83133013ce48cd59513508e75b89f653f7b42e165b12995a8"
+      "sha256": "8f6ca9682e5ca42c8f914606cf608eb6068a0e111590fdfd5c5153b1ff773204"
     },
     "build_manifest": {
       "configured": true,
       "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/release-build-manifest.json",
       "exists": true,
-      "sha256": "35385da4ad3365eaa847e590814ef1af0f835e11071ad08e79680d15ebb11eda"
+      "sha256": "ff443710df7a2a9f5cd7b10c0247b1e19dc324dc099db10f084244ea811a5d8b"
     },
     "commands": {
       "npu_smi": {

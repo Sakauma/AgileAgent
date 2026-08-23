@@ -4,5 +4,3 @@ aa99a0e58db1f80b0b6e0cc0e5049b6dc39e88f4349d2e7c362b1e2a25b83a7e  context/scene_
 56570c8ccac80beef10d623f40bd20e26dbf310dc1ba93c80ff607b9f6df7ae0  ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om
 d12ccf5b4c07ea97b8be09ff4cdea02463cf83ec68736ae6fd7451a3e0fcd87b  ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om
 c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9  ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om
-3dd053e041c36225059cf6624eefebe5945ba6b8ca5bc0ca9d914448c4a54c89  ascend310b/full-score/20260816-full-score-1493b04/om/shared_backbone_dual_head.om
-c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9  ascend310b/full-score/20260816-full-score-1493b04/om/scene_sensor_net.om

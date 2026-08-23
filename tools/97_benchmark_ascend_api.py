@@ -21,11 +21,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fair_agent.core.hashes import business_payload_sha256  # noqa: E402
-from fair_agent.modules.ascend_benchmark_guard import (  # noqa: E402
-    collect_environment_snapshot,
-    compare_environment_snapshots,
-    evaluate_environment_snapshot,
-)
 
 
 ROUTING_TIMING_KEYS = (
@@ -282,19 +277,6 @@ def artifact_evidence(path: Path | None) -> Dict[str, Any]:
     }
 
 
-def load_json_object(path: Path, label: str) -> Dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"{label}不是JSON对象：{path}")
-    return payload
-
-
-def relative_difference_within(current: float, reference: float, limit: float) -> bool:
-    if reference <= 0.0:
-        raise ValueError("稳定性参考值必须为正数。")
-    return abs(float(current) - float(reference)) / float(reference) <= float(limit)
-
-
 def request_row(
     client: KeepAliveClient,
     body: bytes,
@@ -322,7 +304,7 @@ def request_row(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="在310B本机回环以HTTP keep-alive执行30预热+10x89单图API基准。"
+        description="按正式协议执行Ascend310B v2回环HTTP预热与20图batch基准。"
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8502")
     parser.add_argument("--image-root", type=Path, required=True)
@@ -334,18 +316,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--build-manifest", type=Path)
-    parser.add_argument(
-        "--gate-profile", choices=("p0", "p3", "p8", "score"), default="p0"
-    )
-    parser.add_argument("--baseline-mean-ms", type=float)
-    parser.add_argument("--baseline-p99-ms", type=float)
-    parser.add_argument("--environment-guard", action="store_true")
-    parser.add_argument("--official-url", default="http://127.0.0.1:8501")
-    parser.add_argument("--max-npu-temperature-c", type=int, default=65)
-    parser.add_argument("--max-process-cpu-percent", type=float, default=10.0)
-    parser.add_argument("--process-samples", type=int, default=3)
-    parser.add_argument("--process-sample-interval", type=float, default=1.0)
-    parser.add_argument("--p8-reference-report", type=Path)
+    parser.add_argument("--gate-profile", choices=("score",), default="score")
     parser.add_argument("--batch-probe-size", type=int, default=20)
     parser.add_argument("--batch-rounds", type=int, default=3)
     parser.add_argument("--target-batch-fps", type=float, default=30.0)
@@ -371,17 +342,6 @@ def main() -> int:
         or args.target_batch_fps <= 0.0
     ):
         raise ValueError("batch探针大小、轮数和目标FPS必须为正数。")
-    if args.gate_profile == "p3" and (
-        not args.baseline_mean_ms
-        or args.baseline_mean_ms <= 0
-        or not args.baseline_p99_ms
-        or args.baseline_p99_ms <= 0
-    ):
-        raise ValueError("P3门禁要求正数baseline-mean-ms和baseline-p99-ms。")
-    if args.environment_guard and (args.config is None or args.build_manifest is None):
-        raise ValueError("环境守卫要求同时提供--config和--build-manifest。")
-    if args.p8_reference_report is not None and args.gate_profile != "p8":
-        raise ValueError("--p8-reference-report只能用于P8门禁。")
     paths = sorted(args.image_root.glob("*.png"))
     if len(paths) != args.expected_images:
         raise ValueError(
@@ -392,30 +352,6 @@ def main() -> int:
     bodies = {
         path: multipart_body(path, args.confidence, boundary) for path in paths
     }
-
-    guard_before: Dict[str, Any] | None = None
-    guard_before_evaluation: Dict[str, Any] | None = None
-    if args.environment_guard:
-        guard_before = collect_environment_snapshot(
-            repo_root=ROOT,
-            config=args.config,
-            build_manifest=args.build_manifest,
-            official_url=args.official_url,
-            candidate_url=args.base_url,
-            process_sample_count=args.process_samples,
-            process_sample_interval=args.process_sample_interval,
-        )
-        guard_before_evaluation = evaluate_environment_snapshot(
-            guard_before,
-            candidate_state="ready",
-            max_npu_temperature_c=args.max_npu_temperature_c,
-            max_process_cpu_percent=args.max_process_cpu_percent,
-        )
-        if not guard_before_evaluation["passed"]:
-            raise RuntimeError(
-                "P8环境守卫前置检查失败："
-                + json.dumps(guard_before_evaluation, ensure_ascii=False)
-            )
 
     client = KeepAliveClient(args.base_url, args.timeout)
     try:
@@ -467,31 +403,6 @@ def main() -> int:
         batch_rounds, key=lambda row: float(row["system_total_ms"])
     )[len(batch_rounds) // 2]
 
-    guard_after: Dict[str, Any] | None = None
-    guard_after_evaluation: Dict[str, Any] | None = None
-    guard_run_consistency: Dict[str, Any] | None = None
-    if args.environment_guard:
-        guard_after = collect_environment_snapshot(
-            repo_root=ROOT,
-            config=args.config,
-            build_manifest=args.build_manifest,
-            official_url=args.official_url,
-            candidate_url=args.base_url,
-            process_sample_count=args.process_samples,
-            process_sample_interval=args.process_sample_interval,
-        )
-        guard_after_evaluation = evaluate_environment_snapshot(
-            guard_after,
-            candidate_state="ready",
-            max_npu_temperature_c=args.max_npu_temperature_c,
-            max_process_cpu_percent=args.max_process_cpu_percent,
-            # P8 requires the board to cool before each timed run.  The
-            # post-run temperature is evidence of the load, not a start gate
-            # applied retroactively to an otherwise valid measurement.
-            require_temperature_limit=False,
-        )
-        guard_run_consistency = compare_environment_snapshots(guard_after, guard_before)
-
     distributions = {
         "server": distribution([float(row["server_ms"]) for row in rows]),
         "client_wall": distribution([float(row["wall_ms"]) for row in rows]),
@@ -510,112 +421,13 @@ def main() -> int:
                 "client_wall": distribution([float(row["wall_ms"]) for row in subset]),
             }
         )
-    p8_reference: Dict[str, Any] | None = None
-    p8_environment_consistency: Dict[str, Any] | None = None
-    if args.p8_reference_report is not None:
-        p8_reference = load_json_object(args.p8_reference_report.resolve(), "P8参考报告")
-        reference_guard = (
-            p8_reference.get("environment", {})
-            .get("guard", {})
-            .get("before", {})
-            .get("snapshot")
-        )
-        if not isinstance(reference_guard, dict) or guard_before is None:
-            raise ValueError("P8参考报告缺少environment.guard.before.snapshot。")
-        p8_environment_consistency = compare_environment_snapshots(
-            guard_before, reference_guard
-        )
-
-    if args.gate_profile == "score":
-        gates = {
-            "sample_count": len(rows) == args.rounds * args.expected_images,
-            "request_failures": True,
-            "batch_fps": float(median_batch["fps"]) >= args.target_batch_fps,
-        }
-        if args.environment_guard:
-            gates.update(
-                {
-                    "environment_before": bool(
-                        guard_before_evaluation
-                        and guard_before_evaluation["passed"]
-                    ),
-                    "environment_after": bool(
-                        guard_after_evaluation
-                        and guard_after_evaluation["passed"]
-                    ),
-                    "environment_unchanged_during_run": bool(
-                        guard_run_consistency
-                        and guard_run_consistency["passed"]
-                    ),
-                }
-            )
-    elif args.gate_profile == "p3":
-        baseline_mean_ms = float(args.baseline_mean_ms)
-        baseline_p99_ms = float(args.baseline_p99_ms)
-        mean_ms = float(distributions["server"]["mean_ms"])
-        gates = {
-            "sample_count": len(rows) == args.rounds * args.expected_images,
-            "mean_improvement_at_least_3pct": (
-                baseline_mean_ms - mean_ms
-            ) / baseline_mean_ms >= 0.03,
-            "mean_server_ms": mean_ms <= 33.33,
-            "p95_server_ms": float(distributions["server"]["p95_ms"]) <= 35.0,
-            "p99_not_worse_than_2pct": float(
-                distributions["server"]["p99_ms"]
-            )
-            <= baseline_p99_ms * 1.02,
-            "request_failures": True,
-        }
-    elif args.gate_profile == "p8":
-        gates = {
-            "sample_count": len(rows) == args.rounds * args.expected_images,
-            "request_failures": True,
-            "environment_before": bool(
-                guard_before_evaluation and guard_before_evaluation["passed"]
-            ),
-            "environment_after": bool(
-                guard_after_evaluation and guard_after_evaluation["passed"]
-            ),
-            "environment_unchanged_during_run": bool(
-                guard_run_consistency and guard_run_consistency["passed"]
-            ),
-        }
-        if p8_reference is not None:
-            reference_server = p8_reference.get("distributions", {}).get("server", {})
-            if not isinstance(reference_server, dict):
-                raise ValueError("P8参考报告缺少服务端分布。")
-            gates.update(
-                {
-                    "reference_environment_identical": bool(
-                        p8_environment_consistency
-                        and p8_environment_consistency["passed"]
-                    ),
-                    "mean_within_2pct": relative_difference_within(
-                        float(distributions["server"]["mean_ms"]),
-                        float(reference_server["mean_ms"]),
-                        0.02,
-                    ),
-                    "p95_within_2pct": relative_difference_within(
-                        float(distributions["server"]["p95_ms"]),
-                        float(reference_server["p95_ms"]),
-                        0.02,
-                    ),
-                    "p99_within_2pct": relative_difference_within(
-                        float(distributions["server"]["p99_ms"]),
-                        float(reference_server["p99_ms"]),
-                        0.02,
-                    ),
-                }
-            )
-    else:
-        gates = {
-            "sample_count": len(rows) == args.rounds * args.expected_images,
-            "mean_server_ms": float(distributions["server"]["mean_ms"]) <= 40.0,
-            "p95_server_ms": float(distributions["server"]["p95_ms"]) <= 42.0,
-            "request_failures": True,
-        }
+    gates = {
+        "sample_count": len(rows) == args.rounds * args.expected_images,
+        "request_failures": True,
+        "batch_fps": float(median_batch["fps"]) >= args.target_batch_fps,
+    }
     report = {
-        "schema_version": 5,
+        "schema_version": 6,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "protocol": {
             "transport": "loopback_http_multipart_png_keep_alive",
@@ -628,13 +440,6 @@ def main() -> int:
             "sample_count": len(rows),
             "concurrency": 1,
             "gate_profile": args.gate_profile,
-            "baseline_mean_ms": args.baseline_mean_ms,
-            "baseline_p99_ms": args.baseline_p99_ms,
-            "p8_reference_report": (
-                str(args.p8_reference_report.resolve())
-                if args.p8_reference_report is not None
-                else None
-            ),
             "batch_probe_size": len(batch_paths),
             "batch_rounds": args.batch_rounds,
             "target_batch_fps": args.target_batch_fps,
@@ -668,21 +473,6 @@ def main() -> int:
             "commands": {
                 "npu_smi": command_snapshot(["npu-smi", "info"]),
                 "atc": command_snapshot(["atc", "--help"]),
-                "msprof": command_snapshot(["msprof", "--help"]),
-                "aoe": command_snapshot(["aoe", "-h"]),
-            },
-            "guard": {
-                "enabled": bool(args.environment_guard),
-                "before": {
-                    "snapshot": guard_before,
-                    "evaluation": guard_before_evaluation,
-                },
-                "after": {
-                    "snapshot": guard_after,
-                    "evaluation": guard_after_evaluation,
-                },
-                "run_consistency": guard_run_consistency,
-                "reference_consistency": p8_environment_consistency,
             },
         },
         "gates": gates,

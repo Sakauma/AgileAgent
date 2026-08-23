@@ -104,20 +104,11 @@ def test_score_priority_split_intentionally_has_adjacent_train_frames() -> None:
             assert adjacent / len(values) >= expected_minimum_ratio[prefix]
 
 
-def test_mixed_lists_and_legacy_archive_are_complete() -> None:
+def test_mixed_lists_are_complete() -> None:
     assert set(read_split("mixed_dev")) == set(read_split("base_dev")) | set(read_split("increment_dev"))
     assert set(read_split("mixed_lock")) == set(read_split("base_lock")) | set(read_split("increment_lock"))
     assert len(read_split("mixed_dev")) == 89
     assert len(read_split("mixed_lock")) == 89
-
-    archive_root = ROOT / "splits" / "archive" / "2026-08-21_strict_3plus1"
-    archive = json.loads((archive_root / "ARCHIVE_MANIFEST.json").read_text(encoding="utf-8"))
-    assert archive["source_protocol"] == "full_coverage_strict_3plus1_dataset_partition"
-    assert archive["file_count"] == 21
-    assert len(archive["files"]) == 21
-    for relative in archive["files"]:
-        archived = archive_root / "snapshot" / relative
-        assert archived.is_file()
 
 
 def test_increment_sequence_quotas_match_fixed_80_10_10_design() -> None:

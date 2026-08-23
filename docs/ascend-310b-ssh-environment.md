@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # Ascend 310B SSH 连接与运行环境
 
 本文记录 Atlas 200I DK A2 的连接方式、CANN/Python 环境和当前正式服务。仓库不保存任何账户密码、私钥或改密信息；登录时使用设备当前凭据交互认证。
@@ -20,8 +21,6 @@
 | 公共入口 | `127.0.0.1:8501` |
 | 主实例 | `127.0.0.1:18501` |
 | 候选端口 | `127.0.0.1:8502`，正式状态下空闲 |
-
-旧 release-local `<release>/conda-env` 已退役，配置、脚本和人工命令都不得引用它。
 
 ## Windows 连接
 
@@ -140,7 +139,7 @@ cd /home/HwHiAiUser/agileagent/repo
 
 ```text
 agileagent-ascend310b-main.service       18501 的 4+2 主实例
-agileagent-ascend310b-rollback.service   8501 的旧 listener
+agileagent-ascend310b-rollback.service   8501 的回滚 listener
 agileagent-ascend310b-route.service      8501 -> 18501 精确路由
 ```
 

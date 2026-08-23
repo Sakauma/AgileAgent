@@ -55,9 +55,9 @@ def settings(tmp_path: Path) -> dict:
         "poll_interval_ms": 2000,
         "training": {
             "python": None,
-            "initial_weights": "models/production/incremental_detection/three_class_base_detector.pt",
-            "device": "0", "imgsz": 640, "batch": 32, "epochs": 1, "patience": 1,
-            "workers": 0, "optimizer": "AdamW", "lr0": 0.001, "seed": 20260705,
+            "initial_weights": "models/production/incremental_detection/four_class_base_detector.pt",
+            "device": "0", "imgsz": 1280, "batch": 18, "epochs": 1, "patience": 1,
+            "workers": 0, "optimizer": "AdamW", "lr0": 0.001, "seed": 20260821,
             "deterministic": True, "amp": True,
         },
     }
@@ -65,7 +65,11 @@ def settings(tmp_path: Path) -> dict:
 
 def make_store(tmp_path: Path) -> tuple[IncrementalBatchStore, StructuredEventLog]:
     event_log = StructuredEventLog(tmp_path / "logs", 1024 * 1024, 3)
-    store = IncrementalBatchStore(settings(tmp_path), event_log, ["soldier", "warship"])
+    store = IncrementalBatchStore(
+        settings(tmp_path),
+        event_log,
+        ["soldier", "small_aircraft", "warship", "tank"],
+    )
     return store, event_log
 
 
@@ -113,8 +117,8 @@ def test_generated_names_are_stable_and_do_not_block_injection(tmp_path: Path) -
     store, _event_log = make_store(tmp_path)
     manifest = store.create("unnamed.zip", unnamed_dataset_zip())
     assert manifest["audit"]["requires_class_confirmation"] is True
-    assert manifest["audit"]["class_map"] == {"0": "类别3"}
-    assert manifest["audit"]["local_to_global"] == {"0": 2}
+    assert manifest["audit"]["class_map"] == {"0": "类别5"}
+    assert manifest["audit"]["local_to_global"] == {"0": 4}
     assert manifest["audit"]["class_bindings"][0]["semantic_status"] == "provisional"
     injected = store.inject(manifest["batch_id"])
     assert injected["status"] == "INJECTED"
@@ -124,10 +128,10 @@ def test_multiple_unnamed_batches_reserve_sequential_names_and_global_ids(tmp_pa
     store, _event_log = make_store(tmp_path)
     first = store.create("first.zip", unnamed_dataset_zip())
     second = store.create("second.zip", unnamed_dataset_zip())
-    assert first["audit"]["class_map"] == {"0": "类别3"}
-    assert first["audit"]["local_to_global"] == {"0": 2}
-    assert second["audit"]["class_map"] == {"0": "类别4"}
-    assert second["audit"]["local_to_global"] == {"0": 3}
+    assert first["audit"]["class_map"] == {"0": "类别5"}
+    assert first["audit"]["local_to_global"] == {"0": 4}
+    assert second["audit"]["class_map"] == {"0": "类别6"}
+    assert second["audit"]["local_to_global"] == {"0": 5}
 
 
 def test_labels_require_explicit_class_ids(tmp_path: Path) -> None:
@@ -139,14 +143,20 @@ def test_labels_require_explicit_class_ids(tmp_path: Path) -> None:
 
 def test_dataset_names_and_unused_source_id_are_preserved(tmp_path: Path) -> None:
     event_log = StructuredEventLog(tmp_path / "logs", 1024 * 1024, 3)
-    store = IncrementalBatchStore(settings(tmp_path), event_log, {0: "soldier", 1: "small_aircraft", 2: "tank"})
-    manifest = store.create("official-new-class.zip", dataset_zip("warship", class_id=3))
+    store = IncrementalBatchStore(
+        settings(tmp_path),
+        event_log,
+        {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"},
+    )
+    manifest = store.create(
+        "official-new-class.zip", dataset_zip("patrol_boat", class_id=4)
+    )
     binding = manifest["audit"]["class_bindings"][0]
     assert binding == {
-        "source_class_id": 3,
+        "source_class_id": 4,
         "training_class_id": 0,
-        "global_class_id": 3,
-        "display_name": "warship",
+        "global_class_id": 4,
+        "display_name": "patrol_boat",
         "semantic_status": "confirmed",
         "semantic_source": "dataset_names",
         "is_existing_class": False,
@@ -185,7 +195,7 @@ def test_training_snapshot_is_immutable_after_late_class_rename(tmp_path: Path) 
     if not snapshot_registry_path.is_absolute():
         snapshot_registry_path = Path.cwd() / snapshot_registry_path
     frozen = yaml.safe_load(snapshot_registry_path.read_text(encoding="utf-8"))
-    assert frozen["bindings"][0]["display_name"] == "类别3"
+    assert frozen["bindings"][0]["display_name"] == "类别5"
 
     store.rename_classes(manifest["batch_id"], {0: "新型车辆"})
     current = yaml.safe_load(
@@ -265,14 +275,16 @@ def test_state_events_are_queryable_across_experiment_identifiers(tmp_path: Path
         event_log,
         "THRESHOLD_CALIBRATED",
         status="completed",
-        experiment_id="warship_3plus1",
+        experiment_id="patrol_boat_round_01",
         run_id="run-01",
         protocol_id="round_01",
-        details={"threshold": 0.63, "artifact_sha256": "a" * 64},
+        details={"threshold": 0.57, "artifact_sha256": "a" * 64},
     )
     rows = event_log.query(
-        experiment_id="warship_3plus1", run_id="run-01", protocol_id="round_01"
+        experiment_id="patrol_boat_round_01",
+        run_id="run-01",
+        protocol_id="round_01",
     )
     assert len(rows) == 1
     assert rows[0]["event"] == "incremental.dev_calibration.completed"
-    assert rows[0]["details"]["threshold"] == 0.63
+    assert rows[0]["details"]["threshold"] == 0.57

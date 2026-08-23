@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # Ascend 310B 当前状态
 
 截至 2026-08-23，4+2 独立 YOLO26s 三-OM 方案已经完成 ATC 转换、候选四项评分、独立复跑、不可变 release 物化、公共 8501 正式提升和两轮部署后 FPS 复验。当前四项赛题硬门槛全部进入满分档。
@@ -38,7 +39,7 @@ Full-mAP50 为 **0.7249274787**。旧类 mAP50 增量前后均为 **0.7779616266
 - agileagent-ascend310b-rollback.service；
 - agileagent-ascend310b-route.service。
 
-物理 8501 rollback listener 与 18501 主实例同时存在。公共请求由带固定 comment 的精确 loopback NAT 进入主实例；删除该唯一规则即可恢复旧 listener。
+物理 8501 回滚 listener 与 18501 主实例同时存在。公共请求由带固定 comment 的精确 loopback NAT 进入主实例；删除该唯一规则即可恢复回滚 listener。
 
 健康响应必须同时包含：
 
@@ -82,5 +83,3 @@ Full-mAP50 为 **0.7249274787**。旧类 mAP50 增量前后均为 **0.7779616266
 - [部署、切换和回滚](ascend-310b-deployment.md)
 - [板端连接与运行环境](ascend-310b-ssh-environment.md)
 - [正式模型包](../models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/README.md)
-
-旧 20260816-full-score-1493b04 共享双头 3+1 包仅作历史参考，不再是 production。历史 P0–P11 优化记录仍位于 docs/archive/ascend310b/。

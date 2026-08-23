@@ -79,39 +79,85 @@ def load_lineage_catalogs(settings: Mapping[str, Any]) -> list[Dict[str, Any]]:
     return catalogs
 
 
+def _split_records(
+    split_path: Path,
+    *,
+    split_name: str,
+    source_scope: str,
+    round_id: str | None = None,
+) -> list[Dict[str, Any]]:
+    records: list[Dict[str, Any]] = []
+    for raw in split_path.read_text(encoding="utf-8").splitlines():
+        value = raw.strip()
+        if not value:
+            continue
+        image = resolve_path(value)
+        label = image.with_suffix(".txt")
+        if not image.is_file() or not label.is_file():
+            raise FileNotFoundError(f"4+2 血缘文件不存在：{image} / {label}")
+        row: Dict[str, Any] = {
+            "stem": image.stem,
+            "image": value,
+            "label": str(Path(value).with_suffix(".txt")).replace("\\", "/"),
+            "image_sha256": sha256_file(image),
+            "label_sha256": sha256_file(label),
+            "split": split_name,
+            "source_scope": source_scope,
+        }
+        if round_id is not None:
+            row["round_id"] = round_id
+        records.append(row)
+    return records
+
+
 def build_base_lineage(settings: Mapping[str, Any]) -> Dict[str, Any]:
-    """Create the immutable base catalog from the configured audited experiment."""
+    """Create the immutable catalog for the learned 4+2 train/dev data."""
     lineage = settings.get("lineage")
     if not isinstance(lineage, Mapping):
         raise ValueError("未配置增量数据血缘目录。")
     target = resolve_path(lineage["base_manifest"])
     if target.exists():
         return _validate_catalog(json.loads(target.read_text(encoding="utf-8")), target)
-    source = resolve_path(lineage["base_experiment_config"])
+    source = resolve_path(lineage["base_split_manifest"])
     if not source.is_file():
-        raise FileNotFoundError(f"基础数据指纹配置不存在：{source}")
-    from fair_agent.modules.incremental_experiment import dataset_snapshot, load_experiment_config
+        raise FileNotFoundError(f"4+2 划分清单不存在：{source}")
+    split_manifest = json.loads(source.read_text(encoding="utf-8"))
+    if split_manifest.get("protocol") != "competition_score_priority_strict_4plus2_partition":
+        raise ValueError(f"4+2 划分协议不匹配：{source}")
+    lists = split_manifest.get("lists")
+    if not isinstance(lists, Mapping):
+        raise ValueError(f"4+2 划分清单缺少 lists：{source}")
 
-    snapshot = dataset_snapshot(load_experiment_config(source), include_lock_content=False)
-    files = [
-        {**dict(item), "source_scope": "base"}
-        for item in snapshot.get("base", {}).get("files", [])
-    ]
-    for round_snapshot in snapshot.get("rounds", []):
-        files.extend(
-            {
-                **dict(item),
-                "source_scope": "incremental",
-                "round_id": str(round_snapshot["id"]),
-            }
-            for item in round_snapshot.get("files", [])
-        )
+    def split_file(name: str) -> Path:
+        entry = lists.get(name)
+        if not isinstance(entry, Mapping) or not entry.get("path"):
+            raise ValueError(f"4+2 划分缺少列表：{name}")
+        return resolve_path(str(entry["path"]))
+
+    files = _split_records(
+        split_file("base_train_plus_dev"),
+        split_name="base_train_plus_dev",
+        source_scope="base",
+    )
+    rounds = (split_manifest.get("increment_rounds") or {}).get("rounds") or []
+    for round_row in rounds:
+        round_id = str(round_row["round_id"])
+        for role in ("train", "dev"):
+            split_name = f"{round_id}_{role}"
+            files.extend(
+                _split_records(
+                    split_file(split_name),
+                    split_name=split_name,
+                    source_scope="incremental",
+                    round_id=round_id,
+                )
+            )
     unique_files = {
         (str(item.get("image_sha256")), str(item.get("label_sha256"))): item for item in files
     }
     files = sorted(unique_files.values(), key=lambda item: (str(item.get("split")), str(item.get("stem"))))
     if not files:
-        raise ValueError("基础实验快照没有可冻结的基础训练文件。")
+        raise ValueError("4+2 划分没有可冻结的 train/dev 文件。")
     payload: Dict[str, Any] = {
         "schema_version": LINEAGE_SCHEMA_VERSION,
         "catalog_id": "base",
@@ -119,8 +165,7 @@ def build_base_lineage(settings: Mapping[str, Any]) -> Dict[str, Any]:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source": rel_path(source),
         "source_sha256": sha256_file(source),
-        "source_snapshot_sha256": snapshot["snapshot_sha256"],
-        "class_ids": sorted(int(value) for value in snapshot["class_map"]),
+        "class_ids": sorted(int(value) for value in split_manifest["class_map"]),
         "files": files,
         "cache_files": _scan_cache_files(settings),
     }

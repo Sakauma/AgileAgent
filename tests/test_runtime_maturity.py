@@ -215,7 +215,8 @@ def test_static_release_verification_passes() -> None:
     assert isinstance(result["required_assets"], dict)
     assert {
         "models/production/incremental_detection/calibration.json",
-        "models/production/incremental_detection/context_prior.json",
+        "models/production/incremental_detection/base_context_prior.json",
+        "models/production/incremental_detection/incremental_context_prior.json",
         "models/production/incremental_detection/metrics.json",
         "models/production/incremental_detection/profile.json",
     } <= set(result["required_assets"])
@@ -227,6 +228,7 @@ def test_static_release_verification_passes() -> None:
     )
     assert result["model_generations"]["production_classes"] == [0, 1, 2, 3, 4, 5]
     assert result["model_generations"]["candidate_status"] == "active"
+    assert result["blockers"] == []
 
 
 def test_manifest_blocks_uncalibrated_or_overlapping_true_new_class() -> None:

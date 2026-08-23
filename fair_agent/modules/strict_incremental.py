@@ -1,39 +1,27 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import random
-import shutil
 from collections import defaultdict
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 import numpy as np
-import yaml
 from PIL import Image
 
 from fair_agent.core.config import ROOT, rel_path, resolve_path
+from fair_agent.core.hashes import sha256_file
 from fair_agent.modules.detection_fusion import arbitrate_cross_class_conflicts
 
 
-GLOBAL_CLASS_NAMES = {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"}
-
-
-def load_yaml(path: str | Path) -> Dict[str, Any]:
-    resolved = resolve_path(path)
-    data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"YAML 顶层必须是映射：{resolved}")
-    return data
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+CLASS_NAMES = {
+    0: "soldier",
+    1: "small_aircraft",
+    2: "warship",
+    3: "tank",
+    4: "patrol_boat",
+    5: "armored_vehicle",
+}
 
 
 def read_split(path: str | Path) -> List[Path]:
@@ -48,11 +36,8 @@ def source_label(image: Path) -> Path:
     sibling = image.parent.parent / "labels" / f"{image.stem}.txt"
     if sibling.exists():
         return sibling
-    # Also support the canonical YOLO layout
+    # Also support the canonical YOLO layout:
     # ``dataset/images/<split>/x.png -> dataset/labels/<split>/x.txt``.
-    # The strict protocol materializer uses ``<split>/images`` instead, so
-    # both layouts must remain valid without resolving image symlinks back to
-    # their four-class source labels.
     if image.parent.parent.name == "images":
         standard = (
             image.parent.parent.parent
@@ -81,297 +66,6 @@ def read_yolo_labels(path: Path) -> List[tuple[int, float, float, float, float]]
 
 def image_class_ids(image: Path) -> set[int]:
     return {row[0] for row in read_yolo_labels(source_label(image))}
-
-
-def _link_or_copy(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        target.symlink_to(source.resolve())
-    except OSError:
-        shutil.copy2(source, target)
-
-
-def _write_subset(
-    images: Sequence[Path],
-    target_root: Path,
-    global_to_local: Mapping[int, int],
-) -> List[Path]:
-    generated = []
-    for source in images:
-        target_image = target_root / "images" / source.name
-        target_label = target_root / "labels" / f"{source.stem}.txt"
-        _link_or_copy(source, target_image)
-        output_labels = []
-        for class_id, x, y, width, height in read_yolo_labels(source_label(source)):
-            if class_id in global_to_local:
-                output_labels.append(
-                    f"{global_to_local[class_id]} {x:.10g} {y:.10g} {width:.10g} {height:.10g}"
-                )
-        target_label.parent.mkdir(parents=True, exist_ok=True)
-        target_label.write_text("\n".join(output_labels) + ("\n" if output_labels else ""), encoding="utf-8")
-        generated.append(target_image)
-    return generated
-
-
-def _write_split(path: Path, images: Sequence[Path]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Keep the generated view path. Resolving a symlink would make Ultralytics
-    # pair the source image with the original four-class label.
-    path.write_text("\n".join(str(image.absolute()) for image in images) + "\n", encoding="utf-8")
-
-
-def _write_dataset_yaml(path: Path, split_paths: Mapping[str, Path], names: Mapping[int, str]) -> None:
-    data = {
-        "path": str(path.parent.resolve()),
-        "train": str(split_paths["train"].resolve()),
-        "val": str(split_paths["val"].resolve()),
-        "test": str(split_paths["test"].resolve()),
-        "names": dict(names),
-    }
-    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
-
-
-def validate_protocol_spec(protocol: Mapping[str, Any]) -> None:
-    new_id = int(protocol["new_global_id"])
-    new_name = str(protocol["new_class"])
-    mapping = {int(key): int(value) for key, value in protocol["base_local_to_global"].items()}
-    if GLOBAL_CLASS_NAMES.get(new_id) != new_name:
-        raise ValueError(f"新增类别映射错误：{protocol['id']}")
-    if set(mapping) != {0, 1, 2} or new_id in set(mapping.values()):
-        raise ValueError(f"基础类别映射必须是连续三类且与新增类互斥：{protocol['id']}")
-    expected = {GLOBAL_CLASS_NAMES[value] for value in mapping.values()}
-    if expected != set(protocol["base_classes"]):
-        raise ValueError(f"基础类别名称与映射不一致：{protocol['id']}")
-
-
-def build_protocol_dataset(
-    protocol: Mapping[str, Any],
-    source_splits: Mapping[str, str | Path],
-    output_dir: Path,
-    include_lock: bool = False,
-) -> Dict[str, Any]:
-    validate_protocol_spec(protocol)
-    if output_dir.exists():
-        raise FileExistsError(f"拒绝覆盖严格增量数据集：{output_dir}")
-    source_rows = {name: read_split(path) for name, path in source_splits.items()}
-    if set(source_rows) != {"train", "val", "lock"}:
-        raise ValueError("source_splits 必须包含 train、val、lock")
-    source_split_stems = {
-        name: [image.stem for image in images] for name, images in source_rows.items()
-    }
-    source_split_intersections = {
-        "train_val": sorted(set(source_split_stems["train"]) & set(source_split_stems["val"])),
-        "train_lock": sorted(set(source_split_stems["train"]) & set(source_split_stems["lock"])),
-        "val_lock": sorted(set(source_split_stems["val"]) & set(source_split_stems["lock"])),
-    }
-    if any(source_split_intersections.values()):
-        raise RuntimeError(f"源划分存在重复 stem：{source_split_intersections}")
-    new_id = int(protocol["new_global_id"])
-    local_to_global = {int(key): int(value) for key, value in protocol["base_local_to_global"].items()}
-    global_to_local = {global_id: local_id for local_id, global_id in local_to_global.items()}
-    base_names = {local_id: GLOBAL_CLASS_NAMES[global_id] for local_id, global_id in local_to_global.items()}
-    new_names = {0: str(protocol["new_class"])}
-
-    unified_student = bool(protocol.get("build_unified_student", False))
-    selected: Dict[str, Dict[str, List[Path]]] = {"base": {}, "incremental": {}}
-    if unified_student:
-        selected["student"] = {}
-    for split_name, rows in source_rows.items():
-        if split_name == "lock":
-            selected["base"]["test"] = list(rows) if include_lock else []
-            selected["incremental"]["test"] = list(rows) if include_lock else []
-            if unified_student:
-                selected["student"]["test"] = list(rows) if include_lock else []
-        else:
-            image_classes = {image: image_class_ids(image) for image in rows}
-            invalid_ids = {
-                image.name: sorted(classes - set(GLOBAL_CLASS_NAMES))
-                for image, classes in image_classes.items()
-                if not classes <= set(GLOBAL_CLASS_NAMES)
-            }
-            if invalid_ids:
-                raise ValueError(f"严格增量源标签包含未知类别：{invalid_ids}")
-            cooccurrence = {
-                image.name: sorted(classes)
-                for image, classes in image_classes.items()
-                if new_id in classes and classes != {new_id}
-            }
-            if cooccurrence:
-                raise ValueError(f"新增类训练/验证图像存在旧类共现：{cooccurrence}")
-            contains_new = {image: new_id in image_classes[image] for image in rows}
-            target = "train" if split_name == "train" else "val"
-            selected["base"][target] = [image for image in rows if not contains_new[image]]
-            selected["incremental"][target] = [image for image in rows if contains_new[image]]
-            if unified_student:
-                selected["student"][target] = list(selected["incremental"][target])
-
-    expected = protocol.get("expected_incremental_counts", {})
-    for split_name in ("train", "val"):
-        if split_name in expected and len(selected["incremental"][split_name]) != int(expected[split_name]):
-            raise ValueError(
-                f"{protocol['id']} 新增类 {split_name} 样本数不符："
-                f"expected={expected[split_name]} actual={len(selected['incremental'][split_name])}"
-            )
-
-    output_dir.mkdir(parents=True)
-    generated: Dict[str, Dict[str, List[Path]]] = {phase: {} for phase in selected}
-    phase_specs: List[tuple[str, Mapping[int, int], Mapping[int, str]]] = [
-        ("base", global_to_local, base_names),
-        ("incremental", {new_id: 0}, new_names),
-    ]
-    if unified_student:
-        phase_specs.append(("student", {new_id: new_id}, GLOBAL_CLASS_NAMES))
-    for phase, mapping, names in phase_specs:
-        split_files = {}
-        for split_name in ("train", "val", "test"):
-            images = _write_subset(selected[phase][split_name], output_dir / phase / split_name, mapping)
-            generated[phase][split_name] = images
-            split_file = output_dir / phase / "splits" / f"{split_name}.txt"
-            _write_split(split_file, images)
-            split_files[split_name] = split_file
-        _write_dataset_yaml(output_dir / phase / "dataset.yaml", split_files, names)
-
-    base_train_stems = {path.stem for path in selected["base"]["train"]}
-    incremental_train_stems = {path.stem for path in selected["incremental"]["train"]}
-    base_val_stems = {path.stem for path in selected["base"]["val"]}
-    incremental_val_stems = {path.stem for path in selected["incremental"]["val"]}
-    intersections = {
-        "base_incremental_train": sorted(base_train_stems & incremental_train_stems),
-        "base_incremental_val": sorted(base_val_stems & incremental_val_stems),
-        "incremental_train_val": sorted(incremental_train_stems & incremental_val_stems),
-    }
-    if any(intersections.values()):
-        raise RuntimeError(f"严格增量集合存在交集：{intersections}")
-
-    old_raw_stems = sorted(
-        (base_train_stems | base_val_stems) & (incremental_train_stems | incremental_val_stems)
-    )
-    base_source_files = selected["base"]["train"] + selected["base"]["val"]
-    incremental_source_files = selected["incremental"]["train"] + selected["incremental"]["val"]
-    base_image_hashes = {sha256_file(path) for path in base_source_files}
-    incremental_image_hashes = {sha256_file(path) for path in incremental_source_files}
-    base_label_hashes = {sha256_file(source_label(path)) for path in base_source_files}
-    incremental_label_hashes = {sha256_file(source_label(path)) for path in incremental_source_files}
-    old_raw_content_hashes = sorted(base_image_hashes & incremental_image_hashes)
-    old_raw_label_hashes = sorted(base_label_hashes & incremental_label_hashes)
-    old_raw_image_paths = sorted(
-        rel_path(path)
-        for path in incremental_source_files
-        if path.stem in base_train_stems | base_val_stems or sha256_file(path) in base_image_hashes
-    )
-    old_raw_label_paths = sorted(
-        rel_path(source_label(path))
-        for path in incremental_source_files
-        if path.stem in base_train_stems | base_val_stems
-        or sha256_file(source_label(path)) in base_label_hashes
-    )
-    feature_cache_files = sorted(
-        rel_path(path)
-        for path in (output_dir / "incremental").rglob("*")
-        if path.is_file() and path.suffix.lower() in {".cache", ".npy", ".npz", ".pt"}
-    )
-
-    source_hashes = {
-        name: sha256_file(resolve_path(path)) for name, path in source_splits.items()
-    }
-    manifest = {
-        "schema_version": 1,
-        "protocol": protocol["id"],
-        "incremental_mode": "class_incremental",
-        "learning_data_scope": "incremental_dataset_only",
-        "base_classes": list(protocol["base_classes"]),
-        "new_class": protocol["new_class"],
-        "new_global_id": new_id,
-        "base_local_to_global": local_to_global,
-        "specialist_local_to_global": {0: new_id},
-        "source_split_sha256": source_hashes,
-        "source_split_stems": source_split_stems,
-        "source_split_intersections": source_split_intersections,
-        "counts": {
-            phase: {split: len(rows) for split, rows in split_rows.items()}
-            for phase, split_rows in selected.items()
-        },
-        "source_stems": {
-            phase: {split: [path.stem for path in rows] for split, rows in split_rows.items()}
-            for phase, split_rows in selected.items()
-        },
-        "intersections": intersections,
-        "base_nc": 3,
-        "specialist_nc": 1,
-        "student_nc": 4 if unified_student else None,
-        "unified_student_enabled": unified_student,
-        "old_raw_stems": old_raw_stems,
-        "old_raw_content_hashes": old_raw_content_hashes,
-        "old_raw_label_hashes": old_raw_label_hashes,
-        "old_raw_image_paths": old_raw_image_paths,
-        "old_raw_label_paths": old_raw_label_paths,
-        "old_raw_image_count": len(old_raw_image_paths),
-        "old_raw_label_count": len(old_raw_label_paths),
-        "old_feature_cache_count": len(feature_cache_files),
-        "feature_cache_files": feature_cache_files,
-        "original_data_modified": False,
-        "lock_materialized_after_freeze": include_lock,
-        "base_dataset": rel_path(output_dir / "base" / "dataset.yaml"),
-        "incremental_dataset": rel_path(output_dir / "incremental" / "dataset.yaml"),
-        "student_dataset": rel_path(output_dir / "student" / "dataset.yaml") if unified_student else None,
-    }
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    if (
-        manifest["old_raw_image_count"]
-        or manifest["old_raw_label_count"]
-        or manifest["old_feature_cache_count"]
-    ):
-        raise RuntimeError(
-            "增量训练视图包含旧图、旧标签或旧特征缓存；已在manifest中记录并拒绝训练"
-        )
-    return manifest
-
-
-def materialize_lock_data(
-    protocol: Mapping[str, Any],
-    source_lock: str | Path,
-    output_dir: Path,
-) -> Dict[str, Any]:
-    manifest_path = output_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("lock_materialized_after_freeze"):
-        raise FileExistsError(f"lock-val 已经物化：{output_dir}")
-    lock_path = resolve_path(source_lock)
-    if sha256_file(lock_path) != manifest.get("source_split_sha256", {}).get("lock"):
-        raise ValueError("lock-val 划分在训练冻结后发生变化")
-    lock_images = read_split(source_lock)
-    if [image.stem for image in lock_images] != manifest.get("source_split_stems", {}).get("lock"):
-        raise ValueError("lock-val 图像清单在训练冻结后发生变化")
-    expected_lock = protocol.get("expected_incremental_counts", {}).get("lock_positive")
-    if expected_lock is not None:
-        actual_lock = sum(int(protocol["new_global_id"]) in image_class_ids(image) for image in lock_images)
-        if actual_lock != int(expected_lock):
-            raise ValueError(
-                f"{protocol['id']} 新增类 lock-val 样本数不符：expected={expected_lock} actual={actual_lock}"
-            )
-    local_to_global = {int(key): int(value) for key, value in protocol["base_local_to_global"].items()}
-    global_to_local = {global_id: local_id for local_id, global_id in local_to_global.items()}
-    new_id = int(protocol["new_global_id"])
-    phases: List[tuple[str, Mapping[int, int]]] = [
-        ("base", global_to_local),
-        ("incremental", {new_id: 0}),
-    ]
-    if manifest.get("unified_student_enabled"):
-        phases.append(("student", {class_id: class_id for class_id in GLOBAL_CLASS_NAMES}))
-    for phase, mapping in phases:
-        target_root = output_dir / phase / "test"
-        if any(target_root.rglob("*")):
-            raise FileExistsError(f"拒绝覆盖 lock-val 视图：{target_root}")
-        images = _write_subset(lock_images, target_root, mapping)
-        _write_split(output_dir / phase / "splits" / "test.txt", images)
-        manifest["counts"][phase]["test"] = len(images)
-        manifest["source_stems"][phase]["test"] = [path.stem for path in lock_images]
-    manifest["lock_materialized_after_freeze"] = True
-    manifest["lock_materialized_weight_freeze_required"] = True
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return manifest
 
 
 def yolo_ground_truth(images: Sequence[Path], class_ids: Iterable[int] | None = None) -> List[Dict[str, Any]]:
@@ -618,533 +312,290 @@ def subset_rows(rows: Sequence[Mapping[str, Any]], image_ids: Iterable[str]) -> 
     return [dict(row) for row in rows if str(row["image_id"]) in allowed]
 
 
-def bootstrap_metrics(
-    predictions: Sequence[Mapping[str, Any]],
-    ground_truth: Sequence[Mapping[str, Any]],
-    image_paths: Sequence[Path],
-    new_class_id: int,
-    iterations: int,
-    seed: int,
+def load_experiment_profile(
+    profile_id: str,
+    profile_root: str | Path | None = None,
 ) -> Dict[str, Any]:
-    presence = defaultdict(set)
-    for row in ground_truth:
-        presence[str(row["image_id"])].add(int(row["class_id"]))
-    strata: Dict[tuple[str, bool], List[str]] = defaultdict(list)
-    for image in image_paths:
-        image_id = image.stem
-        sensor = image.stem.split("_", 1)[0]
-        strata[(sensor, new_class_id in presence[image_id])].append(image_id)
-    rng = random.Random(seed)
-    full_values = []
-    new_values = []
-    predictions_by_image = defaultdict(list)
-    gt_by_image = defaultdict(list)
-    for row in predictions:
-        predictions_by_image[str(row["image_id"])].append(row)
-    for row in ground_truth:
-        gt_by_image[str(row["image_id"])].append(row)
-    for iteration in range(iterations):
-        sampled_predictions = []
-        sampled_gt = []
-        sample_index = 0
-        for values in strata.values():
-            for original_id in rng.choices(values, k=len(values)):
-                boot_id = f"boot:{iteration}:{sample_index}:{original_id}"
-                sample_index += 1
-                sampled_predictions.extend({**row, "image_id": boot_id} for row in predictions_by_image[original_id])
-                sampled_gt.extend({**row, "image_id": boot_id} for row in gt_by_image[original_id])
-        full_values.append(evaluate_ap50(sampled_predictions, sampled_gt, GLOBAL_CLASS_NAMES)["map50"])
-        new_values.append(evaluate_ap50(sampled_predictions, sampled_gt, [new_class_id])["map50"])
-
-    def summarize(values: Sequence[float]) -> Dict[str, float]:
-        return {
-            "median": float(np.median(values)),
-            "ci95_low": float(np.percentile(values, 2.5)),
-            "ci95_high": float(np.percentile(values, 97.5)),
-        }
-
-    return {"iterations": iterations, "full_map50": summarize(full_values), "new_map50": summarize(new_values)}
-
-
-def load_experiment_profile(profile_id: str, profile_root: str | Path | None = None) -> Dict[str, Any]:
-    root = resolve_path(profile_root) if profile_root is not None else ROOT / "models" / "profiles"
+    root = (
+        resolve_path(profile_root)
+        if profile_root is not None
+        else ROOT / "models" / "profiles"
+    )
     active = root / profile_id / "active.json"
-    if not active.exists():
-        raise FileNotFoundError(f"严格增量实验档尚未通过验收：{profile_id}")
+    if not active.is_file():
+        raise FileNotFoundError(f"增量检测档尚未通过验收：{profile_id}")
     profile = json.loads(active.read_text(encoding="utf-8"))
     if (
         profile.get("profile_id") != profile_id
         or profile.get("competition_accepted") is not True
+        or profile.get("deployment_accepted") is not True
         or profile.get("incremental_mode") != "class_incremental"
         or profile.get("evidence_level") != "verified"
+        or profile.get("deployment") != "dual_detector"
     ):
-        raise ValueError(f"严格增量实验档无效：{profile_id}")
-    raw_thresholds = profile.get("activation_thresholds")
-    raw_new_ids = profile.get("new_global_ids")
-    multi_class_profile = isinstance(raw_thresholds, Mapping) or isinstance(
-        raw_new_ids, list
-    )
+        raise ValueError(f"增量检测档无效：{profile_id}")
+
     try:
-        if multi_class_profile:
-            thresholds = {
-                int(key): float(value)
-                for key, value in dict(raw_thresholds or {}).items()
-            }
-            new_global_ids = sorted(int(value) for value in (raw_new_ids or []))
-            if not new_global_ids or set(new_global_ids) != set(thresholds):
-                raise ValueError("新增类别与逐类阈值不一致")
-        else:
-            new_global_id = int(profile["new_global_id"])
-            thresholds = {new_global_id: float(profile["activation_threshold"])}
-            new_global_ids = [new_global_id]
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"严格增量实验档字段无效：{profile_id}") from exc
-    if any(not 0.01 <= value <= 1.0 for value in thresholds.values()):
-        raise ValueError(f"严格增量实验档逐类阈值无效：{profile_id}")
-    single_detector = profile.get("deployment") == "single_detector"
-    raw_specialist_models = profile.get("specialist_models")
-    multi_specialist = (
-        not single_detector
-        and isinstance(raw_specialist_models, list)
-        and bool(raw_specialist_models)
-    )
-    if single_detector and len(new_global_ids) != 1:
-        raise ValueError(f"统一学生实验档暂不支持多个新增类别：{profile_id}")
-    new_global_id = new_global_ids[0]
-    if single_detector:
-        mapping = {
-            int(key): int(key) for key in profile.get("class_names", GLOBAL_CLASS_NAMES)
+        class_names = {
+            int(key): str(value)
+            for key, value in dict(profile["class_names"]).items()
         }
-        if set(mapping) != set(GLOBAL_CLASS_NAMES) or mapping != {
-            class_id: class_id for class_id in GLOBAL_CLASS_NAMES
-        }:
-            raise ValueError(f"严格增量统一学生类别映射无效：{profile_id}")
-        weight_fields = (
-            ("teacher_weight", "teacher_sha256"),
-            ("model_weight", "model_sha256"),
+        base_mapping = {
+            int(key): int(value)
+            for key, value in dict(profile["base_local_to_global"]).items()
+        }
+        specialist_mapping = {
+            int(key): int(value)
+            for key, value in dict(
+                profile["specialist_local_to_global"]
+            ).items()
+        }
+        new_global_ids = sorted(
+            int(value) for value in profile["new_global_ids"]
         )
-    else:
-        try:
-            mapping = {
-                int(key): int(value)
-                for key, value in profile["base_local_to_global"].items()
-            }
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(f"严格增量实验档类别映射无效：{profile_id}") from exc
-        if (
-            set(mapping) != set(range(len(mapping)))
-            or set(new_global_ids) & set(mapping.values())
-        ):
-            raise ValueError(f"严格增量实验档类别映射或阈值无效：{profile_id}")
-        weight_fields = (("base_weight", "base_sha256"),)
-        if not multi_specialist:
-            weight_fields += (("specialist_weight", "specialist_sha256"),)
-    for path_key, hash_key in weight_fields:
+        thresholds = {
+            int(key): float(value)
+            for key, value in dict(profile["activation_thresholds"]).items()
+        }
+        base_thresholds = {
+            int(key): float(value)
+            for key, value in dict(
+                profile["base_activation_thresholds"]
+            ).items()
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"增量检测档字段无效：{profile_id}") from exc
+
+    if (
+        class_names != CLASS_NAMES
+        or set(base_mapping) != set(range(len(base_mapping)))
+        or set(specialist_mapping) != set(range(len(specialist_mapping)))
+        or set(base_mapping.values()) != {0, 1, 2, 3}
+        or set(specialist_mapping.values()) != {4, 5}
+        or new_global_ids != [4, 5]
+        or set(thresholds) != {4, 5}
+        or set(base_thresholds) != {0, 1, 2, 3}
+        or any(not 0.01 <= value <= 1.0 for value in thresholds.values())
+        or any(not 0.01 <= value <= 1.0 for value in base_thresholds.values())
+    ):
+        raise ValueError(f"增量检测档类别或阈值无效：{profile_id}")
+
+    for path_key, hash_key in (
+        ("base_weight", "base_sha256"),
+        ("specialist_weight", "specialist_sha256"),
+    ):
         weight = resolve_path(profile[path_key])
-        if not weight.exists() or sha256_file(weight) != profile[hash_key]:
-            raise ValueError(f"严格增量实验档权重校验失败：{profile_id}:{path_key}")
-    if multi_specialist:
-        normalized_specialists = []
-        covered_ids: set[int] = set()
-        specialist_ids: set[str] = set()
-        for raw_specialist in raw_specialist_models:
-            if not isinstance(raw_specialist, Mapping):
-                raise ValueError(f"严格增量实验档多专家格式无效：{profile_id}")
-            specialist = dict(raw_specialist)
-            specialist_id = str(
-                specialist.get("model_id") or specialist.get("id") or ""
-            ).strip()
-            try:
-                specialist_mapping = {
-                    int(key): int(value)
-                    for key, value in dict(
-                        specialist.get("local_to_global") or {}
-                    ).items()
-                }
-                owned_ids = set(specialist_mapping.values())
-                declared_ids = {
-                    int(value)
-                    for value in specialist.get("global_class_ids", owned_ids)
-                }
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"严格增量实验档专家映射无效：{profile_id}:{specialist_id}"
-                ) from exc
-            weight = resolve_path(str(specialist.get("weight") or ""))
-            expected_hash = str(specialist.get("sha256") or "")
-            if (
-                not specialist_id
-                or specialist_id in specialist_ids
-                or not specialist_mapping
-                or set(specialist_mapping) != set(range(len(specialist_mapping)))
-                or owned_ids != declared_ids
-                or not owned_ids
-                or covered_ids & owned_ids
-                or owned_ids - set(new_global_ids)
-                or not weight.is_file()
-                or len(expected_hash) != 64
-                or sha256_file(weight) != expected_hash
-            ):
-                raise ValueError(
-                    f"严格增量实验档专家身份无效：{profile_id}:{specialist_id}"
-                )
-            specialist_ids.add(specialist_id)
-            covered_ids.update(owned_ids)
-            normalized_specialists.append(
-                {
-                    **specialist,
-                    "model_id": specialist_id,
-                    "weight": rel_path(weight),
-                    "local_to_global": specialist_mapping,
-                    "global_class_ids": sorted(owned_ids),
-                }
-            )
-        if covered_ids != set(new_global_ids):
-            raise ValueError(f"严格增量实验档专家类别所有权不完整：{profile_id}")
-        profile["specialist_models"] = normalized_specialists
-    prototype_source = profile.get("positive_prototype_source")
-    if prototype_source:
-        prototype_path = resolve_path(prototype_source)
-        expected = str(profile.get("positive_prototype_sha256") or "")
-        if not prototype_path.exists() or sha256_file(prototype_path) != expected:
-            raise ValueError(f"严格增量实验档原型校验失败：{profile_id}")
-        prototype = json.loads(prototype_path.read_text(encoding="utf-8"))
+        expected = str(profile.get(hash_key) or "")
         if (
-            not prototype.get("calibrated")
-            or int(prototype.get("class_id", -1)) != new_global_id
-            or prototype.get("learning_data_scope") != "incremental_dataset_only"
+            not weight.is_file()
+            or len(expected) != 64
+            or sha256_file(weight) != expected
         ):
-            raise ValueError(f"严格增量实验档原型证据无效：{profile_id}")
-        profile["positive_prototype"] = prototype
+            raise ValueError(f"增量检测档权重校验失败：{profile_id}:{path_key}")
+
     context_gate = profile.get("context_gate")
     context_prior = profile.get("context_prior")
-    if not isinstance(context_gate, Mapping):
-        raise ValueError(f"严格增量实验档缺少场景软门控配置：{profile_id}")
-    if context_gate.get("enabled") is True:
-        if (
-            context_gate.get("policy") != "soft_threshold_penalty"
-            or context_gate.get("hard_routing") is not False
-            or context_gate.get("learning_data_scope") != "incremental_train_only"
-            or not isinstance(context_prior, Mapping)
-            or context_prior.get("source_split") != "incremental_train_only"
-        ):
-            raise ValueError(f"严格增量实验档场景软门控证据无效：{profile_id}")
-        penalty = float(context_gate.get("max_threshold_penalty", -1.0))
-        if not 0.0 <= penalty <= 1.0:
-            raise ValueError(f"严格增量实验档场景软门控阈值无效：{profile_id}")
-        raw_penalties = context_gate.get("max_threshold_penalties")
-        if isinstance(raw_penalties, Mapping):
-            penalties = {
-                int(key): float(value) for key, value in raw_penalties.items()
-            }
-            if set(penalties) != set(new_global_ids) or any(
-                not 0.0 <= value <= 1.0 for value in penalties.values()
-            ):
-                raise ValueError(
-                    f"严格增量实验档逐类场景软门控阈值无效：{profile_id}"
-                )
-        context_prior_path = resolve_path(
-            profile.get("context_prior_source", "__missing_context_prior__")
-        )
-        expected = str(profile.get("context_prior_sha256") or "")
-        if (
-            not context_prior_path.is_file()
-            or len(expected) != 64
-            or sha256_file(context_prior_path) != expected
-        ):
-            raise ValueError(f"严格增量实验档场景先验证据缺失：{profile_id}")
-        frozen_prior = json.loads(context_prior_path.read_text(encoding="utf-8"))
-        if frozen_prior != dict(context_prior):
-            raise ValueError(f"严格增量实验档场景先验内容不一致：{profile_id}")
-    elif context_gate.get("enabled") is not False or context_prior not in ({}, None):
-        raise ValueError(f"严格增量实验档场景软门控开关无效：{profile_id}")
-    raw_base_thresholds = profile.get("base_activation_thresholds") or {}
-    try:
-        base_thresholds = {
-            int(key): float(value) for key, value in dict(raw_base_thresholds).items()
-        }
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"严格增量实验档 Base 逐类阈值无效：{profile_id}") from exc
+    if (
+        not isinstance(context_gate, Mapping)
+        or context_gate.get("enabled") is not True
+        or context_gate.get("policy") != "soft_threshold_penalty"
+        or context_gate.get("hard_routing") is not False
+        or context_gate.get("learning_data_scope") != "incremental_train_only"
+        or not isinstance(context_prior, Mapping)
+        or context_prior.get("source_split") != "incremental_train_only"
+    ):
+        raise ValueError(f"增量检测档新增类场景门控无效：{profile_id}")
+    penalties = {
+        int(key): float(value)
+        for key, value in dict(
+            context_gate.get("max_threshold_penalties") or {}
+        ).items()
+    }
+    if set(penalties) != {4, 5} or any(
+        not 0.0 <= value <= 1.0 for value in penalties.values()
+    ):
+        raise ValueError(f"增量检测档新增类场景惩罚无效：{profile_id}")
+    context_prior_path = resolve_path(profile["context_prior_source"])
+    context_prior_hash = str(profile.get("context_prior_sha256") or "")
+    if (
+        not context_prior_path.is_file()
+        or len(context_prior_hash) != 64
+        or sha256_file(context_prior_path) != context_prior_hash
+        or json.loads(context_prior_path.read_text(encoding="utf-8"))
+        != dict(context_prior)
+    ):
+        raise ValueError(f"增量检测档新增类场景先验无效：{profile_id}")
+
     base_gate = profile.get("base_context_gate")
     base_prior = profile.get("base_context_prior")
-    if isinstance(base_gate, Mapping) and base_gate.get("enabled") is True:
-        expected_base_ids = set(mapping.values())
-        raw_base_penalties = base_gate.get("max_threshold_penalties")
-        if (
-            set(base_thresholds) != expected_base_ids
-            or any(not 0.01 <= value <= 1.0 for value in base_thresholds.values())
-            or base_gate.get("policy") != "soft_threshold_penalty"
-            or base_gate.get("hard_routing") is not False
-            or base_gate.get("learning_data_scope") != "base_train_only"
-            or not isinstance(raw_base_penalties, Mapping)
-            or {int(key) for key in raw_base_penalties} != expected_base_ids
-            or any(
-                not 0.0 <= float(value) <= 1.0
-                for value in raw_base_penalties.values()
+    if (
+        not isinstance(base_gate, Mapping)
+        or base_gate.get("enabled") is not True
+        or base_gate.get("policy") != "soft_threshold_penalty"
+        or base_gate.get("hard_routing") is not False
+        or base_gate.get("learning_data_scope") != "base_train_only"
+        or not isinstance(base_prior, Mapping)
+        or base_prior.get("source_split") != "base_train_only"
+    ):
+        raise ValueError(f"增量检测档 Base 场景门控无效：{profile_id}")
+    base_penalties = {
+        int(key): float(value)
+        for key, value in dict(
+            base_gate.get("max_threshold_penalties") or {}
+        ).items()
+    }
+    if set(base_penalties) != {0, 1, 2, 3} or any(
+        not 0.0 <= value <= 1.0 for value in base_penalties.values()
+    ):
+        raise ValueError(f"增量检测档 Base 场景惩罚无效：{profile_id}")
+    base_prior_path = resolve_path(profile["base_context_prior_source"])
+    base_prior_hash = str(profile.get("base_context_prior_sha256") or "")
+    if (
+        not base_prior_path.is_file()
+        or len(base_prior_hash) != 64
+        or sha256_file(base_prior_path) != base_prior_hash
+        or json.loads(base_prior_path.read_text(encoding="utf-8"))
+        != dict(base_prior)
+    ):
+        raise ValueError(f"增量检测档 Base 场景先验无效：{profile_id}")
+
+    try:
+        calibration_sources = {
+            int(key): str(value)
+            for key, value in dict(profile["calibration_sources"]).items()
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"增量检测档校准索引无效：{profile_id}") from exc
+    if set(calibration_sources) != {4, 5}:
+        raise ValueError(f"增量检测档缺少逐类校准证据：{profile_id}")
+    calibration_payloads: Dict[Path, Dict[str, Any]] = {}
+    for class_id, source in calibration_sources.items():
+        calibration = resolve_path(source)
+        if not calibration.is_file():
+            raise ValueError(
+                f"增量检测档缺少校准证据：{profile_id}:{class_id}"
             )
-            or not isinstance(base_prior, Mapping)
-            or base_prior.get("source_split") != "base_train_only"
-        ):
-            raise ValueError(f"严格增量实验档 Base 场景软门控无效：{profile_id}")
-        base_prior_path = resolve_path(
-            profile.get("base_context_prior_source", "__missing_base_context_prior__")
+        payload = calibration_payloads.setdefault(
+            calibration,
+            json.loads(calibration.read_text(encoding="utf-8")),
         )
-        expected_base_hash = str(profile.get("base_context_prior_sha256") or "")
+        try:
+            calibrated_threshold = float(
+                payload["per_class_thresholds"][str(class_id)]
+            )
+            selected_threshold = float(
+                payload["per_class"][str(class_id)]["selected"]["threshold"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"增量检测档逐类校准证据无效：{profile_id}:{class_id}"
+            ) from exc
+        data_scope = dict(payload.get("data_scope") or {})
         if (
-            not base_prior_path.is_file()
-            or len(expected_base_hash) != 64
-            or sha256_file(base_prior_path) != expected_base_hash
-            or json.loads(base_prior_path.read_text(encoding="utf-8"))
-            != dict(base_prior)
+            int(payload.get("schema_version", 0)) < 4
+            or payload.get("phase") != "system_calibration"
+            or payload.get("counted_as_incremental_learning") is not False
+            or payload.get("detector_weights_updated") is not False
+            or payload.get("learning_data_scope") is not None
+            or payload.get("source_split") != "mixed_dev_only"
+            or payload.get("deployment_policy")
+            != "competition_map50_dev_calibrated"
+            or data_scope.get("gate_selection") != "mixed_dev_only"
+            or data_scope.get("scene_sensor_model_training")
+            != "base_and_incremental_train_dev"
+            or data_scope.get("scene_sensor_model_recheck")
+            != "base_and_incremental_lock_frozen_model_only"
+            or data_scope.get("base_context_prior") != "base_train_only"
+            or data_scope.get("incremental_context_prior")
+            != "incremental_train_only"
+            or abs(calibrated_threshold - thresholds[class_id]) > 1e-12
+            or abs(selected_threshold - thresholds[class_id]) > 1e-12
         ):
             raise ValueError(
-                f"严格增量实验档 Base 场景先验证据缺失：{profile_id}"
+                f"增量检测档逐类校准证据无效：{profile_id}:{class_id}"
             )
-    elif base_gate is not None and (
-        not isinstance(base_gate, Mapping)
-        or base_gate.get("enabled") is not False
-        or base_thresholds
-        or base_prior not in ({}, None)
-    ):
-        raise ValueError(f"严格增量实验档 Base 场景软门控开关无效：{profile_id}")
-    raw_calibration_sources = profile.get("calibration_sources")
-    if multi_class_profile:
-        if isinstance(raw_calibration_sources, Mapping):
-            calibration_sources = {
-                int(key): str(value)
-                for key, value in raw_calibration_sources.items()
-            }
-        elif profile.get("calibration_source"):
-            calibration_sources = {
-                class_id: str(profile["calibration_source"])
-                for class_id in new_global_ids
-            }
-        else:
-            calibration_sources = {}
-        if set(calibration_sources) != set(new_global_ids):
-            raise ValueError(f"严格增量实验档缺少逐类校准证据：{profile_id}")
-        calibration_payloads: Dict[Path, Dict[str, Any]] = {}
-        for class_id, source in calibration_sources.items():
-            calibration = resolve_path(source)
-            if not calibration.is_file():
-                raise ValueError(
-                    f"严格增量实验档缺少校准证据：{profile_id}:{class_id}"
-                )
-            payload = calibration_payloads.setdefault(
-                calibration,
-                json.loads(calibration.read_text(encoding="utf-8")),
-            )
-            try:
-                calibrated_threshold = float(
-                    payload["per_class_thresholds"][str(class_id)]
-                )
-                selected_threshold = float(
-                    payload["per_class"][str(class_id)]["selected"]["threshold"]
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"严格增量实验档逐类校准证据无效：{profile_id}:{class_id}"
-                ) from exc
-            calibration_schema = int(payload.get("schema_version", 1))
-            if calibration_schema >= 4:
-                data_scope = dict(payload.get("data_scope") or {})
-                calibration_scope_valid = (
-                    payload.get("phase") == "system_calibration"
-                    and payload.get("counted_as_incremental_learning") is False
-                    and payload.get("detector_weights_updated") is False
-                    and payload.get("learning_data_scope") is None
-                    and data_scope.get("gate_selection") == "mixed_dev_only"
-                    and (
-                        not payload.get("context_policy")
-                        or (
-                            data_scope.get("scene_sensor_model_training")
-                            == "base_and_incremental_train_dev"
-                            and data_scope.get("scene_sensor_model_recheck")
-                            == "base_and_incremental_lock_frozen_model_only"
-                            and data_scope.get("base_context_prior")
-                            == "base_train_only"
-                            and data_scope.get("incremental_context_prior")
-                            == "incremental_train_only"
-                        )
-                    )
-                )
-            else:
-                calibration_scope_valid = (
-                    payload.get("learning_data_scope")
-                    == "incremental_dataset_only"
-                )
-            if (
-                payload.get("source_split") != "mixed_dev_only"
-                or not calibration_scope_valid
-                or payload.get("deployment_policy")
-                != "competition_map50_dev_calibrated"
-                or abs(calibrated_threshold - thresholds[class_id]) > 1e-12
-                or abs(selected_threshold - thresholds[class_id]) > 1e-12
-            ):
-                raise ValueError(
-                    f"严格增量实验档逐类校准证据无效：{profile_id}:{class_id}"
-                )
-        calibration = resolve_path(calibration_sources[new_global_ids[0]])
-    else:
-        calibration = resolve_path(
-            profile.get("calibration_source", "__missing_calibration__")
-        )
-        if not calibration.exists():
-            raise ValueError(f"严格增量实验档缺少校准证据：{profile_id}")
-        calibration_payload = json.loads(calibration.read_text(encoding="utf-8"))
-        try:
-            calibrated_threshold = float(calibration_payload["deployment_threshold"])
-            selected_threshold = float(calibration_payload["selected"]["threshold"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(f"严格增量实验档校准证据无效：{profile_id}") from exc
-        if (
-            calibration_payload.get("passed") is not True
-            or calibration_payload.get("source_split") != "incremental_dev_only"
-            or calibration_payload.get("learning_data_scope")
-            != "incremental_dataset_only"
-            or calibration_payload.get("deployment_policy")
-            != "incremental_dev_calibrated"
-            or abs(calibrated_threshold - thresholds[new_global_id]) > 1e-12
-            or abs(selected_threshold - thresholds[new_global_id]) > 1e-12
-        ):
-            raise ValueError(f"严格增量实验档校准证据无效：{profile_id}")
-        calibration_sources = {new_global_id: rel_path(calibration)}
-    evidence_weight = profile.get("base_weight") or profile.get("model_weight")
-    if not evidence_weight:
-        raise ValueError(f"严格增量实验档缺少评测权重：{profile_id}")
-    metrics_path = resolve_path(
-        profile.get("metrics_source")
-        or (Path(str(evidence_weight)).parent / "metrics.json")
-    )
-    if not metrics_path.exists():
-        raise ValueError(f"严格增量实验档缺少评测证据：{profile_id}")
+
+    metrics_path = resolve_path(profile["metrics_source"])
+    if not metrics_path.is_file():
+        raise ValueError(f"增量检测档缺少冻结评测证据：{profile_id}")
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-    evidence_gates = {
-        **dict(metrics.get("score_gates") or {}),
-        **dict(metrics.get("integrity_gates") or {}),
-    }
-    if not evidence_gates:
-        evidence_gates = {
-            "legacy_competition_accepted": bool(
-                metrics.get("competition_accepted")
-            )
-        }
-    metrics_schema = int(metrics.get("schema_version", 1))
-    if metrics_schema >= 5:
-        metrics_scope_valid = (
-            metrics.get("phase") == "joint_evaluation"
-            and metrics.get("counted_as_incremental_learning") is False
-            and metrics.get("detector_weights_updated") is False
-            and metrics.get("model_selection_allowed") is False
-            and metrics.get("incremental_learning_data_scope")
-            == "incremental_dataset_only"
-            and metrics.get("learning_data_scope") is None
-        )
-    else:
-        metrics_scope_valid = (
-            metrics.get("learning_data_scope") == "incremental_dataset_only"
-        )
+    score_gates = dict(metrics.get("score_gates") or {})
+    lock = dict(metrics.get("lock") or {})
     if (
-        metrics.get("competition_accepted") is not True
+        int(metrics.get("schema_version", 0)) < 5
+        or metrics.get("phase") != "joint_evaluation"
+        or metrics.get("counted_as_incremental_learning") is not False
+        or metrics.get("detector_weights_updated") is not False
+        or metrics.get("model_selection_allowed") is not False
+        or metrics.get("incremental_learning_data_scope")
+        != "incremental_dataset_only"
+        or metrics.get("learning_data_scope") is not None
         or metrics.get("incremental_mode") != "class_incremental"
-        or not metrics_scope_valid
         or metrics.get("old_raw_image_count") != 0
-        or not evidence_gates
-        or not all(evidence_gates.values())
-        or (
-            multi_class_profile
-            and metrics.get("predictions_frozen_before_lock_labels") is not True
-        )
+        or metrics.get("predictions_frozen_before_lock_labels") is not True
+        or metrics.get("competition_accepted") is not True
+        or metrics.get("deployment_accepted") is not True
+        or not score_gates
+        or not all(score_gates.values())
     ):
-        raise ValueError(f"严格增量实验档合规证据无效：{profile_id}")
-    profile["metrics_source"] = rel_path(metrics_path)
-    profile["deployment"] = (
-        "single_detector"
-        if single_detector
-        else ("multi_specialist" if multi_specialist else "dual_detector")
-    )
-    profile["base_local_to_global"] = mapping
+        raise ValueError(f"增量检测档冻结评测证据无效：{profile_id}")
+
+    quality = {
+        int(key): dict(value)
+        for key, value in dict(
+            lock.get("new_class_quality") or {}
+        ).items()
+    }
+    false_activation = {
+        int(key): dict(value)
+        for key, value in dict(
+            lock.get("false_activation") or {}
+        ).items()
+    }
+    if set(quality) != {4, 5} or set(false_activation) != {4, 5}:
+        raise ValueError(f"增量检测档逐类诊断证据不完整：{profile_id}")
+
+    profile["class_names"] = class_names
+    profile["base_local_to_global"] = base_mapping
+    profile["specialist_local_to_global"] = specialist_mapping
     profile["new_global_ids"] = new_global_ids
+    profile["new_classes"] = {
+        class_id: class_names[class_id] for class_id in new_global_ids
+    }
+    profile["new_class"] = "、".join(
+        profile["new_classes"][class_id] for class_id in new_global_ids
+    )
     profile["activation_thresholds"] = thresholds
     profile["base_activation_thresholds"] = base_thresholds
     profile["calibration_sources"] = {
         class_id: rel_path(resolve_path(source))
         for class_id, source in calibration_sources.items()
     }
-    if multi_class_profile:
-        class_names = {
-            int(key): str(value)
-            for key, value in profile.get("class_names", {}).items()
-        }
-        new_classes = {
-            class_id: class_names[class_id] for class_id in new_global_ids
-        }
-        lock = dict(metrics.get("lock") or {})
-        quality = {
-            int(key): dict(value)
-            for key, value in lock.get("new_class_quality", {}).items()
-        }
-        false_activation = {
-            int(key): dict(value)
-            for key, value in lock.get("false_activation", {}).items()
-        }
-        profile["new_classes"] = new_classes
-        profile["new_class"] = "、".join(new_classes.values())
-        profile["new_map50"] = float(lock.get("new_map50", 0.0))
-        profile["krr"] = float(lock.get("krr", 0.0))
-        profile["full_map50"] = float(lock.get("full_map50", 0.0))
-        profile["lock_precision_by_class"] = {
-            class_id: row.get("precision") for class_id, row in quality.items()
-        }
-        profile["lock_recall_by_class"] = {
-            class_id: row.get("recall") for class_id, row in quality.items()
-        }
-        profile["lock_false_activation_rate_by_class"] = {
-            class_id: row.get("false_activation_rate")
-            for class_id, row in false_activation.items()
-        }
-        profile["lock_precision"] = min(
-            (
-                float(value)
-                for value in profile["lock_precision_by_class"].values()
-                if value is not None
-            ),
-            default=None,
-        )
-        profile["lock_recall"] = min(
-            (
-                float(value)
-                for value in profile["lock_recall_by_class"].values()
-                if value is not None
-            ),
-            default=None,
-        )
-        profile["lock_false_activation_rate"] = max(
-            (
-                float(value)
-                for value in profile["lock_false_activation_rate_by_class"].values()
-                if value is not None
-            ),
-            default=None,
-        )
-    else:
-        profile["lock_precision"] = metrics.get("lock_deployment_metrics", {}).get("precision")
-        profile["lock_recall"] = metrics.get("lock_deployment_metrics", {}).get("recall")
-        profile["lock_false_activation_rate"] = metrics.get("false_activation", {}).get("false_activation_rate")
-    profile["competition_accepted"] = bool(metrics["competition_accepted"])
-    profile["deployment_accepted"] = bool(
-        metrics.get("deployment_accepted", metrics.get("accepted", False))
-    )
-    profile["diagnostic_warnings"] = {
-        "lock_precision_below_0_70": bool(
-            profile["lock_precision"] is not None
-            and float(profile["lock_precision"]) < 0.70
-        ),
-        "false_activation_rate_above_0_15": bool(
-            profile["lock_false_activation_rate"] is not None
-            and float(profile["lock_false_activation_rate"]) > 0.15
-        ),
+    profile["metrics_source"] = rel_path(metrics_path)
+    profile["new_map50"] = float(lock["new_map50"])
+    profile["krr"] = float(lock["krr"])
+    profile["full_map50"] = float(lock["full_map50"])
+    profile["lock_precision_by_class"] = {
+        class_id: float(row["precision"])
+        for class_id, row in quality.items()
     }
+    profile["lock_recall_by_class"] = {
+        class_id: float(row["recall"])
+        for class_id, row in quality.items()
+    }
+    profile["lock_false_activation_rate_by_class"] = {
+        class_id: float(row["false_activation_rate"])
+        for class_id, row in false_activation.items()
+    }
+    profile["lock_precision"] = min(
+        profile["lock_precision_by_class"].values()
+    )
+    profile["lock_recall"] = min(
+        profile["lock_recall_by_class"].values()
+    )
+    profile["lock_false_activation_rate"] = max(
+        profile["lock_false_activation_rate_by_class"].values()
+    )
     return profile
 
 

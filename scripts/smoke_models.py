@@ -125,11 +125,7 @@ def main() -> int:
     if not args.load_only:
         context_prediction = predict_context(context_model, context_checkpoint, image, f"cuda:{device}")
         data_root = args.data_root.expanduser().resolve() if args.data_root else ROOT
-        lock_split = (
-            data_root / "splits" / "strict_4plus2" / "mixed_lock.txt"
-            if args.data_root
-            else ROOT / "splits" / "strict_3plus1" / "scene_test.txt"
-        )
+        lock_split = data_root / "splits" / "strict_4plus2" / "mixed_lock.txt"
         if lock_split.exists():
             lock_paths = []
             for raw in lock_split.read_text(encoding="utf-8").splitlines():

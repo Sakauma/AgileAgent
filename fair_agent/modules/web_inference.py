@@ -83,11 +83,7 @@ def _ascend_role_order(
 def _active_specialist_backends(
     protocols: Mapping[str, Mapping[str, Any]],
     specialist_detectors: Mapping[str, Any],
-    *,
-    shared_dual_head: bool,
 ) -> list[Any]:
-    if shared_dual_head:
-        return []
     return [
         specialist_detectors[protocol_id]
         for protocol_id, protocol in protocols.items()
@@ -948,9 +944,6 @@ class WebInferenceEngine:
             self.device_index,
             self._backend_options_for_role("base"),
         )
-        self.shared_dual_head = bool(
-            getattr(self.detector, "is_shared_dual_head", False)
-        )
         self.context_mode = str(self.native_options.get("context_mode", "model"))
         self.fixed_neutral_context = (
             self.backend_name == "ascend_acl"
@@ -1093,19 +1086,8 @@ class WebInferenceEngine:
             compile=self.compile,
         )
         self.incremental_protocols = {name: dict(value) for name, value in (incremental_protocols or {}).items()}
-        active_protocol_ids = [
-            protocol_id
-            for protocol_id, protocol in self.incremental_protocols.items()
-            if protocol.get("available")
-        ]
-        if self.shared_dual_head and (
-            self.backend_name != "ascend_acl" or len(active_protocol_ids) != 1
-        ):
-            raise RuntimeError(
-                "共享双head Ascend布局要求恰好一个活动增量逻辑模型"
-            )
         self.specialist_detectors: Dict[str, Any] = {}
-        if self.preload_specialists and not self.shared_dual_head:
+        if self.preload_specialists:
             for protocol_id, protocol in self.incremental_protocols.items():
                 if not protocol.get("available"):
                     continue
@@ -1142,9 +1124,8 @@ class WebInferenceEngine:
             active_specialists = _active_specialist_backends(
                 self.incremental_protocols,
                 self.specialist_detectors,
-                shared_dual_head=self.shared_dual_head,
             )
-            if not self.shared_dual_head and len(active_specialists) != 1:
+            if len(active_specialists) != 1:
                 raise RuntimeError("Ascend DVPP设备预处理当前要求恰好一个活动增量模型")
             if protocol_positive_prototypes(self.unified_class_gates) or any(
                 protocol_positive_prototypes(protocol)
@@ -1157,7 +1138,7 @@ class WebInferenceEngine:
             self.encoded_preprocessor = AscendEncodedPreprocessor(
                 self.detector.model.runtime,
                 self.detector.model,
-                None if self.shared_dual_head else active_specialists[0].model,
+                active_specialists[0].model,
                 self.context_model.model,
                 scene_resize_stages=self.native_options.get(
                     "dvpp_scene_resize_stages", []
@@ -1323,17 +1304,6 @@ class WebInferenceEngine:
         incremental_protocol: str | None,
     ) -> List[Dict[str, Any]]:
         from fair_agent.models.context import predict_context_batch
-
-        if self.shared_dual_head:
-            return [
-                self._predict_unlocked(
-                    image,
-                    filename,
-                    confidence,
-                    incremental_protocol,
-                )
-                for image, filename in items
-            ]
 
         batch_started = time.perf_counter()
         images = [
@@ -1727,7 +1697,6 @@ class WebInferenceEngine:
     ) -> Dict[str, Any]:
         from fair_agent.models.context import predict_context
 
-        shared_dual_head = bool(getattr(self, "shared_dual_head", False))
         pipeline_started = time.perf_counter()
         rgb_image = image if image.mode == "RGB" else image.convert("RGB")
         ascend_rgb_array = None
@@ -1817,21 +1786,13 @@ class WebInferenceEngine:
             }
             if encoded_preloaded:
                 ready_event, info = encoded_detector_contract(backend)
-                if shared_dual_head and backend is self.detector:
-                    value = backend.predict_dual_preloaded(
-                        info, ready_event=ready_event, **predict_options
-                    )
-                else:
-                    value = backend.predict_preloaded(
-                        info, ready_event=ready_event, **predict_options
-                    )
+                value = backend.predict_preloaded(
+                    info, ready_event=ready_event, **predict_options
+                )
                 return value, (time.perf_counter() - started) * 1000
             if ascend_rgb_array is not None:
                 predict_options["_ascend_rgb_array"] = ascend_rgb_array
-            if shared_dual_head and backend is self.detector:
-                value = backend.predict_dual(rgb_image, **predict_options)
-            else:
-                value = backend.predict(rgb_image, **predict_options)
+            value = backend.predict(rgb_image, **predict_options)
             return value, (time.perf_counter() - started) * 1000
 
         def context_submit_task() -> tuple[Any, float]:
@@ -1859,19 +1820,12 @@ class WebInferenceEngine:
             }
             if encoded_preloaded:
                 ready_event, info = encoded_detector_contract(backend)
-                if shared_dual_head and backend is self.detector:
-                    handle = backend.submit_dual_preloaded(
-                        info, ready_event, **predict_options
-                    )
-                else:
-                    handle = backend.submit_preloaded(
-                        info, ready_event, **predict_options
-                    )
+                handle = backend.submit_preloaded(
+                    info, ready_event, **predict_options
+                )
                 return handle, started
             if ascend_rgb_array is not None:
                 predict_options["_ascend_rgb_array"] = ascend_rgb_array
-            if shared_dual_head and backend is self.detector:
-                return backend.submit_dual(rgb_image, **predict_options), started
             return backend.submit(rgb_image, **predict_options), started
 
         route_candidate_ids = [
@@ -1881,16 +1835,13 @@ class WebInferenceEngine:
                 or protocol_independent_class_ids(protocol)
             )
         ][: self.max_specialists]
-        if shared_dual_head and len(route_candidate_ids) != 1:
-            raise RuntimeError("共享双head执行要求恰好一个预取增量逻辑模型")
         prefetch_ids = [
             protocol_id
             for protocol_id in route_candidate_ids
-            if shared_dual_head
-            or protocol_content_execution_gate(protocol_pool[protocol_id]) is None
+            if protocol_content_execution_gate(protocol_pool[protocol_id]) is None
         ]
         deferred_specialist_ids = set(route_candidate_ids) - set(prefetch_ids)
-        physical_specialist_ids = () if shared_dual_head else tuple(prefetch_ids)
+        physical_specialist_ids = tuple(prefetch_ids)
         for protocol_id in physical_specialist_ids:
             protocol = protocol_pool[protocol_id]
             if protocol_id not in self.specialist_detectors:
@@ -1915,7 +1866,6 @@ class WebInferenceEngine:
             and self.parallel_model_execution
             and bool(
                 physical_specialist_ids
-                or shared_dual_head
                 or deferred_specialist_ids
             )
             and self.native_options.get("execution_mode", "synchronous")
@@ -1966,7 +1916,6 @@ class WebInferenceEngine:
             and self.parallel_model_execution
             and bool(
                 physical_specialist_ids
-                or shared_dual_head
                 or deferred_specialist_ids
             )
             and self.native_options.get("execution_mode", "synchronous")
@@ -2016,7 +1965,6 @@ class WebInferenceEngine:
             }
         elif self.parallel_model_execution and (
             physical_specialist_ids
-            or shared_dual_head
             or deferred_specialist_ids
         ):
             context_future = (
@@ -2053,12 +2001,6 @@ class WebInferenceEngine:
 
         if context is None:
             raise RuntimeError("上下文执行未返回结果")
-        if shared_dual_head:
-            prediction, shared_specialist_prediction = prediction
-            prefetched_predictions[route_candidate_ids[0]] = (
-                shared_specialist_prediction,
-                detector_total_ms,
-            )
 
         context_inference_ms = float(context.pop("_inference_ms", 0.0))
         context_ascend_timings = dict(context.pop("_ascend_timings", {}) or {})

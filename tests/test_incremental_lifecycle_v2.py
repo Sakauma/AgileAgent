@@ -129,21 +129,28 @@ def test_auto_lock_is_deterministic_stratified_and_not_training_reachable(tmp_pa
 def test_known_but_inactive_class_keeps_global_id_and_is_class_incremental(tmp_path: Path) -> None:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
-        archive.writestr("data.yaml", "names:\n  0: warship\n")
+        archive.writestr("data.yaml", "names:\n  0: patrol_boat\n")
         for index in range(6):
-            archive.writestr(f"images/train/ship_{index}.png", _png((0, index, 0)))
+            archive.writestr(f"images/train/boat_{index}.png", _png((0, index, 0)))
             archive.writestr(
-                f"labels/train/ship_{index}.txt", "0 0.5 0.5 0.2 0.2\n"
+                f"labels/train/boat_{index}.txt", "0 0.5 0.5 0.2 0.2\n"
             )
     store = IncrementalBatchStore(
         _store_settings(tmp_path),
         StructuredEventLog(tmp_path / "logs", 1_000_000, 2),
-        {0: "soldier", 1: "small_aircraft", 3: "tank"},
         {0: "soldier", 1: "small_aircraft", 2: "warship", 3: "tank"},
+        {
+            0: "soldier",
+            1: "small_aircraft",
+            2: "warship",
+            3: "tank",
+            4: "patrol_boat",
+            5: "armored_vehicle",
+        },
     )
-    manifest = store.create("warship.zip", output.getvalue())
+    manifest = store.create("patrol-boat.zip", output.getvalue())
     assert manifest["audit"]["incremental_mode"] == "class_incremental"
-    assert manifest["audit"]["local_to_global"] == {"0": 2}
+    assert manifest["audit"]["local_to_global"] == {"0": 4}
 
 
 def test_incremental_ground_truth_resolves_sibling_label_directory(tmp_path: Path) -> None:
@@ -153,31 +160,31 @@ def test_incremental_ground_truth_resolves_sibling_label_directory(tmp_path: Pat
     label.parent.mkdir(parents=True)
     Image.new("RGB", (100, 80)).save(image)
     label.write_text("0 0.5 0.5 0.2 0.25\n", encoding="utf-8")
-    rows = lifecycle_ground_truth([image], {0: 2})
-    assert rows == [{"image_id": "sample", "class_id": 2, "xyxy": [40.0, 30.0, 60.0, 50.0]}]
+    rows = lifecycle_ground_truth([image], {0: 4})
+    assert rows == [{"image_id": "sample", "class_id": 4, "xyxy": [40.0, 30.0, 60.0, 50.0]}]
 
 
 def test_generation_schema_supports_one_multi_class_expert(tmp_path: Path) -> None:
     payload = json.loads(Path("models/generations.json").read_text(encoding="utf-8"))
     payload = deepcopy(payload)
-    payload["class_map"]["4"] = "new_vehicle"
+    payload["class_map"]["6"] = "next_vehicle"
     expert = next(item for item in payload["models"] if item["id"] == "incremental_detector")
-    expert["owns_classes"] = [2, 4]
-    expert["local_to_global"]["1"] = 4
-    expert["per_class_thresholds"]["4"] = 0.71
-    expert["calibration_sources"]["4"] = expert["calibration_source"]
-    expert["metrics"]["per_class"] = {"2": {"map50": 0.79}, "4": {"map50": 0.81}}
+    expert["owns_classes"] = [4, 5, 6]
+    expert["local_to_global"]["2"] = 6
+    expert["per_class_thresholds"]["6"] = 0.71
+    expert["calibration_sources"]["6"] = expert["calibration_source"]
+    expert["metrics"]["per_class"]["6"] = {"map50": 0.81}
     generation = next(item for item in payload["generations"] if item["id"] == "incremental_detection_generation")
-    generation["classes"].append(4)
-    generation["class_owners"]["4"] = "incremental_detector"
-    generation["new_class_ids"] = [2, 4]
+    generation["classes"].append(6)
+    generation["class_owners"]["6"] = "incremental_detector"
+    generation["new_class_ids"] = [4, 5, 6]
     path = tmp_path / "generations.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     registry = load_generation_registry(path)
     settings = generation_web_settings(registry)
     protocol = settings["protocols"]["incremental_detector"]
-    assert protocol["global_class_ids"] == [2, 4]
-    assert protocol["local_to_global"] == {0: 2, 1: 4}
+    assert protocol["global_class_ids"] == [4, 5, 6]
+    assert protocol["local_to_global"] == {0: 4, 1: 5, 2: 6}
     eligible, executed, skipped = plan_specialist_routes(
         settings["protocols"], [], {}, settings["base_class_ids"], 4, 0.7, 0.3, 0.5, 0.5
     )
@@ -229,7 +236,7 @@ def test_generation_replaces_same_class_runtime_owner_but_keeps_parent_for_rollb
         item for item in payload["generations"]
         if item["id"] == "incremental_detection_generation"
     )
-    parent["model_members"] = ["three_class_base_detector", "incremental_detector"]
+    parent["model_members"] = ["four_class_base_detector", "incremental_detector"]
     generation = deepcopy(parent)
     generation.update({
         "id": "incremental_detection_generation_round_02",
@@ -238,7 +245,7 @@ def test_generation_replaces_same_class_runtime_owner_but_keeps_parent_for_rollb
         "new_class_ids": [],
         "updated_class_ids": [2],
         "class_owners": {**parent["class_owners"], "2": target["id"]},
-        "model_members": ["three_class_base_detector", target["id"]],
+        "model_members": ["four_class_base_detector", target["id"]],
         "superseded_model_ids": ["incremental_detector"],
     })
     payload["generations"].append(generation)
