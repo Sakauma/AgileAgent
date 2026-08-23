@@ -6,6 +6,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any, Mapping
 
 from PIL import Image
 import yaml
@@ -16,6 +17,37 @@ if str(ROOT) not in sys.path:
 
 from fair_agent.core.hashes import verify_sha256s
 from fair_agent.modules.functional_models import validate_functional_models
+
+
+def select_runtime_artifacts(
+    entry: Mapping[str, Any],
+    runtime: str,
+    expected_suffix: str,
+    *,
+    expected_count: int | None = None,
+) -> list[Path]:
+    """Select model artifacts for one runtime and reject incompatible formats."""
+    model_id = str(entry.get("id") or entry.get("function") or "unknown_model")
+    selected: list[Path] = []
+    for artifact in entry.get("artifacts", []):
+        if not isinstance(artifact, Mapping) or artifact.get("runtime") != runtime:
+            continue
+        raw_path = str(artifact.get("path") or "")
+        path = ROOT / raw_path
+        if not raw_path or path.suffix.lower() != expected_suffix.lower():
+            raise ValueError(
+                f"{model_id} 的 {runtime} 产物必须为 {expected_suffix}："
+                f"{raw_path or '<missing>'}"
+            )
+        selected.append(path)
+    if not selected:
+        raise ValueError(f"{model_id} 未登记 {runtime} 模型产物。")
+    if expected_count is not None and len(selected) != expected_count:
+        raise ValueError(
+            f"{model_id} 的 {runtime} 模型产物数量应为 {expected_count}，"
+            f"实际为 {len(selected)}。"
+        )
+    return selected
 
 
 def main() -> int:
@@ -56,18 +88,25 @@ def main() -> int:
     detection_entry = next(item for item in functional["models"] if item["function"] == "multimodal_target_detection")
     incremental_entry = next(item for item in functional["models"] if item["function"] == "incremental_object_detection")
     context_entry = next(item for item in functional["models"] if item["function"] == "context_perception")
-    model_specs = [
-        (
-            ROOT / detection_entry["artifacts"][0]["path"],
-            int(detection_entry.get("runtime", {}).get("imgsz", imgsz)),
+    try:
+        base_paths = select_runtime_artifacts(
+            detection_entry, "x86_gpu", ".pt", expected_count=1
         )
+        incremental_paths = select_runtime_artifacts(
+            incremental_entry, "x86_gpu", ".pt"
+        )
+        context_paths = select_runtime_artifacts(
+            context_entry, "x86_gpu", ".pt", expected_count=1
+        )
+    except ValueError as exc:
+        raise SystemExit(f"x86 GPU 模型产物选择失败：{exc}") from exc
+    model_specs = [
+        (path, int(detection_entry.get("runtime", {}).get("imgsz", imgsz)))
+        for path in base_paths
     ]
     model_specs.extend(
-        (
-            ROOT / artifact["path"],
-            int(incremental_entry.get("runtime", {}).get("imgsz", imgsz)),
-        )
-        for artifact in incremental_entry["artifacts"]
+        (path, int(incremental_entry.get("runtime", {}).get("imgsz", imgsz)))
+        for path in incremental_paths
     )
     image = Image.new("RGB", (imgsz, imgsz), color=(0, 0, 0))
     results = []
@@ -75,7 +114,7 @@ def main() -> int:
     cuda_device = f"cuda:{device}"
     for index, (path, model_imgsz) in enumerate(model_specs):
         started = time.perf_counter()
-        model = YOLO(str(path))
+        model = YOLO(str(path), task="detect")
         model.to(cuda_device)
         loaded_device = str(next(model.model.parameters()).device)
         if not loaded_device.startswith("cuda"):
@@ -113,7 +152,7 @@ def main() -> int:
         if batch_result_count != batch_size:
             raise RuntimeError(f"批量推理结果数量异常：expected={batch_size} actual={batch_result_count}")
 
-    context_weights = ROOT / context_entry["artifacts"][0]["path"]
+    context_weights = context_paths[0]
     context_model, context_checkpoint = load_context_model(context_weights, cuda_device)
     context_loaded_device = str(next(context_model.parameters()).device)
     if not context_loaded_device.startswith("cuda"):
