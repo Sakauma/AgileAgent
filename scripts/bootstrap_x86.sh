@@ -17,27 +17,45 @@ python_supported() {
   "$1" -c 'import sys; raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)' >/dev/null 2>&1
 }
 
+python_environment_supported() {
+  [[ -x "$1" ]] && python_supported "$1" && "$1" -m pip --version >/dev/null 2>&1
+}
+
 PYTORCH_INDEX_URL="${PYTORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
 TORCH_VERSION="${TORCH_VERSION:-2.5.1+cu124}"
 TORCHVISION_VERSION="${TORCHVISION_VERSION:-0.20.1+cu124}"
 AGENT_PYTHON=""
+REGISTERED_PYTHON=""
+if [[ -f .agent-python ]]; then
+  IFS= read -r REGISTERED_PYTHON < .agent-python
+fi
 
 if [[ -n "${AGILE_AGENT_PYTHON:-}" ]]; then
-  if [[ ! -x "${AGILE_AGENT_PYTHON}" ]] || ! python_supported "${AGILE_AGENT_PYTHON}" || ! "${AGILE_AGENT_PYTHON}" -m pip --version >/dev/null 2>&1; then
+  if ! python_environment_supported "${AGILE_AGENT_PYTHON}"; then
     printf 'AGILE_AGENT_PYTHON 必须指向带 pip 的 Python 3.10-3.12：%s\n' "${AGILE_AGENT_PYTHON}" >&2
     exit 1
   fi
   AGENT_PYTHON="${AGILE_AGENT_PYTHON}"
+elif [[ -n "${VIRTUAL_ENV:-}" ]]; then
+  if ! python_environment_supported "${VIRTUAL_ENV}/bin/python"; then
+    printf '当前 VIRTUAL_ENV 不是带 pip 的 Python 3.10-3.12 环境：%s\n' "${VIRTUAL_ENV}" >&2
+    exit 1
+  fi
+  AGENT_PYTHON="${VIRTUAL_ENV}/bin/python"
+elif [[ -n "${CONDA_PREFIX:-}" ]]; then
+  if ! python_environment_supported "${CONDA_PREFIX}/bin/python"; then
+    printf '当前 Conda 环境不是带 pip 的 Python 3.10-3.12 环境：%s\n' "${CONDA_PREFIX}" >&2
+    exit 1
+  fi
+  AGENT_PYTHON="${CONDA_PREFIX}/bin/python"
+elif [[ -n "${REGISTERED_PYTHON}" ]] && python_environment_supported "${REGISTERED_PYTHON}"; then
+  AGENT_PYTHON="${REGISTERED_PYTHON}"
 elif [[ -x .venv/bin/python ]]; then
-  if ! python_supported .venv/bin/python || ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+  if ! python_environment_supported .venv/bin/python; then
     printf '现有 .venv 不完整或 Python 版本不受支持。请移走该目录后重新运行配置脚本。\n' >&2
     exit 1
   fi
   AGENT_PYTHON="${ROOT_DIR}/.venv/bin/python"
-elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]] && python_supported "${VIRTUAL_ENV}/bin/python"; then
-  AGENT_PYTHON="${VIRTUAL_ENV}/bin/python"
-elif [[ -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]] && python_supported "${CONDA_PREFIX}/bin/python"; then
-  AGENT_PYTHON="${CONDA_PREFIX}/bin/python"
 elif [[ -n "${PYTHON_BIN:-}" ]]; then
   if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1 || ! python_supported "${PYTHON_BIN}"; then
     printf 'PYTHON_BIN 必须指向可用的 Python 3.10-3.12：%s\n' "${PYTHON_BIN}" >&2

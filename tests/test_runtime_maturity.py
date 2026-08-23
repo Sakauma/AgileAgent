@@ -160,6 +160,13 @@ def test_bootstrap_selects_only_supported_python() -> None:
 def test_bootstrap_reuses_compatible_cuda_environment() -> None:
     content = Path("scripts/bootstrap_x86.sh").read_text(encoding="utf-8")
     assert "AGILE_AGENT_PYTHON" in content
+    assert "python_environment_supported" in content
+    assert 'AGENT_PYTHON="${VIRTUAL_ENV}/bin/python"' in content
+    assert 'AGENT_PYTHON="${CONDA_PREFIX}/bin/python"' in content
+    assert 'IFS= read -r REGISTERED_PYTHON < .agent-python' in content
+    project_venv = content.index('elif [[ -x .venv/bin/python ]]')
+    assert content.index('elif [[ -n "${VIRTUAL_ENV:-}" ]]') < project_venv
+    assert content.index('elif [[ -n "${CONDA_PREFIX:-}" ]]') < project_venv
     assert "torch.version.cuda" in content
     assert 'tuple(map(int, match.groups())) < (2, 0)' in content
     assert "torchvision.ops.nms" in content
