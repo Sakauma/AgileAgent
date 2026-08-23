@@ -323,11 +323,12 @@ def test_manifest_blocks_uncalibrated_or_overlapping_true_new_class() -> None:
     assert _validate_model_manifest(manifest) == []
     candidate = manifest["incremental_models"][0]
     candidate.pop("calibration_source", None)
+    calibration_sources = candidate.pop("calibration_sources")
     assert "manifest_new_class_calibration_missing:incremental_detector" in _validate_model_manifest(manifest)
-    candidate["calibration_source"] = "incremental_val/calibration.json"
-    candidate["base_class_ids"].append(2)
+    candidate["calibration_sources"] = calibration_sources
+    candidate["base_class_ids"].append(4)
     assert "manifest_new_class_overlaps_base:incremental_detector" in _validate_model_manifest(manifest)
-    candidate["base_class_ids"].remove(2)
+    candidate["base_class_ids"].remove(4)
     candidate["deployment_accepted"] = False
     assert _validate_model_manifest(manifest) == []
     candidate["competition_accepted"] = False
@@ -353,7 +354,7 @@ def test_operator_snapshot_is_shared_by_text_and_json() -> None:
     assert snapshot["detector"]["name"] in text
     assert payload["detector"] == snapshot["detector"]
     assert payload["deployment"]["x86_nvidia_gpu"] == "ready"
-    assert payload["deployment"]["ascend_310b"] == "waiting_for_hardware"
+    assert payload["deployment"]["ascend_310b"] == "ready"
 
 
 def test_status_command_supports_machine_readable_output(monkeypatch, capsys) -> None:
@@ -392,6 +393,6 @@ def test_cli_frontend_pages_share_operator_state() -> None:
     state = build_blackboard(config)
     decision = build_decision(config, state, {"sensor": "sar", "scene": "all", "class_focus": "soldier"})
     overview = render_page("overview", state, decision)
-    assert "0.8141423771111025" in overview
+    assert "0.8560669777957763" in overview
     assert "0.91202" not in overview
-    assert "waiting_for_hardware" in render_page("deployment", state, decision)
+    assert "Ascend 310B=ready" in render_page("deployment", state, decision)

@@ -172,10 +172,11 @@ def test_model_score_calibration_requires_both_frozen_sources() -> None:
         validate_config(config)
 
 
-def test_ascend_context_mode_allows_explicit_score_neutral_bypass() -> None:
+def test_ascend_context_mode_requires_the_registered_scene_model() -> None:
     config = clean_config()
     config["ascend_backend"]["context_mode"] = "fixed_neutral_v1"
-    validate_config(config)
+    with pytest.raises(ValueError, match="context_mode必须为model"):
+        validate_config(config)
 
     config["ascend_backend"]["context_mode"] = "filename_derived"
     with pytest.raises(ValueError, match="context_mode"):
@@ -218,7 +219,7 @@ def test_cli_overrides_are_typed_and_process_local() -> None:
     validate_config(effective)
     assert effective["inference"]["confidence_default"] == 0.61
     assert effective["ui"]["history_limit"] == 7
-    assert config["inference"]["confidence_default"] == 0.5
+    assert config["inference"]["confidence_default"] == 0.01
 
 
 def test_sensitive_values_are_redacted() -> None:
@@ -309,12 +310,12 @@ def test_context_engine_contract_rejects_bad_batch_and_shape() -> None:
 def test_tensorrt_export_plan_is_fully_config_driven() -> None:
     rows = export_plan(load_config())
     assert [row["kind"] for row in rows] == ["yolo", "yolo", "context"]
-    assert rows[-1]["batch_size"] == 20
+    assert rows[-1]["batch_size"] == 32
     assert [
         (row["min_batch_size"], row["opt_batch_size"], row["batch_size"])
         for row in rows
-    ] == [(1, 8, 20), (1, 8, 20), (1, 8, 20)]
-    assert rows[-1]["imgsz"] == 160
+    ] == [(1, 8, 32), (1, 8, 32), (1, 8, 32)]
+    assert rows[-1]["imgsz"] == 224
 
 
 def test_int8_calibration_manifest_is_deterministic_and_rejects_lock(tmp_path: Path) -> None:
@@ -483,7 +484,7 @@ def test_validated_int8_profile_uses_device_calibrated_threshold(
     report.write_text(
         json.dumps({
             "accepted": True,
-            "threshold_calibration": {"thresholds": {"2": 0.38}},
+            "threshold_calibration": {"thresholds": {"4": 0.38}},
         }),
         encoding="utf-8",
     )
@@ -496,8 +497,8 @@ def test_validated_int8_profile_uses_device_calibrated_threshold(
     settings = build_web_settings(config)
 
     protocol = settings["protocols"]["incremental_detector"]
-    assert protocol["activation_threshold"] == 0.38
-    assert protocol["activation_thresholds"] == {2: 0.38}
+    assert protocol["activation_threshold"] is None
+    assert protocol["activation_thresholds"] == {4: 0.38, 5: 0.82}
 
 
 def test_quantized_threshold_override_updates_single_class_protocol() -> None:
@@ -607,9 +608,15 @@ def test_api_benchmark_can_require_an_existing_server(monkeypatch) -> None:
 
 def test_generation_registry_keeps_verified_rollback_point() -> None:
     registry = load_generation_registry("models/generations.json")
-    assert registry["channels"]["production"] == "incremental_detection_generation"
-    assert registry["generations_by_id"]["base_detection_generation"]["status"] == "active"
-    assert registry["models_by_id"]["incremental_detector"]["activation_threshold"] == 0.63
+    assert registry["channels"]["production"] == (
+        "incremental_detection_generation_4plus2"
+    )
+    assert registry["generations_by_id"][
+        "base_detection_generation_4plus2"
+    ]["status"] == "active"
+    assert registry["models_by_id"]["incremental_detector"][
+        "per_class_thresholds"
+    ] == {4: 0.57, 5: 0.82}
 
 
 def test_generation_registry_rejects_missing_context_prior_asset(tmp_path: Path) -> None:
@@ -636,7 +643,9 @@ def test_promotion_rejects_failed_manifest(tmp_path: Path) -> None:
     assert [row["event"] for row in rows][:2] == [
         "generation.production_switch.failed", "generation.production_switch.started"
     ]
-    assert rows[0]["details"]["production_before"] == "incremental_detection_generation"
+    assert rows[0]["details"]["production_before"] == (
+        "incremental_detection_generation_4plus2"
+    )
 
 
 def test_rollback_updates_only_copied_registry(tmp_path: Path) -> None:
@@ -645,14 +654,20 @@ def test_rollback_updates_only_copied_registry(tmp_path: Path) -> None:
     config = copy.deepcopy(load_config())
     config["generation"]["registry"] = str(registry_copy)
     config["logging"]["root"] = str(tmp_path / "logs")
-    result = rollback_generation(config, "base_detection_generation")
-    assert result["production"] == "base_detection_generation"
-    assert json.loads(registry_copy.read_text(encoding="utf-8"))["channels"]["production"] == "base_detection_generation"
-    assert json.loads(Path("models/generations.json").read_text(encoding="utf-8"))["channels"]["production"] == "incremental_detection_generation"
+    result = rollback_generation(config, "base_detection_generation_4plus2")
+    assert result["production"] == "base_detection_generation_4plus2"
+    assert json.loads(registry_copy.read_text(encoding="utf-8"))["channels"]["production"] == "base_detection_generation_4plus2"
+    assert json.loads(Path("models/generations.json").read_text(encoding="utf-8"))["channels"]["production"] == "incremental_detection_generation_4plus2"
     from fair_agent.core.runtime_log import event_log_from_config
 
-    rows = event_log_from_config(config).query(generation_id="base_detection_generation")
+    rows = event_log_from_config(config).query(
+        generation_id="base_detection_generation_4plus2"
+    )
     completed = next(row for row in rows if row["event"] == "generation.rollback.completed")
-    assert completed["details"]["production_before"] == "incremental_detection_generation"
-    assert completed["details"]["production_after"] == "base_detection_generation"
+    assert completed["details"]["production_before"] == (
+        "incremental_detection_generation_4plus2"
+    )
+    assert completed["details"]["production_after"] == (
+        "base_detection_generation_4plus2"
+    )
     assert completed["details"]["registry_sha256_before"] != completed["details"]["registry_sha256_after"]

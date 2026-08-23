@@ -172,9 +172,13 @@ def test_generation_schema_supports_one_multi_class_expert(tmp_path: Path) -> No
     expert["owns_classes"] = [4, 5, 6]
     expert["local_to_global"]["2"] = 6
     expert["per_class_thresholds"]["6"] = 0.71
-    expert["calibration_sources"]["6"] = expert["calibration_source"]
+    expert["calibration_sources"]["6"] = expert["calibration_sources"]["4"]
     expert["metrics"]["per_class"]["6"] = {"map50": 0.81}
-    generation = next(item for item in payload["generations"] if item["id"] == "incremental_detection_generation")
+    generation = next(
+        item
+        for item in payload["generations"]
+        if item["id"] == "incremental_detection_generation_4plus2"
+    )
     generation["classes"].append(6)
     generation["class_owners"]["6"] = "incremental_detector"
     generation["new_class_ids"] = [4, 5, 6]
@@ -224,29 +228,41 @@ def test_generation_settings_loads_hashed_confusion_graph(tmp_path: Path) -> Non
 def test_generation_replaces_same_class_runtime_owner_but_keeps_parent_for_rollback(tmp_path: Path) -> None:
     payload = deepcopy(json.loads(Path("models/generations.json").read_text(encoding="utf-8")))
     target = deepcopy(next(item for item in payload["models"] if item["id"] == "incremental_detector"))
+    calibration_source = target["calibration_sources"]["4"]
     target.update({
         "id": "incremental_detector_round_02",
         "display_name": "增量检测器（第2轮）",
         "role": "target_incremental_expert",
         "incremental_mode": "target_incremental",
         "independent_class_ids": [2],
+        "owns_classes": [2],
+        "local_to_global": {"0": 2},
+        "per_class_thresholds": {"2": 0.63},
+        "calibration_sources": {"2": calibration_source},
+        "context_prior": {},
+        "context_gate": {"enabled": False},
+        "content_execution_gate": {"enabled": False},
     })
     payload["models"].append(target)
     parent = next(
         item for item in payload["generations"]
-        if item["id"] == "incremental_detection_generation"
+        if item["id"] == "incremental_detection_generation_4plus2"
     )
     parent["model_members"] = ["four_class_base_detector", "incremental_detector"]
     generation = deepcopy(parent)
     generation.update({
         "id": "incremental_detection_generation_round_02",
         "parent": parent["id"],
-        "old_class_ids": [0, 1, 2, 3],
-        "new_class_ids": [],
+        "old_class_ids": [0, 1, 3],
+        "new_class_ids": [4, 5],
         "updated_class_ids": [2],
         "class_owners": {**parent["class_owners"], "2": target["id"]},
-        "model_members": ["four_class_base_detector", target["id"]],
-        "superseded_model_ids": ["incremental_detector"],
+        "model_members": [
+            "four_class_base_detector",
+            "incremental_detector",
+            target["id"],
+        ],
+        "superseded_model_ids": [],
     })
     payload["generations"].append(generation)
     payload["channels"]["production"] = generation["id"]
@@ -256,12 +272,15 @@ def test_generation_replaces_same_class_runtime_owner_but_keeps_parent_for_rollb
 
     settings = generation_web_settings(load_generation_registry(path))
     assert settings["model_members"] == generation["model_members"]
-    assert set(settings["protocols"]) == {target["id"]}
+    assert set(settings["protocols"]) == {"incremental_detector", target["id"]}
     eligible, executed, skipped = plan_specialist_routes(
         settings["protocols"], [], {}, settings["base_class_ids"], 4, 0.7, 0.3, 0.5, 0.5
     )
-    assert [row["id"] for row in eligible] == [target["id"]]
-    assert len(executed) == 1
+    assert {row["id"] for row in eligible} == {
+        "incremental_detector",
+        target["id"],
+    }
+    assert len(executed) == 2
     assert skipped == []
 
 
@@ -287,7 +306,7 @@ def test_lock_recheck_can_only_be_unsealed_once(tmp_path: Path) -> None:
     registry = json.loads(Path("models/generations.json").read_text(encoding="utf-8"))
     candidate = next(
         item for item in registry["generations"]
-        if item["id"] == "incremental_detection_generation"
+        if item["id"] == "incremental_detection_generation_4plus2"
     )
     candidate.pop("lock_recheck", None)
     registry_path.write_text(json.dumps(registry, ensure_ascii=False), encoding="utf-8")
@@ -296,15 +315,19 @@ def test_lock_recheck_can_only_be_unsealed_once(tmp_path: Path) -> None:
     config["generation"]["runtime_registry"] = str(registry_path)
     config["generation"]["report_root"] = str(tmp_path / "rechecks")
     config["logging"]["root"] = str(tmp_path / "logs")
-    first = _unseal_lock_once(config, "incremental_detection_generation")
+    first = _unseal_lock_once(
+        config, "incremental_detection_generation_4plus2"
+    )
     assert first["status"] == "unsealed"
     stored = json.loads(registry_path.read_text(encoding="utf-8"))
     generation = next(
-        row for row in stored["generations"] if row["id"] == "incremental_detection_generation"
+        row
+        for row in stored["generations"]
+        if row["id"] == "incremental_detection_generation_4plus2"
     )
     assert generation["lock_recheck"]["marker_sha256"] == first["marker_sha256"]
     with pytest.raises(ValueError, match="已经解封过"):
-        _unseal_lock_once(config, "incremental_detection_generation")
+        _unseal_lock_once(config, "incremental_detection_generation_4plus2")
 
 
 class _LifecycleStore:

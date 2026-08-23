@@ -143,7 +143,7 @@ generation:
   recheck_lock_split: splits/strict_4plus2/base_lock.txt
   report_root: reports/generation_rechecks
   candidate_id: incremental_detection_generation_4plus2
-  # 旧单阈值接口的保守回退；正式逐类阈值来自generation registry（4=0.18、5=0.08）。
+  # 旧单阈值接口的保守回退；正式逐类阈值来自generation registry（4=0.57、5=0.82）。
   calibrated_threshold: 0.08
   auto_promote: true
   shadow_smoke_images: 1

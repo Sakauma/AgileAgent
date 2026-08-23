@@ -46,7 +46,7 @@ def test_blackboard_uses_verified_production_generation() -> None:
     state = build_blackboard(load_config())
     generation = state["model_generation"]
     assert generation["valid"] is True
-    assert generation["production"] == "incremental_detection_generation"
+    assert generation["production"] == "incremental_detection_generation_4plus2"
     assert generation["incremental_verified"] is True
     assert "incremental_compliant_threshold_not_met" not in state["current_blockers"]
 

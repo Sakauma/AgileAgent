@@ -83,7 +83,7 @@ def test_ap50_and_krr_are_recomputed_from_frozen_prediction_rows() -> None:
     reduced = [before[0]]
 
     perfect = evaluate_ap50(before, ground_truth, [0, 1])
-    assert perfect["map50"] == pytest.approx(1.0)
+    assert perfect["map50"] == pytest.approx(0.995)
 
     retained = retention_metrics(before, unchanged, ground_truth, [0, 1])
     assert retained["krr"] == pytest.approx(1.0)

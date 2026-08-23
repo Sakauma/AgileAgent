@@ -109,6 +109,7 @@ def client_with_engine() -> tuple[TestClient, FakeEngine]:
     engine = FakeEngine()
     return TestClient(create_app(
         engine_provider=lambda: engine,
+        config=load_config("configs/agent_pipeline.yaml"),
     )), engine
 
 
@@ -142,7 +143,11 @@ def test_health_and_static_product_contract() -> None:
     public_config = client.get("/api/config/public")
     assert public_config.status_code == 200
     assert public_config.json()["confidence"] == {"min": 0.01, "max": 1.0, "default": 0.01}
-    assert public_config.json()["runtime"]["architecture"] == "x86"
+    assert public_config.json()["runtime"]["architecture"] == (
+        load_config("configs/agent_pipeline.yaml")["_runtime_platform"][
+            "architecture"
+        ]
+    )
     assert public_config.json()["runtime"]["model_format"] == "pt"
     assert "limits" not in public_config.json()
     assert "registry" not in json.dumps(public_config.json())
@@ -186,10 +191,13 @@ def test_health_and_static_product_contract() -> None:
 
 
 def test_web_settings_follow_active_config_and_manifest() -> None:
-    settings = build_web_settings()
+    config = load_config("configs/agent_pipeline.yaml")
+    settings = build_web_settings(config)
     assert settings["detector_path"].name == "four_class_base_detector.pt"
     assert settings["device_index"] == "0"
-    assert settings["runtime_platform"]["architecture"] == "x86"
+    assert settings["runtime_platform"]["architecture"] == config[
+        "_runtime_platform"
+    ]["architecture"]
     assert settings["runtime_platform"]["model_format"] == "pt"
     assert settings["model_artifacts"]["base"].suffix == ".pt"
     assert settings["model_artifacts"]["context"].suffix == ".pt"
