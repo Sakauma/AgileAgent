@@ -688,7 +688,12 @@ def cmd_config(args: argparse.Namespace) -> int:
             print(render_effective_config(args.config, overrides, args.format))
         elif args.config_action == "get":
             value = get_key(load_config(args.config, overrides), args.key)
-            print(yaml.safe_dump(value, allow_unicode=True, sort_keys=False).rstrip())
+            rendered = yaml.safe_dump(
+                value, allow_unicode=True, sort_keys=False
+            ).rstrip()
+            if rendered.endswith("\n..."):
+                rendered = rendered[:-4].rstrip()
+            print(rendered)
         elif args.config_action == "set":
             path = set_persistent_value(args.config, args.key, args.value)
             print(json.dumps({"updated": rel_path(path), "key": args.key, "restart_required": True}, ensure_ascii=False))

@@ -97,6 +97,28 @@ def test_cli_has_no_retired_image_size_commands() -> None:
     assert "console" in subcommands
 
 
+def test_config_get_prints_scalars_without_yaml_document_markers(
+    monkeypatch, capsys
+) -> None:
+    config = {
+        "runtime": {"server_host": "127.0.0.1", "server_port": 8501}
+    }
+    monkeypatch.setattr(cli, "load_config", lambda _path, _overrides: config)
+
+    for key, expected in (
+        ("runtime.server_host", "127.0.0.1"),
+        ("runtime.server_port", "8501"),
+    ):
+        args = argparse.Namespace(
+            config_action="get",
+            config="auto",
+            config_overrides=[],
+            key=key,
+        )
+        assert cli.cmd_config(args) == 0
+        assert capsys.readouterr().out == f"{expected}\n"
+
+
 def test_run_directories_are_unique(tmp_path: Path) -> None:
     first = make_run_dir("dryrun", str(tmp_path))
     second = make_run_dir("dryrun", str(tmp_path))
