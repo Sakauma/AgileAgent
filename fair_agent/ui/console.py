@@ -14,7 +14,7 @@ InputFn = Callable[[str], str]
 OutputFn = Callable[[str], None]
 
 
-MENU = "[1] 总览  [2] 模型  [3] 数据  [4] 增量  [5] 部署  [r] 刷新  [d] 决策  [p] Dry-run  [x] 执行  [q] 退出"
+MENU = "[1] 总览  [2] 模型  [3] 数据  [4] 增量  [5] 部署  [r] 刷新  [p] Dry-run  [x] 执行  [q] 退出"
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -138,15 +138,6 @@ class ConsoleFrontend:
             self.output("\n" + self.message)
             self.message = ""
 
-    def _decision(self) -> None:
-        sensor = self.input("传感器 [sar/ir，默认 sar]：").strip() or "sar"
-        scene = self.input("场景 [all/air/forest/sea/urban，默认 all]：").strip() or "all"
-        class_focus = self.input(
-            "关注类别 [soldier/small_aircraft/warship/tank/patrol_boat/armored_vehicle，默认 soldier]："
-        ).strip() or "soldier"
-        self._run_cli(["decide", "--sensor", sensor, "--scene", scene, "--class-focus", class_focus])
-        self.page = "overview"
-
     def run(self) -> int:
         pages = {"1": "overview", "2": "models", "3": "data", "4": "incremental", "5": "deployment"}
         while True:
@@ -164,8 +155,6 @@ class ConsoleFrontend:
             elif command == "r":
                 if self._run_cli(["refresh"]):
                     self._run_cli(["decide"])
-            elif command == "d":
-                self._decision()
             elif command == "p":
                 self._run_cli(["pipeline", "--mode", "dryrun"])
             elif command == "x":

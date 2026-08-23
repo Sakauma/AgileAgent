@@ -14,7 +14,7 @@ from fair_agent.core.config import load_config
 from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
 from fair_agent.modules.release_verification import _validate_model_manifest, verify_release
 from fair_agent.policies.decision import build_decision
-from fair_agent.ui.console import ConsoleFrontend, render_page
+from fair_agent.ui.console import MENU, ConsoleFrontend, render_page
 
 
 def test_serve_is_bound_to_loopback(monkeypatch) -> None:
@@ -95,6 +95,35 @@ def test_cli_has_no_retired_image_size_commands() -> None:
     assert "freeze-candidate" not in subcommands
     assert "status" in subcommands
     assert "console" in subcommands
+
+
+def test_detect_cli_exposes_only_the_image_source() -> None:
+    parser = cli.build_parser()
+    subcommands = next(
+        action for action in parser._actions if action.dest == "command"
+    ).choices
+    detect_parser = subcommands["detect"]
+    options = {
+        option
+        for action in detect_parser._actions
+        for option in action.option_strings
+    }
+    assert "--source" in options
+    assert "--confidence" not in options
+    assert "--profile" not in options
+
+    args = parser.parse_args(["detect", "--source", "sample.png"])
+    assert args.source == "sample.png"
+    assert not hasattr(args, "confidence")
+    assert not hasattr(args, "profile")
+
+
+def test_console_hides_manual_detection_decision_controls() -> None:
+    source = Path("fair_agent/ui/console.py").read_text(encoding="utf-8")
+    assert "[d]" not in MENU
+    assert "传感器 [sar/ir" not in source
+    assert "关注类别 [soldier" not in source
+    assert 'command == "d"' not in source
 
 
 def test_config_get_prints_scalars_without_yaml_document_markers(

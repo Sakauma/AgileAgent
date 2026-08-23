@@ -535,103 +535,22 @@ def cmd_context_predict(args: argparse.Namespace) -> int:
 
 def cmd_detect(args: argparse.Namespace) -> int:
     from fair_agent.modules.web_inference import WebInferenceEngine, decode_image_bytes
-    from fair_agent.modules.strict_incremental import load_experiment_profile
     from fair_agent.web.app import build_web_settings
 
     source = resolve_path(args.source)
     try:
         config = load_args_config(args)
         inference = config["inference"]
-        confidence = float(
-            inference["confidence_default"] if args.confidence is None else args.confidence
-        )
+        confidence = float(inference["confidence_default"])
         if not float(inference["confidence_min"]) <= confidence <= float(inference["confidence_max"]):
             raise ValueError(
-                f"置信度必须位于{float(inference['confidence_min']):.2f}到"
-                f"{float(inference['confidence_max']):.2f}之间。"
+                "冻结的默认置信度超出有效范围："
+                f"{float(inference['confidence_min']):.2f}到"
+                f"{float(inference['confidence_max']):.2f}。"
             )
         data = source.read_bytes()
         image = decode_image_bytes(data, source.name, str(config["decoding"]["backend"]))
         settings = build_web_settings(config)
-        if args.profile:
-            profile = load_experiment_profile(args.profile)
-            profile_id = str(profile["profile_id"])
-            class_names = {
-                int(key): str(value)
-                for key, value in profile["class_names"].items()
-            }
-            base_mapping = {
-                int(key): int(value)
-                for key, value in profile["base_local_to_global"].items()
-            }
-            specialist_mapping = {
-                int(key): int(value)
-                for key, value in profile[
-                    "specialist_local_to_global"
-                ].items()
-            }
-            new_global_ids = sorted(specialist_mapping.values())
-            activation_thresholds = {
-                int(key): float(value)
-                for key, value in profile["activation_thresholds"].items()
-            }
-            calibration_sources = {
-                int(key): str(value)
-                for key, value in profile["calibration_sources"].items()
-            }
-            base_activation_thresholds = {
-                int(key): float(value)
-                for key, value in profile[
-                    "base_activation_thresholds"
-                ].items()
-            }
-            specialist_id = "incremental_detector"
-            owned_names = {
-                class_id: class_names[class_id]
-                for class_id in new_global_ids
-            }
-            class_owners = {
-                class_id: settings["base_model_id"]
-                for class_id in base_mapping.values()
-            }
-            class_owners.update(
-                {class_id: specialist_id for class_id in new_global_ids}
-            )
-            settings.update({
-                "detector_path": resolve_path(profile["base_weight"]),
-                "class_names": class_names,
-                "base_class_ids": list(base_mapping.values()),
-                "base_local_to_global": base_mapping,
-                "class_owners": class_owners,
-                "protocols": {
-                    specialist_id: {
-                        "id": specialist_id,
-                        "class_name": "、".join(owned_names.values()),
-                        "new_class": "、".join(owned_names.values()),
-                        "class_names": owned_names,
-                        "global_class_ids": new_global_ids,
-                        "local_to_global": specialist_mapping,
-                        "incremental_mode": "class_incremental",
-                        "weights": resolve_path(profile["specialist_weight"]),
-                        "new_map50": float(profile["new_map50"]),
-                        "krr": float(profile["krr"]),
-                        "available": True,
-                        "activation_thresholds": activation_thresholds,
-                        "calibration_sources": calibration_sources,
-                        "routing_prior": float(
-                            config["routing"]["default_routing_prior"]
-                        ),
-                        "context_prior": dict(profile["context_prior"]),
-                        "context_gate": dict(profile["context_gate"]),
-                    }
-                },
-                "unified_class_gates": {
-                    "activation_thresholds": base_activation_thresholds,
-                    "incremental_class_ids": [],
-                    "context_prior": dict(profile["base_context_prior"]),
-                    "context_gate": dict(profile["base_context_gate"]),
-                },
-            })
         engine = WebInferenceEngine(
             settings["detector_path"],
             settings["context_path"],
@@ -976,8 +895,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     detect = sub.add_parser("detect", help="执行完整自动路由检测并输出详细决策轨迹。")
     detect.add_argument("--source", required=True)
-    detect.add_argument("--confidence", type=float)
-    detect.add_argument("--profile", choices=["incremental-detection"], help="使用已注册并通过验收的增量检测档。")
     detect.set_defaults(func=cmd_detect)
 
     generation = sub.add_parser("generation", help="复核、上线或回滚模型代际。")

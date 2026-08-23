@@ -96,11 +96,10 @@ agile-agent status --format json --refresh
 对单张图像执行 Scene-SensorNet、Base 和 Incremental 组合推理；命令输出包含场景概率、检测框、类别 owner 和模型执行轨迹的 JSON：
 
 ```bash
-agile-agent detect \
-  --source /path/to/image.png \
-  --confidence 0.10 \
-  --profile incremental-detection
+agile-agent detect --source /path/to/image.png
 ```
+
+检测命令自动使用当前 production 代际、场景门控和已冻结阈值，无需人工选择模型或设置检测参数。
 
 Web 服务启动后，可通过 HTTP 检查健康状态并提交图像：
 

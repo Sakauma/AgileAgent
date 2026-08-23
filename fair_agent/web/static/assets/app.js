@@ -666,7 +666,6 @@
     try {
       const form = new FormData();
       form.append("file", state.singleFile, state.singleFile.name);
-      form.append("confidence", $("#confidence").value);
       const response = await fetch("/api/detect", { method: "POST", body: form });
       if (!response.ok) throw new Error(await responseError(response));
       const result = await response.json();
@@ -775,7 +774,6 @@
     try {
       const form = new FormData();
       state.batchFiles.forEach((file) => form.append("files", file, file.name));
-      form.append("confidence", $("#batchConfidence").value);
       const response = await fetch("/api/batch", { method: "POST", body: form });
       if (!response.ok) throw new Error(await responseError(response));
       const payload = await response.json();
@@ -1020,14 +1018,6 @@
     UI.healthPollMs = Number(config.ui.health_poll_ms);
     UI.toastDurationMs = Number(config.ui.toast_duration_ms);
     state.history = readHistory();
-    const confidence = config.confidence;
-    [$("#confidence"), $("#batchConfidence")].forEach((input) => {
-      input.min = String(confidence.min);
-      input.max = String(confidence.max);
-      input.value = String(confidence.default);
-    });
-    $("#confidenceLabel").textContent = `置信度 ${Number(confidence.default).toFixed(2)}`;
-    $("#batchConfidenceLabel").textContent = Number(confidence.default).toFixed(2);
     $("#incrementalLimitText").textContent = `包含图像、标签及可选data.yaml · 最大${formatBytes(INCREMENTAL.maxArchiveBytes)}`;
   }
 
@@ -1053,9 +1043,6 @@
     bindDropzone($("#singleDropzone"), (files) => files[0] && selectSingle(files[0]));
     $("#clearSingle").addEventListener("click", () => clearSingle());
     $("#detectButton").addEventListener("click", detectSingle);
-    $("#confidence").addEventListener("input", (event) => {
-      $("#confidenceLabel").textContent = `置信度 ${Number(event.target.value).toFixed(2)}`;
-    });
     $("#downloadImage").addEventListener("click", downloadSingleImage);
     $("#downloadJson").addEventListener("click", downloadSingleJson);
 
@@ -1064,9 +1051,6 @@
     bindDropzone($("#batchDropzone"), selectBatch);
     $("#clearBatch").addEventListener("click", () => clearBatch());
     $("#batchButton").addEventListener("click", detectBatch);
-    $("#batchConfidence").addEventListener("input", (event) => {
-      $("#batchConfidenceLabel").textContent = Number(event.target.value).toFixed(2);
-    });
     $("#downloadBatch").addEventListener("click", () => {
       if (state.batchResult && state.batchResult.download_url) window.location.assign(state.batchResult.download_url);
     });

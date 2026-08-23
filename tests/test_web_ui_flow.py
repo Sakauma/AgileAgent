@@ -324,7 +324,7 @@ def test_single_detection_falls_back_when_encoded_backend_rejects_input() -> Non
     )
     assert response.status_code == 200
     assert engine.encoded_calls == []
-    assert engine.calls == [("sample.png", 0.50, "auto")]
+    assert engine.calls == [("sample.png", 0.01, "auto")]
 
 
 def test_single_detection_does_not_filter_filename_extension_or_mime() -> None:
@@ -334,7 +334,7 @@ def test_single_detection_does_not_filter_filename_extension_or_mime() -> None:
         files={"file": ("official-input.bin", png(), "application/octet-stream")},
     )
     assert response.status_code == 200
-    assert engine.calls == [("official-input.bin", 0.50, "auto")]
+    assert engine.calls == [("official-input.bin", 0.01, "auto")]
 
 
 def test_single_detection_ignores_manual_protocol_and_uses_agent_auto_mode() -> None:
@@ -349,14 +349,14 @@ def test_single_detection_ignores_manual_protocol_and_uses_agent_auto_mode() -> 
     assert engine.calls == [("sample.png", 0.20, "auto")]
 
 
-def test_single_detection_defaults_to_half_confidence() -> None:
+def test_single_detection_uses_frozen_default_confidence() -> None:
     client, engine = client_with_engine()
     response = client.post(
         "/api/detect",
         files={"file": ("sample.png", png(), "image/png")},
     )
     assert response.status_code == 200
-    assert engine.calls[0][1] == 0.50
+    assert engine.calls[0][1] == 0.01
     assert engine.calls[0][2] == "auto"
 
 
@@ -600,6 +600,13 @@ def test_custom_frontend_has_complete_interaction_contract() -> None:
     assert "incremental_protocol" not in script
     assert "incrementalProtocol" not in html
     assert "增量演示" not in html
+    assert "advanced-settings" not in html
+    assert 'id="confidence"' not in html
+    assert 'id="batchConfidence"' not in html
+    assert 'form.append("confidence"' not in script
+    assert '$("#confidence")' not in script
+    assert '$("#batchConfidence")' not in script
+    assert "advanced-settings" not in styles
     assert "Agent 自动决策" in script
     assert "纯推理时间" in script
     assert "系统总用时" in script

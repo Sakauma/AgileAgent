@@ -77,11 +77,10 @@ curl -fsS http://127.0.0.1:8501/api/health
 单图检测会输出场景概率、六类检测结果、类别 owner 和模型执行轨迹：
 
 ```bash
-agile-agent detect \
-  --source /path/to/image.png \
-  --confidence 0.10 \
-  --profile incremental-detection
+agile-agent detect --source /path/to/image.png
 ```
+
+CLI 会自动使用当前 production 代际、Scene-SensorNet 和已冻结阈值，不提供检测参数或模型档案的人工切换入口。
 
 ## 准备 strict 4+2 数据
 
