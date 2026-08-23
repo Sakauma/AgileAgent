@@ -73,6 +73,10 @@ else
   AGENT_PYTHON="${ROOT_DIR}/.venv/bin/python"
 fi
 
+# Persist the selected interpreter before dependency/model checks so a later
+# diagnostic failure does not make start_agent.sh fall back to .venv.
+printf '%s\n' "${AGENT_PYTHON}" > .agent-python
+
 torch_stack_compatible() {
   "${AGENT_PYTHON}" - <<'PY' >/dev/null 2>&1
 import re
@@ -193,6 +197,5 @@ else
 fi
 "${AGENT_PYTHON}" -m fair_agent.cli doctor
 "${AGENT_PYTHON}" scripts/smoke_models.py --load-only
-printf '%s\n' "${AGENT_PYTHON}" > .agent-python
 
 printf '\n环境配置完成。日常启动请运行：./scripts/start_agent.sh\n'

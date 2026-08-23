@@ -19,10 +19,19 @@ case "${MACHINE_ARCH}" in
     ;;
 esac
 
+REGISTERED_PYTHON=""
+if [[ "${AGENT_PLATFORM}" == x86 && -f "${ROOT_DIR}/.agent-python" ]]; then
+  IFS= read -r REGISTERED_PYTHON < "${ROOT_DIR}/.agent-python"
+fi
+
 if [[ -n "${AGILE_AGENT_PYTHON:-}" ]]; then
   AGENT_PYTHON="${AGILE_AGENT_PYTHON}"
-elif [[ "${AGENT_PLATFORM}" == x86 && -f "${ROOT_DIR}/.agent-python" ]]; then
-  IFS= read -r AGENT_PYTHON < "${ROOT_DIR}/.agent-python"
+elif [[ "${AGENT_PLATFORM}" == x86 && -n "${REGISTERED_PYTHON}" && -x "${REGISTERED_PYTHON}" ]]; then
+  AGENT_PYTHON="${REGISTERED_PYTHON}"
+elif [[ "${AGENT_PLATFORM}" == x86 && -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+  AGENT_PYTHON="${VIRTUAL_ENV}/bin/python"
+elif [[ "${AGENT_PLATFORM}" == x86 && -n "${CONDA_PREFIX:-}" && -x "${CONDA_PREFIX}/bin/python" ]]; then
+  AGENT_PYTHON="${CONDA_PREFIX}/bin/python"
 elif [[ "${AGENT_PLATFORM}" == arm ]]; then
   ASCEND_ENV="${AGILE_AGENT_ASCEND_ENV:-/usr/local/miniconda3/envs/agileagent}"
   AGENT_PYTHON="${ASCEND_ENV}/bin/python"
@@ -33,7 +42,7 @@ if [[ ! -x "${AGENT_PYTHON}" ]]; then
   if [[ "${AGENT_PLATFORM}" == arm ]]; then
     printf '未找到 ARM/Ascend Python：%s\n请配置 AGILE_AGENT_ASCEND_ENV 或 AGILE_AGENT_PYTHON。\n' "${AGENT_PYTHON}" >&2
   else
-    printf '未找到已配置的 Python：%s\n请先运行 scripts/bootstrap_x86.sh。\n' "${AGENT_PYTHON}" >&2
+    printf '未找到已配置的 Python：%s\n请激活兼容的 Conda/venv 环境，或运行 scripts/bootstrap_x86.sh。\n' "${AGENT_PYTHON}" >&2
   fi
   exit 1
 fi

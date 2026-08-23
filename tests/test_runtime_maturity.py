@@ -166,7 +166,9 @@ def test_bootstrap_reuses_compatible_cuda_environment() -> None:
     assert "dependencies_compatible" in content
     assert "project_entrypoint_compatible" in content
     assert 'pip install -e . --no-deps' in content
-    assert "> .agent-python" in content
+    registration = 'printf \'%s\\n\' "${AGENT_PYTHON}" > .agent-python'
+    assert registration in content
+    assert content.index(registration) < content.index("torch_stack_compatible()")
     assert "python -m pip install --upgrade pip" not in content
     assert "--force-reinstall" not in content
     assert "-c constraints-agent.txt" not in content
@@ -175,7 +177,9 @@ def test_bootstrap_reuses_compatible_cuda_environment() -> None:
 def test_start_script_reuses_bootstrap_selected_python() -> None:
     content = Path("scripts/start_agent.sh").read_text(encoding="utf-8")
     assert '[[ "${AGENT_PLATFORM}" == x86 && -f "${ROOT_DIR}/.agent-python" ]]' in content
-    assert 'IFS= read -r AGENT_PYTHON < "${ROOT_DIR}/.agent-python"' in content
+    assert 'IFS= read -r REGISTERED_PYTHON < "${ROOT_DIR}/.agent-python"' in content
+    assert 'AGENT_PYTHON="${VIRTUAL_ENV}/bin/python"' in content
+    assert 'AGENT_PYTHON="${CONDA_PREFIX}/bin/python"' in content
     assert 'MACHINE_ARCH_RAW="$(uname -m)"' in content
     assert 'MACHINE_ARCH="${MACHINE_ARCH_RAW,,}"' in content
     assert 'export AGILE_AGENT_PYTHON="${AGENT_PYTHON}"' in content
