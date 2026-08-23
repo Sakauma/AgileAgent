@@ -174,6 +174,8 @@ def test_generation_schema_supports_one_multi_class_expert(tmp_path: Path) -> No
     expert["per_class_thresholds"]["6"] = 0.71
     expert["calibration_sources"]["6"] = expert["calibration_sources"]["4"]
     expert["metrics"]["per_class"]["6"] = {"map50": 0.81}
+    expert["context_prior"] = {}
+    expert["context_gate"] = {"enabled": False}
     generation = next(
         item
         for item in payload["generations"]
