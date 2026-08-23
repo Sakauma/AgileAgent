@@ -150,6 +150,28 @@ def test_global_cross_class_suppression_configuration_is_explicitly_validated() 
         validate_config(config)
 
 
+def test_model_score_calibration_requires_both_frozen_sources() -> None:
+    config = clean_config()
+    config["routing"]["score_calibration"] = {
+        "enabled": True,
+        "method": "logit_affine",
+        "source_split": "mixed_dev_only",
+        "sources": {
+            "frozen_base_model": {"temperature": 1.0, "bias": 0.0},
+            "incremental_model": {"temperature": 1.25, "bias": -0.25},
+        },
+    }
+    config["routing"]["cross_class_suppression"][
+        "incremental_over_base_margin"
+    ] = 0.10
+
+    validate_config(config)
+
+    del config["routing"]["score_calibration"]["sources"]["incremental_model"]
+    with pytest.raises(ValueError, match="完整登记Base与Specialist"):
+        validate_config(config)
+
+
 def test_ascend_context_mode_allows_explicit_score_neutral_bypass() -> None:
     config = clean_config()
     config["ascend_backend"]["context_mode"] = "fixed_neutral_v1"

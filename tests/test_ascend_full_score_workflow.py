@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from fair_agent.core.config import load_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = (
@@ -31,6 +33,7 @@ def load_tool(name: str):
 MATERIALIZE = load_tool("112_materialize_ascend_yolo26_candidate.py")
 SCORE = load_tool("94_score_ascend_agent.py")
 PROMOTE = load_tool("111_promote_ascend_full_score_release.py")
+FREEZE = load_tool("98_freeze_ascend_predictions.py")
 
 
 def method_config() -> dict:
@@ -108,6 +111,28 @@ def test_score_contract_uses_registered_class_ids_and_method_gates() -> None:
         "new_map50": 0.60,
         "krr": 0.95,
     }
+
+
+def test_calibration_probe_keeps_models_but_neutralizes_policy_layers(
+    tmp_path: Path,
+) -> None:
+    config = copy.deepcopy(load_config())
+
+    audit = FREEZE.prepare_calibration_probe(config, tmp_path, 0.00001)
+    probe_registry = json.loads(
+        Path(config["web"]["generation_registry"]).read_text(encoding="utf-8")
+    )
+
+    assert audit["confidence_floor"] == 0.00001
+    assert config["routing"]["fusion_iou"] == 1.0
+    assert config["routing"]["score_calibration"] == {"enabled": False}
+    assert config["routing"]["cross_class_suppression"]["enabled"] is False
+    for model in probe_registry["models"]:
+        assert set(model["per_class_thresholds"].values()) == {0.00001}
+        assert model["context_gate"] == {"enabled": False}
+        assert model["context_prior"] == {}
+        if model["role"] == "class_incremental_expert":
+            assert model["content_execution_gate"] == {"enabled": False}
 
 
 def test_packaged_score_and_release_match_the_reference_method() -> None:

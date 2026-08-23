@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fair_agent.core.config import load_config  # noqa: E402
+from fair_agent.core.config import load_config, resolve_path  # noqa: E402
 from fair_agent.web.app import AtomicEngineProvider, build_web_settings  # noqa: E402
 
 
@@ -44,6 +45,83 @@ def public_record(result: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def prepare_calibration_probe(
+    config: Dict[str, Any],
+    temporary_root: Path,
+    confidence_floor: float,
+) -> Dict[str, Any]:
+    """Neutralize policy layers so dev freezing retains both OM candidate streams.
+
+    The probe still uses the real Base, Specialist and Scene OM files.  It only
+    disables learned thresholds, scene gates and cross-model suppression.  The
+    resulting unlabeled JSONL can therefore be replayed repeatedly by the
+    constrained search without rerunning either detector.
+    """
+
+    registry_source = resolve_path(config["web"]["generation_registry"])
+    registry = json.loads(registry_source.read_text(encoding="utf-8"))
+    model_audit: Dict[str, Any] = {}
+    for model in registry.get("models", []):
+        owned = [int(value) for value in model.get("owns_classes", [])]
+        if owned:
+            model["per_class_thresholds"] = {
+                str(class_id): confidence_floor for class_id in owned
+            }
+        model["context_prior"] = {}
+        model["context_gate"] = {"enabled": False}
+        if model.get("role") in {
+            "class_incremental_expert",
+            "target_incremental_expert",
+        }:
+            model["content_execution_gate"] = {"enabled": False}
+        model_audit[str(model.get("id"))] = {
+            "owns_classes": owned,
+            "threshold": confidence_floor,
+            "context_gate_enabled": False,
+            "content_execution_gate_enabled": False,
+        }
+
+    probe_registry = temporary_root / "probe-generations.json"
+    probe_registry.write_text(
+        json.dumps(registry, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    config["web"]["generation_registry"] = str(probe_registry)
+    config["generation"]["registry"] = str(probe_registry)
+    config["inference"]["confidence_min"] = min(
+        float(config["inference"]["confidence_min"]), confidence_floor
+    )
+    config["inference"]["confidence_default"] = confidence_floor
+    routing = config["routing"]
+    routing["fusion_iou"] = 1.0
+    routing["conflict_iou"] = 1.0
+    routing["conflict_incremental_coverage"] = None
+    routing["conflict_base_confidence"] = 1.0
+    routing["specialist_margin"] = 0.0
+    routing["score_calibration"] = {"enabled": False}
+    routing["cross_class_suppression"] = {
+        "enabled": False,
+        "strategy": "highest_confidence",
+        "scope": "all_classes",
+        "iou": 1.0,
+        "smaller_box_coverage": None,
+        "incremental_over_base_margin": 0.0,
+    }
+    return {
+        "registry_source": str(registry_source),
+        "confidence_floor": confidence_floor,
+        "policy_layers_neutralized": [
+            "per_class_thresholds",
+            "known_scene_soft_gates",
+            "content_execution_gate",
+            "score_calibration",
+            "old_new_conflict_arbitration",
+            "cross_class_suppression",
+        ],
+        "models": model_audit,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="在隔离进程中冻结指定图集的Ascend候选响应，用于评分与诊断。"
@@ -52,12 +130,19 @@ def main() -> int:
     parser.add_argument("--image-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
-    parser.add_argument("--confidence", type=float, default=0.5)
+    parser.add_argument("--confidence", type=float)
     parser.add_argument("--expected-images", type=int, default=89)
     parser.add_argument(
         "--encoded",
         action="store_true",
         help="直接传入PNG字节，验证DVPP encoded路径；默认使用CPU解码输入。",
+    )
+    parser.add_argument(
+        "--calibration-probe",
+        action="store_true",
+        help=(
+            "冻结低阈值Base/Specialist原始候选与Scene概率；仅用于mixed dev约束搜索。"
+        ),
     )
     parser.add_argument(
         "--context-om",
@@ -80,6 +165,15 @@ def main() -> int:
         raise FileExistsError("冻结预测或摘要已存在，拒绝覆盖。")
     if args.expected_images <= 0:
         raise ValueError("expected-images必须为正整数。")
+    confidence = (
+        float(args.confidence)
+        if args.confidence is not None
+        else (0.00001 if args.calibration_probe else 0.5)
+    )
+    if not 0.00001 <= confidence <= 1.0:
+        raise ValueError("confidence必须位于[0.00001, 1.0]。")
+    if args.calibration_probe and confidence > 0.01:
+        raise ValueError("calibration-probe要求confidence不高于0.01。")
     paths = sorted(args.image_root.glob("*.png"))
     if (
         len(paths) != args.expected_images
@@ -119,35 +213,43 @@ def main() -> int:
             "sha256": sha256(context_override),
         }
 
-    engine = AtomicEngineProvider._build_engine(build_web_settings(config))
     records = []
     wall_ms = []
-    try:
-        for path in paths:
-            started = time.perf_counter_ns()
-            if args.encoded:
-                data = path.read_bytes()
-                if not engine.accepts_encoded(data):
-                    raise RuntimeError(f"候选拒绝固定PNG encoded契约：{path}")
-                result = engine.predict_encoded(
-                    data,
-                    path.name,
-                    confidence=args.confidence,
-                    incremental_protocol="auto",
-                )
-            else:
-                with Image.open(path) as opened:
-                    image = opened.convert("RGB")
-                result = engine.predict(
-                    image,
-                    path.name,
-                    confidence=args.confidence,
-                    incremental_protocol="auto",
-                )
-            wall_ms.append((time.perf_counter_ns() - started) / 1_000_000.0)
-            records.append(public_record(result))
-    finally:
-        engine.close()
+    probe_audit = None
+    with tempfile.TemporaryDirectory(prefix="agileagent-ascend-probe-") as directory:
+        if args.calibration_probe:
+            probe_audit = prepare_calibration_probe(
+                config,
+                Path(directory),
+                confidence,
+            )
+        engine = AtomicEngineProvider._build_engine(build_web_settings(config))
+        try:
+            for path in paths:
+                started = time.perf_counter_ns()
+                if args.encoded:
+                    data = path.read_bytes()
+                    if not engine.accepts_encoded(data):
+                        raise RuntimeError(f"候选拒绝固定PNG encoded契约：{path}")
+                    result = engine.predict_encoded(
+                        data,
+                        path.name,
+                        confidence=confidence,
+                        incremental_protocol="auto",
+                    )
+                else:
+                    with Image.open(path) as opened:
+                        image = opened.convert("RGB")
+                    result = engine.predict(
+                        image,
+                        path.name,
+                        confidence=confidence,
+                        incremental_protocol="auto",
+                    )
+                wall_ms.append((time.perf_counter_ns() - started) / 1_000_000.0)
+                records.append(public_record(result))
+        finally:
+            engine.close()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +275,9 @@ def main() -> int:
             else None
         ),
         "model_overrides": model_overrides,
-        "confidence": args.confidence,
+        "confidence": confidence,
+        "calibration_probe": bool(args.calibration_probe),
+        "probe_audit": probe_audit,
         "encoded": args.encoded,
         "image_count": len(records),
         "prediction_count": sum(len(row["detections"]) for row in records),

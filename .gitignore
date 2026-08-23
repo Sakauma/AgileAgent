@@ -76,6 +76,7 @@ venv/
 !/tools/99_validate_ascend_dvpp_inputs.py
 !/tools/111_promote_ascend_full_score_release.py
 !/tools/112_materialize_ascend_yolo26_candidate.py
+!/tools/113_optimize_ascend_runtime_calibration.py
 !/scripts/start_agent_ascend310b.sh
 !/scripts/stop_agent_ascend310b.sh
 !/scripts/prepare_ascend310b_benchmark_env.sh

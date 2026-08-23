@@ -7,6 +7,69 @@ import numpy as np
 from fair_agent.modules.incremental_guardian import confusion_edge
 
 
+def calibrated_confidence(
+    confidence: float,
+    calibration: Mapping[str, Any] | None,
+) -> float:
+    """Apply a monotonic logit-affine calibration to one model score.
+
+    Temperature controls sharpness while bias aligns confidence scales between
+    independently exported models.  The transform is deliberately monotonic,
+    so it cannot reorder detections emitted by the same model; it only affects
+    frozen thresholds and cross-model arbitration.
+    """
+
+    settings = dict(calibration or {})
+    if not settings or settings.get("enabled", True) is False:
+        return float(confidence)
+    if settings.get("method", "logit_affine") != "logit_affine":
+        raise ValueError("unsupported confidence calibration method")
+    temperature = float(settings.get("temperature", 1.0))
+    bias = float(settings.get("bias", 0.0))
+    if temperature <= 0.0:
+        raise ValueError("confidence calibration temperature must be positive")
+    clipped = min(1.0 - 1e-7, max(1e-7, float(confidence)))
+    logit = np.log(clipped / (1.0 - clipped))
+    calibrated_logit = logit / temperature + bias
+    if calibrated_logit >= 0.0:
+        exponent = np.exp(-calibrated_logit)
+        return float(1.0 / (1.0 + exponent))
+    exponent = np.exp(calibrated_logit)
+    return float(exponent / (1.0 + exponent))
+
+
+def calibrate_record_confidences(
+    records: Iterable[Mapping[str, Any]],
+    policy: Mapping[str, Any] | None,
+) -> List[Dict[str, Any]]:
+    """Calibrate Base/Specialist records before thresholds and fusion."""
+
+    settings = dict(policy or {})
+    sources = settings.get("sources")
+    if settings.get("enabled") is not True or not isinstance(sources, Mapping):
+        return [dict(row) for row in records]
+    calibrated: List[Dict[str, Any]] = []
+    for raw_row in records:
+        row = dict(raw_row)
+        source = str(row.get("source") or "")
+        source_settings = sources.get(source)
+        if not isinstance(source_settings, Mapping):
+            calibrated.append(row)
+            continue
+        original = float(row.get("confidence", 0.0))
+        adjusted = calibrated_confidence(original, source_settings)
+        row["raw_confidence"] = original
+        row["confidence"] = adjusted
+        row["confidence_calibration"] = {
+            "method": "logit_affine",
+            "source": source,
+            "temperature": float(source_settings.get("temperature", 1.0)),
+            "bias": float(source_settings.get("bias", 0.0)),
+        }
+        calibrated.append(row)
+    return calibrated
+
+
 def box_overlap_metrics(
     first: Iterable[float], second: Iterable[float]
 ) -> Dict[str, float]:
@@ -85,6 +148,7 @@ def suppress_cross_class_overlaps(
     *,
     iou_threshold: float,
     smaller_box_coverage: float | None = None,
+    incremental_over_base_margin: float = 0.0,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Greedily keep the highest-confidence class for one spatial target.
 
@@ -107,8 +171,18 @@ def suppress_cross_class_overlaps(
         raise ValueError("cross-class IoU threshold must be within [0, 1]")
     if coverage_limit is not None and not 0.0 <= coverage_limit <= 1.0:
         raise ValueError("smaller-box coverage threshold must be within [0, 1]")
+    source_margin = float(incremental_over_base_margin)
+    if not 0.0 <= source_margin <= 1.0:
+        raise ValueError("incremental-over-base margin must be within [0, 1]")
 
     rows = [dict(row) for row in records]
+
+    def arbitration_confidence(row: Mapping[str, Any]) -> float:
+        confidence = float(row.get("confidence", 0.0))
+        if row.get("source") == "incremental_model":
+            return confidence - source_margin
+        return confidence
+
     grouped_indices: Dict[str, List[int]] = {}
     for index, row in enumerate(rows):
         image_id = str(row.get("image_id", "__single_image__"))
@@ -119,7 +193,7 @@ def suppress_cross_class_overlaps(
     for image_id, indices in grouped_indices.items():
         ordered = sorted(
             indices,
-            key=lambda index: (-float(rows[index].get("confidence", 0.0)), index),
+            key=lambda index: (-arbitration_confidence(rows[index]), index),
         )
         winner_indices: List[int] = []
         for candidate_index in ordered:
@@ -162,6 +236,13 @@ def suppress_cross_class_overlaps(
                     ),
                     "kept_source": winner.get("source"),
                     "suppressed_source": candidate.get("source"),
+                    "kept_arbitration_confidence": round(
+                        arbitration_confidence(winner), 6
+                    ),
+                    "suppressed_arbitration_confidence": round(
+                        arbitration_confidence(candidate), 6
+                    ),
+                    "incremental_over_base_margin": source_margin,
                 }
             )
 

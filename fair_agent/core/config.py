@@ -58,7 +58,7 @@ KNOWN_SECTION_KEYS = {
     "routing": {
         "incremental_enabled", "require_acceptance_passed", "consensus_iou", "fusion_iou",
         "max_specialists_per_image", "conflict_iou", "conflict_incremental_coverage", "conflict_base_confidence",
-        "specialist_margin", "preserve_base_class_owners", "cross_class_suppression",
+        "specialist_margin", "preserve_base_class_owners", "cross_class_suppression", "score_calibration",
         "detection_evidence_weight", "context_evidence_weight",
         "neutral_context_score", "default_routing_prior",
         "parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution", "max_model_workers",
@@ -414,6 +414,7 @@ def validate_config(
                     "scope",
                     "iou",
                     "smaller_box_coverage",
+                    "incremental_over_base_margin",
                 }
             )
             if unknown_cross_class:
@@ -440,6 +441,60 @@ def validate_config(
                     0.01,
                     1.0,
                 )
+            if cross_class_suppression.get("incremental_over_base_margin") is not None:
+                _number(
+                    cross_class_suppression,
+                    "incremental_over_base_margin",
+                    errors,
+                    0.0,
+                    1.0,
+                )
+    score_calibration = routing.get("score_calibration")
+    if score_calibration is not None:
+        if not isinstance(score_calibration, Mapping):
+            errors.append("routing.score_calibration必须是映射")
+        else:
+            unknown_calibration = sorted(
+                set(score_calibration)
+                - {"enabled", "method", "source_split", "sources"}
+            )
+            if unknown_calibration:
+                errors.append(
+                    "routing.score_calibration包含未知字段："
+                    + ", ".join(unknown_calibration)
+                )
+            if not isinstance(score_calibration.get("enabled"), bool):
+                errors.append("routing.score_calibration.enabled必须为布尔值")
+            if score_calibration.get("enabled") is True:
+                if score_calibration.get("method") != "logit_affine":
+                    errors.append(
+                        "routing.score_calibration.method必须为logit_affine"
+                    )
+                if score_calibration.get("source_split") != "mixed_dev_only":
+                    errors.append(
+                        "routing.score_calibration.source_split必须为mixed_dev_only"
+                    )
+                sources = score_calibration.get("sources")
+                required_sources = {"frozen_base_model", "incremental_model"}
+                if not isinstance(sources, Mapping) or set(sources) != required_sources:
+                    errors.append(
+                        "routing.score_calibration.sources必须完整登记Base与Specialist"
+                    )
+                else:
+                    for source, raw_source in sources.items():
+                        if not isinstance(raw_source, Mapping):
+                            errors.append(f"置信度校准源必须是映射：{source}")
+                            continue
+                        unknown_source = sorted(
+                            set(raw_source) - {"temperature", "bias"}
+                        )
+                        if unknown_source:
+                            errors.append(
+                                f"置信度校准源包含未知字段：{source}:"
+                                + ", ".join(unknown_source)
+                            )
+                        _number(raw_source, "temperature", errors, 0.05, 20.0)
+                        _number(raw_source, "bias", errors, -10.0, 10.0)
     if abs(float(routing.get("detection_evidence_weight", 0)) + float(routing.get("context_evidence_weight", 0)) - 1.0) > 1e-9:
         errors.append("routing的检测证据权重与上下文证据权重之和必须为1")
     _number(routing, "max_specialists_per_image", errors, 1)

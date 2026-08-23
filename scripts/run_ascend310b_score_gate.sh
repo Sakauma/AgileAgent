@@ -135,7 +135,18 @@ print(",".join(str(value) for value in new_values))
 print(target["candidate_port"])
 print(target["formal_port"])
 print(target["cann_version"])
-print(method["threshold_search"]["scoring_request_confidence"])
+method_confidence = float(
+    method["threshold_search"]["scoring_request_confidence"]
+)
+configured_confidence = float(payload["inference"]["confidence_default"])
+scoring_confidence = min(method_confidence, configured_confidence)
+if not (
+    float(payload["inference"]["confidence_min"])
+    <= scoring_confidence
+    <= float(payload["inference"]["confidence_max"])
+):
+    raise RuntimeError("score gate请求置信度不在候选配置范围内")
+print(scoring_confidence)
 print(benchmark["warmup_requests"])
 print(benchmark["batch_probe_size"])
 print(benchmark["batch_rounds"])

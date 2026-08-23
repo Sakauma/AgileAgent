@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, UnidentifiedImageError
 from fair_agent.modules.detection_fusion import (
     arbitrate_cross_class_conflicts,
     box_iou,
+    calibrate_record_confidences,
     context_adjusted_threshold,
     context_affinity,
     context_penalty_for_class,
@@ -683,7 +684,15 @@ def remap_base_records(
         if local_id not in mapping:
             raise ValueError(f"基础模型输出未注册的本地类别：{local_id}")
         global_id = mapping[local_id]
-        remapped.append({**item, "class_id": global_id, "class_name": names.get(global_id, str(global_id))})
+        remapped.append(
+            {
+                **item,
+                "class_id": global_id,
+                "class_name": names.get(global_id, str(global_id)),
+                "source": "frozen_base_model",
+                "protocol_id": None,
+            }
+        )
     return remapped
 
 
@@ -861,6 +870,9 @@ def class_aware_nms(
                 float(policy["smaller_box_coverage"])
                 if policy.get("smaller_box_coverage") is not None
                 else None
+            ),
+            incremental_over_base_margin=float(
+                policy.get("incremental_over_base_margin", 0.0)
             ),
         )
         suppressed += len(cross_class_decisions)
@@ -1042,6 +1054,9 @@ class WebInferenceEngine:
         self.fusion_iou = float(routing["fusion_iou"])
         self.cross_class_suppression = dict(
             routing.get("cross_class_suppression") or {"enabled": False}
+        )
+        self.score_calibration = dict(
+            routing.get("score_calibration") or {"enabled": False}
         )
         self.max_specialists = int(routing["max_specialists_per_image"])
         self.conflict_iou = float(routing["conflict_iou"])
@@ -1429,10 +1444,13 @@ class WebInferenceEngine:
             contexts = context_batch_task()
             base_predictions = detector_batch_task(self.detector, self.imgsz)
         raw_base_records_by_image = [
-            remap_base_records(
-                result_records(prediction, self.base_local_names),
-                self.base_local_to_global,
-                self.class_names,
+            calibrate_record_confidences(
+                remap_base_records(
+                    result_records(prediction, self.base_local_names),
+                    self.base_local_to_global,
+                    self.class_names,
+                ),
+                getattr(self, "score_calibration", None),
             )
             for prediction in base_predictions
         ]
@@ -1534,8 +1552,14 @@ class WebInferenceEngine:
                 effective_thresholds, context_score = protocol_effective_thresholds(
                     protocol, contexts[image_index], float(confidence)
                 )
-                raw_candidates = remap_specialist_records_dynamic(
-                    result_records(prediction), local_to_global, self.class_names, str(protocol_id)
+                raw_candidates = calibrate_record_confidences(
+                    remap_specialist_records_dynamic(
+                        result_records(prediction),
+                        local_to_global,
+                        self.class_names,
+                        str(protocol_id),
+                    ),
+                    getattr(self, "score_calibration", None),
                 )
                 threshold_candidates, threshold_rejections = apply_protocol_thresholds(
                     raw_candidates, effective_thresholds, context_score
@@ -2062,10 +2086,13 @@ class WebInferenceEngine:
             )
         inference_ms = context_inference_ms + detector_timings["inference_ms"]
         conversion_started = time.perf_counter()
-        raw_base_records = remap_base_records(
-            result_records(prediction, self.base_local_names),
-            self.base_local_to_global,
-            self.class_names,
+        raw_base_records = calibrate_record_confidences(
+            remap_base_records(
+                result_records(prediction, self.base_local_names),
+                self.base_local_to_global,
+                self.class_names,
+            ),
+            getattr(self, "score_calibration", None),
         )
         routing_conversion_ms = (time.perf_counter() - conversion_started) * 1000
         gate_started = time.perf_counter()
@@ -2145,8 +2172,14 @@ class WebInferenceEngine:
             if not isinstance(local_to_global, Mapping):
                 local_to_global = {0: class_ids[0]}
             conversion_started = time.perf_counter()
-            raw_candidates = remap_specialist_records_dynamic(
-                result_records(specialist_prediction), local_to_global, self.class_names, protocol_id
+            raw_candidates = calibrate_record_confidences(
+                remap_specialist_records_dynamic(
+                    result_records(specialist_prediction),
+                    local_to_global,
+                    self.class_names,
+                    protocol_id,
+                ),
+                getattr(self, "score_calibration", None),
             )
             routing_conversion_ms += (time.perf_counter() - conversion_started) * 1000
             gate_started = time.perf_counter()

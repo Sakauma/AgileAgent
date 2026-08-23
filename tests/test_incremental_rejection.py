@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 
 from fair_agent.modules.detection_fusion import (
     apply_incremental_candidate_gates,
+    calibrate_record_confidences,
     context_adjusted_threshold,
     learn_context_prior,
     suppress_cross_class_overlaps,
@@ -228,6 +229,72 @@ def test_global_cross_class_suppression_reduces_reported_16_boxes_to_7() -> None
     assert len(decisions) == 9
     assert {row["suppressed_class_id"] for row in decisions} == {3}
     assert {row["kept_class_id"] for row in decisions} == {5}
+
+
+def test_logit_calibration_preserves_raw_score_and_separates_model_scales() -> None:
+    rows = [
+        {
+            "class_id": 3,
+            "confidence": 0.80,
+            "source": "frozen_base_model",
+            "xyxy": [0, 0, 20, 20],
+        },
+        {
+            "class_id": 5,
+            "confidence": 0.80,
+            "source": "incremental_model",
+            "xyxy": [0, 0, 20, 20],
+        },
+    ]
+    calibrated = calibrate_record_confidences(
+        rows,
+        {
+            "enabled": True,
+            "method": "logit_affine",
+            "sources": {
+                "frozen_base_model": {"temperature": 1.0, "bias": 0.0},
+                "incremental_model": {"temperature": 1.0, "bias": -0.5},
+            },
+        },
+    )
+
+    assert calibrated[0]["confidence"] == 0.80
+    assert calibrated[1]["confidence"] < 0.80
+    assert calibrated[1]["raw_confidence"] == 0.80
+    assert calibrated[1]["confidence_calibration"]["source"] == "incremental_model"
+
+
+def test_cross_class_source_margin_requires_specialist_to_win_clearly() -> None:
+    rows = [
+        {
+            "image_id": "one",
+            "class_id": 3,
+            "confidence": 0.80,
+            "source": "frozen_base_model",
+            "xyxy": [0, 0, 20, 20],
+        },
+        {
+            "image_id": "one",
+            "class_id": 5,
+            "confidence": 0.85,
+            "source": "incremental_model",
+            "xyxy": [1, 1, 19, 19],
+        },
+    ]
+
+    without_margin, _ = suppress_cross_class_overlaps(
+        rows,
+        iou_threshold=0.50,
+    )
+    with_margin, decisions = suppress_cross_class_overlaps(
+        rows,
+        iou_threshold=0.50,
+        incremental_over_base_margin=0.10,
+    )
+
+    assert [int(row["class_id"]) for row in without_margin] == [5]
+    assert [int(row["class_id"]) for row in with_margin] == [3]
+    assert decisions[0]["incremental_over_base_margin"] == 0.10
 
 
 def test_global_cross_class_suppression_has_no_pair_whitelist_or_image_leakage() -> None:
