@@ -131,7 +131,7 @@ def _verify_full_score_performance_report(
     report: Mapping[str, Any],
     errors: List[str],
 ) -> None:
-    if report.get("schema_version") != 5:
+    if report.get("schema_version") not in {5, 6}:
         errors.append("full_score_performance_schema_invalid")
     protocol = report.get("protocol") or {}
     competition = report.get("competition") or {}

@@ -242,7 +242,7 @@ def test_formal_release_uses_competition_gates_and_validity_prerequisites(
     _write_json(
         performance,
         {
-            "schema_version": 5,
+            "schema_version": 6,
             "protocol": {
                 "batch_probe_size": 20,
                 "batch_rounds": 3,
