@@ -3,15 +3,18 @@
 
 AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模型与训练验收、Ascend310B1 板端候选与正式 release 验收。Pytest 测试使用仿真后端和临时文件验证契约；真实 CUDA、ACL、DVPP、CANN 与性能结果由对应硬件上的专用工具验证。
 
-## 本次整理的验证状态
+## 本次验证状态
 
-本次工程整理按用户要求没有运行 pytest，也没有重跑 GPU 训练或 Ascend310B 板端评分。本次对测试范围的核对仅包括：
+2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与不可变 release `20260824-4plus2-yolo26-runtime-calibration-v1` 完成最终验收：
 
-- 盘点 `tests/test_*.py` 中当前存在的收集目标和顶层 `test_*` 节点；
-- 将测试文件与当前 4+2、顺序增量、场景校准、Web/CLI 和 Ascend310B v2 源码入口逐项对应；
-- 扫描文档中的测试路径，并对 `docs/TESTING.md` 执行 `git diff --check`。
+- Ascend 定向回归：`100 passed`；
+- 全量回归：`283 passed in 34.19s`；
+- `scripts/verify_release.py`：PASS；
+- `bash scripts/materialize_ascend310b_full_score_release.sh --verify-existing`：33 项发布资产全部 PASS；
+- 三个 systemd unit 均为 active，公共 `8501` 健康检查返回 `status=ready`、`backend=ascend_acl`、`validated=true`；
+- 冻结 release 的 Base-mAP50、New-mAP50、KRR 与公共 `8501` FPS 四项满分门禁全部通过。
 
-下文命令是后续代码、模型或发布变更时的标准验收入口，不表示它们已在本次整理中执行。
+本轮没有重新训练模型。精度、误激活和性能结论采用当前冻结 release 的候选、lock、正式提升后复验及部署后 benchmark 证据；下文命令仍是后续代码、模型或发布变更时的标准验收入口。
 
 ## 测试框架与安装
 
