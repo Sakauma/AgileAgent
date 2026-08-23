@@ -1029,7 +1029,19 @@ async def incremental_batches(request: Request) -> JSONResponse:
         return JSONResponse({"batches": await run_in_threadpool(store.list)})
     settings = request_web_settings(request)["incremental_workbench"]
     try:
-        async with request.form(max_files=1, max_fields=3, max_part_size=int(settings["max_archive_bytes"])) as form:
+        try:
+            form_context = request.form(
+                max_files=1,
+                max_fields=3,
+                max_part_size=int(settings["max_archive_bytes"]),
+            )
+        except TypeError as exc:
+            if "max_part_size" not in str(exc):
+                raise
+            # Starlette < 0.40 has no parser-level part limit. The streaming
+            # store still enforces max_archive_bytes while copying the upload.
+            form_context = request.form(max_files=1, max_fields=3)
+        async with form_context as form:
             upload = form.get("file")
             if not isinstance(upload, UploadFile):
                 raise ValueError("请选择增量数据ZIP压缩包。")
