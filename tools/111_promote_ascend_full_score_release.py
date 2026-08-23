@@ -137,8 +137,8 @@ def validate_score(report: Mapping[str, Any]) -> dict[str, float]:
 
 
 def validate_benchmark(report: Mapping[str, Any], label: str) -> float:
-    if report.get("schema_version") != 5:
-        raise ValueError(f"{label}必须是benchmark schema v5")
+    if report.get("schema_version") not in {5, 6}:
+        raise ValueError(f"{label}必须是benchmark schema v5/v6")
     protocol = report.get("protocol") or {}
     competition = report.get("competition") or {}
     rounds = competition.get("batch_rounds")

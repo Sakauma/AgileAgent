@@ -172,10 +172,10 @@ def score_payload(base: float, new: float, krr: float) -> dict:
     }
 
 
-def benchmark_payload(round_fps: list[float]) -> dict:
+def benchmark_payload(round_fps: list[float], schema_version: int = 6) -> dict:
     median = sorted(round_fps)[len(round_fps) // 2]
     return {
-        "schema_version": 5,
+        "schema_version": schema_version,
         "protocol": {
             "batch_probe_size": 20,
             "batch_rounds": 3,
@@ -205,6 +205,10 @@ def test_promotion_requires_all_accuracy_and_three_round_fps_gates() -> None:
         benchmark_payload([39.2, 39.4, 39.3]),
         "primary",
     ) == pytest.approx(39.3)
+    assert PROMOTE.validate_benchmark(
+        benchmark_payload([39.2, 39.4, 39.3], schema_version=5),
+        "legacy",
+    ) == pytest.approx(39.3)
 
     with pytest.raises(ValueError, match="new_map50"):
         PROMOTE.validate_score(score_payload(0.81, 0.59, 1.0))
@@ -212,6 +216,11 @@ def test_promotion_requires_all_accuracy_and_three_round_fps_gates() -> None:
         PROMOTE.validate_benchmark(
             benchmark_payload([29.0, 29.2, 29.1]),
             "primary",
+        )
+    with pytest.raises(ValueError, match="schema v5/v6"):
+        PROMOTE.validate_benchmark(
+            benchmark_payload([39.2, 39.4, 39.3], schema_version=4),
+            "obsolete",
         )
 
 
