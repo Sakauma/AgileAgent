@@ -65,6 +65,8 @@ chmod +x scripts/bootstrap_x86.sh scripts/start_agent.sh
 
 已有符合版本要求的 Python 环境时，可以通过 `AGILE_AGENT_PYTHON=/path/to/python` 指定解释器。
 
+`scripts/start_agent.sh` 是统一启动入口：它通过系统架构自动选择运行栈。`x86_64/AMD64` 使用 `configs/agent_pipeline.yaml`、CUDA 与 `.pt` 模型；`aarch64/ARM64` 使用 `configs/agent_pipeline_ascend310b.yaml`、PyACL 与 `.om` 模型。ARM 默认复用 `/usr/local/miniconda3/envs/agileagent` 和现有 CANN 环境，不安装或替换驱动、CANN、CUDA 或 PyTorch。可用顶层 `--config` 或 `AGILE_AGENT_CONFIG` 显式覆盖自动选择。
+
 ## 快速开始
 
 1. 启动 Web 工作台：
@@ -72,6 +74,8 @@ chmod +x scripts/bootstrap_x86.sh scripts/start_agent.sh
    ```bash
    ./scripts/start_agent.sh
    ```
+
+   页头状态会显示当前自动识别的 `x86 · CUDA` 或 `ARM · Ascend` 运行平台。
 
 2. 在浏览器打开 `http://127.0.0.1:8501`。
 
@@ -154,14 +158,17 @@ AGILE_AGENT_ASCEND_PORT=8501 \
 
 ## 配置与验证
 
-默认 x86 配置为 [`configs/agent_pipeline.yaml`](configs/agent_pipeline.yaml)，Ascend 正式配置为 [`configs/agent_pipeline_ascend310b.yaml`](configs/agent_pipeline_ascend310b.yaml)。常用检查命令：
+默认使用 `auto` 配置选择：x86 加载 [`configs/agent_pipeline.yaml`](configs/agent_pipeline.yaml)，ARM 加载 [`configs/agent_pipeline_ascend310b.yaml`](configs/agent_pipeline_ascend310b.yaml)。常用检查命令：
 
 ```bash
-agile-agent config validate --config configs/agent_pipeline.yaml
+agile-agent config validate
+agile-agent config get inference.backend
 agile-agent doctor
 python scripts/verify_release.py
 python scripts/smoke_models.py --load-only
 ```
+
+`config validate` 输出同时包含检测到的机器架构、后端、模型格式和配置选择来源。需要固定平台配置时使用 `agile-agent --config PATH ...`；显式配置不会被自动替换。
 
 完整测试命令和设备要求见 [`docs/TESTING.md`](docs/TESTING.md)。
 

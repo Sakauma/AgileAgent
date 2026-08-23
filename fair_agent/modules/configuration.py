@@ -13,7 +13,7 @@ from fair_agent.core.config import (
     load_config,
     parse_yaml_value,
     redact_config,
-    resolve_path,
+    runtime_config_path,
     set_key,
     unset_key,
     write_config,
@@ -21,7 +21,7 @@ from fair_agent.core.config import (
 
 
 def raw_config(path: str | Path) -> Dict[str, Any]:
-    resolved = resolve_path(path)
+    resolved = runtime_config_path(path)
     value = yaml.safe_load(resolved.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError(f"配置必须是映射：{resolved}")
@@ -31,17 +31,19 @@ def raw_config(path: str | Path) -> Dict[str, Any]:
 def set_persistent_value(path: str | Path, key: str, value: str) -> Path:
     if is_protected_key(key):
         raise ValueError(f"受保护参数必须使用generation专用命令修改：{key}")
-    data = raw_config(path)
+    resolved = runtime_config_path(path)
+    data = raw_config(resolved)
     set_key(data, key, parse_yaml_value(value), create=False)
-    return write_config(path, data, f"set:{key}")
+    return write_config(resolved, data, f"set:{key}")
 
 
 def unset_persistent_value(path: str | Path, key: str) -> Path:
     if is_protected_key(key):
         raise ValueError(f"受保护参数必须使用generation专用命令修改：{key}")
-    data = raw_config(path)
+    resolved = runtime_config_path(path)
+    data = raw_config(resolved)
     unset_key(data, key)
-    return write_config(path, data, f"unset:{key}")
+    return write_config(resolved, data, f"unset:{key}")
 
 
 def flatten(value: Any, prefix: str = "") -> Dict[str, Any]:

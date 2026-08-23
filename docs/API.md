@@ -10,8 +10,8 @@ AgileAgent 的 Web 服务由 `fair_agent/web/app.py` 提供。x86/CUDA 与 Ascen
 | 方法与路径 | 输入 | 成功响应 |
 | --- | --- | --- |
 | `GET /api/health` | 无 | 后端、设备、队列、代际和活动类别 |
-| `GET /api/config/public` | 无 | 置信度范围、UI、上传限制和标签字典 |
-| `GET /api/capabilities` | 无 | 当前代际、模型、增量协议和冻结指标 |
+| `GET /api/config/public` | 无 | 自动识别的运行平台、置信度范围、UI、上传限制和标签字典 |
+| `GET /api/capabilities` | 无 | 当前运行平台、代际、模型格式、增量协议和冻结指标 |
 | `POST /api/detect` | multipart：`file`，可选 `confidence` | 单图场景、检测、执行轨迹和耗时 |
 | `POST /api/batch` | multipart：一个或多个 `files`，可选 `confidence` | 批次摘要、逐图结果、预览和下载地址 |
 | `GET /api/batch/{batch_id}/preview/{index}` | 路径参数 | 标注 PNG |
@@ -30,6 +30,11 @@ curl -fsS http://127.0.0.1:8501/api/health
   "status": "ready",
   "device": "cuda:0",
   "backend": "ultralytics_cuda",
+  "architecture": "x86",
+  "machine": "x86_64",
+  "device_family": "x86_cuda",
+  "model_format": "pt",
+  "config_selection": "architecture",
   "validated": false,
   "validation_candidate": false,
   "model_layout": "independent_models_v1",
@@ -48,7 +53,7 @@ curl -fsS http://127.0.0.1:8501/api/health
 }
 ```
 
-Ascend310B v2 正式实例返回 `backend: "ascend_acl"`、`device: "ascend:0"`、`validated: true`、`model_layout: "independent_yolo26_e2e_v1"` 和 `context_mode: "model"`。
+Ascend310B v2 正式实例返回 `architecture: "arm"`、`backend: "ascend_acl"`、`device: "ascend:0"`、`model_format: "om"`、`validated: true`、`model_layout: "independent_yolo26_e2e_v1"` 和 `context_mode: "model"`。Web 页头使用这些字段显示 `x86 · CUDA` 或 `ARM · Ascend`；模型路径不会通过公共 API 暴露。
 
 模型初始化失败时返回 HTTP `503`：
 

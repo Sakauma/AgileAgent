@@ -58,6 +58,8 @@
 ./scripts/start_agent.sh
 ```
 
+该入口默认使用 `--config auto`。在 `x86_64/AMD64` 上自动加载 CUDA 配置与 `.pt` 模型；在 `aarch64/ARM64` 上自动加载 Ascend 配置与 `.om` 模型，并复用现有 `/usr/local/miniconda3/envs/agileagent` 和 CANN 环境。CLI 与 Web 使用同一个选择结果，不会发生一端使用 PT、另一端使用 OM 的分裂。
+
 浏览器打开 `http://127.0.0.1:8501`，或在另一终端检查服务：
 
 ```bash
@@ -69,6 +71,8 @@ curl -fsS http://127.0.0.1:8501/api/health
 ```bash
 ./scripts/start_agent.sh --cli
 ```
+
+也可以运行 `agile-agent config validate` 查看 `runtime.architecture`、`backend`、`model_format` 与选择来源；顶层 `--config PATH` 保留为显式覆盖。
 
 单图检测会输出场景概率、六类检测结果、类别 owner 和模型执行轨迹：
 

@@ -141,7 +141,9 @@ def test_health_and_static_product_contract() -> None:
     assert "limits" not in health.json()
     public_config = client.get("/api/config/public")
     assert public_config.status_code == 200
-    assert public_config.json()["confidence"] == {"min": 0.01, "max": 1.0, "default": 0.5}
+    assert public_config.json()["confidence"] == {"min": 0.01, "max": 1.0, "default": 0.01}
+    assert public_config.json()["runtime"]["architecture"] == "x86"
+    assert public_config.json()["runtime"]["model_format"] == "pt"
     assert "limits" not in public_config.json()
     assert "registry" not in json.dumps(public_config.json())
     capabilities = client.get("/api/capabilities")
@@ -187,6 +189,11 @@ def test_web_settings_follow_active_config_and_manifest() -> None:
     settings = build_web_settings()
     assert settings["detector_path"].name == "four_class_base_detector.pt"
     assert settings["device_index"] == "0"
+    assert settings["runtime_platform"]["architecture"] == "x86"
+    assert settings["runtime_platform"]["model_format"] == "pt"
+    assert settings["model_artifacts"]["base"].suffix == ".pt"
+    assert settings["model_artifacts"]["context"].suffix == ".pt"
+    assert settings["model_artifacts"]["specialists"]["incremental_detector"].suffix == ".pt"
     assert settings["predict"] == {
             "imgsz": 1280, "specialist_imgsz": 1280, "iou": 0.7, "max_det": 300, "batch_size": 32,
             "warmup_iterations": 1, "warmup_batch_size": 1,
@@ -232,10 +239,16 @@ def test_health_reports_ascend_device_for_ascend_backend() -> None:
     for entry in config["ascend_backend"]["models"].values():
         entry["sha256"] = "0" * 64
     config["ascend_backend"]["context_model"]["sha256"] = "0" * 64
+    settings = build_web_settings(config)
+    assert settings["runtime_platform"]["model_format"] == "om"
+    assert settings["model_artifacts"]["base"].suffix == ".om"
+    assert settings["model_artifacts"]["context"].suffix == ".om"
+    assert settings["model_artifacts"]["specialists"]["incremental_detector"].suffix == ".om"
     client = TestClient(create_app(engine_provider=lambda: FakeEngine(), config=config))
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["device"] == "ascend:0"
+    assert response.json()["model_format"] == "om"
 
 
 def test_single_detection_api_returns_public_json() -> None:

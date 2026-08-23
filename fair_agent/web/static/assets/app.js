@@ -457,11 +457,14 @@
       if (!response.ok) throw new Error("health check failed");
       const payload = await response.json();
       const busy = Boolean(payload.queue && (payload.queue.active || payload.queue.waiting));
+      const platformLabel = payload.architecture === "arm" ? "ARM · Ascend" : "x86 · CUDA";
       node.className = `service-status ${busy ? "is-busy" : "is-ready"}`;
-      node.querySelector("b").textContent = busy ? "正在处理" : "服务就绪";
+      node.querySelector("b").textContent = `${busy ? "正在处理" : "服务就绪"} · ${platformLabel}`;
+      node.title = `${payload.backend || "unknown"} · ${String(payload.model_format || "").toUpperCase()}`;
     } catch (_error) {
       node.className = "service-status is-error";
       node.querySelector("b").textContent = "暂未连接";
+      node.removeAttribute("title");
     }
   }
 

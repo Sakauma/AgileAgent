@@ -30,7 +30,13 @@ from fair_agent.modules.web_inference import (
     decode_batch_images,
     decode_image_bytes,
 )
-from fair_agent.core.config import inference_backend_options, load_config, resolve_path
+from fair_agent.core.config import (
+    inference_backend_options,
+    load_config,
+    rel_path,
+    resolve_path,
+    runtime_platform_info,
+)
 from fair_agent.core.runtime_log import StructuredEventLog, new_trace_id
 from fair_agent.modules.incremental_workbench import IncrementalBatchStore, TrainingJobManager
 
@@ -43,6 +49,76 @@ BATCH_FAST_MULTIPART_MAX_BYTES = 64 * 1024 * 1024
 BATCH_FAST_MULTIPART_MAX_PARTS = 256
 BATCH_RESULT_METADATA_BASE_BYTES = 128 * 1024
 BATCH_RESULT_METADATA_PER_ROW_BYTES = 4096
+
+
+def _registered_context_artifact(
+    context_entry: Mapping[str, Any], runtime_name: str
+) -> Path:
+    artifact = next(
+        (
+            item
+            for item in context_entry.get("artifacts", [])
+            if isinstance(item, Mapping) and item.get("runtime") == runtime_name
+        ),
+        None,
+    )
+    if not isinstance(artifact, Mapping) or not artifact.get("path"):
+        raise ValueError(f"场景模型未登记 {runtime_name} 运行资产。")
+    return resolve_path(str(artifact["path"]))
+
+
+def _selected_model_artifacts(
+    backend_name: str,
+    backend_options: Mapping[str, Any],
+    generation: Mapping[str, Any],
+    context_path: Path,
+) -> Dict[str, Any]:
+    if backend_name != "ascend_acl":
+        return {
+            "base": resolve_path(generation["detector_path"]),
+            "context": context_path,
+            "specialists": {
+                protocol_id: resolve_path(protocol["weights"])
+                for protocol_id, protocol in generation["protocols"].items()
+            },
+        }
+
+    configured_models = backend_options.get("models") or {}
+
+    def ascend_model(source: str | Path) -> Path:
+        source_key = rel_path(resolve_path(source))
+        entry = configured_models.get(source_key)
+        if not isinstance(entry, Mapping) or not entry.get("path"):
+            raise ValueError(f"Ascend 配置未登记运行模型：{source_key}")
+        return resolve_path(str(entry["path"]))
+
+    context_entry = backend_options.get("context_model")
+    if not isinstance(context_entry, Mapping) or not context_entry.get("path"):
+        raise ValueError("Ascend 配置未登记场景 OM。")
+    return {
+        "base": ascend_model(generation["detector_path"]),
+        "context": resolve_path(str(context_entry["path"])),
+        "specialists": {
+            protocol_id: ascend_model(protocol["weights"])
+            for protocol_id, protocol in generation["protocols"].items()
+        },
+    }
+
+
+def _public_runtime_platform(value: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value.get(key)
+        for key in (
+            "architecture",
+            "machine",
+            "device_family",
+            "backend",
+            "model_format",
+            "selection",
+            "automatic",
+            "architecture_match",
+        )
+    }
 
 
 class BatchResultStore:
@@ -129,12 +205,14 @@ def build_web_settings(
     routing = dict(config["routing"])
     backend_name = str(inference["backend"])
     backend_options = inference_backend_options(config)
+    runtime_platform = runtime_platform_info(config)
     registry_path = resolve_path(web["functional_registry"])
     registry = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
     context_entry = next(
         item for item in registry["models"] if item.get("function") == "context_perception"
     )
-    context_path = resolve_path(context_entry["artifacts"][0]["path"])
+    context_runtime = "ascend_310b" if backend_name == "ascend_acl" else "x86_gpu"
+    context_path = _registered_context_artifact(context_entry, context_runtime)
     from fair_agent.modules.generation_management import active_generation_registry
     from fair_agent.modules.model_generations import (
         generation_settings,
@@ -157,6 +235,10 @@ def build_web_settings(
         for global_id in generation["base_class_ids"]
     }
     protocols = generation["protocols"]
+    model_artifacts = _selected_model_artifacts(
+        backend_name, backend_options, generation, context_path
+    )
+    context_path = model_artifacts["context"]
     if backend_name == "tensorrt_engine" and backend_options.get("precision") == "int8":
         backend_options["engines"] = {
             **dict(backend_options.get("engines") or {}),
@@ -192,6 +274,8 @@ def build_web_settings(
     return {
         "detector_path": generation["detector_path"],
         "context_path": context_path,
+        "model_artifacts": model_artifacts,
+        "runtime_platform": runtime_platform,
         "device_index": str(config.get("runtime", {}).get("default_device", "0")),
         "backend": backend_name,
         "predict": {
@@ -570,6 +654,7 @@ async def health(request: Request) -> JSONResponse:
     try:
         engine = await run_in_threadpool(provider)
         queue = engine.queue_status()
+        runtime_platform = dict(settings["runtime_platform"])
         return JSONResponse(
             {
                 "status": "ready",
@@ -579,6 +664,11 @@ async def health(request: Request) -> JSONResponse:
                     else f'cuda:{settings["device_index"]}'
                 ),
                 "backend": settings["backend"],
+                "architecture": runtime_platform["architecture"],
+                "machine": runtime_platform["machine"],
+                "device_family": runtime_platform["device_family"],
+                "model_format": runtime_platform["model_format"],
+                "config_selection": runtime_platform.get("selection", "provided"),
                 "validated": bool(
                     settings.get("native_backend", {}).get("validated", False)
                 ),
@@ -606,6 +696,7 @@ async def health(request: Request) -> JSONResponse:
 
 async def capabilities(request: Request) -> JSONResponse:
     settings = request_web_settings(request)
+    runtime_platform = dict(settings["runtime_platform"])
     protocols = [
         {
             "id": item["id"],
@@ -619,11 +710,17 @@ async def capabilities(request: Request) -> JSONResponse:
         for item in settings["protocols"].values()
     ]
     models = [
-        {"id": "scene_sensor_net_v1", "name": "场景认知", "role": "context_perception"},
+        {
+            "id": "scene_sensor_net_v1",
+            "name": "场景认知",
+            "role": "context_perception",
+            "artifact_format": runtime_platform["model_format"],
+        },
         {
             "id": settings["base_model_id"],
             "name": settings["base_model_name"],
             "role": "frozen_base",
+            "artifact_format": runtime_platform["model_format"],
         },
     ]
     models.extend(
@@ -632,6 +729,7 @@ async def capabilities(request: Request) -> JSONResponse:
             "name": item.get("display_name") or f"{item['class_name']}增量专家",
             "role": "class_incremental_expert",
             "available": item["available"],
+            "artifact_format": runtime_platform["model_format"],
         }
         for item in settings["protocols"].values()
     )
@@ -640,6 +738,7 @@ async def capabilities(request: Request) -> JSONResponse:
             "generation_id": settings["generation_id"],
             "generation_name": settings["generation_name"],
             "generation_status": settings["generation_status"],
+            "runtime": _public_runtime_platform(runtime_platform),
             "active_classes": [
                 settings["class_names"][class_id]
                 for class_id in settings["active_class_ids"]
@@ -654,6 +753,7 @@ async def capabilities(request: Request) -> JSONResponse:
 def public_config_payload(settings: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     settings = dict(settings or WEB_SETTINGS)
     return {
+        "runtime": _public_runtime_platform(settings["runtime_platform"]),
         "confidence": dict(settings["confidence"]),
         "ui": dict(settings["ui"]),
         "incremental": {

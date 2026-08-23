@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
-from fair_agent.core.config import configured_python, load_config, resolve_path
+from fair_agent.core.config import AUTO_CONFIG, configured_python, load_config, resolve_path
 from fair_agent.modules.operator_view import build_operator_snapshot, render_console
 
 
@@ -89,7 +89,7 @@ def render_page(page: str, state: Dict[str, Any], decision: Dict[str, Any]) -> s
 class ConsoleFrontend:
     def __init__(
         self,
-        config_path: str = "configs/agent_pipeline.yaml",
+        config_path: str = AUTO_CONFIG,
         input_fn: InputFn = input,
         output_fn: OutputFn = print,
         clear_screen: bool | None = None,
@@ -177,5 +177,5 @@ class ConsoleFrontend:
                 self.message = "未知命令。请选择菜单中的数字或字母。"
 
 
-def run_console_frontend(config_path: str = "configs/agent_pipeline.yaml") -> int:
+def run_console_frontend(config_path: str = AUTO_CONFIG) -> int:
     return ConsoleFrontend(config_path=config_path).run()

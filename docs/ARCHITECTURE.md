@@ -60,10 +60,11 @@ Base 本地类 0–3 直接映射到全局类 0–3，增量专家本地类 0–
 
 ### 公共启动流程
 
-1. `load_config()` 加载 schema 3 配置并完成环境变量展开、路径解析和字段校验。
-2. `build_web_settings()` 读取功能模型注册表和 production 代际，将 Base 权重、增量协议、类别映射、阈值、场景先验及后端配置整理为运行设置。
-3. `AtomicEngineProvider` 按需构建 `WebInferenceEngine`，预热三个功能模型，并在代际提升或回滚时原子替换运行实例。
-4. `/api/detect`、`/api/batch` 或 CLI `detect` 将请求交给 `FairInferenceQueue`，由单一设备队列保持推理请求的执行顺序。
+1. `select_runtime_config()` 将 `x86_64/AMD64` 映射到 x86/CUDA 配置，将 `aarch64/ARM64` 映射到 ARM/Ascend 配置；显式 `--config` 与 `AGILE_AGENT_CONFIG` 可固定选择。
+2. `load_config()` 加载 schema 3 配置并完成环境变量展开、路径解析、字段校验和运行平台元数据登记。
+3. `build_web_settings()` 读取功能模型注册表和 production 代际，按后端把 Base、Incremental、Scene-SensorNet 自动解析为 `.pt` 或 `.om` 运行资产，并整理类别映射、阈值、场景先验及后端配置。
+4. `AtomicEngineProvider` 按需构建 `WebInferenceEngine`，预热三个功能模型，并在代际提升或回滚时原子替换运行实例。
+5. `/api/detect`、`/api/batch` 或 CLI `detect` 将请求交给 `FairInferenceQueue`，由单一设备队列保持推理请求的执行顺序。
 
 ### x86/CUDA
 
@@ -141,7 +142,7 @@ Base/Increment train/dev 与 mixed dev
 
 | 抽象 | 位置 | 作用 |
 | --- | --- | --- |
-| `load_config()` | `fair_agent/core/config.py` | 加载、覆盖、校验并解析运行配置 |
+| `select_runtime_config()` / `load_config()` | `fair_agent/core/config.py` | 识别 x86/ARM，选择平台配置并加载、覆盖、校验运行配置 |
 | `load_generation_registry()` / `generation_web_settings()` | `fair_agent/modules/model_generations.py` | 验证权重身份、类别 owner、阈值和代际通道，并生成在线设置 |
 | `AtomicEngineProvider` | `fair_agent/web/app.py` | 延迟构建推理引擎，执行 shadow 加载后的原子提升与回滚 |
 | `WebInferenceEngine` | `fair_agent/modules/web_inference.py` | 编排场景模型、Base、增量专家、门控、融合和批量推理 |

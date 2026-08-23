@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List
 
 import yaml
 
-from .config import rel_path, resolve_path
+from .config import rel_path, resolve_path, runtime_platform_info
 from .hashes import hash_if_exists, verify_sha256s
 from fair_agent.modules.functional_models import validate_functional_models
 from fair_agent.modules.model_generations import load_generation_registry
@@ -257,7 +257,10 @@ def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
         },
         "config": {"path": rel_path(config_path), **hash_if_exists(config_path)},
         "input_fingerprints": fingerprints(tracked_inputs),
-        "runtime": config.get("runtime", {}),
+        "runtime": {
+            **dict(config.get("runtime", {})),
+            "platform": runtime_platform_info(config),
+        },
         "dataset": dataset_summary,
         "data_audit": {
             "total_images": data_audit.get("total_images"),

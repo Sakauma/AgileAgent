@@ -45,6 +45,8 @@ python scripts/smoke_models.py --load-only
 ./scripts/start_agent.sh --cli
 ```
 
+通用启动脚本和 `agile-agent` CLI 默认使用 `--config auto`：x86 选择 `ultralytics_cuda` 与三个 `.pt` 资产，ARM 选择 `ascend_acl` 与三个 `.om` 资产。`AGILE_AGENT_CONFIG` 或顶层 `--config PATH` 可固定配置；自动选择从不在 CUDA 与 Ascend 之间做失败回退。
+
 服务默认监听 `127.0.0.1:8501`。运行状态以 `/api/health` 返回的 `generation_id`、`backend`、活动类别和模型队列为准。
 
 ## Ascend310B v2

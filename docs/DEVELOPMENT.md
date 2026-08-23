@@ -35,8 +35,8 @@ python -m fair_agent.cli doctor
 | 命令 | 用途 |
 | --- | --- |
 | `./scripts/bootstrap_x86.sh` | 准备或复用 x86 CUDA 开发环境并注册 CLI |
-| `./scripts/start_agent.sh` | 校验环境、刷新状态并启动 Starlette 工作台 |
-| `./scripts/start_agent.sh --cli` | 启动终端工作台 |
+| `./scripts/start_agent.sh` | 自动识别 x86/ARM、选择 CUDA/PT 或 Ascend/OM，校验环境并启动 Starlette 工作台 |
+| `./scripts/start_agent.sh --cli` | 使用同一自动设备与模型选择启动终端工作台 |
 | `"$AGENT_PYTHON" -m fair_agent.cli config validate --config configs/agent_pipeline.yaml` | 校验 x86 schema 3 配置 |
 | `"$AGENT_PYTHON" scripts/verify_release.py --config configs/agent_pipeline.yaml` | 检查 x86 发布配置和正式资产 |
 | `"$AGENT_PYTHON" scripts/smoke_models.py --load-only` | 在 CUDA 上加载三个正式功能模型 |

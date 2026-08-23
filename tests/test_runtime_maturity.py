@@ -24,6 +24,7 @@ def test_serve_is_bound_to_loopback(monkeypatch) -> None:
     def fake_call(command, cwd, env=None):
         captured["command"] = command
         captured["cwd"] = cwd
+        captured["env"] = env
         return 0
 
     monkeypatch.setattr(cli.subprocess, "call", fake_call)
@@ -33,6 +34,24 @@ def test_serve_is_bound_to_loopback(monkeypatch) -> None:
     assert captured["command"][captured["command"].index("--host") + 1] == "127.0.0.1"
     assert captured["command"][captured["command"].index("--port") + 1] == "8501"
     assert "--no-access-log" in captured["command"]
+    assert Path(captured["env"]["AGILE_AGENT_CONFIG"]).resolve() == Path(
+        "configs/agent_pipeline.yaml"
+    ).resolve()
+
+
+def test_serve_preserves_automatic_architecture_selection(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.delenv("AGILE_AGENT_CONFIG", raising=False)
+    monkeypatch.setattr(cli, "check_module", lambda _name: True)
+
+    def fake_call(command, cwd, env=None):
+        captured["env"] = env
+        return 0
+
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+    code = cli.cmd_serve(argparse.Namespace(config="auto"))
+    assert code == 0
+    assert "AGILE_AGENT_CONFIG" not in captured["env"]
 
 
 def test_serve_stops_cleanly_on_keyboard_interrupt(monkeypatch, capsys) -> None:
@@ -70,6 +89,7 @@ def test_online_detection_config_only_selects_decoder() -> None:
 
 def test_cli_has_no_retired_image_size_commands() -> None:
     parser = cli.build_parser()
+    assert parser.parse_args(["status"]).config == "auto"
     subcommands = next(action for action in parser._actions if action.dest == "command").choices
     assert "model-recheck" not in subcommands
     assert "freeze-candidate" not in subcommands
@@ -132,8 +152,13 @@ def test_bootstrap_reuses_compatible_cuda_environment() -> None:
 
 def test_start_script_reuses_bootstrap_selected_python() -> None:
     content = Path("scripts/start_agent.sh").read_text(encoding="utf-8")
-    assert '[[ -f "${ROOT_DIR}/.agent-python" ]]' in content
+    assert '[[ "${AGENT_PLATFORM}" == x86 && -f "${ROOT_DIR}/.agent-python" ]]' in content
     assert 'IFS= read -r AGENT_PYTHON < "${ROOT_DIR}/.agent-python"' in content
+    assert 'MACHINE_ARCH_RAW="$(uname -m)"' in content
+    assert 'MACHINE_ARCH="${MACHINE_ARCH_RAW,,}"' in content
+    assert 'export AGILE_AGENT_PYTHON="${AGENT_PYTHON}"' in content
+    assert "AGILE_AGENT_ASCEND_ENV" in content
+    assert "agent_pipeline_ascend310b.yaml" not in content
 
 
 def test_doctor_fails_when_workbench_dependency_is_missing(monkeypatch, capsys) -> None:

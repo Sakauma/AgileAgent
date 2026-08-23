@@ -15,7 +15,16 @@ import yaml
 
 from fair_agent.core.audit import make_run_dir, write_pipeline_artifacts
 from fair_agent.core.blackboard import build_blackboard, write_blackboard
-from fair_agent.core.config import ROOT, configured_python, get_key, load_config, rel_path, resolve_path
+from fair_agent.core.config import (
+    AUTO_CONFIG,
+    ROOT,
+    configured_python,
+    get_key,
+    load_config,
+    rel_path,
+    resolve_path,
+    runtime_platform_info,
+)
 from fair_agent.core.hashes import sha256_file
 from fair_agent.core.runtime_log import StructuredEventLog, event_log_from_config
 from fair_agent.executors.local import append_log, run_command
@@ -28,13 +37,21 @@ from fair_agent.ui.console import run_console_frontend
 REQUIRED_MODULES = ["yaml", "PIL"]
 WORKBENCH_MODULES = ["pandas", "starlette", "uvicorn", "multipart"]
 INFERENCE_MODULES = ["ultralytics", "cv2", "torch", "torchvision"]
+ASCEND_INFERENCE_MODULES = ["numpy", "cv2", "acl"]
 TENSORRT_MODULES = ["tensorrt"]
-ALL_MODULES = REQUIRED_MODULES + WORKBENCH_MODULES + INFERENCE_MODULES + TENSORRT_MODULES
+ALL_MODULES = list(dict.fromkeys(
+    REQUIRED_MODULES
+    + WORKBENCH_MODULES
+    + INFERENCE_MODULES
+    + ASCEND_INFERENCE_MODULES
+    + TENSORRT_MODULES
+))
 
 
 def load_args_config(args: argparse.Namespace) -> Dict[str, Any]:
     overrides = list(getattr(args, "config_overrides", []) or [])
-    return load_config(args.config, overrides) if overrides else load_config(args.config)
+    config_path = getattr(args, "config", AUTO_CONFIG)
+    return load_config(config_path, overrides) if overrides else load_config(config_path)
 
 
 def check_module(module: str) -> bool:
@@ -77,17 +94,46 @@ def check_external_python(path: Path) -> Dict[str, Any]:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     config = load_args_config(args)
+    runtime_platform = runtime_platform_info(config)
     py = configured_python(config)
     external = check_external_python(py)
+    modules = external.get("modules", {})
     runtime_cfg = config.get("runtime", {})
     default_device = str(runtime_cfg.get("default_device", "0"))
     accelerator = external.get("accelerator", {})
-    gpu_ready = (
+    cuda_ready = (
         bool(accelerator.get("cuda_available"))
         and int(default_device) < int(accelerator.get("cuda_device_count") or 0)
     )
     state = build_blackboard(config)
     backend_name = str(config["inference"]["backend"])
+    required_inference_modules = (
+        ASCEND_INFERENCE_MODULES
+        if backend_name == "ascend_acl"
+        else INFERENCE_MODULES
+        + (
+            TENSORRT_MODULES
+            if backend_name in {"tensorrt_engine", "tensorrt_native"}
+            else []
+        )
+    )
+    ascend_verification: Dict[str, Any] | None = None
+    if backend_name == "ascend_acl":
+        try:
+            from fair_agent.modules.ascend_release import verify_ascend_artifacts
+
+            ascend_verification = verify_ascend_artifacts(
+                config["ascend_backend"], require_validation=True
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            ascend_verification = {"status": "failed", "errors": [str(exc)]}
+    device_ready = (
+        bool(modules.get("acl"))
+        and bool(ascend_verification)
+        and ascend_verification.get("status") == "passed"
+        if backend_name == "ascend_acl"
+        else cuda_ready
+    )
     native_cfg = config["native_backend"]
     native_assets = {
         "library": resolve_path(native_cfg["library"]).is_file(),
@@ -136,14 +182,22 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             and all(native_assets.values())
             and config["native_backend"]["validated"] is True
         )
+        or (
+            backend_name == "ascend_acl"
+            and config["ascend_backend"]["validated"] is True
+            and device_ready
+        )
     )
     artifacts = state.get("frozen_assets", {}).get("artifacts", {})
     result = {
         "runtime": external,
+        "runtime_platform": runtime_platform,
         "device": {
             "default": default_device,
-            "gpu_required": True,
-            "ready": gpu_ready,
+            "accelerator_required": True,
+            "gpu_required": backend_name != "ascend_acl",
+            "npu_required": backend_name == "ascend_acl",
+            "ready": device_ready,
         },
         "server": {
             "host": runtime_cfg.get("server_host"),
@@ -154,12 +208,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "ready": backend_ready,
             "native_assets": native_assets if backend_name == "tensorrt_native" else None,
             "tensorrt_assets": tensorrt_assets if backend_name == "tensorrt_engine" else None,
+            "ascend_assets": ascend_verification if backend_name == "ascend_acl" else None,
             "cpu_fallback": False,
         },
         "dependency_groups": {
             "required": REQUIRED_MODULES,
             "workbench": WORKBENCH_MODULES,
-            "inference": INFERENCE_MODULES,
+            "inference": required_inference_modules,
         },
         "weights": state.get("frozen_assets", {}).get("weights"),
         "inference_weights": state.get("frozen_assets", {}).get("inference_weights"),
@@ -171,12 +226,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     quiet = bool(getattr(args, "quiet", False))
     if not quiet:
         print(json.dumps(result, ensure_ascii=False, indent=2))
-    modules = external.get("modules", {})
     missing_required = [name for name in REQUIRED_MODULES if not modules.get(name)]
     missing_workbench = [name for name in WORKBENCH_MODULES if not modules.get(name)]
-    required_inference_modules = INFERENCE_MODULES + (
-        TENSORRT_MODULES if backend_name in {"tensorrt_engine", "tensorrt_native"} else []
-    )
     missing_inference = [name for name in required_inference_modules if not modules.get(name)]
     if missing_required:
         print("缺少必需模块：", ", ".join(missing_required))
@@ -185,15 +236,26 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"安装命令：{py} -m pip install -e \".[workbench]\"")
     if missing_inference:
         print("缺少推理模块：", ", ".join(missing_inference))
-    if not gpu_ready:
-        print("默认设备为 NVIDIA GPU，但当前环境无法使用 CUDA。请安装 CUDA 版 PyTorch 并检查显卡驱动。")
+    if not device_ready:
+        if backend_name == "ascend_acl":
+            print("已选择 ARM/Ascend 模型，但 PyACL、CANN 环境或正式 OM 资产不可用。")
+        else:
+            print("已选择 x86/CUDA 模型，但当前环境无法使用 CUDA。请检查 CUDA 版 PyTorch 与显卡驱动。")
     if not backend_ready:
         print("推理后端依赖、资产、GPU或验收状态不完整；已拒绝启动，且不会回退到CPU。")
-    inference_ok = bool(result["inference_weights"].get("matches_expected")) and bool(result["inference_weights"].get("same_frozen_path"))
-    core_artifacts_ok = all(bool(value) for value in artifacts.values())
-    checksums_ok = bool(result["frozen_checksums"].get("valid"))
-    functional_ok = bool(result["functional_models"].get("valid")) and bool(result["functional_models"].get("all_x86_gpu_ready"))
-    return 1 if missing_required or missing_workbench or missing_inference or not gpu_ready or not backend_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or not functional_ok or external.get("returncode") != 0 else 0
+    if backend_name == "ascend_acl":
+        inference_ok = bool(ascend_verification) and ascend_verification.get("status") == "passed"
+        core_artifacts_ok = inference_ok
+        checksums_ok = inference_ok
+        functional_ok = bool(result["functional_models"].get("valid")) and bool(
+            result["functional_models"].get("all_ascend_310b_ready")
+        )
+    else:
+        inference_ok = bool(result["inference_weights"].get("matches_expected")) and bool(result["inference_weights"].get("same_frozen_path"))
+        core_artifacts_ok = all(bool(value) for value in artifacts.values())
+        checksums_ok = bool(result["frozen_checksums"].get("valid"))
+        functional_ok = bool(result["functional_models"].get("valid")) and bool(result["functional_models"].get("all_x86_gpu_ready"))
+    return 1 if missing_required or missing_workbench or missing_inference or not device_ready or not backend_ready or not inference_ok or not core_artifacts_ok or not checksums_ok or not functional_ok or external.get("returncode") != 0 else 0
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
@@ -244,7 +306,7 @@ def cmd_console(args: argparse.Namespace) -> int:
     if args.once or not sys.stdin.isatty():
         print(render_snapshot(build_operator_snapshot(state, decision), "text"))
         return 0
-    return run_console_frontend(args.config)
+    return run_console_frontend(config["_config_path"])
 
 
 def infer_image_context(config: Dict[str, Any], source: str | Path) -> Dict[str, Any]:
@@ -445,7 +507,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     ]
     try:
         environment = dict(os.environ)
-        environment["AGILE_AGENT_CONFIG"] = str(resolve_path(args.config))
+        requested_config = str(getattr(args, "config", AUTO_CONFIG) or AUTO_CONFIG)
+        if requested_config.strip().lower() != AUTO_CONFIG:
+            environment["AGILE_AGENT_CONFIG"] = str(
+                resolve_path(config["_config_path"])
+            )
         environment["AGILE_AGENT_OVERRIDES"] = json.dumps(list(getattr(args, "config_overrides", []) or []))
         return subprocess.call(command, cwd=str(ROOT), env=environment)
     except KeyboardInterrupt:
@@ -609,12 +675,14 @@ def cmd_config(args: argparse.Namespace) -> int:
     try:
         if args.config_action == "validate":
             config = load_config(args.config, overrides)
+            runtime_platform = runtime_platform_info(config)
             print(json.dumps({
                 "valid": True,
                 "config": config["_config_path"],
                 "sha256": config["_config_sha256"],
                 "overrides": overrides,
                 "restart_required": bool(overrides),
+                "runtime": runtime_platform,
             }, ensure_ascii=False, indent=2))
         elif args.config_action == "show":
             print(render_effective_config(args.config, overrides, args.format))
@@ -809,7 +877,11 @@ def cmd_logs(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="IR/SAR 快速学习智能体工作台")
-    parser.add_argument("--config", default="configs/agent_pipeline.yaml")
+    parser.add_argument(
+        "--config",
+        default=AUTO_CONFIG,
+        help="运行配置路径；默认 auto，x86 选择 CUDA/PT，ARM 选择 Ascend/OM。",
+    )
     parser.add_argument("--set", dest="config_overrides", action="append", default=[], metavar="KEY=VALUE", help="仅覆盖当前命令的配置，可重复使用。")
     sub = parser.add_subparsers(dest="command", required=True)
 

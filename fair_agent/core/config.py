@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import platform
 import re
 import sys
 from datetime import datetime
@@ -15,9 +16,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = ROOT / "configs" / "agent_pipeline.yaml"
+ASCEND_CONFIG = ROOT / "configs" / "agent_pipeline_ascend310b.yaml"
+AUTO_CONFIG = "auto"
 CONFIG_SCHEMA_VERSION = 3
 ENV_PATTERN = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 SECRET_PARTS = {"password", "passwd", "secret", "token", "api_key", "private_key"}
+X86_MACHINE_NAMES = {"x86_64", "amd64", "x64", "i386", "i486", "i586", "i686"}
+ARM_MACHINE_NAMES = {"aarch64", "arm64", "arm", "armv7l", "armv8l"}
 PROTECTED_PREFIXES = (
     "model.expected_sha256",
     "assets.checksums",
@@ -102,6 +107,100 @@ KNOWN_SECTION_KEYS = {
 def resolve_path(value: Union[str, Path]) -> Path:
     path = Path(value)
     return path if path.is_absolute() else ROOT / path
+
+
+def detect_host_architecture(machine: str | None = None) -> str:
+    """Normalize the current host to the two deployment architectures we ship."""
+
+    detected = str(machine if machine is not None else platform.machine()).strip().lower()
+    normalized = detected.replace("-", "_")
+    if normalized in X86_MACHINE_NAMES:
+        return "x86"
+    if normalized in ARM_MACHINE_NAMES or normalized.startswith("armv"):
+        return "arm"
+    raise ValueError(
+        f"不支持的设备架构：{detected or 'unknown'}；"
+        "当前发布仅支持 x86/x86_64 与 ARM/aarch64。"
+    )
+
+
+def _backend_runtime_profile(backend: str) -> Dict[str, str]:
+    if backend == "ascend_acl":
+        return {"device_family": "ascend_310b", "model_format": "om"}
+    if backend in {"tensorrt_engine", "tensorrt_native"}:
+        return {"device_family": "x86_cuda", "model_format": "engine"}
+    return {"device_family": "x86_cuda", "model_format": "pt"}
+
+
+def select_runtime_config(
+    path: Union[str, Path, None] = None,
+    *,
+    machine: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Dict[str, Any]:
+    """Select the x86/CUDA or ARM/Ascend config without probing accelerators.
+
+    An explicit path wins. ``AGILE_AGENT_CONFIG`` remains the deployment-level
+    override for default/auto callers. Architecture selection is deterministic
+    and intentionally never falls back from one model family to the other.
+    """
+
+    environment = os.environ if environ is None else environ
+    raw_machine = str(machine if machine is not None else platform.machine()).strip()
+    architecture = detect_host_architecture(raw_machine)
+    raw_path = "" if path is None else str(path).strip()
+    auto_requested = not raw_path or raw_path.lower() == AUTO_CONFIG
+    legacy_default = raw_path == str(DEFAULT_CONFIG)
+    configured = str(environment.get("AGILE_AGENT_CONFIG") or "").strip()
+
+    if configured and (auto_requested or legacy_default):
+        selected = resolve_path(configured)
+        source = "environment"
+    elif auto_requested and architecture == "arm" and environment.get(
+        "AGILE_AGENT_ASCEND_RELEASE"
+    ):
+        selected = (
+            Path(str(environment["AGILE_AGENT_ASCEND_RELEASE"])).expanduser()
+            / "configs"
+            / "agent_pipeline_ascend310b.yaml"
+        )
+        source = "ascend_release"
+    elif auto_requested:
+        selected = ASCEND_CONFIG if architecture == "arm" else DEFAULT_CONFIG
+        source = "architecture"
+    else:
+        selected = resolve_path(raw_path)
+        source = "explicit"
+
+    return {
+        "config_path": selected,
+        "machine": raw_machine or "unknown",
+        "architecture": architecture,
+        "selection": source,
+        "automatic": source in {"architecture", "ascend_release"},
+    }
+
+
+def runtime_platform_info(
+    config: Mapping[str, Any], machine: str | None = None
+) -> Dict[str, Any]:
+    """Describe the detected host and the model family selected by a config."""
+
+    stored = config.get("_runtime_platform")
+    metadata = dict(stored) if isinstance(stored, Mapping) else {}
+    raw_machine = str(machine if machine is not None else metadata.get("machine") or platform.machine())
+    architecture = detect_host_architecture(raw_machine)
+    backend = str((config.get("inference") or {}).get("backend") or "unknown")
+    profile = _backend_runtime_profile(backend)
+    expected_family = "ascend_310b" if architecture == "arm" else "x86_cuda"
+    return {
+        **metadata,
+        "machine": raw_machine,
+        "architecture": architecture,
+        "backend": backend,
+        **profile,
+        "architecture_match": profile["device_family"] == expected_family,
+    }
 
 
 def rel_path(path: Path) -> str:
@@ -239,7 +338,11 @@ def validate_config(
     errors: List[str] = []
     if config.get("schema_version") != CONFIG_SCHEMA_VERSION:
         errors.append(f"schema_version 必须为 {CONFIG_SCHEMA_VERSION}")
-    unknown = sorted(set(config) - KNOWN_TOP_LEVEL - {"_config_path", "_config_sha256", "_config_overrides"})
+    unknown = sorted(
+        set(config)
+        - KNOWN_TOP_LEVEL
+        - {"_config_path", "_config_sha256", "_config_overrides", "_runtime_platform"}
+    )
     if unknown:
         errors.append("未知顶层配置：" + ", ".join(unknown))
     for section_name, allowed_keys in KNOWN_SECTION_KEYS.items():
@@ -871,10 +974,12 @@ def validate_config(
         raise ValueError("Invalid agent config: " + "; ".join(errors))
 
 
-def runtime_config_path(path: Union[str, Path] = DEFAULT_CONFIG) -> Path:
-    if str(path) == str(DEFAULT_CONFIG) and os.environ.get("AGILE_AGENT_CONFIG"):
-        return resolve_path(os.environ["AGILE_AGENT_CONFIG"])
-    return resolve_path(path)
+def runtime_config_path(
+    path: Union[str, Path, None] = None,
+    *,
+    machine: str | None = None,
+) -> Path:
+    return Path(select_runtime_config(path, machine=machine)["config_path"])
 
 
 def runtime_overrides(overrides: Iterable[str] | None = None) -> List[str]:
@@ -890,12 +995,13 @@ def runtime_overrides(overrides: Iterable[str] | None = None) -> List[str]:
 
 
 def load_config(
-    path: Union[str, Path] = DEFAULT_CONFIG,
+    path: Union[str, Path, None] = None,
     overrides: Iterable[str] | None = None,
     *,
     allow_unverified_tensorrt_hashes: bool = False,
 ) -> Dict[str, Any]:
-    config_path = runtime_config_path(path)
+    selection = select_runtime_config(path)
+    config_path = Path(selection["config_path"])
     with config_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
     if not isinstance(raw, dict):
@@ -908,6 +1014,16 @@ def load_config(
     validate_config(
         data,
         allow_unverified_tensorrt_hashes=allow_unverified_tensorrt_hashes,
+    )
+    selection_metadata = {
+        key: value for key, value in selection.items() if key != "config_path"
+    }
+    selection_metadata["config_path"] = rel_path(config_path)
+    data["_runtime_platform"] = runtime_platform_info(
+        {
+            **data,
+            "_runtime_platform": selection_metadata,
+        }
     )
     data["_config_sha256"] = config_sha256(data)
     return data
@@ -961,7 +1077,9 @@ def write_config(path: Union[str, Path], data: Mapping[str, Any], operation: str
 
 
 def configured_python(config: Dict[str, Any]) -> Path:
-    configured = config["runtime"].get("local_python")
+    configured = os.environ.get("AGILE_AGENT_PYTHON") or config["runtime"].get(
+        "local_python"
+    )
     return Path(configured).expanduser() if configured else Path(sys.executable)
 
 

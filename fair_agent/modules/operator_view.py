@@ -32,6 +32,8 @@ def build_operator_snapshot(state: Dict[str, Any], decision: Dict[str, Any] | No
     functional = state.get("functional_models", {})
     incremental = state.get("incremental_learning", {})
     submission = state.get("submission", {})
+    runtime = state.get("runtime", {})
+    runtime_platform = dict(runtime.get("platform") or {})
     blockers = list(state.get("current_blockers", []))
     critical_blockers = [
         item
@@ -66,6 +68,16 @@ def build_operator_snapshot(state: Dict[str, Any], decision: Dict[str, Any] | No
         "generated_at": state.get("generated_at"),
         "evidence_mode": state.get("evidence", {}).get("mode", "unknown"),
         "health": "attention" if critical_blockers else "ready_with_external_gates",
+        "runtime": {
+            "architecture": runtime_platform.get("architecture"),
+            "machine": runtime_platform.get("machine"),
+            "device_family": runtime_platform.get("device_family"),
+            "backend": runtime_platform.get("backend"),
+            "model_format": runtime_platform.get("model_format"),
+            "config": runtime_platform.get("config_path"),
+            "selection": runtime_platform.get("selection"),
+            "automatic": bool(runtime_platform.get("automatic")),
+        },
         "blockers": [
             {"code": item, "label": BLOCKER_LABELS.get(item, item), "external": item not in critical_blockers}
             for item in blockers
@@ -106,10 +118,12 @@ def render_console(snapshot: Dict[str, Any]) -> str:
     counts = incremental["counts"]
     deployment = snapshot["deployment"]
     recommended = snapshot["recommended_action"]
+    runtime = snapshot.get("runtime", {})
     lines = [
         "灵动Agent终端工作台",
         "=" * 72,
         f"状态        {snapshot['health']}    证据 {snapshot['evidence_mode']}    更新时间 {snapshot.get('generated_at')}",
+        f"运行平台    {runtime.get('architecture')} ({runtime.get('machine')})    后端 {runtime.get('backend')}    模型 {runtime.get('model_format')}",
         "-" * 72,
         f"基础检测    {detector.get('name')}    base-test mAP50={detector.get('map50')}",
         f"冻结权重    SHA256={'通过' if detector.get('hash_verified') else '失败'}    {detector.get('weights')}",

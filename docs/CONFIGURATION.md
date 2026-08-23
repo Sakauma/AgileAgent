@@ -28,17 +28,19 @@ AgileAgent 以 UTF-8 YAML 管理运行、训练、增量协议和 Ascend310B 发
 
 `load_config()` 按以下顺序得到有效配置：
 
-1. 读取调用方指定的 YAML；`load_config()` 的默认值是 `configs/agent_pipeline.yaml`。当调用方使用默认 `DEFAULT_CONFIG` 时，`AGILE_AGENT_CONFIG` 可以替换它；CLI 使用顶层 `--config` 显式选择文件。
+1. 选择主配置。调用方显式传入 `--config PATH` 时固定使用该文件；默认 `--config auto` 先接受 `AGILE_AGENT_CONFIG`，否则将 `x86_64/AMD64` 映射到 `configs/agent_pipeline.yaml`，将 `aarch64/ARM64` 映射到 `configs/agent_pipeline_ascend310b.yaml`。ARM 设置 `AGILE_AGENT_ASCEND_RELEASE` 时优先使用该 release 内的配置。
 2. 对值完全等于 `${ENV_NAME}` 的字符串做环境变量展开。当前受控配置没有这类占位符。
 3. 应用重复的 `--set KEY=VALUE` 或 `AGILE_AGENT_OVERRIDES` 中的临时覆盖。值使用 YAML 语义解析，因此数字、布尔值和 `null` 保留其类型。
 4. 校验 schema、已知字段、数值范围、后端契约和发布资产身份。
-5. 添加 `_config_path`、`_config_overrides` 和 `_config_sha256` 运行时元数据。
+5. 添加 `_config_path`、`_config_overrides`、`_config_sha256` 和 `_runtime_platform` 运行时元数据。后者记录主机架构、后端、设备族、模型格式及选择来源，不写回 YAML，也不参与配置 SHA256。
 
 相对路径以仓库根目录为基准。`runtime.local_python: null` 表示使用当前 Python 解释器。
 
 常用查看和校验命令：
 
 ```bash
+agile-agent config validate
+agile-agent config get inference.backend
 agile-agent --config configs/agent_pipeline.yaml config validate
 agile-agent --config configs/agent_pipeline_ascend310b.yaml config validate
 agile-agent --config configs/agent_pipeline.yaml config show --effective
@@ -198,17 +200,18 @@ Ascend 内容执行门控使用 `skip_specialist_on_scene_and_base_evidence_v1`�
 
 | 变量 | 必需性 | 默认值 | 用途 |
 | --- | --- | --- | --- |
-| `AGILE_AGENT_CONFIG` | 可选 | `configs/agent_pipeline.yaml` | 替换 Web/app 调用 `load_config()` 时的默认主配置；Ascend systemd 服务将它设为 release-local YAML |
+| `AGILE_AGENT_CONFIG` | 可选 | `auto` | 覆盖 Web、CLI 与 app 的自动主配置选择；Ascend systemd 服务将它设为 release-local YAML |
+| `AGILE_AGENT_ASCEND_RELEASE` | ARM 可选 | 未设置；专用 Ascend 启停脚本使用当前正式 release | `auto` 模式下从指定 release 读取 Ascend 配置与 OM 映射 |
 | `AGILE_AGENT_OVERRIDES` | 可选 | 空列表 | JSON 字符串数组，例如 `["runtime.server_port=8503"]` |
-| `AGILE_AGENT_PYTHON` | 可选 | 启动/导出读取 `.agent-python`，其次 `.venv/bin/python` | 显式指定 x86 环境引导、启动与 TensorRT 导出所用 Python |
+| `AGILE_AGENT_PYTHON` | 可选 | x86 读取 `.agent-python`/现有环境，ARM 读取 `AGILE_AGENT_ASCEND_ENV` | 显式指定启动、`doctor`、环境引导与 TensorRT 导出所用 Python |
 | `PYTHON_BIN` | 可选 | 自动寻找 Python 3.12/3.11/3.10 | `bootstrap_x86.sh` 创建 `.venv` 时的 Python |
 | `VIRTUAL_ENV` | 可选 | 未设置 | `bootstrap_x86.sh` 可复用的已激活 venv |
 | `CONDA_PREFIX` | 可选 | 未设置 | `bootstrap_x86.sh` 可复用的已激活 Conda 环境 |
 | `PYTORCH_INDEX_URL` | 可选 | `https://download.pytorch.org/whl/cu124` | x86 bootstrap 的 PyTorch wheel 索引 |
 | `TORCH_VERSION` | 可选 | `2.5.1+cu124` | x86 bootstrap 在 CUDA 栈不可用时安装的 PyTorch 版本 |
 | `TORCHVISION_VERSION` | 可选 | `0.20.1+cu124` | 与 `TORCH_VERSION` 配套的 torchvision 版本 |
-| `AGILE_AGENT_ASCEND_RELEASE` | 可选 | `/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2` | Ascend 启停脚本使用的 release 根目录 |
 | `AGILE_AGENT_ASCEND_ENV` | 可选 | `/usr/local/miniconda3/envs/agileagent` | Ascend 服务的 Conda 环境 |
+| `AGILE_AGENT_CANN_ENV` | 可选 | `/usr/local/Ascend/ascend-toolkit/set_env.sh` | 统一启动脚本在 ARM 上加载的 CANN 环境脚本 |
 | `AGILE_AGENT_ASCEND_PID_FILE` | 可选 | `$AGILE_AGENT_ASCEND_RELEASE/agent-web.pid` | Ascend 启停脚本的 PID 文件 |
 | `AGILE_AGENT_ASCEND_PORT` | 可选 | `8501` | Ascend 直接启动端口；systemd 正式主实例设为 `18501` |
 | `AGILE_AGENT_ASCEND_USER` | 可选 | `HwHiAiUser` | 安装 Ascend 主/回滚 systemd 服务的运行用户 |
