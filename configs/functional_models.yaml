@@ -2,7 +2,7 @@ schema_version: 2
 generation_registry: models/generations.json
 deployment_manifest:
   path: models/manifest.json
-  sha256: a538e8e905a1cfe1f790d3aea9168c122a04ba492694468f991d80f800c7cce8
+  sha256: 0e66ab6ce94938f904fad10660a9c9e9db49831036a0e98c0d82692a3a991ce2
 
 models:
   - id: scene_sensor_net_v1
@@ -18,7 +18,7 @@ models:
       - path: models/context/scene_sensor_net.pt
         sha256: aa99a0e58db1f80b0b6e0cc0e5049b6dc39e88f4349d2e7c362b1e2a25b83a7e
         runtime: x86_gpu
-      - path: models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om
+      - path: models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/scene_sensor_net.om
         sha256: c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9
         runtime: ascend_310b
     evidence:
@@ -44,12 +44,12 @@ models:
       - path: models/production/incremental_detection/four_class_base_detector.pt
         sha256: 105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd
         runtime: x86_gpu
-      - path: models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om
+      - path: models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/base_detector.om
         sha256: 56570c8ccac80beef10d623f40bd20e26dbf310dc1ba93c80ff607b9f6df7ae0
         runtime: ascend_310b
     evidence:
       path: models/manifest.json
-      sha256: a538e8e905a1cfe1f790d3aea9168c122a04ba492694468f991d80f800c7cce8
+      sha256: 0e66ab6ce94938f904fad10660a9c9e9db49831036a0e98c0d82692a3a991ce2
     runtime:
       x86_gpu: true
       ascend_310b: true
@@ -71,12 +71,12 @@ models:
       - path: models/production/incremental_detection/incremental_detector.pt
         sha256: 0ab0c6ed0117b75ab9ee105e9f109ccad96d988156d00fa4c4c0b9599e424a2a
         runtime: x86_gpu
-      - path: models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om
+      - path: models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/incremental_detector.om
         sha256: d12ccf5b4c07ea97b8be09ff4cdea02463cf83ec68736ae6fd7451a3e0fcd87b
         runtime: ascend_310b
     evidence:
       path: models/manifest.json
-      sha256: a538e8e905a1cfe1f790d3aea9168c122a04ba492694468f991d80f800c7cce8
+      sha256: 0e66ab6ce94938f904fad10660a9c9e9db49831036a0e98c0d82692a3a991ce2
     runtime:
       x86_gpu: true
       ascend_310b: true

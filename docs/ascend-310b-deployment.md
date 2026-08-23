@@ -1,13 +1,13 @@
 <!-- generated-by: gsd-doc-writer -->
 # Ascend 310B 部署实现
 
-截至 2026-08-23，Ascend310B1 production 是 4+2 独立 YOLO26s 三-OM release：
+截至 2026-08-24，Ascend310B1 production 是 4+2 独立 YOLO26s 三-OM release：
 
 ```text
-/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 ```
 
-它已经完成 ATC 转换、候选评分、独立复跑、正式提升以及公共 `8501` 两轮部署后复验。回滚 listener 物理监听 `8501`；公共请求由一条精确 loopback NAT 规则进入 `18501` 主实例，`8502` 保留给候选。
+它已经完成 ATC 转换、候选评分、独立复跑、正式提升以及公共 `8501` 三轮 batch 部署后复验。回滚 listener 物理监听 `8501`；公共请求由一条精确 loopback NAT 规则进入 `18501` 主实例，`8502` 保留给候选。
 
 ## 正式运行结构
 
@@ -31,7 +31,7 @@
 | Incremental YOLO26s | patrol_boat、armored_vehicle | uint8 NHWC `[1,608,736,3]`；E2E `[1,300,6]` |
 | Scene-SensorNet | IR/SAR 与 air/forest/sea/urban 概率 | uint8 NHWC `[1,160,160,3]` |
 
-两个检测 OM 的 ATC 输入声明为 NCHW `images:1,3,608,736`，AIPP 接收 NHWC uint8。六类活动阈值与计分请求阈值均为 `0.10`。
+两个检测 OM 的 ATC 输入声明为 NCHW `images:1,3,608,736`，AIPP 接收 NHWC uint8。计分请求置信度为 `0.01`，六类活动阈值为 `0=.075, 1=.05, 2=.05, 3=.05, 4=.20, 5=.50`，并在阈值前执行冻结的 Base/Specialist logit 校准。
 
 实现入口：
 
@@ -65,10 +65,10 @@ agileagent-ascend310b-route.service
 可版本化模型包：
 
 ```text
-models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/
+models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 ```
 
-包内包含三个 OM、对应 source checkpoint/ONNX/AIPP/ATC 日志、构建清单、正式配置、冻结预测、精度报告、候选性能报告以及两轮公共 `8501` 性能报告。单文件均低于 GitHub 100 MB，不需要 Git LFS。
+包内包含三个 OM、对应 source checkpoint/ONNX/AIPP/ATC 日志、构建清单、正式配置、冻结预测、精度报告、候选性能报告以及公共 `8501` 三轮 batch 性能报告。单文件均低于 GitHub 100 MB，不需要 Git LFS。
 
 在已安装 CANN `7.0.RC1` 和命名环境 `agileagent` 的板端执行：
 
@@ -88,7 +88,7 @@ chmod +x scripts/materialize_ascend310b_full_score_release.sh
 新板没有回滚 listener 时可以直接监听公共端口：
 
 ```bash
-RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
 AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
 AGILE_AGENT_ASCEND_PORT=8501 \
@@ -102,7 +102,7 @@ AGILE_AGENT_ASCEND_PORT=8501 \
 以 root 权限执行安装器，第二个参数必须是已经验证且能够在 `8501` ready 的回滚 release：
 
 ```bash
-PRIMARY=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+PRIMARY=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 ROLLBACK=/home/HwHiAiUser/agileagent/releases/ROLLBACK_RELEASE
 
 sudo "$PRIMARY/src/scripts/install_ascend310b_primary_services.sh" \
@@ -178,23 +178,22 @@ curl -fsS http://127.0.0.1:8501/api/health
 
 | 指标 | 实测 | 满分门槛 |
 | --- | ---: | ---: |
-| Base mAP50 | `0.8256706047` | ≥0.80 |
-| New-mAP50 | `0.6188591828` | ≥0.60 |
+| Base mAP50 | `0.8166630282` | ≥0.80 |
+| New-mAP50 | `0.6114608956` | ≥0.60 |
 | KRR | `1.0000000000` | ≥0.95 |
-| 候选 batch 中位 FPS | `39.3468 / 39.4244` | ≥30 |
-| 公共 `8501` 中位 FPS | `39.5726 / 39.5883` | ≥30 |
+| lock / mixed dev 候选中位 FPS | `38.3877 / 39.1389` | ≥30 |
+| 公共 `8501` 中位 FPS | `38.6623` | ≥30 |
 
-Full-mAP50 为 `0.7249274787`。公共 `8501` 两轮逐轮 FPS：
+Full-mAP50 为 `0.7220053258`。公共 `8501` 部署后逐轮 FPS：
 
-- `39.5726 / 39.5804 / 39.3933`
-- `39.5883 / 39.5023 / 39.6668`
+- `38.5802 / 38.6698 / 38.6623`
 
-诊断项为 precision `0.677551`、recall `0.661111`、误激活率 `0.466667`。误激活率表示 75 张不含新增类的图像中有 35 张至少激活一个新增类；它不属于四项赛题淘汰门槛。
+诊断项为 precision `0.729167`、recall `0.612698`、误激活率 `0.226667`。误激活率表示 75 张不含新增类的图像中有 17 张至少激活一个新增类；它不属于四项赛题淘汰门槛。
 
 原始证据：
 
 ```text
-models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/
+models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/
 ```
 
 ## 重新测量所需数据
@@ -204,7 +203,7 @@ models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/
 | 仅仓库 | 完整性、release verifier、配置和包内报告 |
 | 至少 20 张契约 PNG | 30 次预热与三轮 20 图 batch FPS |
 | 89 图及 YOLO 标签 | 重新冻结预测并计算 Base/New/KRR/Full-mAP50 |
-| 同版 89 图标签 | 对包内 `frozen-predictions.jsonl` 重新计分 |
+| 同版 89 图标签 | 对包内 `frozen-predictions-post-promotion.jsonl` 重新计分 |
 
 输入契约为 `640×512`、8-bit 灰度/RGB/RGBA PNG。
 
@@ -220,7 +219,7 @@ models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/
 ./scripts/build_ascend_yolo26_e2e_oms.sh \
   /path/to/onnx-dir \
   /home/HwHiAiUser/agileagent/candidates/CANDIDATE_ID/build \
-  /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/release-build-manifest.json
+  /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/provenance/release-build-manifest.json
 ```
 
 脚本固定 `Ascend310B1`、`mixed_float16`、检测输入 `images:1,3,608,736`，并验证 Base、Specialist、Scene 三组来源资产。

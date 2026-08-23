@@ -20,7 +20,7 @@ def test_three_distinct_functional_models_are_registered() -> None:
     assert result["all_x86_gpu_ready"] is True
     assert result["all_ascend_310b_ready"] is True
     assert result["deployment_manifest"]["release_id"] == (
-        "20260823-4plus2-yolo26-content-gate-v2"
+        "20260824-4plus2-yolo26-runtime-calibration-v1"
     )
     assert result["strict_class_incremental"]["true_class_incremental_verified"] is True
     assert result["strict_class_incremental"]["production_profile"]["model_id"] == "incremental_detector"
@@ -69,7 +69,7 @@ def test_functional_registry_rejects_wrong_production_ascend_artifact(
     )
     wrong_path = (
         "models/ascend310b/full-score/"
-        "20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om"
+        "20260824-4plus2-yolo26-runtime-calibration-v1/om/base_detector.om"
     )
     incremental["artifacts"][1] = {
         "path": wrong_path,

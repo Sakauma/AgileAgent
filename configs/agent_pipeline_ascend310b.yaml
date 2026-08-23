@@ -6,7 +6,7 @@ runtime:
   server_host: 127.0.0.1
   server_port: 18501
 web:
-  generation_registry: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/generations.json
+  generation_registry: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/provenance/generations.json
   generation_channel: production
   functional_registry: configs/functional_models.yaml
 inference:
@@ -18,7 +18,7 @@ inference:
   batch_size: 1
   confidence_min: 1.0e-05
   confidence_max: 1.0
-  confidence_default: 0.1
+  confidence_default: 0.01
   warmup_iterations: 1
   warmup_batch_size: 1
   warmup_width: 640
@@ -37,13 +37,6 @@ routing:
   conflict_base_confidence: 0.5
   specialist_margin: 0.15
   preserve_base_class_owners: true
-  # 736 OM 的置信度分布独立校准，先采用更保守的全类别 IoU 仲裁。
-  cross_class_suppression:
-    enabled: true
-    strategy: highest_confidence
-    scope: all_classes
-    iou: 0.9
-    smaller_box_coverage: null
   detection_evidence_weight: 0.7
   context_evidence_weight: 0.3
   neutral_context_score: 0.5
@@ -52,6 +45,24 @@ routing:
   parallel_context_execution: true
   parallel_context_batch_execution: false
   max_model_workers: 3
+  score_calibration:
+    enabled: true
+    method: logit_affine
+    source_split: mixed_dev_only
+    sources:
+      frozen_base_model:
+        temperature: 1.5
+        bias: 0.0
+      incremental_model:
+        temperature: 1.0
+        bias: -0.5
+  cross_class_suppression:
+    enabled: true
+    strategy: highest_confidence
+    scope: all_classes
+    iou: 0.9
+    smaller_box_coverage: 0.95
+    incremental_over_base_margin: 0.0
 decoding:
   backend: opencv
   workers: 1
@@ -127,11 +138,11 @@ performance:
   benchmark_rounds: 10
   warmup_requests: 30
   benchmark_split: splits/strict_4plus2/mixed_lock.txt
-  report_root: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/reports
+  report_root: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/reports
   concurrent_requests: 1
   batch_probe_size: 20
 generation:
-  registry: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/generations.json
+  registry: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/provenance/generations.json
   runtime_registry: data/generation_registry/runtime.json
   recheck_lock_split: splits/strict_4plus2/base_lock.txt
   report_root: reports/generation_rechecks
@@ -230,25 +241,25 @@ ascend_backend:
     - 230
   validated: true
   validation_candidate: false
-  validation_report: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/validation/validation-summary.json
-  validation_report_sha256: b759459239737b50fe2c4c410b54cdf273e0df78e877b7f97b3b4f92e48c1819
-  build_manifest: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/release-build-manifest.json
-  build_manifest_sha256: ff443710df7a2a9f5cd7b10c0247b1e19dc324dc099db10f084244ea811a5d8b
+  validation_report: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/validation/validation-summary.json
+  validation_report_sha256: 0ce240ad120f35912564f603c4984012dcdfe2e812b6a46d6f62550c76dbb641
+  build_manifest: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/provenance/release-build-manifest.json
+  build_manifest_sha256: 64b15d0eb28810d499cba9ce27ab4c67110decb6fa5b6ab8429c1f43c6ddc133
   models:
     models/production/incremental_detection/four_class_base_detector.pt:
-      path: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om
+      path: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/om/base_detector.om
       sha256: 56570c8ccac80beef10d623f40bd20e26dbf310dc1ba93c80ff607b9f6df7ae0
       output_contract: yolo26_e2e_v1
       max_det: 300
       class_count: 4
     models/production/incremental_detection/incremental_detector.pt:
-      path: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om
+      path: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/om/incremental_detector.om
       sha256: d12ccf5b4c07ea97b8be09ff4cdea02463cf83ec68736ae6fd7451a3e0fcd87b
       output_contract: yolo26_e2e_v1
       max_det: 300
       class_count: 2
   context_model:
-    path: /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om
+    path: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/om/scene_sensor_net.om
     sha256: c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9
 tensorrt_backend:
   expected_version: null

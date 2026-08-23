@@ -9,7 +9,7 @@ AgileAgent 以 UTF-8 YAML 管理运行、训练、增量协议和 Ascend310B 发
 | --- | --- | --- |
 | `configs/agent_pipeline.yaml` | YAML, schema 3 | x86/NVIDIA CUDA 服务、增量工作台、路由、性能和发布门禁的主配置 |
 | `configs/agent_pipeline_ascend310b.yaml` | YAML, schema 3 | Ascend310B1 正式服务配置，登记 Base、Incremental 和 Scene-SensorNet 三个 OM |
-| `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/configs/agent_pipeline_ascend310b.yaml` | YAML, schema 3 | Ascend310B v2 发布包内的自包含配置；当前与仓库根配置字节一致 |
+| `models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/configs/agent_pipeline_ascend310b.yaml` | YAML, schema 3 | Ascend310B v2 发布包内的已验证部署配置 |
 | `configs/functional_models.yaml` | YAML, schema 2 | Scene-SensorNet、四类 Base 检测器和二类 Incremental 专家的功能模型注册表 |
 | `configs/incremental_detection_policy.yaml` | YAML, schema 4 | Base learning、Incremental learning、System calibration 和 Joint evaluation 的数据与权重更新边界 |
 | `configs/incremental_round_registry_4plus2.yaml` | YAML, schema 1 | 4+2 类别注册表、两轮注入顺序、split、局部/全局 ID 映射和父子代际 |
@@ -104,7 +104,8 @@ inference:
 - `runtime.mode` 必须为 `local`，`runtime.server_host` 必须是回环地址，`default_device` 必须是非负设备编号。
 - `inference.backend` 可以是 `ultralytics_cuda`、`tensorrt_engine`、`tensorrt_native` 或 `ascend_acl`；置信度默认值必须位于 `confidence_min` 和 `confidence_max` 之间。
 - `routing.detection_evidence_weight + routing.context_evidence_weight` 必须等于 `1.0`。
-- `routing.cross_class_suppression` 仅接受 `highest_confidence` 与 `all_classes`；`iou` 必须位于 `[0.01, 1.0]`，`smaller_box_coverage` 可为同一范围内的数值或 `null`。
+- `routing.cross_class_suppression` 仅接受 `highest_confidence` 与 `all_classes`；`iou`、`smaller_box_coverage` 和 `incremental_over_base_margin` 都必须位于对应的 `[0,1]` 范围。
+- 启用 `routing.score_calibration` 时，必须同时登记 `frozen_base_model` 与 `incremental_model` 的 logit-affine temperature/bias，并标明 `source_split: mixed_dev_only`。
 - `logging.request_bodies` 必须为 `false`；上传的图像和数据包不写入请求日志。
 - `incremental.learning_data_scope` 必须为 `incremental_dataset_only`，支持模式必须同时包含 `class_incremental` 和 `target_incremental`。
 - `model.expected_sha256`、已验收后端的模型资产和发布报告必须登记有效身份。
@@ -149,7 +150,7 @@ inference:
 
 x86 的 `soft_threshold_penalty` 根据 Scene-SensorNet 的 `air/forest/sea/urban` 已知类概率调整逐类有效阈值，`hard_routing: false` 使 Base 和 Incremental 类别 owner 保持固定。
 
-`routing.cross_class_suppression` 是数据来源无关的正式后处理：Web、CLI、训练集回放、dev、lock 和未来无标签图像走同一规则，不读取文件名或标签，也不维护类别对白名单。同类重复框仍由模型后端和 class-aware NMS 处理；这一层只在不同类别框高度重叠时按置信度仲裁。Ascend 736 OM 使用独立校准的保守参数 `iou=0.90`、`smaller_box_coverage=null`。
+`routing.cross_class_suppression` 是数据来源无关的正式后处理：Web、CLI、训练集回放、dev、lock 和未来无标签图像走同一规则，不读取文件名或标签，也不维护类别对白名单。同类重复框仍由模型后端和 class-aware NMS 处理；这一层只在不同类别框高度重叠时按校准后置信度仲裁。Ascend 736 OM 的冻结参数为 `iou=0.90`、`smaller_box_coverage=0.95`。
 
 增量工作台的默认训练值为 `imgsz=1280`、`batch=18`、`epochs=500`、`patience=50`、`optimizer=AdamW`、`lr0=0.001`、`seed=20260821`、`deterministic=true` 和 `amp=true`。数据拆分使用 `validation_fraction=0.20`、`lock_fraction=0.20` 与 `split_seed=20260821`。
 
@@ -172,7 +173,7 @@ Scene-SensorNet 的单独训练配置使用 `224` 输入、`batch=256`、`epochs
 
 ## Ascend310B v2 当前值
 
-正式发布 ID 为 `20260823-4plus2-yolo26-content-gate-v2`。仓库根 Ascend 配置与发布包内配置登记了同一组 release-local 模型资产、构建清单和验证摘要，但当前不再字节相同：根配置已加入待上板验证的全类别跨类别重叠抑制，immutable release 仍保留上一次通过四项门禁的配置。在候选 `8502` 重跑精度与 FPS gate 并产生新 release 前，正式 `8501` 不替换。
+正式发布 ID 为 `20260824-4plus2-yolo26-runtime-calibration-v1`。仓库根 Ascend 配置与发布包内配置登记同一组 release-local OM、构建清单、验证摘要和冻结运行时策略。根配置另保留当前 strict 4+2 工作台与 x86/TensorRT 默认值，因此不要以整文件字节相等代替 release 资产验证。
 
 | 配置 | 当前值 |
 | --- | --- |
@@ -184,7 +185,7 @@ Scene-SensorNet 的单独训练配置使用 `224` 输入、`batch=256`、`epochs
 | 检测输出 | Base 和 Incremental 均为 `[1,300,6]` (`yolo26_e2e_v1`) |
 | context | 真实 `scene_sensor_net.om`，`context_mode=model` |
 | 预处理/调度 | `dvpp`、`async_stream`、`unified_enqueue`、`pageable` |
-| 请求默认置信度 | `0.10` |
+| 请求默认置信度 | `0.01` |
 | batch | `1` |
 | 性能目标 | `30 FPS`，p95 `35 ms`，30 次预热 |
 
@@ -196,9 +197,9 @@ Scene-SensorNet 的单独训练配置使用 `224` 输入、`batch=256`、`epochs
 
 Ascend 内容执行门控使用 `skip_specialist_on_scene_and_base_evidence_v1`：当 `air` 概率至少 `0.5` 且 Base 出现全局类 `1` 证据时跳过 Incremental 专家。线上输入只包含场景概率和 Base 检测结果。
 
-当前 x86 根配置使用全类别 `IoU=0.50` 与小框覆盖率 `0.95` 抑制；Ascend 候选根配置考虑 736 OM 的置信度分布，使用更保守的全类别 `IoU=0.90`，不启用小框覆盖率条件。
+当前 x86 根配置使用全类别 `IoU=0.50` 与小框覆盖率 `0.95` 抑制。Ascend 在 mixed dev 上冻结为 `IoU=0.90`、小框覆盖率 `0.95`，并在阈值与仲裁前分别对 Base 和 Specialist 执行 logit-affine 校准。Base 为 temperature `1.5` / bias `0`，Specialist 为 temperature `1.0` / bias `-0.5`。
 
-`configs/ascend310b/full_score_method.yaml` 的训练契约使用独立 YOLO26s、`input_size=[608,736]`、`epochs=500`、`patience=50`、`seed=3407`、`optimizer=AdamW`、`lr0=0.001` 和确定性 AMP 训练。候选端口为 `8502`，正式公共端口为 `8501`，阈值搜索从 old/new `0.10/0.10` 开始。
+`configs/ascend310b/full_score_method.yaml` 的训练契约使用独立 YOLO26s、`input_size=[608,736]`、`epochs=500`、`patience=50`、`seed=3407`、`optimizer=AdamW`、`lr0=0.001` 和确定性 AMP 训练。候选端口为 `8502`，正式公共端口为 `8501`；系统在 mixed dev 上搜索 `5,476` 组参数，不读取 lock 选参。
 
 ## 环境变量
 

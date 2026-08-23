@@ -189,7 +189,7 @@ python tools/60_train_scene_sensor.py \
 
 ```bash
 (
-  cd models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2
+  cd models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1
   sha256sum -c SHA256SUMS
 )
 ```
@@ -208,7 +208,7 @@ python tools/60_train_scene_sensor.py \
 物化脚本会检查预构建包，复制受控源码/资产，并执行正式 release 验证器。也可在 release 目录上直接复核：
 
 ```bash
-RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
   /usr/local/miniconda3/envs/agileagent/bin/python \
   "$RELEASE/src/tools/95_verify_ascend_release.py" \

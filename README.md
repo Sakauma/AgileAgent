@@ -18,7 +18,7 @@ AgileAgent 是面向 IR/SAR 图像的可审计 4+2 目标检测与类别增量�
 | 平台 | 正式模型组合 | 运行资产 |
 | --- | --- | --- |
 | x86/CUDA | 四类 Base YOLO26s、二类 Incremental YOLO26s、Scene-SensorNet | [`models/production/incremental_detection/`](models/production/incremental_detection/) 与 [`models/context/`](models/context/) |
-| Ascend310B v2 | Base、Incremental、Scene-SensorNet 三个独立 OM | [`20260823-4plus2-yolo26-content-gate-v2`](models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/README.md) |
+| Ascend310B v2 | Base、Incremental、Scene-SensorNet 三个独立 OM | [`20260824-4plus2-yolo26-runtime-calibration-v1`](models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/README.md) |
 
 Scene-SensorNet 输出 IR/SAR 传感器概率和 air、forest、sea、urban 闭集场景概率。x86/CUDA 使用场景概率调整六类逐类有效阈值；Ascend310B v2 先并发执行 Base 与 Scene，并根据场景和 Base 检测证据决定是否执行 Incremental OM。在线门控由图像内容、场景概率和检测结果共同驱动。
 
@@ -37,17 +37,18 @@ Scene-SensorNet 在 mixed lock 上的 sensor / scene / joint accuracy 为 `0.988
 
 ### Ascend310B v2 release
 
-正式 release `20260823-4plus2-yolo26-content-gate-v2` 使用 `608×736` AIPP 输入，两个 YOLO26s 检测 OM 均输出 `[1,300,6]`：
+正式 release `20260824-4plus2-yolo26-runtime-calibration-v1` 使用 `608×736` AIPP 输入，两个 YOLO26s 检测 OM 均输出 `[1,300,6]`：
 
 | 指标 | 结果 |
 | --- | ---: |
-| Base mAP50 | `0.825671` |
-| New-mAP50 | `0.618859` |
-| Full-mAP50 | `0.724927` |
+| Base mAP50 | `0.816663` |
+| New-mAP50 | `0.611461` |
+| Full-mAP50 | `0.722005` |
 | KRR | `1.000000` |
-| 公共 `8501` 两次 batch 中位 FPS | `39.5726 / 39.5883` |
+| 新类误激活 | `17/75 = 0.226667` |
+| 公共 `8501` batch 中位 FPS | `38.6623` |
 
-上表是当前 immutable release 在新的跨类别抑制启用前的真实板端结果。新后处理的冻结预测回放为 Base mAP50 `0.825860`、New-mAP50 `0.618859`、KRR `1.000000`，精度门禁均通过；修改后 FPS 尚需在候选 `8502` 重新上板。冻结评分见 [`validation/score.json`](models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/score.json)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
+上表是当前 immutable release 的真实 OM lock 结果。发布前候选与发布后 release-local 复验完全一致，四项满分门禁均通过；误激活较上一代 `35/75` 降至 `17/75`。冻结评分见 [`validation/score.json`](models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/score.json)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
 
 ## 安装
 
@@ -144,7 +145,7 @@ curl -fsS -F "file=@/path/to/image.png;type=image/png" \
 ```bash
 ./scripts/materialize_ascend310b_full_score_release.sh
 
-RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
 AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
 AGILE_AGENT_ASCEND_PORT=8501 \

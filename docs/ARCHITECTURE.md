@@ -39,9 +39,9 @@ graph TD
 
 | 功能模型 | x86/CUDA 资产 | Ascend310B1 v2 资产 | 输出与职责 |
 | --- | --- | --- | --- |
-| Scene-SensorNet | `models/context/scene_sensor_net.pt` | `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om` | IR/SAR 概率及 air、forest、sea、urban 闭集场景概率 |
-| 四类 Base YOLO26s | `models/production/incremental_detection/four_class_base_detector.pt` | `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om` | 全局类 0–3 |
-| 二类增量 YOLO26s | `models/production/incremental_detection/incremental_detector.pt` | `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om` | 全局类 4–5 |
+| Scene-SensorNet | `models/context/scene_sensor_net.pt` | `models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/scene_sensor_net.om` | IR/SAR 概率及 air、forest、sea、urban 闭集场景概率 |
+| 四类 Base YOLO26s | `models/production/incremental_detection/four_class_base_detector.pt` | `models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/base_detector.om` | 全局类 0–3 |
+| 二类增量 YOLO26s | `models/production/incremental_detection/incremental_detector.pt` | `models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/incremental_detector.om` | 全局类 4–5 |
 
 类别所有权由 `models/generations.json` 固定：
 
@@ -74,6 +74,7 @@ Base 本地类 0–3 直接映射到全局类 0–3，增量专家本地类 0–
   -> 场景概率与 Base 检测双证据内容门控
   -> 按门控结果执行或跳过二类增量专家
   -> Base 与专家输出映射到全局类别
+  -> 按模型来源执行冻结 logit-affine 置信度校准
   -> 按已冻结的逐类阈值和场景亲和度计算有效阈值
   -> 固定 owner 合并与跨类冲突仲裁
   -> class-aware NMS
@@ -92,14 +93,15 @@ Base 本地类 0–3 直接映射到全局类 0–3，增量专家本地类 0–
   -> 收集场景概率与 Base 检测
   -> air 概率与 small_aircraft 检测双证据内容门控
   -> 按门控结果执行或跳过二类增量专家
+  -> Base/Specialist 置信度校准与逐类阈值
   -> 固定 owner 融合与 class-aware NMS
   -> 全类别最高置信度重叠抑制
   -> 六类 API 响应和 ACL/DVPP 耗时
 ```
 
-`configs/agent_pipeline_ascend310b.yaml` 选择 `ascend_acl` 和 `independent_yolo26_e2e_v1`。Base 与 Incremental OM 接收 uint8 NHWC `[1,608,736,3]`，各自输出 `[1,300,6]`；Scene-SensorNet OM 接收 uint8 NHWC `[1,160,160,3]`。内容门控策略为：当 `air >= 0.5` 且 Base 检出 `small_aircraft` 时跳过增量专家，其余输入执行增量专家。
+`configs/agent_pipeline_ascend310b.yaml` 选择 `ascend_acl` 和 `independent_yolo26_e2e_v1`。Base 与 Incremental OM 接收 uint8 NHWC `[1,608,736,3]`，各自输出 `[1,300,6]`；Scene-SensorNet OM 接收 uint8 NHWC `[1,160,160,3]`。内容门控策略为：当 `air >= 0.5` 且 Base 检出 `small_aircraft` 时跳过增量专家，其余输入执行增量专家。mixed dev 冻结的 logit 校准、逐类阈值、场景软惩罚与重叠仲裁对 Web、CLI 和评分路径一致生效。
 
-正式包 `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/` 自包含三个 OM、正式配置、源 checkpoint、ONNX、AIPP、ATC 日志、构建来源和冻结验证报告。板端主实例监听内部 `18501`，loopback 路由将公共 `8501` 指向主实例，`8502` 用于隔离候选。
+正式包 `models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/` 自包含三个 OM、正式配置、源 checkpoint、ONNX、AIPP、ATC 日志、构建来源和冻结验证报告。板端主实例监听内部 `18501`，loopback 路由将公共 `8501` 指向主实例，`8502` 用于隔离候选。
 
 ## 训练、增量与发布数据流
 

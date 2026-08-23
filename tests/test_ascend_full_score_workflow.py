@@ -17,7 +17,7 @@ RELEASE = (
     / "models"
     / "ascend310b"
     / "full-score"
-    / "20260823-4plus2-yolo26-content-gate-v2"
+    / "20260824-4plus2-yolo26-runtime-calibration-v1"
 )
 
 
@@ -83,10 +83,10 @@ def test_full_score_method_pins_current_independent_yolo26_contract() -> None:
         "color_types": [0, 2, 6],
     }
     assert method["reference_result"]["base_map50"] == pytest.approx(
-        0.8256706047
+        0.8166630282
     )
     assert method["reference_result"]["new_map50"] == pytest.approx(
-        0.6188591828
+        0.6114608956
     )
     assert method["reference_result"]["krr"] == 1.0
     assert min(

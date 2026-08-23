@@ -10,7 +10,7 @@ usage() {
 不训练、不运行 ATC、不升级 CANN，也不修改 8501/8502 上的进程。
 
 固定目标：
-  /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+  /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 EOF
 }
 
@@ -29,7 +29,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-RELEASE_ID=20260823-4plus2-yolo26-content-gate-v2
+RELEASE_ID=20260824-4plus2-yolo26-runtime-calibration-v1
 PACKAGE_ROOT="${REPO_ROOT}/models/ascend310b/full-score/${RELEASE_ID}"
 RELEASE_PARENT=/home/HwHiAiUser/agileagent/releases
 RELEASE_ROOT="${RELEASE_PARENT}/${RELEASE_ID}"

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "input_mode": "unlabeled_images",
+  "labels_read": false,
+  "config": "/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/configs/agent_pipeline_ascend310b.yaml",
+  "config_sha256": "2f248947b464c7e53cfff652cd92d0037856843250c0b172003c2c01e50ef08d",
+  "context_override": null,
+  "model_overrides": {},
+  "confidence": 0.01,
+  "calibration_probe": false,
+  "probe_audit": null,
+  "encoded": true,
+  "image_count": 89,
+  "prediction_count": 752,
+  "mean_wall_ms": 36.22752038202244,
+  "predictions": "/home/HwHiAiUser/agileagent/reports/ascend310b/20260824-runtime-calibration-v1/production-post-promotion/predictions.jsonl",
+  "predictions_sha256": "521570a6099db6168ebc814ed7b0e1ad0461a1a219e6292cb1c2b5f991751fd0",
+  "passed": true
+}

@@ -80,12 +80,13 @@ Scene-SensorNet 为双头 CNN，权重位于 `models/context/scene_sensor_net.pt
 
 | 指标 | 当前 immutable release 实测 |
 | --- | ---: |
-| Base mAP50 | `0.825671` |
-| New-mAP50 | `0.618859` |
+| Base mAP50 | `0.816663` |
+| New-mAP50 | `0.611461` |
 | KRR | `1.000000` |
-| Full-mAP50 | `0.724927` |
-| 公共 8501 两轮 batch 中位 FPS | `39.5726 / 39.5883` |
+| Full-mAP50 | `0.722005` |
+| 新类误激活 | `17/75 = 0.226667` |
+| 公共 8501 batch 中位 FPS | `38.6623` |
 
-上表是新的全类别重叠抑制启用前的板端实测。对同一批 89 张冻结板端预测使用 Ascend 候选规则回放后，Base mAP50 为 `0.825860`、New-mAP50 为 `0.618859`、KRR 为 `1.000000`、Full-mAP50 为 `0.725360`，三项精度门禁均通过。修改后 FPS 必须在候选 `8502` 重新实测，不沿用旧值作为新 release 证据。
+上表是当前 `20260824-4plus2-yolo26-runtime-calibration-v1` 的真实 OM lock 和部署后板端结果。候选与 release-local 复验精度完全一致，四项满分门禁均通过。
 
 完整硬门禁、逐类精度、误激活、场景模型与四组 FPS 见 `docs/current-metrics.md`；模型身份、评分产物和部署入口见 `docs/ascend-310b-current-status.md`。

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RELEASE_ROOT="${AGILE_AGENT_ASCEND_RELEASE:-/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2}"
+RELEASE_ROOT="${AGILE_AGENT_ASCEND_RELEASE:-/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1}"
 PID_FILE="${AGILE_AGENT_ASCEND_PID_FILE:-${RELEASE_ROOT}/agent-web.pid}"
 
 if [[ ! -f "${PID_FILE}" ]]; then

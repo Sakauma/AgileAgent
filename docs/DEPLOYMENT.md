@@ -54,7 +54,7 @@ python scripts/smoke_models.py --load-only
 正式包：
 
 ```text
-models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/
+models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 ```
 
 目标环境为 Ascend310B1、CANN `7.0.RC1` 和 `/usr/local/miniconda3/envs/agileagent`。release 已包含 Base、Incremental、Scene-SensorNet 三个 OM 及构建和验收证据，部署过程无需训练或重新运行 ATC。
@@ -69,7 +69,7 @@ chmod +x scripts/materialize_ascend310b_full_score_release.sh
 固定目标目录：
 
 ```text
-/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 ```
 
 目标已存在时执行只读复核：
@@ -83,7 +83,7 @@ chmod +x scripts/materialize_ascend310b_full_score_release.sh
 未配置回滚 listener 的设备可以直接启动正式实例：
 
 ```bash
-RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
 AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
 AGILE_AGENT_ASCEND_PORT=8501 \
@@ -104,7 +104,7 @@ AGILE_AGENT_ASCEND_PORT=8501 \
 安装或更新服务：
 
 ```bash
-PRIMARY=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+PRIMARY=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 ROLLBACK=/home/HwHiAiUser/agileagent/releases/ROLLBACK_RELEASE
 
 sudo "$PRIMARY/src/scripts/install_ascend310b_primary_services.sh" \

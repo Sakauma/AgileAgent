@@ -1,0 +1,503 @@
+{
+  "schema_version": 2,
+  "class_map": {
+    "0": "soldier",
+    "1": "small_aircraft",
+    "2": "warship",
+    "3": "tank",
+    "4": "patrol_boat",
+    "5": "armored_vehicle"
+  },
+  "models": [
+    {
+      "id": "four_class_base_detector",
+      "display_name": "四类冻结基础检测器",
+      "role": "frozen_base",
+      "backend": "ultralytics",
+      "architecture": "YOLO26s",
+      "path": "models/production/incremental_detection/four_class_base_detector.pt",
+      "sha256": "105b6cb27f31559dc945bfb4bb508fb54ece6c5df40502b306a852b8ac4fa8dd",
+      "imgsz": 1280,
+      "owns_classes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "local_to_global": {
+        "0": 0,
+        "1": 1,
+        "2": 2,
+        "3": 3
+      },
+      "evidence": "4+2 Base 阶段只读取 R1 四类 train/dev；锁定后在 Base lock 评分",
+      "per_class_thresholds": {
+        "0": 0.075,
+        "1": 0.05,
+        "2": 0.05,
+        "3": 0.05
+      },
+      "context_prior": {},
+      "context_gate": {
+        "enabled": false
+      }
+    },
+    {
+      "id": "incremental_detector",
+      "display_name": "二类增量检测专家",
+      "role": "class_incremental_expert",
+      "incremental_mode": "class_incremental",
+      "backend": "ultralytics",
+      "architecture": "YOLO26s",
+      "path": "models/production/incremental_detection/incremental_detector.pt",
+      "sha256": "0ab0c6ed0117b75ab9ee105e9f109ccad96d988156d00fa4c4c0b9599e424a2a",
+      "imgsz": 1280,
+      "owns_classes": [
+        4,
+        5
+      ],
+      "local_to_global": {
+        "0": 4,
+        "1": 5
+      },
+      "per_class_thresholds": {
+        "4": 0.2,
+        "5": 0.5
+      },
+      "calibration_source": "models/production/incremental_detection/calibration.json",
+      "calibration_sources": {
+        "4": "/home/HwHiAiUser/agileagent/reports/ascend310b/20260824-runtime-calibration-v1/search.json",
+        "5": "/home/HwHiAiUser/agileagent/reports/ascend310b/20260824-runtime-calibration-v1/search.json"
+      },
+      "context_prior": {
+        "schema_version": 2,
+        "source_split": "incremental_train_only",
+        "dimensions": [
+          "scene"
+        ],
+        "online_inputs": [
+          "scene_probabilities"
+        ],
+        "label_aware_online_routing": false,
+        "filename_aware_online_routing": false,
+        "per_class": {
+          "4": {
+            "schema_version": 1,
+            "class_id": 4,
+            "class_name": "patrol_boat",
+            "sample_count": 56,
+            "scene": {
+              "air": 0.12243071165448241,
+              "forest": 0.16440275625333164,
+              "sea": 1.0,
+              "urban": 0.16303575719315921
+            }
+          },
+          "5": {
+            "schema_version": 1,
+            "class_id": 5,
+            "class_name": "armored_vehicle",
+            "sample_count": 56,
+            "scene": {
+              "air": 0.09149927230400841,
+              "forest": 0.93914792299818,
+              "sea": 0.48745347124642435,
+              "urban": 1.0
+            }
+          }
+        }
+      },
+      "context_gate": {
+        "enabled": true,
+        "policy": "soft_threshold_penalty",
+        "hard_routing": false,
+        "learning_data_scope": "incremental_train_only",
+        "dimensions": [
+          "scene"
+        ],
+        "max_threshold_penalty": 0.05,
+        "max_threshold_penalties": {
+          "4": 0.05,
+          "5": 0.0
+        },
+        "prior_source": "/home/HwHiAiUser/agileagent/repo/models/production/incremental_detection/incremental_context_prior.json",
+        "prior_sha256": "c102f4b6d1a7de7b712ce117239c3fe20f77fe991f85b6d82b1d15b3e3eb3f29",
+        "online_input": "scene_sensor_net_probabilities"
+      },
+      "metrics": {
+        "new_map50": 0.7733677094868956,
+        "per_class": {
+          "4": {
+            "map50": 0.6910000000000001,
+            "precision": 0.9666666666666667,
+            "recall": 0.6904761904761905,
+            "threshold": 0.57,
+            "max_scene_penalty": 0.65
+          },
+          "5": {
+            "map50": 0.855735418973791,
+            "precision": 0.8163265306122449,
+            "recall": 0.8888888888888888,
+            "threshold": 0.82,
+            "max_scene_penalty": 0.0
+          }
+        }
+      },
+      "deployment_metrics": {
+        "evaluation_semantics": "all_owners_scene_probability_gated_on_mixed_dev_then_frozen_mixed_lock_v2",
+        "overall_precision": 0.66796875,
+        "new_class_precision": 0.8734177215189873,
+        "false_activation_rate_by_class": {
+          "4": 0.012195121951219513,
+          "5": 0.08536585365853659
+        },
+        "diagnostic_only": true
+      },
+      "acceptance": {
+        "official_score_gates_passed": true,
+        "competition_gates_passed": true,
+        "deployment_quality_gates_passed": false,
+        "integrity_gates_passed": true,
+        "passed": true,
+        "diagnostic_warnings": [
+          "lock_precision_below_0_90",
+          "false_activation_rate_above_0_05"
+        ]
+      },
+      "status": "active",
+      "content_execution_gate": {
+        "enabled": true,
+        "policy": "skip_specialist_on_scene_and_base_evidence_v1",
+        "action": "skip_specialist",
+        "scene": "air",
+        "scene_probability_min": 0.5,
+        "base_evidence_class_ids": [
+          1
+        ],
+        "base_evidence_mode": "any",
+        "online_inputs": [
+          "scene_probabilities",
+          "base_detections"
+        ],
+        "label_aware_online_routing": false,
+        "filename_aware_online_routing": false,
+        "learning_data_scope": "frozen_system_calibration"
+      }
+    }
+  ],
+  "generations": [
+    {
+      "id": "base_detection_generation_4plus2",
+      "display_name": "4+2 四类基础检测代际",
+      "parent": null,
+      "classes": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "class_owners": {
+        "0": "four_class_base_detector",
+        "1": "four_class_base_detector",
+        "2": "four_class_base_detector",
+        "3": "four_class_base_detector"
+      },
+      "model_members": [
+        "four_class_base_detector"
+      ],
+      "status": "active",
+      "old_class_ids": [],
+      "new_class_ids": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "updated_class_ids": [],
+      "dataset_fingerprint": "splits/strict_4plus2/manifest.json",
+      "metrics": {
+        "base_dev_map50": 0.8899785910691257,
+        "base_test_map50": 0.8560669777957763,
+        "evaluation_split": "splits/strict_4plus2/base_lock.txt",
+        "image_count": 75,
+        "raw_base_test_map50": 0.8875500761448091,
+        "scene_soft_gating": true
+      }
+    },
+    {
+      "id": "incremental_detection_generation_4plus2",
+      "display_name": "4+2 增量检测生产代际",
+      "run_id": "strict-4plus2-scene-aware-20260822-181928",
+      "parent": "base_detection_generation_4plus2",
+      "classes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "class_owners": {
+        "0": "four_class_base_detector",
+        "1": "four_class_base_detector",
+        "2": "four_class_base_detector",
+        "3": "four_class_base_detector",
+        "4": "incremental_detector",
+        "5": "incremental_detector"
+      },
+      "model_members": [
+        "four_class_base_detector",
+        "incremental_detector"
+      ],
+      "status": "active",
+      "old_class_ids": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "new_class_ids": [
+        4,
+        5
+      ],
+      "updated_class_ids": [],
+      "dataset_fingerprint": "splits/strict_4plus2/manifest.json",
+      "data_compliance": {
+        "compliance": "passed",
+        "lineage_evidence": "strict_4plus2_manifest",
+        "audit_source": "splits/strict_4plus2/manifest.json",
+        "old_raw_image_count": 0,
+        "old_raw_label_count": 0,
+        "old_cache_count": 0,
+        "unverified_cache_count": 0,
+        "base_train_count": 600,
+        "base_dev_count": 75,
+        "base_lock_count": 75,
+        "incremental_train_count": 112,
+        "incremental_dev_count": 14,
+        "incremental_lock_count": 14
+      },
+      "evaluation_lock": {
+        "split_sources": [
+          "splits/strict_4plus2/base_lock.txt",
+          "splits/strict_4plus2/increment_lock.txt"
+        ],
+        "base_split": "splits/strict_4plus2/base_lock.txt",
+        "prediction_scope": "all_owners_on_all_89_images_before_lock_labels",
+        "specialist_local_to_global": {
+          "0": 4,
+          "1": 5
+        }
+      },
+      "metrics": {
+        "base_test_map50": 0.8560669777957763,
+        "old_map50_before": 0.8280599094822771,
+        "old_map50_after": 0.8058064769386335,
+        "new_map50": 0.7733677094868956,
+        "krr": 0.9731258182061283,
+        "full_map50": 0.7949935544547209,
+        "old_prediction_equivalent": false,
+        "per_class": {
+          "4": {
+            "map50": 0.6910000000000001,
+            "precision": 0.9666666666666667,
+            "recall": 0.6904761904761905,
+            "false_activation_rate": 0.012195121951219513,
+            "negative_image_count": 82,
+            "false_activation_image_count": 1,
+            "threshold": 0.57,
+            "max_scene_penalty": 0.65
+          },
+          "5": {
+            "map50": 0.855735418973791,
+            "precision": 0.8163265306122449,
+            "recall": 0.8888888888888888,
+            "false_activation_rate": 0.08536585365853659,
+            "negative_image_count": 82,
+            "false_activation_image_count": 7,
+            "threshold": 0.82,
+            "max_scene_penalty": 0.0
+          }
+        },
+        "cumulative_per_class": {
+          "0": 0.6294990679583363,
+          "1": 0.9182654936974791,
+          "2": 0.9291695755149133,
+          "3": 0.746291770583805,
+          "4": 0.6910000000000001,
+          "5": 0.855735418973791
+        },
+        "overall_precision": 0.66796875,
+        "new_class_precision": 0.8734177215189873,
+        "overall_false_activation_image_count": 14,
+        "image_count": 89,
+        "base_test_image_count": 75,
+        "new_class_image_count": 14,
+        "specialist_count": 1
+      },
+      "acceptance": {
+        "core_metrics_passed": true,
+        "competition_gates_passed": true,
+        "deployment_quality_gates_passed": false,
+        "deployment_recheck_passed": true,
+        "status": "passed",
+        "diagnostic_warnings": [
+          "lock_precision_below_0_90",
+          "false_activation_rate_above_0_05"
+        ]
+      },
+      "lock_recheck": {
+        "status": "completed",
+        "rechecked_at": "2026-08-22T18:19:28.905530+08:00",
+        "evaluation_semantics": "all_owners_scene_probability_gated_on_mixed_dev_then_frozen_mixed_lock_v2",
+        "input_image_count": 89,
+        "label_aware_routing": false,
+        "filename_class_routing": false,
+        "scene_hard_routing": false,
+        "scene_soft_gating": true,
+        "activation_threshold_source": "mixed_dev_only",
+        "context_gate_enabled": true,
+        "fusion_inputs": "fixed_class_owners_with_runtime_class_aware_nms",
+        "candidate_frozen_before_lock_labels": true
+      },
+      "phase_contract": {
+        "base_learning": {
+          "counted_as_incremental_learning": false,
+          "detector_weights_updated": [
+            "base_detector"
+          ],
+          "training_data_scope": "base_dataset_only"
+        },
+        "incremental_learning": {
+          "counted_as_incremental_learning": true,
+          "detector_weights_updated": [
+            "incremental_detector"
+          ],
+          "training_data_scope": "incremental_dataset_only",
+          "validation_data_scope": "incremental_dataset_only",
+          "base_detector_weights_frozen": true
+        },
+        "system_calibration": {
+          "counted_as_incremental_learning": false,
+          "detector_weights_updated": false,
+          "data_scope": {
+            "scene_sensor_model_training": "base_and_incremental_train_dev",
+            "scene_sensor_model_recheck": "base_and_incremental_lock_frozen_model_only",
+            "base_context_prior": "base_train_only",
+            "incremental_context_prior": "incremental_train_only",
+            "gate_selection": "mixed_dev_only"
+          }
+        },
+        "joint_evaluation": {
+          "counted_as_incremental_learning": false,
+          "detector_weights_updated": false,
+          "model_selection_allowed": false
+        }
+      },
+      "candidate_system_calibration": {
+        "phase": "system_calibration",
+        "source_split": "mixed_dev_only",
+        "selection": "/home/HwHiAiUser/agileagent/reports/ascend310b/20260824-runtime-calibration-v1/search.json",
+        "competition_passed": true,
+        "metrics": {
+          "base_map50": 0.823082912931656,
+          "new_map50": 0.7058363095238094,
+          "krr": 1.0071254464330306,
+          "old_map50_before": 0.7975000010746666,
+          "old_map50_after": 0.803182544612666,
+          "full_map50": 0.7707337995830471,
+          "new_precision": 0.9011904761904761,
+          "new_recall": 0.7373015873015873,
+          "false_activation_rate": 0.05333333333333334,
+          "false_activation_image_count": 4,
+          "negative_image_count": 75,
+          "false_activation_by_class": {
+            "4": {
+              "rate": 0.024390243902439025,
+              "count": 2,
+              "negative_images": 82
+            },
+            "5": {
+              "rate": 0.024390243902439025,
+              "count": 2,
+              "negative_images": 82
+            }
+          },
+          "prediction_count": 774,
+          "per_class_ap50": {
+            "0": 0.46987080011110394,
+            "1": 0.9802324014005048,
+            "2": 0.8668433181187618,
+            "3": 0.8957836588202934,
+            "4": 0.7358333333333331,
+            "5": 0.6758392857142858
+          },
+          "per_class_precision_recall": {
+            "0": {
+              "precision": 0.1618705035971223,
+              "recall": 0.7142857142857143,
+              "f1": 0.26392961876832843,
+              "tp": 45,
+              "fp": 233,
+              "targets": 63
+            },
+            "1": {
+              "precision": 0.5806451612903226,
+              "recall": 1.0,
+              "f1": 0.7346938775510204,
+              "tp": 72,
+              "fp": 52,
+              "targets": 72
+            },
+            "2": {
+              "precision": 0.6428571428571429,
+              "recall": 0.9101123595505618,
+              "f1": 0.7534883720930232,
+              "tp": 81,
+              "fp": 45,
+              "targets": 89
+            },
+            "3": {
+              "precision": 0.5428571428571428,
+              "recall": 0.9313725490196079,
+              "f1": 0.6859205776173285,
+              "tp": 95,
+              "fp": 80,
+              "targets": 102
+            },
+            "4": {
+              "precision": 0.9166666666666666,
+              "recall": 0.7857142857142857,
+              "f1": 0.8461538461538461,
+              "tp": 33,
+              "fp": 3,
+              "targets": 42
+            },
+            "5": {
+              "precision": 0.8857142857142857,
+              "recall": 0.6888888888888889,
+              "f1": 0.775,
+              "tp": 31,
+              "fp": 4,
+              "targets": 45
+            }
+          },
+          "counters": {
+            "threshold_rejected": 52358,
+            "scene_soft_rejected": 10900,
+            "content_gate_images": 18,
+            "conflict_suppressed": 47,
+            "cross_class_suppressed": 163
+          }
+        }
+      }
+    }
+  ],
+  "channels": {
+    "production": "incremental_detection_generation_4plus2",
+    "candidate": "incremental_detection_generation_4plus2"
+  },
+  "external_blockers": [
+    "ascend_310b_4plus2_release_not_built"
+  ]
+}

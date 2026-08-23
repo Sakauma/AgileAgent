@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # 快速上手
 
-本指南覆盖当前 strict 4+2 正式流程：x86/CUDA 工作台、YOLO26s Base 训练、patrol_boat → armored_vehicle 两轮类别增量、Scene-SensorNet 系统级校准，以及 Ascend310B v2 release `20260823-4plus2-yolo26-content-gate-v2` 的板端启动。
+本指南覆盖当前 strict 4+2 正式流程：x86/CUDA 工作台、YOLO26s Base 训练、patrol_boat → armored_vehicle 两轮类别增量、Scene-SensorNet 系统级校准，以及 Ascend310B v2 release `20260824-4plus2-yolo26-runtime-calibration-v1` 的板端启动。
 
 ## 前置条件
 
@@ -24,7 +24,7 @@
 | 设备 | Atlas 200I DK A2 / Ascend310B1 |
 | CANN | `7.0.RC1`，环境脚本位于 `/usr/local/Ascend/ascend-toolkit/set_env.sh` |
 | Python 环境 | `/usr/local/miniconda3/envs/agileagent` |
-| 仓库模型包 | `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/` |
+| 仓库模型包 | `models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/` |
 
 ## 安装 x86/CUDA 工作台
 
@@ -406,13 +406,13 @@ chmod +x scripts/materialize_ascend310b_full_score_release.sh
 物化目标固定为：
 
 ```text
-/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 ```
 
 启动正式服务：
 
 ```bash
-RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 
 AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
 AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \

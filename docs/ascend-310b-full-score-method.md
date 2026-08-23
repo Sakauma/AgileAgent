@@ -4,29 +4,28 @@
 本文描述当前正式 4+2 Ascend310B1 方法。唯一机器可读契约是 `configs/ascend310b/full_score_method.yaml`，正式发布包是：
 
 ```text
-models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/
+models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 ```
 
 ## 1. 当前结论
 
 | 赛题硬指标 | Ascend310B1 实测 | 满分门槛 |
 | --- | ---: | ---: |
-| Base mAP50 | `0.8256706047` | ≥0.80 |
-| New-mAP50 | `0.6188591828` | ≥0.60 |
+| Base mAP50 | `0.8166630282` | ≥0.80 |
+| New-mAP50 | `0.6114608956` | ≥0.60 |
 | KRR | `1.0000000000` | ≥0.95 |
-| 候选 batch 中位 FPS | `39.3468 / 39.4244` | ≥30 |
-| 公共 `8501` 中位 FPS | `39.5726 / 39.5883` | ≥30 |
+| lock / mixed dev 候选中位 FPS | `38.3877 / 39.1389` | ≥30 |
+| 公共 `8501` 中位 FPS | `38.6623` | ≥30 |
 
-Full-mAP50 为 `0.7249274787`。旧类 mAP50 增量前后均为 `0.7779616266`，冻结旧类预测完全等价。
+Full-mAP50 为 `0.7220053258`。旧类 mAP50 增量前后均为 `0.7772775409`，冻结旧类预测完全等价。
 
 公共 `8501` 两轮逐轮 FPS：
 
 ```text
-39.5726 / 39.5804 / 39.3933
-39.5883 / 39.5023 / 39.6668
+38.5802 / 38.6698 / 38.6623
 ```
 
-precision `0.677551`、recall `0.661111`、误激活率 `0.466667` 是非阻断诊断。75 张不含新增类的图像中有 35 张至少误激活一个新增类。
+precision `0.729167`、recall `0.612698`、误激活率 `0.226667` 是非阻断诊断。75 张不含新增类的图像中有 17 张至少误激活一个新增类。
 
 ## 2. 协议口径
 
@@ -119,7 +118,7 @@ filename_aware_online_routing: false
 
 ### 5.4 阈值
 
-当前计分请求阈值以及六类活动阈值都为 `0.10`。阈值在候选 dev 上选择并冻结，lock/test 只评分。更换模型或数据集后必须重新搜索，不得把当前阈值当作通用常数。
+当前计分请求置信度为 `0.01`，六类冻结阈值分别为 `0=.075, 1=.05, 2=.05, 3=.05, 4=.20, 5=.50`。候选先对 Base 使用 temperature `1.5` / bias `0`、对 Specialist 使用 temperature `1.0` / bias `-0.5` 执行 logit-affine 校准，再应用阈值与跨模型仲裁。全部参数在 mixed dev 上选择并冻结，lock 只评分。
 
 ## 6. 训练与导出
 
@@ -167,7 +166,7 @@ ONNX 与实际 source checkpoint 必须同时进入构建清单，不能只保�
 ./scripts/build_ascend_yolo26_e2e_oms.sh \
   /path/to/onnx-dir \
   /home/HwHiAiUser/agileagent/candidates/CANDIDATE_ID/build \
-  /home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/release-build-manifest.json
+  /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/provenance/release-build-manifest.json
 ```
 
 `onnx-dir` 必须包含 `base.onnx` 和 `specialist.onnx`。第三个参数提供一个已验证 Scene 资产组；脚本复核 source weight、ONNX、AIPP、OM 和 ATC log 后才生成新的 `build-manifest.json`。
@@ -233,14 +232,19 @@ score gate 顺序：
 8. 精确停止自己启动的 `8502` 进程；
 9. 再次确认正式 `8501 ready`。
 
-阈值矩阵来自方法配置：
+约束搜索来自方法配置：
 
 ```text
-new: 0.05, 0.075, 0.10, 0.125, 0.15
-old: 0.05, 0.075, 0.10, 0.125, 0.15
+selection split: mixed_dev_only
+objective: minimize new-class false activation
+constraints: Base>=0.80, New>=0.60, KRR>=0.95
+dimensions: per-class thresholds, scene soft penalties,
+            Base/Specialist logit calibration,
+            conflict IoU/margin and overlap geometry
+evaluated: 5,476; passing: 4,467
 ```
 
-先固定 old 搜索 new，再固定胜出 new 搜索 old，最后复核头部组合。选择顺序是最小精度余量最大、FPS 波动最小、batch 中位 FPS 最高。四项未同时达标的候选只能标记为 intermediate。
+选择顺序是先满足三项精度约束，再最小化新类误激活，然后依次最大化 New-mAP50 和 Full-mAP50。首次 lock 不通过后没有重新选参；只修复 Base 记录来源标识使同一冻结校准在真实 OM 路径生效，再使用同一候选复验。
 
 ## 10. 正式 release 与提升
 
@@ -271,7 +275,7 @@ sudo /home/HwHiAiUser/agileagent/releases/NEW_RELEASE_ID/src/scripts/install_asc
 ## 11. 当前证据位置
 
 ```text
-models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/
+models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 ├── configs/agent_pipeline_ascend310b.yaml
 ├── om/
 │   ├── base_detector.om
@@ -284,11 +288,14 @@ models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/
 │   └── generations.json
 ├── validation/
 │   ├── score.json
+│   ├── score-dev.json
+│   ├── score-post-promotion.json
 │   ├── benchmark.json
 │   ├── benchmark-repeat-1.json
 │   ├── benchmark-post-promotion.json
-│   ├── benchmark-post-promotion-repeat.json
-│   └── frozen-predictions.jsonl
+│   ├── frozen-predictions-post-promotion.jsonl
+│   ├── runtime-calibration-search.json
+│   └── validation-summary.json
 └── release.json
 ```
 

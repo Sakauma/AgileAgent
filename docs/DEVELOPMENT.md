@@ -63,7 +63,7 @@ python -m fair_agent.cli doctor
 | `configs/` | x86、Ascend、功能模型、场景模型和两轮增量配置 |
 | `splits/strict_4plus2/` | Base、Increment、mixed 及逐轮 train/dev/lock 固定清单 |
 | `models/production/incremental_detection/` | x86 正式 Base、增量专家、门控参数和冻结证据 |
-| `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/` | Ascend310B1 v2 三-OM 正式包 |
+| `models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/` | Ascend310B1 v2 三-OM 正式包 |
 | `tools/` | 编号化数据、训练、评估、候选和验收入口 |
 | `scripts/` | 环境、服务、OM 构建、评分门禁、物化和原子路由 |
 | `tests/` | 配置、运行时、增量与 Ascend 发布回归 |
@@ -150,7 +150,7 @@ Scene-SensorNet 是独立功能模型，配置位于 `configs/scene_sensor_model
 | 候选冻结评分 | `scripts/run_ascend310b_score_gate.sh` | 冻结预测、score、benchmark 和验证证据 |
 | 正式包生成 | `tools/111_promote_ascend_full_score_release.py` | validated release 目录 |
 | release 复核 | `tools/95_verify_ascend_release.py --require-validation` | 配置、OM、清单和报告一致性结果 |
-| 板端物化 | `scripts/materialize_ascend310b_full_score_release.sh` | `/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2` |
+| 板端物化 | `scripts/materialize_ascend310b_full_score_release.sh` | `/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1` |
 | 服务提升 | `scripts/install_ascend310b_primary_services.sh` | `18501` 主实例、`8501` 公共路由和 `8502` 候选隔离 |
 
 构建两个检测 OM：
@@ -183,7 +183,7 @@ Scene-SensorNet 是独立功能模型，配置位于 `configs/scene_sensor_model
 - 功能模型职责或协作关系：更新 `configs/functional_models.yaml`、`models/manifest.json` 和对应加载/验证逻辑。
 - 类别、轮次或 owner：更新 `configs/incremental_round_registry_4plus2.yaml`、`models/generations.json`、逐轮清单与增量回归。
 - x86 production 模型：更新 `models/production/incremental_detection/` 中的权重、profile、calibration、metrics 和冻结证据。
-- Ascend v2 正式包：更新 `models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/` 中的配置、OM、provenance、validation 和 `release.json`。
+- Ascend v2 正式包：更新 `models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/` 中的配置、OM、provenance、validation 和 `release.json`。
 
 正式模型包更新时同步维护包内 `SHA256SUMS`、`models/SHA256SUMS.txt`、`models/manifest.json`、`configs/functional_models.yaml` 与 `models/generations.json`。普通源码和文档修改只执行与改动范围对应的语法、配置和路径检查。
 

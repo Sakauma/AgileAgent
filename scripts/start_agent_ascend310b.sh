@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RELEASE_ROOT="${AGILE_AGENT_ASCEND_RELEASE:-/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2}"
+RELEASE_ROOT="${AGILE_AGENT_ASCEND_RELEASE:-/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1}"
 SOURCE_ROOT="${RELEASE_ROOT}/src"
 CONDA_ENV="${AGILE_AGENT_ASCEND_ENV:-/usr/local/miniconda3/envs/agileagent}"
 PYTHON="${CONDA_ENV}/bin/python"

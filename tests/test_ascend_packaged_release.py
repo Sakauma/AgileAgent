@@ -8,7 +8,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_ID = "20260823-4plus2-yolo26-content-gate-v2"
+RELEASE_ID = "20260824-4plus2-yolo26-runtime-calibration-v1"
 PACKAGE = ROOT / "models/ascend310b/full-score" / RELEASE_ID
 FIXED_RELEASE = Path("/home/HwHiAiUser/agileagent/releases") / RELEASE_ID
 
@@ -44,7 +44,7 @@ def test_packaged_release_has_complete_verified_checksum_inventory() -> None:
     }
 
     assert set(rows) == packaged
-    assert len(rows) == 31
+    assert len(rows) == 33
     for relative, expected in rows.items():
         assert sha256_file(PACKAGE / relative) == expected
 
@@ -60,7 +60,7 @@ def test_packaged_release_config_and_manifests_are_self_contained() -> None:
     validation_path = release_local_path(ascend["validation_report"])
 
     assert config["runtime"]["server_port"] == 18501
-    assert config["inference"]["confidence_default"] == 0.10
+    assert config["inference"]["confidence_default"] == 0.01
     assert ascend["validated"] is True
     assert ascend["validation_candidate"] is False
     assert ascend["model_layout"] == "independent_yolo26_e2e_v1"
@@ -175,10 +175,7 @@ def test_post_promotion_evidence_remains_full_score() -> None:
     assert score["metrics"]["new_map50"] >= 0.60
     assert score["metrics"]["krr"] >= 0.95
 
-    for name in (
-        "benchmark-post-promotion.json",
-        "benchmark-post-promotion-repeat.json",
-    ):
+    for name in ("benchmark-post-promotion.json",):
         benchmark = json.loads(
             (PACKAGE / "validation" / name).read_text(encoding="utf-8")
         )

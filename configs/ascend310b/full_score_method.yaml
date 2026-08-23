@@ -125,21 +125,35 @@ runtime:
   image_copy_elision: true
 
 threshold_search:
-  scoring_request_confidence: 0.10
-  current_seed:
-    old: 0.10
-    new: 0.10
-  stage_1_new:
-    fixed_old: 0.10
-    values: [0.05, 0.075, 0.10, 0.125, 0.15]
-  stage_2_old:
-    values: [0.05, 0.075, 0.10, 0.125, 0.15]
-  cross_check_top_pairs: 2
+  selection_scope: mixed_dev_only
+  lock_split_opened_during_selection: false
+  scoring_request_confidence: 0.01
+  objective: minimize_new_class_false_activation_subject_to_accuracy_gates
+  evaluated_candidate_count: 5476
+  passing_candidate_count: 4467
+  selected_per_class_thresholds:
+    "0": 0.075
+    "1": 0.05
+    "2": 0.05
+    "3": 0.05
+    "4": 0.20
+    "5": 0.50
+  score_calibration:
+    method: logit_affine
+    frozen_base_model: {temperature: 1.5, bias: 0.0}
+    incremental_model: {temperature: 1.0, bias: -0.5}
+  known_scene_soft_penalties: {"4": 0.05, "5": 0.0}
+  conflict_iou: 0.50
+  specialist_margin: 0.15
+  cross_class_iou: 0.90
+  smaller_box_coverage: 0.95
+  incremental_over_base_margin: 0.0
   selection_order:
-    - largest_minimum_accuracy_headroom
-    - smallest_batch_fps_spread
-    - highest_batch_median_fps
-  no_full_score_policy: highest_fps_accuracy_pass_is_intermediate_only
+    - all_accuracy_gates_pass
+    - lowest_new_class_false_activation
+    - highest_new_map50
+    - highest_full_map50
+  first_lock_failure_used_for_reselection: false
 
 benchmark:
   base_url: http://127.0.0.1:8502
@@ -158,24 +172,25 @@ benchmark:
     color_types: [0, 2, 6]
 
 reference_result:
-  date: "2026-08-23"
-  validation_stage: ascend310b_public_8501_post_promotion
+  date: "2026-08-24"
+  validation_stage: ascend310b_runtime_calibration_public_8501_post_promotion
   old_candidate_confidence: 0.10
-  new_candidate_confidence: 0.10
-  base_map50: 0.8256706046553274
-  new_map50: 0.6188591827942598
-  full_map50: 0.7249274786671415
+  new_candidate_confidence: 0.01
+  base_map50: 0.8166630281570453
+  new_map50: 0.6114608956156757
+  full_map50: 0.7220053258250602
   krr: 1.0
-  old_map50_before: 0.7779616266035823
-  old_map50_after: 0.7779616266035823
+  old_map50_before: 0.7772775409297523
+  old_map50_after: 0.7772775409297523
   old_prediction_equivalent: true
-  lock_precision: 0.6775510204081632
-  lock_recall: 0.6611111111111111
-  false_activation_rate: 0.4666666666666667
-  candidate_batch_median_fps: [39.34684241589613, 39.424403705893944]
+  lock_precision: 0.7291666666666666
+  lock_recall: 0.6126984126984127
+  false_activation_rate: 0.22666666666666666
+  false_activation_image_count: 17
+  false_activation_negative_image_count: 75
+  candidate_batch_median_fps: [38.38771593090211, 39.13894324853229]
   public_8501_batch_rounds:
-    - [39.57261574990107, 39.580447259054026, 39.393342525113255]
-    - [39.5882818685669, 39.502271380604384, 39.666798889329634]
-  public_8501_batch_median_fps: [39.57261574990107, 39.5882818685669]
+    - [38.58024691358025, 38.669760247486465, 38.66228494104002]
+  public_8501_batch_median_fps: [38.66228494104002]
   board_accuracy_passed: true
   board_batch_fps_passed: true

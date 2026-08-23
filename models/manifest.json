@@ -257,7 +257,7 @@
   },
   "ascend_releases": [
     {
-      "id": "20260823-4plus2-yolo26-content-gate-v2",
+      "id": "20260824-4plus2-yolo26-runtime-calibration-v1",
       "status": "production",
       "ready_without_training": true,
       "target": "Ascend310B1",
@@ -266,12 +266,12 @@
       "model_layout": "independent_yolo26_e2e_v1",
       "context_mode": "model",
       "dataset_protocol": "strict_4plus2",
-      "package_root": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2",
+      "package_root": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1",
       "materialize_script": "scripts/materialize_ascend310b_full_score_release.sh",
-      "fixed_release_root": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2",
+      "fixed_release_root": "/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1",
       "models": {
         "base_detector": {
-          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/base_detector.om",
+          "path": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/base_detector.om",
           "sha256": "56570c8ccac80beef10d623f40bd20e26dbf310dc1ba93c80ff607b9f6df7ae0",
           "output_contract": "yolo26_e2e_v1",
           "class_ids": [
@@ -282,7 +282,7 @@
           ]
         },
         "incremental_detector": {
-          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/incremental_detector.om",
+          "path": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/incremental_detector.om",
           "sha256": "d12ccf5b4c07ea97b8be09ff4cdea02463cf83ec68736ae6fd7451a3e0fcd87b",
           "output_contract": "yolo26_e2e_v1",
           "class_ids": [
@@ -291,7 +291,7 @@
           ]
         },
         "scene_sensor_net": {
-          "path": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/om/scene_sensor_net.om",
+          "path": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/om/scene_sensor_net.om",
           "sha256": "c1902bc8f66e8036e70a9ba12a3b91dc5711837408eca819eb02b6afddc1f1a9"
         }
       },
@@ -309,44 +309,76 @@
         "label_aware_online_routing": false,
         "filename_aware_online_routing": false
       },
+      "runtime_calibration": {
+        "objective": "minimize_new_class_false_activation_subject_to_accuracy_gates",
+        "selection_split": "mixed_dev_only",
+        "lock_used_for_selection": false,
+        "evaluated_candidate_count": 5476,
+        "passing_candidate_count": 4467,
+        "per_class_thresholds": {
+          "0": 0.075,
+          "1": 0.05,
+          "2": 0.05,
+          "3": 0.05,
+          "4": 0.2,
+          "5": 0.5
+        },
+        "score_calibration": {
+          "base_temperature": 1.5,
+          "base_bias": 0.0,
+          "specialist_temperature": 1.0,
+          "specialist_bias": -0.5
+        },
+        "scene_soft_penalties": {
+          "4": 0.05,
+          "5": 0.0
+        },
+        "conflict_iou": 0.5,
+        "specialist_margin": 0.15,
+        "cross_class_iou": 0.9,
+        "smaller_box_coverage": 0.95,
+        "incremental_over_base_margin": 0.0
+      },
       "metrics": {
-        "base_map50": 0.8256706046553274,
-        "new_map50": 0.6188591827942598,
+        "base_map50": 0.8166630281570453,
+        "new_map50": 0.6114608956156757,
         "krr": 1.0,
-        "full_map50": 0.7249274786671415,
+        "full_map50": 0.7220053258250602,
         "candidate_batch_median_fps": [
-          39.34684241589613,
-          39.424403705893944
+          38.38771593090211,
+          39.13894324853229
         ],
         "post_promotion_batch_rounds": [
           [
-            39.57261574990107,
-            39.580447259054026,
-            39.393342525113255
-          ],
-          [
-            39.5882818685669,
-            39.502271380604384,
-            39.666798889329634
+            38.58024691358025,
+            38.669760247486465,
+            38.66228494104002
           ]
         ],
         "post_promotion_batch_median_fps": [
-          39.57261574990107,
-          39.5882818685669
+          38.66228494104002
         ],
-        "lock_precision": 0.6775510204081632,
-        "lock_recall": 0.6611111111111111,
-        "false_activation_rate": 0.4666666666666667
+        "lock_precision": 0.7291666666666666,
+        "lock_recall": 0.6126984126984127,
+        "false_activation_count": 17,
+        "false_activation_base_image_count": 75,
+        "false_activation_rate": 0.22666666666666666,
+        "previous_false_activation_rate": 0.4666666666666667,
+        "false_activation_reduction": 0.5142857142857142
       },
       "validation": {
-        "score": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/score.json",
-        "benchmark": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark.json",
-        "repeat_benchmark": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-repeat-1.json",
+        "score": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/score.json",
+        "dev_score": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/score-dev.json",
+        "post_promotion_score": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/score-post-promotion.json",
+        "benchmark": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/benchmark.json",
+        "repeat_benchmark": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/benchmark-repeat-1.json",
         "post_promotion_benchmarks": [
-          "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-post-promotion.json",
-          "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/benchmark-post-promotion-repeat.json"
+          "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/benchmark-post-promotion.json"
         ],
-        "frozen_predictions": "models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/frozen-predictions.jsonl"
+        "frozen_predictions": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/frozen-predictions-post-promotion.jsonl",
+        "prediction_summary": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/predictions-summary-post-promotion.json",
+        "runtime_calibration_search": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/runtime-calibration-search.json",
+        "validation_summary": "models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/validation-summary.json"
       }
     }
   ],
@@ -359,7 +391,7 @@
     "六类逐类阈值和场景惩罚只由 mixed dev 选择；线上只读取 Scene-SensorNet 概率，不读取文件名或标签。",
     "precision 与误激活率是非阻断诊断；当前场景感知运行点已显著改善二者。",
     "仓库不包含竞赛数据集和标签。",
-    "Ascend 4+2 独立 YOLO26 E2E 三 OM release 已在公共 8501 正式提升并完成两轮部署后复验。"
+    "Ascend 4+2 独立 YOLO26 E2E 三 OM release 已在公共 8501 正式提升，并完成三轮 batch 部署后复验。"
   ],
   "phase_contract": {
     "base_learning": {

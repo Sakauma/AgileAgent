@@ -17,7 +17,7 @@
 | Conda base | `/usr/local/miniconda3` |
 | 正式环境 | `/usr/local/miniconda3/envs/agileagent` |
 | 正式 Python | `/usr/local/miniconda3/envs/agileagent/bin/python` |
-| 正式 release | `/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2` |
+| 正式 release | `/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1` |
 | 公共入口 | `127.0.0.1:8501` |
 | 主实例 | `127.0.0.1:18501` |
 | 候选端口 | `127.0.0.1:8502`，正式状态下空闲 |
@@ -99,7 +99,7 @@ atc --version
 ## 当前 release 目录
 
 ```text
-/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/
+/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/
 ├── src/
 ├── configs/agent_pipeline_ascend310b.yaml
 ├── om/
@@ -115,7 +115,7 @@ atc --version
 仓库副本：
 
 ```text
-models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/
+models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 ```
 
 零训练物化：
@@ -178,7 +178,7 @@ sudo /usr/local/sbin/agileagent-ascend310b-primary-route status 18501
 没有旧回滚 listener 的新板可以直接使用公共端口：
 
 ```bash
-RELEASE=/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2
+RELEASE=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 AGILE_AGENT_ASCEND_ENV=/usr/local/miniconda3/envs/agileagent \
 AGILE_AGENT_ASCEND_RELEASE="$RELEASE" \
 AGILE_AGENT_CONFIG="$RELEASE/configs/agent_pipeline_ascend310b.yaml" \
@@ -197,7 +197,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-正式 release 已完成两轮公共入口 `30 + 3×20` 复验，中位 FPS 为 `39.5726` 与 `39.5883`。重新测量需要至少 20 张 `640×512`、8-bit 灰度/RGB/RGBA PNG；重新计算 Base/New/KRR 需要同版 89 图和标签。
+正式 release 已完成公共入口 `30 + 3×20` 部署后复验，三轮为 `38.5802 / 38.6698 / 38.6623 FPS`，中位 `38.6623 FPS`。重新测量需要至少 20 张 `640×512`、8-bit 灰度/RGB/RGBA PNG；重新计算 Base/New/KRR 需要同版 89 图和标签。
 
 ## 回滚
 

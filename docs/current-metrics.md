@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # 当前指标总账
 
-本文统一记录 4+2 正式推理的赛题硬指标、逐类诊断、场景模型准确率与 Ascend310B1 端侧性能。截至 2026-08-23，x86/CUDA 已完成新的全类别跨类别重叠抑制实测；Ascend310B1 已完成冻结板端预测的同构精度回放，但新后处理的 FPS 还需要在候选端口 `8502` 重新上板实测。
+本文统一记录 4+2 正式推理的赛题硬指标、逐类诊断、场景模型准确率与 Ascend310B1 端侧性能。截至 2026-08-24，x86/CUDA 和 Ascend310B1 都已完成全类别重叠抑制；Ascend 还完成了 mixed dev 约束校准、lock 冻结验收、公共 `8501` 原子提升和部署后独立 FPS 复验。
 
 ## 结论与硬门禁
 
@@ -10,10 +10,10 @@
 | 运行点 | Base mAP50 | New-mAP50 | KRR | FPS | 当前判定 |
 | --- | ---: | ---: | ---: | ---: | --- |
 | x86/CUDA，修改后 mixed lock | `0.845782` | `0.750368` | `0.997179` | 不适用 | 三项精度门禁全部通过 |
-| Ascend310B1 当前 immutable release，修改前实测 | `0.825671` | `0.618859` | `1.000000` | `39.5726 / 39.5883` | 四项已上板实测通过 |
-| Ascend310B1 新后处理，冻结预测回放 | `0.825860` | `0.618859` | `1.000000` | 待候选端口实测 | 三项精度门禁通过；FPS 尚未形成改后板端证据 |
+| Ascend310B1 当前 immutable release，lock / `8501` 实测 | `0.816663` | `0.611461` | `1.000000` | `38.6623` | 四项已上板实测通过 |
+| Ascend310B1 mixed dev 选参点 | `0.823083` | `0.705836` | `1.000000` | `39.1389` | 只用于选参，不代替 lock |
 
-因此，可以确认新后处理没有破坏精度满分档；在新配置实际运行于 310B 并通过 `30` 次预热、`3×20` 图 batch 基准前，不将旧 release 的 FPS 写成“修改后实测”。
+当前 Ascend release 的四项硬门禁全部通过；lock 新类误激活从上一代的 `35/75` 降至 `17/75`。
 
 ## x86/CUDA 一号结果：独立 mixed lock
 
@@ -85,38 +85,39 @@ lock 上三项场景功能验收均通过。
 
 ## Ascend310B1 当前正式 release
 
-当前不可变发布包为 `20260823-4plus2-yolo26-content-gate-v2`。以下数值均是修改前新后处理未启用时的真实板端证据。
+当前不可变发布包为 `20260824-4plus2-yolo26-runtime-calibration-v1`。lock 精度是候选冻结后一次性评分结果，正式提升后又从 release-local 配置和三个 OM 独立冻结 89 图，得到完全一致的结果。
 
 | 指标 | 实测 | 满分门槛 | 余量 |
 | --- | ---: | ---: | ---: |
-| Base mAP50 | `0.8256706047` | `>=0.80` | `+0.0256706047` |
-| New-mAP50 | `0.6188591828` | `>=0.60` | `+0.0188591828` |
+| Base mAP50 | `0.8166630282` | `>=0.80` | `+0.0166630282` |
+| New-mAP50 | `0.6114608956` | `>=0.60` | `+0.0114608956` |
 | KRR | `1.0000000000` | `>=0.95` | `+0.0500000000` |
-| 候选 `8502` batch FPS，两次中位数 | `39.3468 / 39.4244` | `>=30` | `+9.3468 / +9.4244` |
-| 公共 `8501` batch FPS，两次中位数 | `39.5726 / 39.5883` | `>=30` | `+9.5726 / +9.5883` |
+| lock 候选 `8502` batch FPS | `38.3877` | `>=30` | `+8.3877` |
+| mixed dev 独立复跑 batch FPS | `39.1389` | `>=30` | `+9.1389` |
+| 公共 `8501` 部署后 batch FPS | `38.6623` | `>=30` | `+8.6623` |
 
 其他精度诊断：
 
 | 指标 | 数值 |
 | --- | ---: |
-| Full-mAP50 | `0.7249274787` |
-| 增量前/后旧类 mAP50 | `0.7779616266 / 0.7779616266` |
-| 新类宏平均 lock precision / recall | `0.677551 / 0.661111` |
-| 六类误激活率 | `0.466667 = 35/75` |
-| patrol_boat precision / recall | `0.600000 / 0.500000` |
-| armored_vehicle precision / recall | `0.755102 / 0.822222` |
-| patrol_boat 误激活率 | `0.207317` |
-| armored_vehicle 误激活率 | `0.268293` |
-| 冻结预测框数 | `588` |
+| Full-mAP50 | `0.7220053258` |
+| 增量前/后旧类 mAP50 | `0.7772775409 / 0.7772775409` |
+| 新类宏平均 lock precision / recall | `0.729167 / 0.612698` |
+| 新类误激活率 | `0.226667 = 17/75` |
+| patrol_boat precision / recall | `0.666667 / 0.380952` |
+| armored_vehicle precision / recall | `0.791667 / 0.844444` |
+| patrol_boat 误激活率 | `0.097561` |
+| armored_vehicle 误激活率 | `0.109756` |
+| 冻结预测框数 | `752` |
 
 | 类别 | AP50 |
 | --- | ---: |
-| soldier | `0.471184` |
-| small_aircraft | `0.936386` |
-| warship | `0.891092` |
-| tank | `0.813184` |
-| patrol_boat | `0.406635` |
-| armored_vehicle | `0.831083` |
+| soldier | `0.490069` |
+| small_aircraft | `0.939302` |
+| warship | `0.888246` |
+| tank | `0.791493` |
+| patrol_boat | `0.476365` |
+| armored_vehicle | `0.746557` |
 
 ### FPS 完整复测
 
@@ -124,35 +125,23 @@ lock 上三项场景功能验收均通过。
 
 | 端口与复测 | 第 1 轮 | 第 2 轮 | 第 3 轮 | 中位 FPS | 门禁 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| 候选 `8502` 首次 | `39.2696` | `39.3546` | `39.3468` | `39.3468` | PASS |
-| 候选 `8502` 独立复跑 | `39.3391` | `39.4244` | `39.4945` | `39.4244` | PASS |
-| 公共 `8501` 提升后 | `39.5726` | `39.5804` | `39.3933` | `39.5726` | PASS |
-| 公共 `8501` 提升后复跑 | `39.5883` | `39.5023` | `39.6668` | `39.5883` | PASS |
+| lock 候选 `8502` | `38.1752` | `38.4025` | `38.3877` | `38.3877` | PASS |
+| mixed dev 独立复跑 `8502` | `38.9712` | `39.1389` | `39.1619` | `39.1389` | PASS |
+| 公共 `8501` 提升后 | `38.5802` | `38.6698` | `38.6623` | `38.6623` | PASS |
 
-## Ascend310B1 新后处理精度回放
+## Ascend310B1 选参口径与误激活改善
 
-Ascend 候选策略对所有类别使用更保守的 `IoU >= 0.90`，不启用小框覆盖率条件。89 张正式 lock 的 588 个冻结板端框在本地同构回放中抑制 10 个跨类别重复框，保留 578 个。
+系统先在 89 张 mixed dev 上冻结 Base、Specialist 和 Scene 的低阈值原始候选，然后搜索 `5,476` 组逐类阈值、场景软惩罚、Base/Specialist logit 校准和重叠仲裁参数。选择目标是在 Base `>=0.80`、New `>=0.60`、KRR `>=0.95` 的约束下最小化新类误激活；选参进程不打开 lock。
 
-| 指标 | 修改前 | 新后处理回放 | 变化 |
-| --- | ---: | ---: | ---: |
-| Base mAP50 | `0.8256706047` | `0.8258603079` | `+0.0001897033` |
-| New-mAP50 | `0.6188591828` | `0.6188591828` | `0` |
-| KRR | `1.0000000000` | `1.0000000000` | `0` |
-| Full-mAP50 | `0.7249274787` | `0.7253598791` | `+0.0004324004` |
-| 新类宏平均 lock precision | `0.677551` | `0.677551` | `0` |
-| 新类宏平均 lock recall | `0.661111` | `0.661111` | `0` |
-| 误激活率 | `0.466667` | `0.466667` | `0` |
-| 预测框数 | `588` | `578` | `-10` |
-
-回放后逐类 AP50 为 soldier `0.471184`、small_aircraft `0.937112`、warship `0.891565`、tank `0.814580`、patrol_boat `0.406635`、armored_vehicle `0.831083`。三项精度硬门禁全部通过。
-
-在 x86 WSL 上对这 89 张、588 个框单独微基准测得该后处理中位耗时约 `0.0545 ms/图`，只占当前 30 FPS 门禁约 `8.1 ms/图` 性能余量的很小一部分；这只是风险估计，不替代 aarch64/Ascend310B1 的正式 FPS 实测。
+冻结策略使 lock 误激活从上一代的 `35/75 = 0.466667` 降至 `17/75 = 0.226667`，降幅 `51.43%`。mixed dev 为 `4/75 = 0.053333`；该值只用于选参诊断，不代替 lock 结果。
 
 ## 证据索引
 
 - x86 双口径及逐类结果：`models/production/incremental_detection/evidence/all_images_diagnostics.json`
 - Scene-SensorNet：`models/context/scene_sensor_metrics.json`
-- Ascend 冻结精度：`models/ascend310b/full-score/20260823-4plus2-yolo26-content-gate-v2/validation/score.json`
+- Ascend 发布包：`models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/`
+- Ascend lock 冻结精度：`validation/score.json`
+- Ascend mixed dev 精度：`validation/score-dev.json`
+- Ascend 选参证据：`validation/runtime-calibration-search.json`
 - Ascend 候选 FPS：`validation/benchmark.json` 与 `validation/benchmark-repeat-1.json`
-- Ascend 公共入口 FPS：`validation/benchmark-post-promotion.json` 与 `validation/benchmark-post-promotion-repeat.json`
-- Ascend 新后处理回放：`models/production/incremental_detection/evidence/ascend310b_cross_class_replay.json`
+- Ascend 公共入口冻结与 FPS：`validation/frozen-predictions-post-promotion.jsonl`、`validation/score-post-promotion.json` 与 `validation/benchmark-post-promotion.json`
