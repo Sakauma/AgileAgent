@@ -67,7 +67,7 @@ def render_page(page: str, state: Dict[str, Any], decision: Dict[str, Any]) -> s
         return "\n\n".join(
             [
                 panel(
-                    "灵动 Agent · SSH 视觉识别终端",
+                    "灵动 Agent · 视觉识别终端",
                     [
                         f"状态：{health}    Production：{state.get('model_generation', {}).get('production')}",
                         f"平台：{runtime.get('architecture')} / {runtime.get('machine')}    后端：{backend}    模型：{runtime.get('model_format')}",
@@ -79,7 +79,6 @@ def render_page(page: str, state: Dict[str, Any], decision: Dict[str, Any]) -> s
                     "开始识别",
                     [
                         "输入 1 识别一张图像，输入 2 扫描整个目录。",
-                        "CLI 自动使用正式模型、Scene-SensorNet、冻结阈值和场景门控。",
                         "每次识别自动保存标注图、JSON、CSV、预测 TXT 与摘要。",
                     ],
                 ),

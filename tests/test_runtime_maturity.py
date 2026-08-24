@@ -415,7 +415,9 @@ def test_cli_frontend_navigates_all_operator_pages(monkeypatch) -> None:
     monkeypatch.setattr(frontend, "_state", lambda: (state, decision))
     assert frontend.run() == 0
     rendered = "\n".join(output)
-    assert "灵动 Agent · SSH 视觉识别终端" in rendered
+    assert "灵动 Agent · 视觉识别终端" in rendered
+    assert "SSH 视觉识别终端" not in rendered
+    assert "CLI 自动使用正式模型" not in rendered
     assert "运行状态" in rendered
     assert "当前正式模型" in rendered
     assert "CLI 使用帮助" in rendered
@@ -427,7 +429,7 @@ def test_cli_frontend_pages_share_operator_state() -> None:
     state = build_blackboard(config)
     decision = build_decision(config, state, {"sensor": "sar", "scene": "all", "class_focus": "soldier"})
     overview = render_page("overview", state, decision)
-    assert "灵动 Agent · SSH 视觉识别终端" in overview
+    assert "灵动 Agent · 视觉识别终端" in overview
     assert "incremental_detection_generation_4plus2" in overview
     assert "人员 / 小型飞行器 / 舰船 / 坦克 / 巡逻艇 / 装甲车辆" in overview
     assert "当前正式模型" in render_page("models", state, decision)

@@ -609,7 +609,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 )
         else:
             transport = "direct_engine"
-            print("未发现匹配的本机正式服务，正在加载本地推理引擎……", file=sys.stderr)
+            print("正在准备识别引擎，请稍候……", file=sys.stderr)
             engine = build_detection_engine(config)
             accepts_encoded = getattr(engine, "accepts_encoded", None)
             for index, (item, data) in enumerate(zip(inputs, source_bytes), 1):
@@ -871,7 +871,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="灵动 Agent：面向 SSH 与本地终端的 IR/SAR 视觉识别主界面",
+        description="灵动 Agent：IR/SAR 视觉识别主界面",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "常用示例：\n"
@@ -913,7 +913,7 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--refresh", action="store_true", help="读取证据并重建黑板。")
     status.set_defaults(func=cmd_status)
 
-    console = sub.add_parser("console", help="进入 SSH 友好的视觉识别交互主界面。")
+    console = sub.add_parser("console", help="进入视觉识别交互主界面。")
     console.add_argument("--once", action="store_true", help="只打印一次终端总览，不进入交互界面。")
     console.add_argument("--refresh", action="store_true", help="打印总览前重新采集运行状态。")
     console.set_defaults(func=cmd_console)
