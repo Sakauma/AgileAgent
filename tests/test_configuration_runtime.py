@@ -120,6 +120,16 @@ def test_ascend_yolo26_e2e_contract_is_explicit_and_fully_pinned() -> None:
     with pytest.raises(ValueError, match="缺少固定输出参数"):
         validate_config(config)
 
+
+def test_low_latency_replica_count_is_bounded() -> None:
+    config = clean_config()
+    config["performance"]["low_latency_replicas"] = 3
+    validate_config(config)
+
+    config["performance"]["low_latency_replicas"] = 9
+    with pytest.raises(ValueError, match="low_latency_replicas"):
+        validate_config(config)
+
     config = clean_config()
     entry = next(iter(config["ascend_backend"]["models"].values()))
     entry["output_contract"] = "shape_guess"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import io
 import json
+import threading
 import zipfile
 from pathlib import Path
 
@@ -11,7 +12,12 @@ from starlette.testclient import TestClient
 
 from fair_agent.core.config import load_config
 from fair_agent.modules.web_inference import image_png_bytes
-from fair_agent.web.app import BatchResultStore, build_web_settings, create_app
+from fair_agent.web.app import (
+    AtomicEngineProvider,
+    BatchResultStore,
+    build_web_settings,
+    create_app,
+)
 
 
 class FakeEngine:
@@ -79,10 +85,16 @@ class EncodedFakeEngine(FakeEngine):
         return data.startswith(b"encoded-test")
 
     def predict_encoded(
-        self, data, filename, confidence=0.50, incremental_protocol=None
+        self,
+        data,
+        filename,
+        confidence=0.50,
+        incremental_protocol=None,
+        speculative_specialists=False,
     ):
+        call = (data, filename, confidence, incremental_protocol)
         self.encoded_calls.append(
-            (data, filename, confidence, incremental_protocol)
+            call + (True,) if speculative_specialists else call
         )
         return self.predict(
             Image.new("RGB", (640, 512)),
@@ -92,7 +104,11 @@ class EncodedFakeEngine(FakeEngine):
         )
 
     def predict_encoded_batch(
-        self, items, confidence=0.50, incremental_protocol=None
+        self,
+        items,
+        confidence=0.50,
+        incremental_protocol=None,
+        speculative_specialists=False,
     ):
         return [
             self.predict_encoded(
@@ -100,6 +116,7 @@ class EncodedFakeEngine(FakeEngine):
                 filename,
                 confidence,
                 incremental_protocol,
+                speculative_specialists,
             )
             for data, filename in items
         ]
@@ -304,6 +321,32 @@ def test_single_detection_uses_encoded_backend_without_cpu_decode(monkeypatch) -
     assert response.json()["timings"]["decode_ms"] == 0.0
 
 
+def test_cli_low_latency_header_speculatively_prefetches_specialists() -> None:
+    engine = EncodedFakeEngine()
+    client = TestClient(create_app(engine_provider=lambda: engine))
+    encoded_payload = b"encoded-test-png"
+
+    response = client.post(
+        "/api/detect",
+        files={"file": ("sample.bin", encoded_payload, "application/octet-stream")},
+        headers={
+            "X-Agile-Agent-Execution-Profile": "speculative-low-latency"
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert engine.encoded_calls == [
+        (encoded_payload, "sample.bin", 0.01, "auto", True)
+    ]
+    assert payload["agent"]["models_used"] == [
+        "scene_sensor_net_v1",
+        "four_class_base_detector",
+    ]
+    assert "protocols" not in payload["agent"]
+    assert "reason" not in payload["agent"]["decision"]
+
+
 def test_single_detection_keeps_contract_sized_upload_in_memory(monkeypatch) -> None:
     engine = EncodedFakeEngine()
     client = TestClient(create_app(engine_provider=lambda: engine))
@@ -447,6 +490,64 @@ def test_batch_api_returns_archive_and_summary_headers() -> None:
         assert len([name for name in archive.namelist() if name.startswith("annotated/")]) == 2
         summary = json.loads(archive.read("results.json"))
     assert summary["image_count"] == 2
+
+
+def test_batch_low_latency_header_prefetches_specialists_for_each_image() -> None:
+    engine = EncodedFakeEngine()
+    client = TestClient(create_app(engine_provider=lambda: engine))
+    response = client.post(
+        "/api/batch",
+        files=[
+            ("files", ("first.bin", b"encoded-test-one", "application/octet-stream")),
+            ("files", ("second.bin", b"encoded-test-two", "application/octet-stream")),
+        ],
+        headers={
+            "X-Agile-Agent-Execution-Profile": "speculative-low-latency"
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert engine.encoded_calls == [
+        (b"encoded-test-one", "first.bin", 0.01, "auto", True),
+        (b"encoded-test-two", "second.bin", 0.01, "auto", True),
+    ]
+    assert payload["response_profile"] == "cli_compact"
+    assert payload["batch_id"] is None
+    assert "download_url" not in payload
+    assert "preview_url" not in payload["results"][0]
+    assert "protocols" not in payload["results"][0]["agent"]
+
+
+def test_atomic_provider_shards_low_latency_batch_and_restores_input_order() -> None:
+    primary = EncodedFakeEngine()
+    replicas = [EncodedFakeEngine(), EncodedFakeEngine()]
+    provider = AtomicEngineProvider.__new__(AtomicEngineProvider)
+    provider._engine = primary
+    provider._low_latency_engines = [primary]
+    provider._settings = {
+        "backend": "ascend_acl",
+        "performance": {"low_latency_replicas": 3},
+    }
+    provider._lock = threading.RLock()
+    provider._build_engine = lambda _settings: replicas.pop(0)
+    rows = [(f"encoded-test-{index}".encode(), f"{index}.bin") for index in range(7)]
+
+    results = provider.predict_encoded_low_latency_batch(rows, 0.05, "auto")
+
+    assert [result["filename"] for result in results] == [
+        f"{index}.bin" for index in range(7)
+    ]
+    assert [len(engine.encoded_calls) for engine in provider._low_latency_engines] == [
+        3,
+        2,
+        2,
+    ]
+    assert all(
+        call[-1] is True
+        for engine in provider._low_latency_engines
+        for call in engine.encoded_calls
+    )
 
 
 def test_batch_fast_multipart_preserves_file_order_and_confidence() -> None:

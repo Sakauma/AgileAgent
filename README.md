@@ -37,7 +37,7 @@ Scene-SensorNet 在 mixed lock 上的 sensor / scene / joint accuracy 为 `0.988
 
 ### Ascend310B v2 release
 
-正式 release `20260824-4plus2-yolo26-runtime-calibration-v1` 使用 `608×736` AIPP 输入，两个 YOLO26s 检测 OM 均输出 `[1,300,6]`：
+当前板端运行时 release 为 `20260824-4plus2-yolo26-replica-pool-v1`，沿用 `20260824-4plus2-yolo26-runtime-calibration-v1` 的冻结三模型资产。它使用 `608×736` AIPP 输入，两个 YOLO26s 检测 OM 均输出 `[1,300,6]`，并通过三个同构实例并行处理批次；模型、阈值、场景门控和融合规则均未修改：
 
 | 指标 | 结果 |
 | --- | ---: |
@@ -46,9 +46,11 @@ Scene-SensorNet 在 mixed lock 上的 sensor / scene / joint accuracy 为 `0.988
 | Full-mAP50 | `0.722005` |
 | KRR | `1.000000` |
 | 新类误激活 | `17/75 = 0.226667` |
-| 公共 `8501` batch 中位 FPS | `38.6623` |
+| 公共 `8501` mixed 20 图中位 FPS | `38.2175` |
+| 公共 `8501` 纯增量 140 图中位 FPS | `37.3997` |
+| CLI 纯增量 140 图端到端 FPS | `33.504` |
 
-上表是当前 immutable release 的真实 OM lock 结果。发布前候选与发布后 release-local 复验完全一致，四项满分门禁均通过；误激活较上一代 `35/75` 降至 `17/75`。冻结评分见 [`validation/score.json`](models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/score.json)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
+上表是当前真实 OM lock 与正式公共入口结果。新旧 runtime 的冻结输出完全一致，四项满分门禁均通过；误激活较上一代 `35/75` 降至 `17/75`。仓库内模型资产仍由 [`runtime-calibration-v1`](models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/README.md) 提供，本轮运行时证据见 [`reports/ascend310b/20260824-replica-pool-v1/`](reports/ascend310b/20260824-replica-pool-v1/README.md)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
 
 ## 安装
 

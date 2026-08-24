@@ -141,6 +141,7 @@ performance:
   report_root: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/reports
   concurrent_requests: 1
   batch_probe_size: 20
+  low_latency_replicas: 3
 generation:
   registry: /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/provenance/generations.json
   runtime_registry: data/generation_registry/runtime.json

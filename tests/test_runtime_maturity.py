@@ -480,22 +480,19 @@ def test_cli_frontend_runs_single_detection_and_returns_home(monkeypatch) -> Non
     )
     monkeypatch.setattr(frontend, "_state", lambda: (state, decision))
 
-    def fake_call(arguments, *, timeout=600):
-        calls.append((arguments, timeout))
+    def fake_call(arguments):
+        calls.append(arguments)
         return subprocess.CompletedProcess(arguments, 0, "识别完成并已保存", "")
 
-    monkeypatch.setattr(frontend, "_call_cli", fake_call)
+    monkeypatch.setattr(frontend, "_call_detect", fake_call)
     assert frontend.run() == 0
     assert calls == [
-        (
-            [
-                "detect",
-                "--source",
-                "/tmp/input image.png",
-                "--output",
-                "/tmp/result",
-            ],
-            3600,
-        )
+        [
+            "detect",
+            "--source",
+            "/tmp/input image.png",
+            "--output",
+            "/tmp/result",
+        ]
     ]
     assert "识别完成并已保存" in "\n".join(output)

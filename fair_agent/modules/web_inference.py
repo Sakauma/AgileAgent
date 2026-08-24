@@ -1085,6 +1085,8 @@ class WebInferenceEngine:
             torch.backends.cudnn.benchmark = bool(options["cudnn_benchmark"])
             self.context_stream = torch.cuda.Stream(device=int(self.device_index))
         self._model_executor = ThreadPoolExecutor(max_workers=self.max_model_workers)
+        self._encoded_hardware_lock = threading.Lock()
+        self._encoded_batch_executor = ThreadPoolExecutor(max_workers=2)
         context_size = int(self.context_checkpoint["preprocessing"]["image_size"])
         warmup_image = Image.new("RGB", (self.warmup_width, self.warmup_height))
         context_warmup = Image.new("RGB", (context_size, context_size))
@@ -1215,6 +1217,9 @@ class WebInferenceEngine:
         queue = getattr(self, "queue", None)
         if queue is not None:
             queue.close()
+        batch_executor = getattr(self, "_encoded_batch_executor", None)
+        if batch_executor is not None:
+            batch_executor.shutdown(wait=True, cancel_futures=True)
         executor = getattr(self, "_model_executor", None)
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
@@ -1268,15 +1273,29 @@ class WebInferenceEngine:
         filename: str,
         confidence: float | None = None,
         incremental_protocol: str | None = None,
+        speculative_specialists: bool = False,
     ) -> Dict[str, Any]:
         if not self.accepts_encoded(data):
             raise ValueError("当前Ascend编码输入不符合DVPP固定生产契约")
+        resolved_confidence = (
+            self.default_confidence if confidence is None else confidence
+        )
         result, queue_wait_ms = self.queue.run(
-            lambda: self._predict_encoded_unlocked(
-                data,
-                filename,
-                self.default_confidence if confidence is None else confidence,
-                incremental_protocol,
+            lambda: (
+                self._predict_encoded_unlocked(
+                    data,
+                    filename,
+                    resolved_confidence,
+                    incremental_protocol,
+                    True,
+                )
+                if speculative_specialists
+                else self._predict_encoded_unlocked(
+                    data,
+                    filename,
+                    resolved_confidence,
+                    incremental_protocol,
+                )
             )
         )
         result["queue_wait_ms"] = queue_wait_ms
@@ -1287,6 +1306,7 @@ class WebInferenceEngine:
         items: Iterable[tuple[bytes, str]],
         confidence: float | None = None,
         incremental_protocol: str | None = "auto",
+        speculative_specialists: bool = False,
     ) -> List[Dict[str, Any]]:
         rows = list(items)
         if not rows:
@@ -1296,17 +1316,53 @@ class WebInferenceEngine:
         resolved_confidence = (
             self.default_confidence if confidence is None else confidence
         )
-        results, queue_wait_ms = self.queue.run(
-            lambda: [
-                self._predict_encoded_unlocked(
-                    data,
-                    filename,
-                    resolved_confidence,
-                    incremental_protocol,
+        pipeline_hardware = (
+            speculative_specialists
+            and len(rows) > 1
+            and self.backend_name == "ascend_acl"
+            and self.native_options.get("execution_mode", "synchronous")
+            == "async_stream"
+            and self.native_options.get("schedule_mode", "threaded_execute")
+            == "unified_enqueue"
+            and not bool(self.native_options.get("detailed_event_timing", False))
+        )
+
+        def predict_rows() -> List[Dict[str, Any]]:
+            if pipeline_hardware:
+                futures = [
+                    self._encoded_batch_executor.submit(
+                        self._predict_encoded_unlocked,
+                        data,
+                        filename,
+                        resolved_confidence,
+                        incremental_protocol,
+                        True,
+                        True,
+                    )
+                    for data, filename in rows
+                ]
+                return [future.result() for future in futures]
+            return [
+                (
+                    self._predict_encoded_unlocked(
+                        data,
+                        filename,
+                        resolved_confidence,
+                        incremental_protocol,
+                        True,
+                    )
+                    if speculative_specialists
+                    else self._predict_encoded_unlocked(
+                        data,
+                        filename,
+                        resolved_confidence,
+                        incremental_protocol,
+                    )
                 )
                 for data, filename in rows
             ]
-        )
+
+        results, queue_wait_ms = self.queue.run(predict_rows)
         for result in results:
             result["queue_wait_ms"] = queue_wait_ms
         return results
@@ -1317,14 +1373,53 @@ class WebInferenceEngine:
         filename: str,
         confidence: float,
         incremental_protocol: str | None,
+        speculative_specialists: bool = False,
+        pipeline_hardware: bool = False,
     ) -> Dict[str, Any]:
-        return self._predict_unlocked(
-            self._encoded_image_stub,
-            filename,
-            confidence,
-            incremental_protocol,
-            encoded_data=data,
-        )
+        hardware_release: Callable[[], None] | None = None
+        hardware_locked = False
+        hardware_wait_started = time.perf_counter()
+        hardware_started = hardware_wait_started
+        hardware_elapsed_ms = 0.0
+        if pipeline_hardware:
+            self._encoded_hardware_lock.acquire()
+            hardware_locked = True
+            hardware_started = time.perf_counter()
+
+            def release_hardware() -> None:
+                nonlocal hardware_elapsed_ms, hardware_locked
+                if hardware_locked:
+                    hardware_elapsed_ms = (
+                        time.perf_counter() - hardware_started
+                    ) * 1000
+                    hardware_locked = False
+                    self._encoded_hardware_lock.release()
+
+            hardware_release = release_hardware
+        try:
+            result = self._predict_unlocked(
+                self._encoded_image_stub,
+                filename,
+                confidence,
+                incremental_protocol,
+                encoded_data=data,
+                speculative_specialists=speculative_specialists,
+                hardware_release=hardware_release,
+            )
+            if pipeline_hardware:
+                result.setdefault("timings", {}).update(
+                    {
+                        "pipeline_hardware_wait_ms": round(
+                            (hardware_started - hardware_wait_started) * 1000,
+                            3,
+                        ),
+                        "pipeline_hardware_ms": round(hardware_elapsed_ms, 3),
+                    }
+                )
+            return result
+        finally:
+            if hardware_locked:
+                self._encoded_hardware_lock.release()
 
     def predict_batch(
         self,
@@ -1752,6 +1847,8 @@ class WebInferenceEngine:
         confidence: float,
         incremental_protocol: str | None,
         encoded_data: bytes | None = None,
+        speculative_specialists: bool = False,
+        hardware_release: Callable[[], None] | None = None,
     ) -> Dict[str, Any]:
         from fair_agent.models.context import predict_context
 
@@ -1893,11 +1990,15 @@ class WebInferenceEngine:
                 or protocol_independent_class_ids(protocol)
             )
         ][: self.max_specialists]
-        prefetch_ids = [
-            protocol_id
-            for protocol_id in route_candidate_ids
-            if protocol_content_execution_gate(protocol_pool[protocol_id]) is None
-        ]
+        prefetch_ids = (
+            list(route_candidate_ids)
+            if speculative_specialists
+            else [
+                protocol_id
+                for protocol_id in route_candidate_ids
+                if protocol_content_execution_gate(protocol_pool[protocol_id]) is None
+            ]
+        )
         deferred_specialist_ids = set(route_candidate_ids) - set(prefetch_ids)
         physical_specialist_ids = tuple(prefetch_ids)
         for protocol_id in physical_specialist_ids:
@@ -2056,6 +2157,18 @@ class WebInferenceEngine:
             if not fixed_context:
                 context, context_total_ms = context_task()
             prediction, detector_total_ms = detector_task(self.detector, self.imgsz)
+
+        # Encoded batch workers serialize only the resident DVPP/model buffers.
+        # Once every OM output has been copied to its per-result host arrays,
+        # the next frame may enter the NPU while this frame completes routing,
+        # calibration and NMS on the CPU.
+        if hardware_release is not None:
+            hardware_release()
+            # Hand the interpreter to the next batch worker immediately.  The
+            # routing stage below is Python-heavy enough to otherwise retain
+            # the GIL until it has finished, which would serialize the very
+            # NPU/CPU overlap this pipeline is intended to create.
+            time.sleep(0)
 
         if context is None:
             raise RuntimeError("上下文执行未返回结果")
@@ -2310,6 +2423,12 @@ class WebInferenceEngine:
             "mode": "automatic" if automatic else ("manual" if protocol_pool else "unified_only"),
             "input_mode": "unlabeled_image",
             "inference_scope": "production",
+            "execution_profile": (
+                "speculative_low_latency"
+                if speculative_specialists
+                else "gated_standard"
+            ),
+            "prefetched_specialists": list(physical_specialist_ids),
             "routing_basis": "all_class_owners_plus_optional_content_routing",
             "class_incremental_execution_policy": (
                 "scene_and_base_evidence_gate"

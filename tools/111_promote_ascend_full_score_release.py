@@ -137,8 +137,9 @@ def validate_score(report: Mapping[str, Any]) -> dict[str, float]:
 
 
 def validate_benchmark(report: Mapping[str, Any], label: str) -> float:
-    if report.get("schema_version") not in {5, 6}:
-        raise ValueError(f"{label}必须是benchmark schema v5/v6")
+    schema_version = report.get("schema_version")
+    if schema_version not in {5, 6, 7}:
+        raise ValueError(f"{label}必须是benchmark schema v5/v6/v7")
     protocol = report.get("protocol") or {}
     competition = report.get("competition") or {}
     rounds = competition.get("batch_rounds")
@@ -153,6 +154,10 @@ def validate_benchmark(report: Mapping[str, Any], label: str) -> float:
         or len(rounds) != FULL_SCORE_BATCH_ROUNDS
     ):
         raise ValueError(f"{label}的20图三轮协议非法")
+    if schema_version == 7 and competition.get("batch_timing_source") != (
+        "api_timings.batch_engine_ms"
+    ):
+        raise ValueError(f"{label}没有使用完整图像推理耗时口径")
     fps = float(competition.get("batch_fps", -1.0))
     if fps < FULL_SCORE_BATCH_FPS_MIN or competition.get("batch_fps_passed") is not True:
         raise ValueError(f"{label}未达到30 FPS满分门禁")

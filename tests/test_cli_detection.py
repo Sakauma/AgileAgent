@@ -52,6 +52,37 @@ def fake_result(filename: str) -> dict:
     }
 
 
+class FakeLocalDetectionApiClient:
+    def __init__(self, _base_url: str, _timeout: float) -> None:
+        pass
+
+    def __enter__(self) -> "FakeLocalDetectionApiClient":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        pass
+
+    def detect(self, _data: bytes, filename: str) -> tuple[dict, float]:
+        result = fake_result(filename)
+        result["system_total_ms"] = 15.0
+        result["timings"] = {"engine_total_ms": 13.0}
+        return result, 18.0
+
+    def detect_batch(
+        self,
+        rows: list[tuple[str, bytes]],
+    ) -> tuple[dict, float]:
+        results = [fake_result(filename) for filename, _data in rows]
+        return {
+            "image_count": len(rows),
+            "detection_count": len(rows),
+            "inference_ms": 12.5 * len(rows),
+            "system_total_ms": 15.0 * len(rows),
+            "timings": {"batch_engine_ms": 13.0 * len(rows)},
+            "results": results,
+        }, 18.0 * len(rows)
+
+
 def test_discover_detection_inputs_supports_single_and_recursive_directory(tmp_path: Path) -> None:
     first = tmp_path / "first.png"
     nested = tmp_path / "nested" / "second.jpg"
@@ -141,11 +172,21 @@ def test_detection_summary_limits_terminal_rows() -> None:
         "detection_count": 3,
         "class_counts": {"tank": 3},
         "saved_to": "/tmp/result",
+        "performance": {
+            "end_to_end_inference_ms": 50.0,
+            "end_to_end_inference_fps": 20.0,
+        },
         "results": [result],
     }
     rendered = render_detection_summary(payload, max_detection_rows=1)
     assert "统计摘要" in rendered
-    assert "80.00 FPS" in rendered
+    assert "端到端推理时间" in rendered
+    assert "50.0 ms" in rendered
+    assert "端到端推理 FPS" in rendered
+    assert "20.00 FPS" in rendered
+    assert "处理耗时" not in rendered
+    assert "平均耗时" not in rendered
+    assert "耗时(ms)" not in rendered
     assert "检测明细" in rendered
     assert "另有 2 条记录" in rendered
 
@@ -209,8 +250,8 @@ def test_detect_command_reuses_local_service_and_saves_results(
     )
     monkeypatch.setattr(
         cli_detection,
-        "detect_via_local_api",
-        lambda _base_url, _data, filename, timeout: fake_result(filename),
+        "LocalDetectionApiClient",
+        FakeLocalDetectionApiClient,
     )
     args = argparse.Namespace(
         source=str(source),
@@ -222,8 +263,12 @@ def test_detect_command_reuses_local_service_and_saves_results(
     payload = json.loads(capsys.readouterr().out)
     assert payload["transport"] == "local_api"
     assert payload["detection_count"] == 1
+    assert payload["performance"]["strategy"] == "single_api"
+    assert payload["performance"]["end_to_end_inference_ms"] == 13.0
+    assert payload["performance"]["end_to_end_inference_fps"] == 76.923
+    assert payload["performance"]["cli_total_wall_ms"] > 0
     assert (output / "results.json").is_file()
-    assert (output / "annotated/001_sample.png").is_file()
+    assert (output / "annotated/001_sample.jpg").is_file()
 
 
 def test_batch_detect_command_prints_progress_without_filenames_and_summary_only(
@@ -254,8 +299,8 @@ def test_batch_detect_command_prints_progress_without_filenames_and_summary_only
     )
     monkeypatch.setattr(
         cli_detection,
-        "detect_via_local_api",
-        lambda _base_url, _data, filename, timeout: fake_result(filename),
+        "LocalDetectionApiClient",
+        FakeLocalDetectionApiClient,
     )
     args = argparse.Namespace(
         source=str(source),
@@ -268,11 +313,26 @@ def test_batch_detect_command_prints_progress_without_filenames_and_summary_only
     captured = capsys.readouterr()
     assert "批量识别完成" in captured.out
     assert "统计摘要" in captured.out
+    assert "端到端推理时间" in captured.out
+    assert "端到端推理 FPS" in captured.out
+    assert "识别墙钟" not in captured.out
+    assert "结果收尾" not in captured.out
+    assert "服务处理" not in captured.out
     assert "检测明细" not in captured.out
     assert "批量识别进度" in captured.err
     assert "first.png" not in captured.out + captured.err
     assert "second.png" not in captured.out + captured.err
     saved = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert saved["performance"]["strategy"] == "chunked_batch_api"
+    assert saved["performance"]["measurement_scope"] == (
+        "competition_end_to_end_inference"
+    )
+    assert saved["performance"]["timing_source"] == "api_engine_total_ms"
+    assert saved["performance"]["end_to_end_inference_ms"] == 26.0
+    assert saved["performance"]["end_to_end_inference_fps"] == 76.923
+    assert saved["performance"]["cli_total_wall_ms"] > 0
+    assert saved["performance"]["batch_size"] == 2
+    assert saved["performance"]["request_count"] == 1
     assert [item["filename"] for item in saved["results"]] == [
         "first.png",
         "second.png",

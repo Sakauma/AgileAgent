@@ -17,7 +17,8 @@
 | Conda base | `/usr/local/miniconda3` |
 | 正式环境 | `/usr/local/miniconda3/envs/agileagent` |
 | 正式 Python | `/usr/local/miniconda3/envs/agileagent/bin/python` |
-| 正式 release | `/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1` |
+| 正式 release | `/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-replica-pool-v1` |
+| 回滚 release | `/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1` |
 | 公共入口 | `127.0.0.1:8501` |
 | 主实例 | `127.0.0.1:18501` |
 | 候选端口 | `127.0.0.1:8502`，正式状态下空闲 |
@@ -169,6 +170,7 @@ sudo /usr/local/sbin/agileagent-ascend310b-primary-route status 18501
   "validation_candidate": false,
   "model_layout": "independent_yolo26_e2e_v1",
   "context_mode": "model",
+  "inference_replicas": 3,
   "generation_id": "incremental_detection_generation_4plus2"
 }
 ```
@@ -197,7 +199,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-正式 release 已完成公共入口 `30 + 3×20` 部署后复验，三轮为 `38.5802 / 38.6698 / 38.6623 FPS`，中位 `38.6623 FPS`。重新测量需要至少 20 张 `640×512`、8-bit 灰度/RGB/RGBA PNG；重新计算 Base/New/KRR 需要同版 89 图和标签。
+正式 release 已完成公共入口 `30 + 3×20` 部署后复验，mixed 三轮为 `35.3751 / 38.6201 / 38.2175 FPS`，中位 `38.2175 FPS`；纯增量 140 图三轮为 `38.5337 / 36.0538 / 37.3997 FPS`，中位 `37.3997 FPS`。CLI 按正式 20 图分批识别同一 140 图为 `33.504 FPS`。重新计算 Base/New/KRR 需要同版 89 图和标签。
 
 ## 回滚
 

@@ -5,14 +5,15 @@ AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模�
 
 ## 本次验证状态
 
-2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与不可变 release `20260824-4plus2-yolo26-runtime-calibration-v1` 完成最终验收：
+2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与 runtime release `20260824-4plus2-yolo26-replica-pool-v1` 完成最终验收；三个冻结 OM 继承自 `20260824-4plus2-yolo26-runtime-calibration-v1`：
 
 - Ascend 定向回归：`100 passed`；
 - 全量回归：`283 passed in 34.19s`；
 - `scripts/verify_release.py`：PASS；
 - `bash scripts/materialize_ascend310b_full_score_release.sh --verify-existing`：33 项发布资产全部 PASS；
-- 三个 systemd unit 均为 active，公共 `8501` 健康检查返回 `status=ready`、`backend=ascend_acl`、`validated=true`；
+- 三个 systemd unit 均为 active，公共 `8501` 健康检查返回 `status=ready`、`backend=ascend_acl`、`validated=true`、`inference_replicas=3`；
 - 冻结 release 的 Base-mAP50、New-mAP50、KRR 与公共 `8501` FPS 四项满分门禁全部通过。
+- 正式 `8501` mixed 20 图中位 `38.2175 FPS`，纯增量 140 图中位 `37.3997 FPS`，CLI 同一 140 图端到端 `33.504 FPS`。
 
 本轮没有重新训练模型。精度、误激活和性能结论采用当前冻结 release 的候选、lock、正式提升后复验及部署后 benchmark 证据；下文命令仍是后续代码、模型或发布变更时的标准验收入口。
 
@@ -230,7 +231,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-health 必须报告 `status=ready`、`backend=ascend_acl`、`device=ascend:0`、`validated=true`、`validation_candidate=false`、`model_layout=independent_yolo26_e2e_v1`、`context_mode=model` 和当前 4+2 production generation ID。
+health 必须报告 `status=ready`、`backend=ascend_acl`、`device=ascend:0`、`validated=true`、`validation_candidate=false`、`model_layout=independent_yolo26_e2e_v1`、`context_mode=model`、`inference_replicas=3` 和当前 4+2 production generation ID。
 
 新候选的完整 score gate 入口是：
 
@@ -243,7 +244,7 @@ health 必须报告 `status=ready`、`backend=ascend_acl`、`device=ascend:0`、
   "$OUTPUT_DIR"
 ```
 
-该 gate 在 `8502` 启动受控候选，冻结无标签预测，计算 Base mAP50、New-mAP50、KRR，并执行 30 次预热和三轮 20 图 batch FPS。执行前后正式 `8501` 都必须 ready，输入必须是根目录内 stem 唯一的 `640×512`、8-bit 灰度/RGB/RGBA PNG。
+该 gate 在 `8502` 启动受控候选，冻结无标签预测，计算 Base mAP50、New-mAP50、KRR，并执行 30 次预热和三轮 20 图 batch FPS。schema v7 使用 `api_timings.batch_engine_ms` 作为完整图像推理耗时，覆盖 DVPP、模型、门控、融合和 NMS，不混入上传解析或保存。执行前后正式 `8501` 都必须 ready，输入必须是根目录内 stem 唯一的 `640×512`、8-bit 灰度/RGB/RGBA PNG。
 
 ## 编写新测试
 

@@ -572,16 +572,22 @@ def build_detection_engine(config: Dict[str, Any]) -> Any:
 
 def cmd_detect(args: argparse.Namespace) -> int:
     from fair_agent.modules.cli_detection import (
+        DEFAULT_ANNOTATION_FORMAT,
+        DEFAULT_ANNOTATION_WORKERS,
+        DEFAULT_BATCH_SIZE,
+        DetectionArtifactWriter,
+        LocalDetectionApiClient,
         create_result_dir,
-        detect_via_local_api,
         discover_detection_inputs,
         probe_local_detection_api,
         render_detection_summary,
-        save_detection_results,
+        write_detection_reports,
     )
-    from fair_agent.modules.web_inference import decode_image_bytes
+    from fair_agent.modules.web_inference import decode_batch_images, decode_image_bytes
 
     engine = None
+    artifact_writer = None
+    operation_started = time.perf_counter()
     try:
         config = load_args_config(args)
         inference = config["inference"]
@@ -610,55 +616,248 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
 
+        input_read_started = time.perf_counter()
         source_bytes = [item.path.read_bytes() for item in inputs]
+        input_read_ms = (time.perf_counter() - input_read_started) * 1000
+        run_dir = create_result_dir(args.output, source)
+        artifact_writer = DetectionArtifactWriter(
+            run_dir,
+            annotation_format=DEFAULT_ANNOTATION_FORMAT,
+            workers=min(
+                DEFAULT_ANNOTATION_WORKERS,
+                max(1, int(os.cpu_count() or 1)),
+            ),
+        )
         api_base_url = probe_local_detection_api(config)
-        results = []
+        results: list[Dict[str, Any]] = []
+        request_count = 0
+        service_processing_ms = 0.0
+        client_request_wall_ms = 0.0
+        performance_options = config.get("performance", {})
+        configured_batch_size = max(
+            1,
+            int(performance_options.get("batch_probe_size") or DEFAULT_BATCH_SIZE),
+        )
+        batch_size = min(total_inputs, configured_batch_size)
+        detection_started = time.perf_counter()
+
+        def store_results(start: int, chunk_results: List[Dict[str, Any]]) -> None:
+            if len(chunk_results) + start > total_inputs:
+                raise RuntimeError("识别结果数量超过输入数量")
+            for offset, result in enumerate(chunk_results):
+                index = start + offset
+                results.append(result)
+                artifact_writer.submit(
+                    index + 1,
+                    inputs[index],
+                    source_bytes[index],
+                    result,
+                )
+
         if api_base_url is not None:
             transport = "local_api"
             request_timeout = max(
                 1.0,
                 float(config.get("performance", {}).get("request_timeout_seconds") or 180),
             )
-            for index, (item, data) in enumerate(zip(inputs, source_bytes), 1):
-                results.append(
-                    detect_via_local_api(
-                        api_base_url,
-                        data,
-                        item.name,
-                        timeout=request_timeout,
+            with LocalDetectionApiClient(api_base_url, request_timeout) as client:
+                if total_inputs == 1:
+                    result, wall_ms = client.detect(source_bytes[0], inputs[0].name)
+                    request_count = 1
+                    client_request_wall_ms = wall_ms
+                    service_processing_ms = float(
+                        result.get("timings", {}).get("engine_total_ms")
+                        or result.get("system_total_ms")
+                        or result.get("inference_ms")
+                        or 0.0
                     )
-                )
-                report_batch_progress(index)
+                    store_results(0, [result])
+                else:
+                    for start in range(0, total_inputs, batch_size):
+                        stop = min(total_inputs, start + batch_size)
+                        rows = [
+                            (inputs[index].name, source_bytes[index])
+                            for index in range(start, stop)
+                        ]
+                        batch_payload, wall_ms = client.detect_batch(rows)
+                        chunk_results = list(batch_payload["results"])
+                        store_results(start, chunk_results)
+                        request_count += 1
+                        client_request_wall_ms += wall_ms
+                        service_processing_ms += float(
+                            batch_payload.get("timings", {}).get(
+                                "batch_engine_ms"
+                            )
+                            or batch_payload.get("system_total_ms")
+                            or batch_payload.get("inference_ms")
+                            or 0.0
+                        )
+                        for completed in range(start + 1, stop + 1):
+                            report_batch_progress(completed)
         else:
             transport = "direct_engine"
             print("正在准备识别引擎，请稍候……", file=sys.stderr)
             engine = build_detection_engine(config)
             accepts_encoded = getattr(engine, "accepts_encoded", None)
-            for index, (item, data) in enumerate(zip(inputs, source_bytes), 1):
-                if callable(accepts_encoded) and accepts_encoded(data):
-                    result = engine.predict_encoded(data, item.name, confidence, "auto")
-                else:
-                    image = decode_image_bytes(
-                        data,
-                        item.name,
-                        str(config["decoding"]["backend"]),
+            predict_encoded_batch = getattr(engine, "predict_encoded_batch", None)
+            predict_batch = getattr(engine, "predict_batch", None)
+            for start in range(0, total_inputs, batch_size):
+                stop = min(total_inputs, start + batch_size)
+                rows = [
+                    (inputs[index].name, source_bytes[index])
+                    for index in range(start, stop)
+                ]
+                if (
+                    callable(accepts_encoded)
+                    and callable(predict_encoded_batch)
+                    and all(accepts_encoded(data) for _name, data in rows)
+                ):
+                    chunk_results = list(
+                        predict_encoded_batch(
+                            [(data, name) for name, data in rows],
+                            confidence,
+                            "auto",
+                            True,
+                        )
                     )
-                    result = engine.predict(image, item.name, confidence, "auto")
-                results.append(result)
-                report_batch_progress(index)
-        run_dir = create_result_dir(args.output, source)
-        payload = save_detection_results(
-            run_dir,
-            source,
-            inputs,
-            source_bytes,
-            results,
-            transport=transport,
+                elif callable(predict_batch) and len(rows) > 1:
+                    decoded = decode_batch_images(
+                        rows,
+                        str(config["decoding"]["backend"]),
+                        int(config["decoding"].get("workers") or 1),
+                    )
+                    chunk_results = list(
+                        predict_batch(
+                            [(image, name) for name, _data, image in decoded],
+                            confidence,
+                            "auto",
+                        )
+                    )
+                else:
+                    chunk_results = []
+                    for name, data in rows:
+                        if callable(accepts_encoded) and accepts_encoded(data):
+                            result = engine.predict_encoded(
+                                data,
+                                name,
+                                confidence,
+                                "auto",
+                                True,
+                            )
+                        else:
+                            image = decode_image_bytes(
+                                data,
+                                name,
+                                str(config["decoding"]["backend"]),
+                            )
+                            result = engine.predict(
+                                image,
+                                name,
+                                confidence,
+                                "auto",
+                            )
+                        chunk_results.append(result)
+                if len(chunk_results) != len(rows):
+                    raise RuntimeError("本进程批量识别结果数量与输入不一致")
+                store_results(start, chunk_results)
+                request_count += 1
+                for completed in range(start + 1, stop + 1):
+                    report_batch_progress(completed)
+            service_processing_ms = sum(
+                float(
+                    result.get("timings", {}).get("engine_total_ms")
+                    or result.get("system_total_ms")
+                    or result.get("inference_ms")
+                    or 0.0
+                )
+                for result in results
+            )
+        detection_finished = time.perf_counter()
+        detection_wall_ms = (detection_finished - detection_started) * 1000
+        model_inference_ms = sum(
+            float(result.get("inference_ms") or 0.0) for result in results
         )
+        target_fps = float(performance_options.get("target_api_fps") or 30.0)
+
+        def throughput(duration_ms: float) -> float | None:
+            return (
+                total_inputs * 1000.0 / duration_ms
+                if duration_ms > 0.0
+                else None
+            )
+
+        end_to_end_inference_fps = throughput(service_processing_ms)
+        performance = {
+            "measurement_scope": "competition_end_to_end_inference",
+            "timing_source": (
+                "api_engine_total_ms"
+                if transport == "local_api"
+                else "engine_total_ms"
+            ),
+            "strategy": (
+                "single_api"
+                if total_inputs == 1 and transport == "local_api"
+                else "chunked_batch_api"
+                if transport == "local_api"
+                else "direct_engine_batch"
+            ),
+            "target_fps": round(target_fps, 3),
+            "batch_size": batch_size,
+            "request_count": request_count,
+            "input_read_ms": round(input_read_ms, 3),
+            "model_inference_ms": round(model_inference_ms, 3),
+            "end_to_end_inference_ms": round(service_processing_ms, 3),
+            "end_to_end_inference_fps": (
+                round(float(end_to_end_inference_fps), 3)
+                if end_to_end_inference_fps is not None
+                else None
+            ),
+            "service_processing_ms": round(service_processing_ms, 3),
+            "service_processing_fps": (
+                round(float(end_to_end_inference_fps), 3)
+                if end_to_end_inference_fps is not None
+                else None
+            ),
+            "client_request_wall_ms": round(client_request_wall_ms, 3),
+            "detection_wall_ms": round(detection_wall_ms, 3),
+            "detection_wall_fps": (
+                round(float(throughput(detection_wall_ms)), 3)
+                if throughput(detection_wall_ms) is not None
+                else None
+            ),
+        }
+        payload = artifact_writer.finalize(
+            source,
+            transport=transport,
+            performance=performance,
+        )
+        artifact_writer = None
+        completed_at = time.perf_counter()
+        cli_total_wall_ms = (completed_at - operation_started) * 1000
+        result_finalize_ms = (completed_at - detection_finished) * 1000
+        cli_total_fps = throughput(cli_total_wall_ms)
+        payload["performance"].update(
+            {
+                "result_finalize_ms": round(result_finalize_ms, 3),
+                "cli_total_wall_ms": round(cli_total_wall_ms, 3),
+                "cli_total_fps": (
+                    round(float(cli_total_fps), 3)
+                    if cli_total_fps is not None
+                    else None
+                ),
+                "target_met": bool(
+                    end_to_end_inference_fps is not None
+                    and end_to_end_inference_fps >= target_fps
+                ),
+            }
+        )
+        write_detection_reports(payload)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"自动检测失败：{exc}")
         return 1
     finally:
+        if artifact_writer is not None:
+            artifact_writer.abort()
         if engine is not None:
             close = getattr(engine, "close", None)
             if callable(close):

@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import csv
+import http.client
 import io
 import json
 import mimetypes
 import os
 import re
+import time
 import uuid
 from collections import Counter
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from PIL import Image, ImageDraw
@@ -23,6 +27,9 @@ from fair_agent.ui.terminal import panel, table
 
 
 DEFAULT_RESULT_ROOT = "runs/cli_detections"
+DEFAULT_BATCH_SIZE = 20
+DEFAULT_ANNOTATION_WORKERS = 3
+DEFAULT_ANNOTATION_FORMAT = "jpeg"
 SUPPORTED_IMAGE_SUFFIXES = {
     ".bmp",
     ".jpeg",
@@ -188,6 +195,136 @@ def probe_local_detection_api(
     return base_url
 
 
+def _multipart_filename(filename: str) -> str:
+    suffix = Path(filename).suffix.lower() or ".bin"
+    return safe_stem(filename) + suffix
+
+
+def _multipart_body(
+    rows: Sequence[tuple[str, bytes]],
+    *,
+    field_name: str,
+    boundary: str,
+) -> bytes:
+    if not rows:
+        raise ValueError("检测请求至少需要一张图像")
+    chunks: list[bytes] = []
+    for filename, data in rows:
+        ascii_name = _multipart_filename(filename)
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode("ascii"),
+                (
+                    f'Content-Disposition: form-data; name="{field_name}"; '
+                    f'filename="{ascii_name}"\r\n'
+                ).encode("ascii"),
+                f"Content-Type: {content_type}\r\n\r\n".encode("ascii"),
+                data,
+                b"\r\n",
+            ]
+        )
+    chunks.append(f"--{boundary}--\r\n".encode("ascii"))
+    return b"".join(chunks)
+
+
+class LocalDetectionApiClient:
+    """Small keep-alive client used by the primary CLI inference path."""
+
+    def __init__(self, base_url: str, timeout: float) -> None:
+        parsed = urlsplit(base_url)
+        if parsed.scheme != "http" or not parsed.hostname:
+            raise ValueError("本机推理服务必须使用明确的 http:// 地址")
+        self._prefix = parsed.path.rstrip("/")
+        self._connection = http.client.HTTPConnection(
+            parsed.hostname,
+            parsed.port or 80,
+            timeout=timeout,
+        )
+
+    def __enter__(self) -> "LocalDetectionApiClient":
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def _post_multipart(
+        self,
+        path: str,
+        rows: Sequence[tuple[str, bytes]],
+        *,
+        field_name: str,
+    ) -> tuple[Dict[str, Any], float]:
+        boundary = f"----AgileAgentCLI{uuid.uuid4().hex}"
+        body = _multipart_body(
+            rows,
+            field_name=field_name,
+            boundary=boundary,
+        )
+        started = time.perf_counter()
+        try:
+            self._connection.request(
+                "POST",
+                f"{self._prefix}{path}",
+                body=body,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    "Content-Length": str(len(body)),
+                    "Connection": "keep-alive",
+                    "User-Agent": "AgileAgent-CLI/1",
+                    "X-Agile-Agent-Execution-Profile": "speculative-low-latency",
+                },
+            )
+            response = self._connection.getresponse()
+            response_body = response.read()
+        except (http.client.HTTPException, OSError, TimeoutError) as exc:
+            raise RuntimeError(f"本机推理服务连接中断：{exc}") from exc
+        wall_ms = (time.perf_counter() - started) * 1000
+        try:
+            payload = json.loads(response_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("本机推理服务返回了无效 JSON") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("本机推理服务返回的 JSON 不是对象")
+        if not 200 <= response.status < 300:
+            detail = str(payload.get("error") or response.reason or "请求失败")
+            raise RuntimeError(f"本机推理服务返回 HTTP {response.status}：{detail}")
+        if payload.get("error"):
+            raise RuntimeError(str(payload["error"]))
+        return payload, wall_ms
+
+    def detect(self, data: bytes, filename: str) -> tuple[Dict[str, Any], float]:
+        payload, wall_ms = self._post_multipart(
+            "/api/detect",
+            [(filename, data)],
+            field_name="file",
+        )
+        payload["filename"] = filename
+        return payload, wall_ms
+
+    def detect_batch(
+        self,
+        rows: Sequence[tuple[str, bytes]],
+    ) -> tuple[Dict[str, Any], float]:
+        payload, wall_ms = self._post_multipart(
+            "/api/batch",
+            rows,
+            field_name="files",
+        )
+        results = payload.get("results")
+        if not isinstance(results, list) or len(results) != len(rows):
+            raise RuntimeError("批量推理服务返回的结果数量与输入不一致")
+        for result, (filename, _data) in zip(results, rows):
+            if not isinstance(result, dict):
+                raise RuntimeError("批量推理服务返回了无效的逐图结果")
+            result["filename"] = filename
+        return payload, wall_ms
+
+
 def detect_via_local_api(
     base_url: str,
     data: bytes,
@@ -195,48 +332,8 @@ def detect_via_local_api(
     *,
     timeout: float,
 ) -> Dict[str, Any]:
-    boundary = f"----AgileAgentCLI{uuid.uuid4().hex}"
-    ascii_name = safe_stem(filename) + (Path(filename).suffix.lower() or ".bin")
-    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    body = b"".join(
-        [
-            f"--{boundary}\r\n".encode("ascii"),
-            (
-                'Content-Disposition: form-data; name="file"; '
-                f'filename="{ascii_name}"\r\n'
-            ).encode("ascii"),
-            f"Content-Type: {content_type}\r\n\r\n".encode("ascii"),
-            data,
-            f"\r\n--{boundary}--\r\n".encode("ascii"),
-        ]
-    )
-    request = Request(
-        f"{base_url}/api/detect",
-        data=body,
-        method="POST",
-        headers={
-            "Accept": "application/json",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "User-Agent": "AgileAgent-CLI/1",
-        },
-    )
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        try:
-            detail = str(json.loads(detail).get("error") or detail)
-        except json.JSONDecodeError:
-            pass
-        raise RuntimeError(f"本机推理服务返回 HTTP {exc.code}：{detail}") from exc
-    except (URLError, OSError, TimeoutError) as exc:
-        raise RuntimeError(f"本机推理服务连接中断：{exc}") from exc
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("本机推理服务返回了无效 JSON") from exc
-    if payload.get("error"):
-        raise RuntimeError(str(payload["error"]))
-    payload["filename"] = filename
+    with LocalDetectionApiClient(base_url, timeout) as client:
+        payload, _wall_ms = client.detect(data, filename)
     return payload
 
 
@@ -254,7 +351,12 @@ def display_class_name(value: Any) -> str:
     return f"{label} ({name})" if label else name
 
 
-def _annotated_png(data: bytes, detections: Iterable[Mapping[str, Any]]) -> bytes:
+def _annotated_image(
+    data: bytes,
+    detections: Iterable[Mapping[str, Any]],
+    *,
+    image_format: str,
+) -> bytes:
     with Image.open(io.BytesIO(data)) as source:
         source.load()
         canvas = source.convert("RGB")
@@ -276,7 +378,18 @@ def _annotated_png(data: bytes, detections: Iterable[Mapping[str, Any]]) -> byte
         )
         draw.text((x1 + 3, label_y + 2), label, fill="white")
     buffer = io.BytesIO()
-    canvas.save(buffer, format="PNG")
+    if image_format == "jpeg":
+        canvas.save(
+            buffer,
+            format="JPEG",
+            quality=90,
+            subsampling=0,
+            optimize=False,
+        )
+    elif image_format == "png":
+        canvas.save(buffer, format="PNG", compress_level=1, optimize=False)
+    else:
+        raise ValueError(f"不支持的标注图格式：{image_format}")
     return buffer.getvalue()
 
 
@@ -372,38 +485,86 @@ def build_detection_statistics(
     }
 
 
-def save_detection_results(
-    run_dir: Path,
-    source: Path,
-    inputs: Sequence[DetectionInput],
-    source_bytes: Sequence[bytes],
-    results: Sequence[Mapping[str, Any]],
-    *,
-    transport: str,
-) -> Dict[str, Any]:
-    if not (len(inputs) == len(source_bytes) == len(results)):
-        raise ValueError("输入、图像数据与检测结果数量不一致")
-    annotated_dir = run_dir / "annotated"
-    prediction_dir = run_dir / "predictions"
-    annotated_dir.mkdir(parents=True, exist_ok=False)
-    prediction_dir.mkdir(parents=True, exist_ok=False)
-    public_results: list[Dict[str, Any]] = []
-    csv_rows: list[Dict[str, Any]] = []
-    for index, (item, data, raw_result) in enumerate(
-        zip(inputs, source_bytes, results),
-        1,
-    ):
+@dataclass(frozen=True)
+class _SavedDetectionArtifact:
+    result: Dict[str, Any]
+    csv_rows: list[Dict[str, Any]]
+    worker_ms: float
+
+
+class DetectionArtifactWriter:
+    """Materialize CLI artifacts while later inference batches are still running."""
+
+    def __init__(
+        self,
+        run_dir: Path,
+        *,
+        annotation_format: str = DEFAULT_ANNOTATION_FORMAT,
+        workers: int = DEFAULT_ANNOTATION_WORKERS,
+    ) -> None:
+        normalized_format = str(annotation_format).strip().lower()
+        if normalized_format not in {"jpeg", "png"}:
+            raise ValueError(f"不支持的标注图格式：{annotation_format}")
+        self.run_dir = run_dir
+        self.annotation_format = normalized_format
+        self.annotation_suffix = ".jpg" if normalized_format == "jpeg" else ".png"
+        self.workers = max(1, int(workers))
+        self.annotated_dir = run_dir / "annotated"
+        self.prediction_dir = run_dir / "predictions"
+        self.annotated_dir.mkdir(parents=True, exist_ok=False)
+        self.prediction_dir.mkdir(parents=True, exist_ok=False)
+        self._executor = ThreadPoolExecutor(
+            max_workers=self.workers,
+            thread_name_prefix="agile-cli-save",
+        )
+        self._futures: list[Future[_SavedDetectionArtifact]] = []
+        self._pipeline_started: float | None = None
+        self._closed = False
+
+    def submit(
+        self,
+        index: int,
+        item: DetectionInput,
+        data: bytes,
+        raw_result: Mapping[str, Any],
+    ) -> None:
+        if self._closed:
+            raise RuntimeError("结果写入器已经关闭")
+        if self._pipeline_started is None:
+            self._pipeline_started = time.perf_counter()
+        self._futures.append(
+            self._executor.submit(
+                self._write_one,
+                index,
+                item,
+                data,
+                raw_result,
+            )
+        )
+
+    def _write_one(
+        self,
+        index: int,
+        item: DetectionInput,
+        data: bytes,
+        raw_result: Mapping[str, Any],
+    ) -> _SavedDetectionArtifact:
+        started = time.perf_counter()
         result = public_detection_result(raw_result)
         result["filename"] = item.name
         result["source_path"] = str(item.path)
         stem = f"{index:03d}_{safe_stem(item.name)}"
-        annotated_relative = Path("annotated") / f"{stem}.png"
+        annotated_relative = Path("annotated") / f"{stem}{self.annotation_suffix}"
         prediction_relative = Path("predictions") / f"{stem}.txt"
-        (run_dir / annotated_relative).write_bytes(
-            _annotated_png(data, result.get("detections", []))
+        (self.run_dir / annotated_relative).write_bytes(
+            _annotated_image(
+                data,
+                result.get("detections", []),
+                image_format=self.annotation_format,
+            )
         )
         prediction_lines = _prediction_lines(result)
-        (run_dir / prediction_relative).write_text(
+        (self.run_dir / prediction_relative).write_text(
             "\n".join(prediction_lines) + ("\n" if prediction_lines else ""),
             encoding="utf-8",
         )
@@ -411,6 +572,7 @@ def save_detection_results(
             "annotated_image": annotated_relative.as_posix(),
             "prediction_txt": prediction_relative.as_posix(),
         }
+        csv_rows: list[Dict[str, Any]] = []
         for detection_index, detection in enumerate(result.get("detections", []), 1):
             class_id = int(detection["class_id"])
             x1, y1, x2, y2 = [float(value) for value in detection["xyxy"]]
@@ -429,55 +591,141 @@ def save_detection_results(
                     "owner_model": _owner_for(result, class_id),
                 }
             )
-        public_results.append(result)
-    class_counts = Counter()
-    for result in public_results:
-        class_counts.update(result.get("class_counts", {}))
-    payload: Dict[str, Any] = {
-        "schema_version": 1,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "source": str(source),
-        "transport": transport,
-        "image_count": len(public_results),
-        "detection_count": sum(int(item.get("detection_count") or 0) for item in public_results),
-        "class_counts": dict(sorted(class_counts.items())),
-        "statistics": build_detection_statistics(public_results),
-        "saved_to": str(run_dir),
-        "results": public_results,
-        "artifacts": {
-            "results_json": "results.json",
-            "detections_csv": "detections.csv",
-            "summary_text": "summary.txt",
-            "annotated_dir": "annotated",
-            "predictions_dir": "predictions",
-        },
-    }
+        return _SavedDetectionArtifact(
+            result=result,
+            csv_rows=csv_rows,
+            worker_ms=(time.perf_counter() - started) * 1000,
+        )
+
+    def abort(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
+    def finalize(
+        self,
+        source: Path,
+        *,
+        transport: str,
+        performance: Mapping[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        if self._closed:
+            raise RuntimeError("结果写入器已经关闭")
+        try:
+            artifacts = [future.result() for future in self._futures]
+        finally:
+            self._closed = True
+            self._executor.shutdown(wait=True, cancel_futures=False)
+        pipeline_ms = (
+            (time.perf_counter() - self._pipeline_started) * 1000
+            if self._pipeline_started is not None
+            else 0.0
+        )
+        public_results = [artifact.result for artifact in artifacts]
+        csv_rows = [row for artifact in artifacts for row in artifact.csv_rows]
+        class_counts = Counter()
+        for result in public_results:
+            class_counts.update(result.get("class_counts", {}))
+        payload: Dict[str, Any] = {
+            "schema_version": 2,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "source": str(source),
+            "transport": transport,
+            "image_count": len(public_results),
+            "detection_count": sum(
+                int(item.get("detection_count") or 0) for item in public_results
+            ),
+            "class_counts": dict(sorted(class_counts.items())),
+            "statistics": build_detection_statistics(public_results),
+            "performance": dict(performance or {}),
+            "artifact_pipeline": {
+                "annotation_format": self.annotation_format,
+                "workers": self.workers,
+                "pipeline_wall_ms": round(pipeline_ms, 3),
+                "worker_total_ms": round(
+                    sum(artifact.worker_ms for artifact in artifacts),
+                    3,
+                ),
+            },
+            "saved_to": str(self.run_dir),
+            "results": public_results,
+            "artifacts": {
+                "results_json": "results.json",
+                "detections_csv": "detections.csv",
+                "summary_text": "summary.txt",
+                "annotated_dir": "annotated",
+                "predictions_dir": "predictions",
+            },
+        }
+        fieldnames = [
+            "filename",
+            "detection_index",
+            "class_id",
+            "class_name",
+            "confidence",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+            "source",
+            "owner_model",
+        ]
+        with (self.run_dir / "detections.csv").open(
+            "w", encoding="utf-8-sig", newline=""
+        ) as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        write_detection_reports(payload)
+        return payload
+
+
+def write_detection_reports(payload: Mapping[str, Any]) -> None:
+    run_dir = Path(str(payload["saved_to"]))
     (run_dir / "results.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    fieldnames = [
-        "filename",
-        "detection_index",
-        "class_id",
-        "class_name",
-        "confidence",
-        "x1",
-        "y1",
-        "x2",
-        "y2",
-        "source",
-        "owner_model",
-    ]
-    with (run_dir / "detections.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(csv_rows)
     (run_dir / "summary.txt").write_text(
         render_detection_summary(payload) + "\n",
         encoding="utf-8",
     )
-    return payload
+
+
+def save_detection_results(
+    run_dir: Path,
+    source: Path,
+    inputs: Sequence[DetectionInput],
+    source_bytes: Sequence[bytes],
+    results: Sequence[Mapping[str, Any]],
+    *,
+    transport: str,
+    performance: Mapping[str, Any] | None = None,
+    annotation_format: str = "png",
+    annotation_workers: int = 1,
+) -> Dict[str, Any]:
+    if not (len(inputs) == len(source_bytes) == len(results)):
+        raise ValueError("输入、图像数据与检测结果数量不一致")
+    writer = DetectionArtifactWriter(
+        run_dir,
+        annotation_format=annotation_format,
+        workers=annotation_workers,
+    )
+    try:
+        for index, (item, data, result) in enumerate(
+            zip(inputs, source_bytes, results),
+            1,
+        ):
+            writer.submit(index, item, data, result)
+        return writer.finalize(
+            source,
+            transport=transport,
+            performance=performance,
+        )
+    except Exception:
+        writer.abort()
+        raise
 
 
 def _context_text(result: Mapping[str, Any]) -> str:
@@ -505,7 +753,6 @@ def render_detection_summary(
             item.get("filename", ""),
             _context_text(item),
             int(item.get("detection_count") or 0),
-            f"{float(item.get('system_total_ms') or item.get('inference_ms') or 0):.1f}",
         ]
         for item in results
     ]
@@ -549,6 +796,7 @@ def render_detection_summary(
         if minimum_confidence is not None and maximum_confidence is not None
         else "—"
     )
+    performance = dict(payload.get("performance") or {})
     throughput = statistics.get("estimated_throughput_fps")
     sections = [
         header,
@@ -565,23 +813,43 @@ def render_detection_summary(
                 ]
             ],
         ),
-        table(
-            ["总耗时", "平均耗时/图", "估算吞吐", "平均置信度", "置信度范围"],
-            [
-                [
-                    f"{float(statistics.get('total_processing_ms') or 0):.1f} ms",
-                    f"{float(statistics.get('average_processing_ms') or 0):.1f} ms",
-                    f"{float(throughput):.2f} FPS" if throughput is not None else "—",
-                    (
-                        f"{float(average_confidence):.1%}"
-                        if average_confidence is not None
-                        else "—"
-                    ),
-                    confidence_range,
-                ]
-            ],
-        ),
     ]
+    if performance.get("end_to_end_inference_ms") is not None:
+        end_to_end_fps = performance.get("end_to_end_inference_fps")
+        sections.append(
+            table(
+                ["端到端推理时间", "端到端推理 FPS"],
+                [
+                    [
+                        f"{float(performance.get('end_to_end_inference_ms') or 0):.1f} ms",
+                        (
+                            f"{float(end_to_end_fps):.2f} FPS"
+                            if end_to_end_fps is not None
+                            else "—"
+                        ),
+                    ]
+                ],
+            )
+        )
+    else:
+        sections.append(
+            table(
+                ["处理耗时", "平均耗时/图", "估算吞吐", "平均置信度", "置信度范围"],
+                [
+                    [
+                        f"{float(statistics.get('total_processing_ms') or 0):.1f} ms",
+                        f"{float(statistics.get('average_processing_ms') or 0):.1f} ms",
+                        f"{float(throughput):.2f} FPS" if throughput is not None else "—",
+                        (
+                            f"{float(average_confidence):.1%}"
+                            if average_confidence is not None
+                            else "—"
+                        ),
+                        confidence_range,
+                    ]
+                ],
+            )
+        )
     if is_batch:
         class_rows = [
             [
@@ -630,9 +898,9 @@ def render_detection_summary(
             [
                 "图像概览",
                 table(
-                    ["图像", "传感器/场景", "目标", "耗时(ms)"],
+                    ["图像", "传感器/场景", "目标"],
                     image_rows,
-                    max_widths=[34, 18, 6, 10],
+                    max_widths=[34, 18, 6],
                 ),
             ]
         )

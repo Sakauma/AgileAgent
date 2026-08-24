@@ -172,7 +172,7 @@ def score_payload(base: float, new: float, krr: float) -> dict:
     }
 
 
-def benchmark_payload(round_fps: list[float], schema_version: int = 6) -> dict:
+def benchmark_payload(round_fps: list[float], schema_version: int = 7) -> dict:
     median = sorted(round_fps)[len(round_fps) // 2]
     return {
         "schema_version": schema_version,
@@ -183,6 +183,7 @@ def benchmark_payload(round_fps: list[float], schema_version: int = 6) -> dict:
         },
         "competition": {
             "batch_image_count": 20,
+            "batch_timing_source": "api_timings.batch_engine_ms",
             "batch_fps": median,
             "batch_fps_passed": median >= 30.0,
             "batch_rounds": [

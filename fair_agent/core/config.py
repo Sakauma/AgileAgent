@@ -69,6 +69,7 @@ KNOWN_SECTION_KEYS = {
     "performance": {
         "target_api_fps", "target_p95_ms", "benchmark_rounds", "warmup_requests",
         "benchmark_split", "report_root", "concurrent_requests", "batch_probe_size",
+        "low_latency_replicas",
         "auto_start_server", "server_start_timeout_seconds", "request_timeout_seconds",
     },
     "native_backend": {"library", "base_engine", "engines", "context_engine", "precision", "require_exact_gpu", "validated"},
@@ -595,6 +596,8 @@ def validate_config(
     _number(performance, "warmup_requests", errors, 0)
     _number(performance, "concurrent_requests", errors, 1)
     _number(performance, "batch_probe_size", errors, 1)
+    if "low_latency_replicas" in performance:
+        _number(performance, "low_latency_replicas", errors, 1, 8)
     if not performance.get("benchmark_split") or not performance.get("report_root"):
         errors.append("performance必须声明benchmark_split和report_root")
 

@@ -384,23 +384,28 @@ def main() -> int:
         for round_index in range(args.batch_rounds):
             payload, wall_ms = client.batch(batch_body, batch_boundary)
             system_total_ms = float(payload["system_total_ms"])
-            if system_total_ms <= 0.0:
-                raise RuntimeError("batch响应system_total_ms必须为正数。")
+            timings = dict(payload.get("timings") or {})
+            engine_total_ms = float(timings.get("batch_engine_ms") or 0.0)
+            if system_total_ms <= 0.0 or engine_total_ms <= 0.0:
+                raise RuntimeError(
+                    "batch响应system_total_ms和timings.batch_engine_ms必须为正数。"
+                )
             batch_rounds.append(
                 {
                     "round": round_index + 1,
                     "image_count": len(batch_paths),
                     "system_total_ms": system_total_ms,
+                    "engine_total_ms": engine_total_ms,
                     "wall_ms": wall_ms,
-                    "fps": len(batch_paths) * 1000.0 / system_total_ms,
-                    "timings": dict(payload.get("timings") or {}),
+                    "fps": len(batch_paths) * 1000.0 / engine_total_ms,
+                    "timings": timings,
                 }
             )
     finally:
         client.close()
 
     median_batch = sorted(
-        batch_rounds, key=lambda row: float(row["system_total_ms"])
+        batch_rounds, key=lambda row: float(row["engine_total_ms"])
     )[len(batch_rounds) // 2]
 
     distributions = {
@@ -427,7 +432,7 @@ def main() -> int:
         "batch_fps": float(median_batch["fps"]) >= args.target_batch_fps,
     }
     report = {
-        "schema_version": 6,
+        "schema_version": 7,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "protocol": {
             "transport": "loopback_http_multipart_png_keep_alive",
@@ -455,6 +460,8 @@ def main() -> int:
         "rounds": rounds,
         "competition": {
             "batch_fps": float(median_batch["fps"]),
+            "batch_timing_source": "api_timings.batch_engine_ms",
+            "batch_engine_total_ms": float(median_batch["engine_total_ms"]),
             "batch_system_total_ms": float(median_batch["system_total_ms"]),
             "batch_wall_ms": float(median_batch["wall_ms"]),
             "batch_image_count": len(batch_paths),

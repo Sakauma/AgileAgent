@@ -330,14 +330,19 @@ def _benchmark_running_server(
             batch_response.raise_for_status()
             batch_payload = batch_response.json()
             system_total_ms = float(batch_payload["system_total_ms"])
+            batch_timings = dict(batch_payload.get("timings", {}))
+            engine_total_ms = float(batch_timings.get("batch_engine_ms") or 0.0)
+            if engine_total_ms <= 0.0:
+                raise RuntimeError("批量API缺少有效的timings.batch_engine_ms")
             batch_rounds.append({
                 "round": round_index + 1,
                 "system_total_ms": system_total_ms,
-                "fps": len(batch_paths) / (system_total_ms / 1000.0),
-                "timings": dict(batch_payload.get("timings", {})),
+                "engine_total_ms": engine_total_ms,
+                "fps": len(batch_paths) / (engine_total_ms / 1000.0),
+                "timings": batch_timings,
             })
     median_batch = sorted(
-        batch_rounds, key=lambda row: row["system_total_ms"]
+        batch_rounds, key=lambda row: row["engine_total_ms"]
     )[len(batch_rounds) // 2]
 
     concurrency = int(performance["concurrent_requests"])
@@ -378,6 +383,8 @@ def _benchmark_running_server(
             key: _distribution(values) for key, values in routing_values.items()
         },
         "batch_image_count": len(batch_paths),
+        "batch_timing_source": "api_timings.batch_engine_ms",
+        "batch_engine_total_ms": float(median_batch["engine_total_ms"]),
         "batch_system_total_ms": float(median_batch["system_total_ms"]),
         "batch_fps": float(median_batch["fps"]),
         "batch_timings": dict(median_batch["timings"]),

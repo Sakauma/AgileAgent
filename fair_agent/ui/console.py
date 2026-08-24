@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -304,6 +306,29 @@ class ConsoleFrontend:
             timeout=timeout,
         )
 
+    def _call_detect(
+        self,
+        arguments: list[str],
+    ) -> subprocess.CompletedProcess[str]:
+        """Run detection in-process so the interactive entry pays no Python startup cost."""
+
+        from fair_agent.cli import build_parser
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        parser = build_parser()
+        namespace = parser.parse_args(
+            ["--config", self.config_path, *arguments]
+        )
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            returncode = int(namespace.func(namespace))
+        return subprocess.CompletedProcess(
+            arguments,
+            returncode,
+            stdout.getvalue(),
+            stderr.getvalue(),
+        )
+
     def _run_cli(self, arguments: list[str], timeout: int = 600) -> bool:
         result = self._call_cli(arguments, timeout=timeout)
         output = ((result.stderr or "") + (result.stdout or "")).strip()
@@ -374,7 +399,7 @@ class ConsoleFrontend:
             arguments.extend(["--output", output])
         self.output("\n" + self._notice("正在识别并保存结果，请稍候……"))
         try:
-            result = self._call_cli(arguments, timeout=3600)
+            result = self._call_detect(arguments)
         except subprocess.TimeoutExpired:
             self.message = "识别超时，请检查服务状态或输入规模。"
             return

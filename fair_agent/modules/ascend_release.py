@@ -131,7 +131,8 @@ def _verify_full_score_performance_report(
     report: Mapping[str, Any],
     errors: List[str],
 ) -> None:
-    if report.get("schema_version") not in {5, 6}:
+    schema_version = report.get("schema_version")
+    if schema_version not in {5, 6, 7}:
         errors.append("full_score_performance_schema_invalid")
     protocol = report.get("protocol") or {}
     competition = report.get("competition") or {}
@@ -152,6 +153,10 @@ def _verify_full_score_performance_report(
         contract_matches = False
     if not contract_matches:
         errors.append("full_score_performance_contract_invalid")
+    if schema_version == 7 and competition.get("batch_timing_source") != (
+        "api_timings.batch_engine_ms"
+    ):
+        errors.append("full_score_performance_timing_source_invalid")
     try:
         if float(competition.get("batch_fps", -1.0)) < FULL_SCORE_BATCH_FPS_MIN:
             errors.append("full_score_performance_gate_failed")

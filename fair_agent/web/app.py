@@ -6,8 +6,9 @@ import time
 import uuid
 import zipfile
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping
+from typing import Any, Callable, Dict, Iterable, List, Mapping
 
 import yaml
 
@@ -49,6 +50,15 @@ BATCH_FAST_MULTIPART_MAX_BYTES = 64 * 1024 * 1024
 BATCH_FAST_MULTIPART_MAX_PARTS = 256
 BATCH_RESULT_METADATA_BASE_BYTES = 128 * 1024
 BATCH_RESULT_METADATA_PER_ROW_BYTES = 4096
+LOW_LATENCY_PROFILE_HEADER = "x-agile-agent-execution-profile"
+LOW_LATENCY_PROFILE_VALUE = "speculative-low-latency"
+
+
+def low_latency_requested(request: Request) -> bool:
+    return (
+        request.headers.get(LOW_LATENCY_PROFILE_HEADER, "").strip().lower()
+        == LOW_LATENCY_PROFILE_VALUE
+    )
 
 
 def _registered_context_artifact(
@@ -330,6 +340,7 @@ class AtomicEngineProvider:
     def __init__(self, config: Mapping[str, Any]) -> None:
         self.config = dict(config)
         self._engine: WebInferenceEngine | None = None
+        self._low_latency_engines: list[WebInferenceEngine] = []
         self._settings = build_web_settings(self.config)
         self._lock = threading.RLock()
         self._fallbacks: Dict[str, tuple[WebInferenceEngine | None, Dict[str, Any]]] = {}
@@ -353,7 +364,77 @@ class AtomicEngineProvider:
             with self._lock:
                 if self._engine is None:
                     self._engine = self._build_engine(self._settings)
+                    self._low_latency_engines = [self._engine]
         return self._engine
+
+    def low_latency_pool(self) -> tuple[WebInferenceEngine, ...]:
+        """Return a warm, generation-consistent Ascend inference pool."""
+
+        primary = self.get()
+        requested = int(
+            dict(self._settings.get("performance") or {}).get(
+                "low_latency_replicas", 1
+            )
+        )
+        if self._settings.get("backend") != "ascend_acl":
+            requested = 1
+        with self._lock:
+            if (
+                not self._low_latency_engines
+                or self._low_latency_engines[0] is not primary
+            ):
+                self._low_latency_engines = [primary]
+            while len(self._low_latency_engines) < requested:
+                self._low_latency_engines.append(
+                    self._build_engine(self._settings)
+                )
+            return tuple(self._low_latency_engines[:requested])
+
+    def predict_encoded_low_latency_batch(
+        self,
+        items: Iterable[tuple[bytes, str]],
+        confidence: float,
+        incremental_protocol: str | None = "auto",
+    ) -> List[Dict[str, Any]]:
+        """Shard an encoded batch across identical engines and restore order."""
+
+        rows = list(items)
+        if not rows:
+            raise ValueError("请选择至少一张图像。")
+        engines = self.low_latency_pool()[: len(rows)]
+        if len(engines) == 1:
+            return list(
+                engines[0].predict_encoded_batch(
+                    rows,
+                    confidence,
+                    incremental_protocol,
+                    True,
+                )
+            )
+        chunk_count = len(engines)
+        quotient, remainder = divmod(len(rows), chunk_count)
+        chunks: list[list[tuple[bytes, str]]] = []
+        cursor = 0
+        for index in range(chunk_count):
+            size = quotient + (1 if index < remainder else 0)
+            chunks.append(rows[cursor : cursor + size])
+            cursor += size
+        with ThreadPoolExecutor(max_workers=chunk_count) as executor:
+            futures = [
+                executor.submit(
+                    engine.predict_encoded_batch,
+                    chunk,
+                    confidence,
+                    incremental_protocol,
+                    True,
+                )
+                for engine, chunk in zip(engines, chunks)
+            ]
+            return [
+                result
+                for future in futures
+                for result in future.result()
+            ]
 
     def settings(self) -> Dict[str, Any]:
         with self._lock:
@@ -384,6 +465,7 @@ class AtomicEngineProvider:
                 raise
             self._fallbacks[previous_generation] = (previous_engine, previous_settings)
             self._engine = shadow_engine
+            self._low_latency_engines = [shadow_engine]
             self._settings = settings
         return {**promotion, "shadow_smoke": dict(smoke), "runtime_swap": "atomic"}
 
@@ -407,6 +489,7 @@ class AtomicEngineProvider:
                 raise RuntimeError("注册表已回滚，但运行时代际解析不一致。")
             self._fallbacks[current_generation] = (self._engine, dict(self._settings))
             self._engine = engine
+            self._low_latency_engines = [engine]
             self._settings = dict(settings)
             return {**rollback, "shadow_smoke": smoke, "runtime_swap": "atomic_rollback"}
 
@@ -424,6 +507,30 @@ def public_result(result: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in result.items()
         if key not in {"annotated_png", "source_bytes"}
     }
+
+
+def compact_cli_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep CLI artifacts useful without returning verbose routing diagnostics."""
+
+    payload = public_result(result)
+    agent = dict(payload.get("agent") or {})
+    decision = dict(agent.get("decision") or {})
+    compact_decision = {
+        key: decision[key]
+        for key in (
+            "execution_profile",
+            "generation_id",
+            "base_model_id",
+            "class_owners",
+        )
+        if key in decision
+    }
+    payload["agent"] = {
+        "mode": agent.get("mode"),
+        "models_used": list(agent.get("models_used") or []),
+        "decision": compact_decision,
+    }
+    return payload
 
 
 def request_web_settings(request: Request) -> Dict[str, Any]:
@@ -653,6 +760,12 @@ async def health(request: Request) -> JSONResponse:
     settings = request_web_settings(request)
     try:
         engine = await run_in_threadpool(provider)
+        manager = getattr(request.app.state, "runtime_manager", None)
+        pool = (
+            await run_in_threadpool(manager.low_latency_pool)
+            if manager is not None
+            else (engine,)
+        )
         queue = engine.queue_status()
         runtime_platform = dict(settings["runtime_platform"])
         return JSONResponse(
@@ -682,6 +795,7 @@ async def health(request: Request) -> JSONResponse:
                     "context_mode", "model"
                 ),
                 "queue": queue,
+                "inference_replicas": len(pool),
                 "generation_id": settings["generation_id"],
                 "generation_name": settings["generation_name"],
                 "classes": [
@@ -778,6 +892,7 @@ async def public_config(request: Request) -> JSONResponse:
 
 async def detect(request: Request) -> JSONResponse:
     request_started = time.perf_counter()
+    cli_low_latency = low_latency_requested(request)
     settings = request_web_settings(request)
     decoding = settings["decoding"]
     upload_started = time.perf_counter()
@@ -793,13 +908,23 @@ async def detect(request: Request) -> JSONResponse:
         accepts_encoded = getattr(engine, "accepts_encoded", None)
         if callable(accepts_encoded) and accepts_encoded(data):
             decode_ms = 0.0
-            result = await run_in_threadpool(
-                engine.predict_encoded,
-                data,
-                filename,
-                confidence,
-                "auto",
-            )
+            if cli_low_latency:
+                result = await run_in_threadpool(
+                    engine.predict_encoded,
+                    data,
+                    filename,
+                    confidence,
+                    "auto",
+                    True,
+                )
+            else:
+                result = await run_in_threadpool(
+                    engine.predict_encoded,
+                    data,
+                    filename,
+                    confidence,
+                    "auto",
+                )
         else:
             decode_started = time.perf_counter()
             image = decode_image_bytes(
@@ -813,7 +938,11 @@ async def detect(request: Request) -> JSONResponse:
                 confidence,
                 "auto",
             )
-        payload = public_result(result)
+        payload = (
+            compact_cli_result(result)
+            if cli_low_latency
+            else public_result(result)
+        )
         payload.setdefault("timings", {}).update({
             "upload_parse_ms": round(upload_ms, 3),
             "decode_ms": round(decode_ms, 3),
@@ -842,6 +971,7 @@ async def detect(request: Request) -> JSONResponse:
 
 async def batch_detect(request: Request) -> Response:
     request_started = time.perf_counter()
+    cli_low_latency = low_latency_requested(request)
     settings = request_web_settings(request)
     decoding = settings["decoding"]
     upload_started = time.perf_counter()
@@ -901,12 +1031,34 @@ async def batch_detect(request: Request) -> Response:
         ):
             decode_ms = 0.0
             engine_started = time.perf_counter()
-            completed_results = await run_in_threadpool(
-                predict_encoded_batch,
-                [(data, filename) for filename, data in rows],
-                confidence,
-                "auto",
+            manager = getattr(request.app.state, "runtime_manager", None)
+            pooled_predict = getattr(
+                manager,
+                "predict_encoded_low_latency_batch",
+                None,
             )
+            if callable(pooled_predict):
+                completed_results = await run_in_threadpool(
+                    pooled_predict,
+                    [(data, filename) for filename, data in rows],
+                    confidence,
+                    "auto",
+                )
+            elif cli_low_latency:
+                completed_results = await run_in_threadpool(
+                    predict_encoded_batch,
+                    [(data, filename) for filename, data in rows],
+                    confidence,
+                    "auto",
+                    True,
+                )
+            else:
+                completed_results = await run_in_threadpool(
+                    predict_encoded_batch,
+                    [(data, filename) for filename, data in rows],
+                    confidence,
+                    "auto",
+                )
         else:
             decode_started = time.perf_counter()
             validated = decode_batch_images(
@@ -930,12 +1082,21 @@ async def batch_detect(request: Request) -> Response:
         total_detections = sum(int(item["detection_count"]) for item in completed_results)
         total_inference = round(sum(float(item["inference_ms"]) for item in completed_results), 1)
         cache_started = time.perf_counter()
-        batch_id = request.app.state.batch_store.put(completed_results)
+        batch_id = (
+            None
+            if cli_low_latency
+            else request.app.state.batch_store.put(completed_results)
+        )
         cache_ms = (time.perf_counter() - cache_started) * 1000
         public_results = []
         for index, item in enumerate(completed_results):
-            row = {key: value for key, value in item.items() if key not in {"source_bytes", "annotated_png"}}
-            row["preview_url"] = f"/api/batch/{batch_id}/preview/{index}"
+            row = (
+                compact_cli_result(item)
+                if cli_low_latency
+                else public_result(item)
+            )
+            if batch_id is not None:
+                row["preview_url"] = f"/api/batch/{batch_id}/preview/{index}"
             public_results.append(row)
         system_total = round((time.perf_counter() - request_started) * 1000, 1)
         request.app.state.event_log.append(
@@ -958,24 +1119,30 @@ async def batch_detect(request: Request) -> Response:
                 ],
             },
         )
-        return JSONResponse(
-            {
-                "batch_id": batch_id,
-                "image_count": len(completed_results),
-                "detection_count": total_detections,
-                "inference_ms": total_inference,
-                "system_total_ms": system_total,
-                "timings": {
-                    "upload_parse_ms": round(upload_ms, 3),
-                    "decode_ms": round(decode_ms, 3),
-                    "queue_wait_ms": float(completed_results[0].get("queue_wait_ms", 0.0)) if completed_results else 0.0,
-                    "batch_engine_ms": round(engine_ms, 3),
-                    "cache_store_ms": round(cache_ms, 3),
-                },
-                "results": public_results,
-                "download_url": f"/api/batch/{batch_id}/download",
-            }
-        )
+        response_payload = {
+            "batch_id": batch_id,
+            "image_count": len(completed_results),
+            "detection_count": total_detections,
+            "inference_ms": total_inference,
+            "system_total_ms": system_total,
+            "timings": {
+                "upload_parse_ms": round(upload_ms, 3),
+                "decode_ms": round(decode_ms, 3),
+                "queue_wait_ms": (
+                    float(completed_results[0].get("queue_wait_ms", 0.0))
+                    if completed_results
+                    else 0.0
+                ),
+                "batch_engine_ms": round(engine_ms, 3),
+                "cache_store_ms": round(cache_ms, 3),
+            },
+            "results": public_results,
+        }
+        if cli_low_latency:
+            response_payload["response_profile"] = "cli_compact"
+        else:
+            response_payload["download_url"] = f"/api/batch/{batch_id}/download"
+        return JSONResponse(response_payload)
     except HTTPException:
         return JSONResponse({"error": "无法读取请求中的图像。"}, status_code=400)
     except ValueError as exc:

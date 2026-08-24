@@ -135,6 +135,7 @@ performance:
   report_root: reports/api_performance
   concurrent_requests: 8
   batch_probe_size: 20
+  low_latency_replicas: 1
 
 generation:
   registry: models/generations.json

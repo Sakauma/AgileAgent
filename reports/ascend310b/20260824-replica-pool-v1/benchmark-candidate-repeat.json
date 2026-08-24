@@ -1,0 +1,342 @@
+{
+  "schema_version": 7,
+  "created_at": "2026-08-24T19:07:44+08:00",
+  "protocol": {
+    "transport": "loopback_http_multipart_png_keep_alive",
+    "base_url": "http://127.0.0.1:8502",
+    "confidence": 0.01,
+    "image_count": 89,
+    "warmup_requests": 30,
+    "rounds": 0,
+    "single_requests_skipped": true,
+    "sample_count": 0,
+    "concurrency": 1,
+    "gate_profile": "score",
+    "batch_probe_size": 20,
+    "batch_rounds": 3,
+    "target_batch_fps": 30.0,
+    "png_contracts": {
+      "width": 640,
+      "height": 512,
+      "bit_depth": 8,
+      "color_types": [
+        "grayscale",
+        "rgb",
+        "rgba"
+      ]
+    }
+  },
+  "health": {
+    "status": "ready",
+    "device": "ascend:0",
+    "backend": "ascend_acl",
+    "architecture": "arm",
+    "machine": "aarch64",
+    "device_family": "ascend_310b",
+    "model_format": "om",
+    "config_selection": "environment",
+    "validated": false,
+    "validation_candidate": true,
+    "model_layout": "independent_yolo26_e2e_v1",
+    "context_mode": "model",
+    "queue": {
+      "waiting": 0,
+      "active": false,
+      "completed": 0
+    },
+    "inference_replicas": 3,
+    "generation_id": "incremental_detection_generation_4plus2",
+    "generation_name": "4+2 增量检测生产代际",
+    "classes": [
+      "soldier",
+      "small_aircraft",
+      "warship",
+      "tank",
+      "patrol_boat",
+      "armored_vehicle"
+    ]
+  },
+  "distributions": {
+    "server": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "client_wall": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "inference": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "upload_parse_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "decode_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "queue_wait_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "engine_total_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "dvpp_enqueue_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "dvpp_device_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "ascend_submit_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "ascend_wait_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "ascend_input_copy_max_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "ascend_output_copy_max_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_fusion_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_conversion_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_gate_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_conflict_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_nms_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    },
+    "routing_decision_ms": {
+      "count": 0,
+      "mean_ms": 0.0,
+      "p50_ms": 0.0,
+      "p95_ms": 0.0,
+      "p99_ms": 0.0,
+      "max_ms": 0.0,
+      "fps_from_mean": 0.0
+    }
+  },
+  "rounds": [],
+  "competition": {
+    "batch_fps": 37.9696129187811,
+    "batch_timing_source": "api_timings.batch_engine_ms",
+    "batch_engine_total_ms": 526.737,
+    "batch_system_total_ms": 539.9,
+    "batch_wall_ms": 584.066577,
+    "batch_image_count": 20,
+    "batch_rounds": [
+      {
+        "round": 1,
+        "image_count": 20,
+        "system_total_ms": 547.8,
+        "engine_total_ms": 533.935,
+        "wall_ms": 593.848274,
+        "fps": 37.45774298369652,
+        "timings": {
+          "upload_parse_ms": 12.362,
+          "decode_ms": 0.0,
+          "queue_wait_ms": 0.1,
+          "batch_engine_ms": 533.935,
+          "cache_store_ms": 0.372
+        }
+      },
+      {
+        "round": 2,
+        "image_count": 20,
+        "system_total_ms": 539.9,
+        "engine_total_ms": 526.737,
+        "wall_ms": 584.066577,
+        "fps": 37.9696129187811,
+        "timings": {
+          "upload_parse_ms": 11.683,
+          "decode_ms": 0.0,
+          "queue_wait_ms": 0.1,
+          "batch_engine_ms": 526.737,
+          "cache_store_ms": 0.407
+        }
+      },
+      {
+        "round": 3,
+        "image_count": 20,
+        "system_total_ms": 532.5,
+        "engine_total_ms": 519.419,
+        "wall_ms": 575.443373,
+        "fps": 38.50455990250646,
+        "timings": {
+          "upload_parse_ms": 11.626,
+          "decode_ms": 0.0,
+          "queue_wait_ms": 0.1,
+          "batch_engine_ms": 519.419,
+          "cache_store_ms": 0.373
+        }
+      }
+    ],
+    "batch_fps_passed": true
+  },
+  "requests": [],
+  "environment": {
+    "python": "3.9.2 | packaged by conda-forge | (default, Feb 21 2021, 05:02:26) \n[GCC 9.3.0]",
+    "platform": "Linux-5.10.0+-aarch64-with-glibc2.35",
+    "git": {
+      "root": "/home/HwHiAiUser/agileagent/repo",
+      "head": "27036a0923426dc48a258354b154ad537a7777a4",
+      "branch": "main",
+      "origin": "https://github.com/Sakauma/AgileAgent.git",
+      "status_porcelain": "M configs/agent_pipeline_ascend310b.yaml\n M fair_agent/cli.py\n M fair_agent/core/config.py\n M fair_agent/modules/api_benchmark.py\n M fair_agent/modules/cli_detection.py\n M fair_agent/modules/web_inference.py\n M fair_agent/ui/console.py\n M fair_agent/web/app.py\n M tests/test_cli_detection.py\n M tests/test_runtime_maturity.py\n M tests/test_web_ui_flow.py\n M tools/111_promote_ascend_full_score_release.py\n M tools/97_benchmark_ascend_api.py\n?? .codex-sync/\n?? fusion_result.json",
+      "clean": false
+    },
+    "config": {
+      "configured": true,
+      "path": "/tmp/agile-pool-candidate-8502.yaml",
+      "exists": true,
+      "sha256": "ec5ef0b6b2a135599b2ffff00f106c0b7ebf5b925530f6e3429dbffc36b2bde3"
+    },
+    "build_manifest": {
+      "configured": true,
+      "path": "/home/HwHiAiUser/agileagent/releases/20260823-4plus2-yolo26-content-gate-v2/provenance/release-build-manifest.json",
+      "exists": true,
+      "sha256": "35385da4ad3365eaa847e590814ef1af0f835e11071ad08e79680d15ebb11eda"
+    },
+    "commands": {
+      "npu_smi": {
+        "command": [
+          "npu-smi",
+          "info"
+        ],
+        "available": true,
+        "returncode": 0,
+        "stdout": "+--------------------------------------------------------------------------------------------------------+\n| npu-smi 23.0.rc3                                 Version: 23.0.rc3                                     |\n+-------------------------------+-----------------+------------------------------------------------------+\n| NPU     Name                  | Health          | Power(W)     Temp(C)           Hugepages-Usage(page) |\n| Chip    Device                | Bus-Id          | AICore(%)    Memory-Usage(MB)                        |\n+===============================+=================+======================================================+\n| 0       310B1                 | OK              | 13.2         57                247   / 247           |\n| 0       0                     | NA              | 0            4052 / 11577                            |\n+===============================+=================+======================================================+",
+        "stderr": ""
+      },
+      "atc": {
+        "command": [
+          "atc",
+          "--help"
+        ],
+        "available": true,
+        "returncode": 0,
+        "stdout": "usage: atc <args>\ngenerate offline model example:\natc --model=./alexnet.prototxt --weight=./alexnet.caffemodel --framework=0 --output=./domi \ngenerate offline model for single op example:\natc --singleop=./op_list.json --output=./op_model \n\n===== Basic Functionality =====\n[General]\n  --h/help            Show this help message\n  --mode              Run mode.\n                       0: default, generate offline model;\n                       1: convert model to JSON format;\n                       3: only pre-check;\n                       5: convert ge dump txt file to JSON format;\n                       6: display model info;\n                       30: convert original graph to execute-om for nano(offline model)\n\n[Input]\n  --distributed_cluster_build            build model for distribute mode or not\n  --model             Model file\n  --weight            Weight file. Required when framework is Caffe\n  --om                The model file to be converted to json\n  --framework         Framework type. 0:Caffe; 1:MindSpore; 3:Tensorflow; 5:Onnx\n  --input_format      Format of input data. E.g.: \"NCHW\"\n  --input_shape       Shape of static input data or shape range of dynamic input. Separate multiple nodes with semicolons (;). Use double quotation marks (\") to enclose each argument.\n                      E.g.: \"input_name1:n1,c1,h1,w1;input_name2:n2,c2,h2,w2\"\n                            \"input_name1:n1~n2,c1,h1,w1;input_name2:n3~n4,c2,h2,w2\"\n  --input_shape_range This option is deprecated and will be removed in future version, please use input_shape instead.Shape range of input data. Separate multiple nodes with semicolons (;).\n                      Use double quotation marks (\") to enclose each argument.\n                      E.g.: \"input_name1:[n1~n2,c1,h1,w1];input_name2:[n2,c2~c3,h2,w2]\"\n  --dynamic_batch_size Set dynamic batch size. E.g.: \"batchsize1,batchsize2,batchsize3\"\n  --dynamic_image_size Set dynamic image size. Separate multiple nodes with semicolons (;). Use double quotation marks (\") to enclose each argument.\n                       E.g.: \"imagesize1_height,imagesize1_width;imagesize2_height,imagesize2_width\"\n  --dynamic_dims      Set dynamic dims. Separate multiple nodes with semicolons (;). Use double quotation marks (\") to enclose each argument.\n                       E.g.: \"dims1_n1,dims1_n2;dims2_n1,dims2_n2\"\n  --singleop          Single op definition file. atc will generate offline.model(s) for single op if --singleop is set.\n  --shard_model_dir              dictionary of split models\n  --model_relation_config        relation of split models\n  --enable_graph_parallel        whether to enable parallel\n  --graph_parallel_option_path   parallel strategy configuration file\n  --cluster_config               logic cluster configuration of target environment\n\n[Output]\n  --output            Output file path&name(needn't suffix, will add .om/.exeom automatically).\n                      If --model is set to 30, an additional dbg file will be generated.\n                      If --singleop is set, this arg specifies the directory to which the single op offline model will be generated.\n  --output_type       Set net output type. Support FP32, FP16, UINT8, INT8. E.g.: FP16, indicates that all out nodes are set to FP16.\n                      \"node1:0:FP16;node2:1:FP32\", indicates setting the datatype of multiple out nodes.\n  --check_report      The pre-checking report file. Default value is: \"check_result.json\"\n  --json              The output json file path&name which is converted from a model\n  --host_env_os            OS type of the target execution environment.\n                           The parameters that support setting are the OS types of the opp package\n                           Supported host env os as list:\n                           minios linux \n                           default: linux\n  --host_env_cpu           CPU type of the target execution environment.\n                           The parameters that support setting are the CPU types of the opp package\n                           Supported host env cpu as list:\n                           support cpu: aarch64 , respond to os: minios\n                           support cpu: aarch64 x86_64 , respond to os: linux\n                           default: aarch64\n\n[Target]\n  --soc_version       The soc version.\n  --virtual_type      Set whether offline model can run on the virtual devices under compute capability allocation.\n                      0 (default) : Disable virtualization; 1 : Enable virtualization.\n  --core_type         Set core type AiCore or VectorCore. VectorCore: use vector core. Default value is: AiCore\n  --aicore_num        Set aicore num\n===== Advanced Functionality =====\n[Feature]\n  --out_nodes         Output nodes designated by users. Separate multiple nodes with semicolons (;).Use double quotation marks (\") to enclose each argument.\n                      E.g.: \"node_name1:0;node_name1:1;node_name2:0\"\n  --input_fp16_nodes  Input node datatype is fp16. Separate multiple nodes with semicolons (;). Use double quotation marks (\") to enclose each argument. E.g.: \"node_name1;node_name2\"\n  --insert_op_conf    Config file to insert new op\n  --op_name_map       Custom op name mapping file\n                      Note: A semicolon(;) cannot be included in each path, otherwise the resolved path will not match the expected one.\n  --is_input_adjust_hw_layout    Intput node datatype is fp16 and format is NC1HWC0, used with input_fp16_nodes. E.g.: \"true,true,false,true\"\n  --is_output_adjust_hw_layout   Net output node datatype is fp16 and format is NC1HWC0, used with out_nodes. E.g.: \"true,true,false,true\"\n  --external_weight        Convert const to file constant, and save weight in file.\n                           0 (default): save weight in om.  1: save weight in file.\n\n[Model Tuning]\n  --disable_reuse_memory    The switch of reuse memory. Default value is : 0. 0 means reuse memory, 1 means do not reuse memory.\n  --fusion_switch_file      Set fusion switch file path\n  --enable_scope_fusion_passes    validate the non-general scope fusion passes, multiple names can be set and separated by ','. E.g.: ScopePass1,ScopePass2,...\n  --enable_single_stream    Enable single stream. true: enable; false(default): disable\n  --enable_small_channel    Set enable small channel. 0(default): disable; 1: enable\n  --enable_compress_weight  Enable compress weight. true: enable; false(default): disable\n  --compress_weight_conf    Config file to compress weight\n  --compression_optimize_conf    Config file to compress optimize\n  --sparsity                Optional; enable structured sparse. 0(default): disable; 1: enable\n  --buffer_optimize         Set buffer optimize. Support \"l2_optimize\" (default), \"l1_optimize\", \"off_optimize\"\n  --mdl_bank_path           Set the path of the custom repository generated after model tuning.\n\n[Operator Tuning]\n  --op_precision_mode     Set the path of operator precision mode configuration file (.ini)\n  --allow_hf32            enable hf32. false: disable; true: enable.\n  --precision_mode        precision mode, support force_fp16(default), force_fp32, cube_fp16in_fp32out, allow_mix_precision, allow_fp32_to_fp16, must_keep_origin_dtype, allow_mix_precision_fp16, allow_mix_precision_bf16, allow_fp32_to_bf16.\n  --precision_mode_v2     precision mode v2, support fp16, origin, cube_fp16in_fp32out, mixed_float16, mixed_bfloat16.\n  --modify_mixlist        Set the path of operator mixed precision configuration file.\n  --keep_dtype            Retains the precision of certain operators in inference scenarios by using a configuration file.\n  --customize_dtypes      Set the path of custom dtypes configuration file.\n  --op_bank_path          Set the path of the custom repository generated after operator tuning with Auto Tune.\n  --op_select_implmode    Set op select implmode. Support high_precision, high_performance, high_precision_for_all, high_performance_for_all. default: high_performance\n  --optypelis",
+        "stderr": ""
+      }
+    }
+  },
+  "gates": {
+    "sample_count": true,
+    "request_failures": true,
+    "batch_fps": true
+  },
+  "passed": true
+}

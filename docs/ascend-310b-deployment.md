@@ -4,16 +4,17 @@
 截至 2026-08-24，Ascend310B1 production 是 4+2 独立 YOLO26s 三-OM release：
 
 ```text
-/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
+/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-replica-pool-v1
 ```
 
-它已经完成 ATC 转换、候选评分、独立复跑、正式提升以及公共 `8501` 三轮 batch 部署后复验。回滚 listener 物理监听 `8501`；公共请求由一条精确 loopback NAT 规则进入 `18501` 主实例，`8502` 保留给候选。
+它继承 `20260824-4plus2-yolo26-runtime-calibration-v1` 的三个冻结 OM，并已完成候选评分、独立复跑、正式提升、公共 `8501` 三轮 batch 和纯增量 140 图压力复验。回滚 listener 使用上一正式 release 物理监听 `8501`；公共请求由一条精确 loopback NAT 规则进入 `18501` 主实例，`8502` 保留给候选。
 
 ## 正式运行结构
 
 ```text
 640×512 PNG
   -> bounded multipart + DVPP encoded preprocessing
+  -> 3 个同构引擎均衡分片，结果按输入顺序合并
   -> 并发提交 Scene-SensorNet 与四类 Base YOLO26s
   -> 收集 Scene 概率和 Base 检测
   -> air >= 0.5 且 Base 检出 small_aircraft
@@ -102,8 +103,8 @@ AGILE_AGENT_ASCEND_PORT=8501 \
 以 root 权限执行安装器，第二个参数必须是已经验证且能够在 `8501` ready 的回滚 release：
 
 ```bash
-PRIMARY=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
-ROLLBACK=/home/HwHiAiUser/agileagent/releases/ROLLBACK_RELEASE
+PRIMARY=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-replica-pool-v1
+ROLLBACK=/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1
 
 sudo "$PRIMARY/src/scripts/install_ascend310b_primary_services.sh" \
   "$PRIMARY" "$ROLLBACK" 18501
@@ -143,6 +144,7 @@ sudo /usr/local/sbin/agileagent-ascend310b-primary-route status 18501
   "validation_candidate": false,
   "model_layout": "independent_yolo26_e2e_v1",
   "context_mode": "model",
+  "inference_replicas": 3,
   "generation_id": "incremental_detection_generation_4plus2"
 }
 ```
@@ -181,12 +183,16 @@ curl -fsS http://127.0.0.1:8501/api/health
 | Base mAP50 | `0.8166630282` | ≥0.80 |
 | New-mAP50 | `0.6114608956` | ≥0.60 |
 | KRR | `1.0000000000` | ≥0.95 |
-| lock / mixed dev 候选中位 FPS | `38.3877 / 39.1389` | ≥30 |
-| 公共 `8501` 中位 FPS | `38.6623` | ≥30 |
+| 候选 / 独立复跑中位 FPS | `37.3571 / 37.9696` | ≥30 |
+| 公共 `8501` mixed 20 图中位 FPS | `38.2175` | ≥30 |
+| 公共 `8501` 纯增量 140 图中位 FPS | `37.3997` | ≥30 |
+| CLI 纯增量 140 图端到端 FPS | `33.5040` | ≥30 |
 
-Full-mAP50 为 `0.7220053258`。公共 `8501` 部署后逐轮 FPS：
+Full-mAP50 为 `0.7220053258`。公共 `8501` mixed 20 图逐轮 FPS：
 
-- `38.5802 / 38.6698 / 38.6623`
+- `35.3751 / 38.6201 / 38.2175`
+
+纯增量 140 图整批逐轮为 `38.5337 / 36.0538 / 37.3997 FPS`。FPS 使用完整图像推理耗时，包含 DVPP、三个 OM、场景与内容门控、融合和 NMS，不包含上传解析、落盘与标注图渲染。
 
 诊断项为 precision `0.729167`、recall `0.612698`、误激活率 `0.226667`。误激活率表示 75 张不含新增类的图像中有 17 张至少激活一个新增类；它不属于四项赛题淘汰门槛。
 
@@ -194,6 +200,7 @@ Full-mAP50 为 `0.7220053258`。公共 `8501` 部署后逐轮 FPS：
 
 ```text
 models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/
+reports/ascend310b/20260824-replica-pool-v1/
 ```
 
 ## 重新测量所需数据
