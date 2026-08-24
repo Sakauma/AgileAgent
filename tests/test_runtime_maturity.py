@@ -408,6 +408,10 @@ def test_operator_snapshot_is_shared_by_text_and_json() -> None:
     assert payload["detector"] == snapshot["detector"]
     assert payload["deployment"]["x86_nvidia_gpu"] == "ready"
     assert payload["deployment"]["ascend_310b"] == "ready"
+    assert any(item["external"] for item in payload["blockers"])
+    assert "外部门禁" not in text
+    assert "本地赛题评测输入未配置" not in text
+    assert "官方提交格式尚未确认" not in text
 
 
 def test_status_command_supports_machine_readable_output(monkeypatch, capsys) -> None:

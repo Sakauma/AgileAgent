@@ -133,12 +133,19 @@ def render_console(snapshot: Dict[str, Any]) -> str:
         f"推荐动作    {recommended.get('action')} [{recommended.get('status')}]",
         f"原因        {recommended.get('reason')}",
         "-" * 72,
-        "当前门禁",
+        "当前问题",
     ]
-    blockers = snapshot.get("blockers", [])
-    lines.extend(f"  {'[外部]' if item['external'] else '[内部]'} {item['label']} ({item['code']})" for item in blockers)
+    blockers = [
+        item
+        for item in snapshot.get("blockers", [])
+        if not item.get("external")
+    ]
+    lines.extend(
+        f"  {item['label']} ({item['code']})"
+        for item in blockers
+    )
     if not blockers:
-        lines.append("  无")
+        lines.append("  当前没有影响本机识别的问题。")
     lines.extend(
         [
             "-" * 72,
