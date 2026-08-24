@@ -89,6 +89,7 @@ venv/
 /configs/*
 !/configs/agent_pipeline.yaml
 !/configs/agent_pipeline_ascend310b.yaml
+!/configs/agent_demo_state.json
 !/configs/requirements-ascend310b.txt
 !/configs/submission_infer_base_4class.yaml
 !/configs/local_infer_gpu.yaml
@@ -119,7 +120,6 @@ venv/
 !/docs/functional-models.md
 !/docs/incremental-workbench.md
 
-# Recoverable legacy snapshot. Its contents keep their original extensions.
-!/archive/
-!/archive/3plus1/
-!/archive/3plus1/**
+# Local legacy snapshots and generated demonstration artifacts.
+/archive/3plus1/
+/demo_artifacts/

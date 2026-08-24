@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Mapping
 
 import yaml
 
-from fair_agent.core.blackboard import build_blackboard
+from fair_agent.core.blackboard import build_blackboard, resolve_demo_evidence
 from fair_agent.core.config import ROOT, load_config, rel_path, resolve_path
 from fair_agent.core.hashes import hash_if_exists, verify_sha256s
 from fair_agent.modules.functional_models import validate_functional_models
@@ -516,7 +516,7 @@ def verify_release(config_path: str | Path = "configs/agent_pipeline.yaml") -> D
         if int(details["batch"] or 0) != 32:
             errors.append(f"inference_batch_not_32:{name}")
 
-    demo_path = resolve_path(config["blackboard"]["demo_evidence"])
+    demo_path = resolve_demo_evidence(config)
     demo_text = demo_path.read_text(encoding="utf-8") if demo_path.exists() else ""
     demo = json.loads(demo_text) if demo_text else {}
     if not demo:

@@ -16,6 +16,10 @@ from fair_agent.modules.model_generations import load_generation_registry
 from fair_agent.modules.status import fingerprints
 
 
+DEFAULT_DEMO_EVIDENCE = "configs/agent_demo_state.json"
+LEGACY_DEMO_EVIDENCE = "demo_artifacts/agent_demo_state.json"
+
+
 def read_json_if_exists(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -55,10 +59,17 @@ def artifact_status(paths: Iterable[str]) -> Dict[str, bool]:
     return {path: resolve_path(path).exists() for path in paths}
 
 
+def resolve_demo_evidence(config: Dict[str, Any]) -> Path:
+    configured = str(config.get("blackboard", {}).get("demo_evidence") or DEFAULT_DEMO_EVIDENCE)
+    path = resolve_path(configured)
+    if path.exists() or configured != LEGACY_DEMO_EVIDENCE:
+        return path
+    return resolve_path(DEFAULT_DEMO_EVIDENCE)
+
+
 def build_blackboard(config: Dict[str, Any]) -> Dict[str, Any]:
     inputs = config.get("inputs", {})
-    blackboard_cfg = config.get("blackboard", {})
-    demo_path = resolve_path(blackboard_cfg.get("demo_evidence", "demo_artifacts/agent_demo_state.json"))
+    demo_path = resolve_demo_evidence(config)
     demo = read_json_if_exists(demo_path)
     detector = dict(config.get("detector", {}))
     model_cfg = dict(config.get("model", {}))

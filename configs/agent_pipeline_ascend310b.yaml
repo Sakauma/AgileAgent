@@ -345,7 +345,7 @@ assets:
   - models/context/scene_selection.json
   - models/manifest.json
   - models/generations.json
-  - demo_artifacts/agent_demo_state.json
+  - configs/agent_demo_state.json
 automation:
   audit_before_execute: true
   run_root: reports/agent_runs
@@ -369,7 +369,7 @@ blackboard:
   output_dir: reports/agent_blackboard
   state_json: blackboard_state.json
   report_md: agent_preparation_report.md
-  demo_evidence: demo_artifacts/agent_demo_state.json
+  demo_evidence: configs/agent_demo_state.json
 detector:
   name: four_class_base_yolo26s_imgsz1280
   weights: models/production/incremental_detection/four_class_base_detector.pt
