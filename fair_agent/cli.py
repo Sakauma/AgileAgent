@@ -587,6 +587,20 @@ def cmd_detect(args: argparse.Namespace) -> int:
             args.source,
             recursive=bool(args.recursive),
         )
+        total_inputs = len(inputs)
+        progress_interval = max(1, (total_inputs + 9) // 10)
+
+        def report_batch_progress(completed: int) -> None:
+            if total_inputs <= 1:
+                return
+            if completed != total_inputs and completed % progress_interval:
+                return
+            percent = completed * 100.0 / total_inputs
+            print(
+                f"批量识别进度：{completed}/{total_inputs} · {percent:.0f}%",
+                file=sys.stderr,
+            )
+
         source_bytes = [item.path.read_bytes() for item in inputs]
         api_base_url = probe_local_detection_api(config)
         results = []
@@ -597,8 +611,6 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 float(config.get("performance", {}).get("request_timeout_seconds") or 180),
             )
             for index, (item, data) in enumerate(zip(inputs, source_bytes), 1):
-                if len(inputs) > 1:
-                    print(f"[{index}/{len(inputs)}] 正在识别 {item.name}", file=sys.stderr)
                 results.append(
                     detect_via_local_api(
                         api_base_url,
@@ -607,14 +619,13 @@ def cmd_detect(args: argparse.Namespace) -> int:
                         timeout=request_timeout,
                     )
                 )
+                report_batch_progress(index)
         else:
             transport = "direct_engine"
             print("正在准备识别引擎，请稍候……", file=sys.stderr)
             engine = build_detection_engine(config)
             accepts_encoded = getattr(engine, "accepts_encoded", None)
             for index, (item, data) in enumerate(zip(inputs, source_bytes), 1):
-                if len(inputs) > 1:
-                    print(f"[{index}/{len(inputs)}] 正在识别 {item.name}", file=sys.stderr)
                 if callable(accepts_encoded) and accepts_encoded(data):
                     result = engine.predict_encoded(data, item.name, confidence, "auto")
                 else:
@@ -625,6 +636,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
                     )
                     result = engine.predict(image, item.name, confidence, "auto")
                 results.append(result)
+                report_batch_progress(index)
         run_dir = create_result_dir(args.output, source)
         payload = save_detection_results(
             run_dir,

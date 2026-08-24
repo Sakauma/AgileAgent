@@ -443,6 +443,11 @@ def test_cli_frontend_pages_share_operator_state() -> None:
     assert "incremental_detection_generation_4plus2" in overview
     assert "人员 / 小型飞行器 / 舰船 / 坦克 / 巡逻艇 / 装甲车辆" in overview
     assert "当前正式模型" in render_page("models", state, decision)
+    status = render_page("status", state, decision)
+    assert "外部门禁" not in status
+    assert "本地赛题评测输入未配置" not in status
+    assert "官方提交格式尚未确认" not in status
+    assert "当前没有影响本机识别的问题" in status
 
 
 def test_cli_frontend_runs_single_detection_and_returns_home(monkeypatch) -> None:

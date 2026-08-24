@@ -109,6 +109,12 @@ def test_detection_results_are_saved_as_human_and_machine_readable_artifacts(
     assert payload["image_count"] == 1
     assert payload["detection_count"] == 1
     assert payload["class_counts"] == {"tank": 1}
+    assert payload["statistics"]["images_with_detections"] == 1
+    assert payload["statistics"]["images_without_detections"] == 0
+    assert payload["statistics"]["detections_per_image"] == 1.0
+    assert payload["statistics"]["average_processing_ms"] == 12.5
+    assert payload["statistics"]["estimated_throughput_fps"] == 80.0
+    assert payload["statistics"]["average_confidence"] == 0.875
     assert (run_dir / "annotated/001_input.png").is_file()
     assert (run_dir / "predictions/001_input.txt").read_text(encoding="utf-8").startswith("3 ")
     saved = json.loads((run_dir / "results.json").read_text(encoding="utf-8"))
@@ -138,8 +144,43 @@ def test_detection_summary_limits_terminal_rows() -> None:
         "results": [result],
     }
     rendered = render_detection_summary(payload, max_detection_rows=1)
-    assert "本进程直接推理" in rendered
+    assert "统计摘要" in rendered
+    assert "80.00 FPS" in rendered
+    assert "检测明细" in rendered
     assert "另有 2 条记录" in rendered
+
+
+def test_batch_detection_summary_only_prints_aggregate_statistics() -> None:
+    first = fake_result("first.png")
+    second = fake_result("second.png")
+    second["context"] = {"sensor": "sar", "scene": "sea"}
+    empty = fake_result("empty.png")
+    empty["detections"] = []
+    empty["class_counts"] = {}
+    empty["detection_count"] = 0
+    payload = {
+        "source": "/tmp/images",
+        "transport": "local_api",
+        "image_count": 3,
+        "detection_count": 2,
+        "class_counts": {"tank": 2},
+        "saved_to": "/tmp/result",
+        "results": [first, second, empty],
+    }
+
+    rendered = render_detection_summary(payload)
+
+    assert "批量识别完成" in rendered
+    assert "统计摘要" in rendered
+    assert "类别分布" in rendered
+    assert "上下文分布" in rendered
+    assert "有目标" in rendered
+    assert "未检出" in rendered
+    assert "检测明细" not in rendered
+    assert "图像概览" not in rendered
+    assert "first.png" not in rendered
+    assert "second.png" not in rendered
+    assert "empty.png" not in rendered
 
 
 def test_detect_command_reuses_local_service_and_saves_results(
@@ -183,3 +224,56 @@ def test_detect_command_reuses_local_service_and_saves_results(
     assert payload["detection_count"] == 1
     assert (output / "results.json").is_file()
     assert (output / "annotated/001_sample.png").is_file()
+
+
+def test_batch_detect_command_prints_progress_without_filenames_and_summary_only(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    source = tmp_path / "images"
+    source.mkdir()
+    for name in ("first.png", "second.png"):
+        (source / name).write_bytes(image_bytes())
+    output = tmp_path / "output"
+    config = {
+        "inference": {
+            "backend": "ascend_acl",
+            "confidence_default": 0.05,
+            "confidence_min": 0.05,
+            "confidence_max": 0.95,
+        },
+        "decoding": {"backend": "pillow"},
+        "performance": {"request_timeout_seconds": 180},
+    }
+    monkeypatch.setattr(cli, "load_args_config", lambda _args: config)
+    monkeypatch.setattr(
+        cli_detection,
+        "probe_local_detection_api",
+        lambda _config: "http://127.0.0.1:18501",
+    )
+    monkeypatch.setattr(
+        cli_detection,
+        "detect_via_local_api",
+        lambda _base_url, _data, filename, timeout: fake_result(filename),
+    )
+    args = argparse.Namespace(
+        source=str(source),
+        recursive=False,
+        output=str(output),
+        format="text",
+    )
+
+    assert cli.cmd_detect(args) == 0
+    captured = capsys.readouterr()
+    assert "批量识别完成" in captured.out
+    assert "统计摘要" in captured.out
+    assert "检测明细" not in captured.out
+    assert "批量识别进度" in captured.err
+    assert "first.png" not in captured.out + captured.err
+    assert "second.png" not in captured.out + captured.err
+    saved = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert [item["filename"] for item in saved["results"]] == [
+        "first.png",
+        "second.png",
+    ]

@@ -137,11 +137,15 @@ def render_page(
             ]
         )
     if page == "status":
-        blockers = snapshot.get("blockers", [])
+        blockers = [
+            item
+            for item in snapshot.get("blockers", [])
+            if not item.get("external")
+        ]
         blocker_lines = [
-            f"{'外部门禁' if item.get('external') else '内部问题'}：{item.get('label')}"
+            f"需要处理：{item.get('label')}"
             for item in blockers
-        ] or ["当前没有内部运行阻塞。"]
+        ] or ["当前没有影响本机识别的问题。"]
         return panel(
             f"{accent('◆')} 运行状态",
             [

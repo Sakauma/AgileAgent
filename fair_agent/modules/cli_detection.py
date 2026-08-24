@@ -306,6 +306,72 @@ def _owner_for(result: Mapping[str, Any], class_id: int) -> str:
     return str(owners.get(str(class_id)) or owners.get(class_id) or "")
 
 
+def build_detection_statistics(
+    results: Sequence[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    image_count = len(results)
+    detection_counts = [
+        int(result.get("detection_count") or 0)
+        for result in results
+    ]
+    images_with_detections = sum(count > 0 for count in detection_counts)
+    detection_count = sum(detection_counts)
+    processing_times = [
+        max(
+            0.0,
+            float(
+                result.get("system_total_ms")
+                or result.get("inference_ms")
+                or 0.0
+            ),
+        )
+        for result in results
+    ]
+    confidences = [
+        float(detection.get("confidence") or 0.0)
+        for result in results
+        for detection in result.get("detections", [])
+    ]
+    sensor_counts: Counter[str] = Counter()
+    scene_counts: Counter[str] = Counter()
+    for result in results:
+        context = result.get("context", {})
+        sensor_counts.update([str(context.get("sensor") or "unknown")])
+        scene_counts.update([str(context.get("scene") or "unknown")])
+    total_processing_ms = sum(processing_times)
+    return {
+        "images_with_detections": images_with_detections,
+        "images_without_detections": image_count - images_with_detections,
+        "image_detection_rate": round(
+            images_with_detections / image_count if image_count else 0.0,
+            6,
+        ),
+        "detections_per_image": round(
+            detection_count / image_count if image_count else 0.0,
+            6,
+        ),
+        "total_processing_ms": round(total_processing_ms, 3),
+        "average_processing_ms": round(
+            total_processing_ms / image_count if image_count else 0.0,
+            3,
+        ),
+        "estimated_throughput_fps": (
+            round(image_count * 1000.0 / total_processing_ms, 3)
+            if total_processing_ms > 0.0
+            else None
+        ),
+        "average_confidence": (
+            round(sum(confidences) / len(confidences), 6)
+            if confidences
+            else None
+        ),
+        "minimum_confidence": round(min(confidences), 6) if confidences else None,
+        "maximum_confidence": round(max(confidences), 6) if confidences else None,
+        "sensor_counts": dict(sorted(sensor_counts.items())),
+        "scene_counts": dict(sorted(scene_counts.items())),
+    }
+
+
 def save_detection_results(
     run_dir: Path,
     source: Path,
@@ -375,6 +441,7 @@ def save_detection_results(
         "image_count": len(public_results),
         "detection_count": sum(int(item.get("detection_count") or 0) for item in public_results),
         "class_counts": dict(sorted(class_counts.items())),
+        "statistics": build_detection_statistics(public_results),
         "saved_to": str(run_dir),
         "results": public_results,
         "artifacts": {
@@ -426,6 +493,13 @@ def render_detection_summary(
     max_detection_rows: int = 80,
 ) -> str:
     results = list(payload.get("results", []))
+    image_count = int(payload.get("image_count") or len(results))
+    detection_count = int(payload.get("detection_count") or 0)
+    is_batch = image_count > 1
+    statistics = dict(
+        payload.get("statistics")
+        or build_detection_statistics(results)
+    )
     image_rows = [
         [
             item.get("filename", ""),
@@ -453,16 +527,104 @@ def render_detection_summary(
         for name, count in payload.get("class_counts", {}).items()
     ) or "无"
     header = panel(
-        "灵动 Agent · 识别完成",
+        f"灵动 Agent · {'批量识别完成' if is_batch else '识别完成'}",
         [
             f"输入：{payload.get('source')}",
-            f"执行：{'复用本机正式服务' if payload.get('transport') == 'local_api' else '本进程直接推理'}",
-            f"图像：{int(payload.get('image_count') or 0)}    目标：{int(payload.get('detection_count') or 0)}",
+            f"图像：{image_count}    目标：{detection_count}",
             f"类别：{class_text}",
             f"保存：{payload.get('saved_to') or '未保存'}",
         ],
     )
-    sections = [header]
+    images_with_detections = int(
+        statistics.get("images_with_detections") or 0
+    )
+    images_without_detections = int(
+        statistics.get("images_without_detections") or 0
+    )
+    average_confidence = statistics.get("average_confidence")
+    minimum_confidence = statistics.get("minimum_confidence")
+    maximum_confidence = statistics.get("maximum_confidence")
+    confidence_range = (
+        f"{float(minimum_confidence):.1%}–{float(maximum_confidence):.1%}"
+        if minimum_confidence is not None and maximum_confidence is not None
+        else "—"
+    )
+    throughput = statistics.get("estimated_throughput_fps")
+    sections = [
+        header,
+        "统计摘要",
+        table(
+            ["完成图像", "有目标", "未检出", "检测目标", "平均目标/图"],
+            [
+                [
+                    image_count,
+                    images_with_detections,
+                    images_without_detections,
+                    detection_count,
+                    f"{float(statistics.get('detections_per_image') or 0):.2f}",
+                ]
+            ],
+        ),
+        table(
+            ["总耗时", "平均耗时/图", "估算吞吐", "平均置信度", "置信度范围"],
+            [
+                [
+                    f"{float(statistics.get('total_processing_ms') or 0):.1f} ms",
+                    f"{float(statistics.get('average_processing_ms') or 0):.1f} ms",
+                    f"{float(throughput):.2f} FPS" if throughput is not None else "—",
+                    (
+                        f"{float(average_confidence):.1%}"
+                        if average_confidence is not None
+                        else "—"
+                    ),
+                    confidence_range,
+                ]
+            ],
+        ),
+    ]
+    if is_batch:
+        class_rows = [
+            [
+                display_class_name(name),
+                int(count),
+                f"{int(count) / detection_count:.1%}" if detection_count else "—",
+            ]
+            for name, count in payload.get("class_counts", {}).items()
+        ]
+        sections.extend(
+            [
+                "类别分布",
+                (
+                    table(
+                        ["类别", "数量", "目标占比"],
+                        class_rows,
+                        max_widths=[28, 8, 10],
+                    )
+                    if class_rows
+                    else "未识别到通过正式门控的目标。"
+                ),
+            ]
+        )
+        sensor_text = "、".join(
+            f"{SENSOR_LABELS.get(str(name), str(name))} × {count}"
+            for name, count in statistics.get("sensor_counts", {}).items()
+        ) or "无"
+        scene_text = "、".join(
+            f"{SCENE_LABELS.get(str(name), str(name))} × {count}"
+            for name, count in statistics.get("scene_counts", {}).items()
+        ) or "无"
+        sections.extend(
+            [
+                "上下文分布",
+                table(
+                    ["维度", "分布"],
+                    [["传感器", sensor_text], ["场景", scene_text]],
+                    max_widths=[8, 64],
+                ),
+                "逐图明细已保存到 results.json、detections.csv 与 predictions/。",
+            ]
+        )
+        return "\n\n".join(sections)
     if image_rows:
         sections.extend(
             [
