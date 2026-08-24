@@ -14,7 +14,7 @@ from fair_agent.core.config import load_config
 from fair_agent.modules.operator_view import build_operator_snapshot, render_snapshot
 from fair_agent.modules.release_verification import _validate_model_manifest, verify_release
 from fair_agent.policies.decision import build_decision
-from fair_agent.ui.console import MENU, ConsoleFrontend, render_page
+from fair_agent.ui.console import MENU, ConsoleFrontend, render_menu, render_page
 
 
 def test_serve_is_bound_to_loopback(monkeypatch) -> None:
@@ -132,6 +132,16 @@ def test_console_prioritizes_detection_without_manual_model_controls() -> None:
     assert "关注类别 [soldier" not in source
     assert "--confidence" not in source
     assert "--profile" not in source
+
+
+def test_console_menu_groups_actions_and_only_shows_home_off_home_page() -> None:
+    home = render_menu("home")
+    status = render_menu("status")
+    assert "识别" in home
+    assert "查看" in home
+    assert "系统" in home
+    assert "[0] 返回首页" not in home
+    assert "[0] 返回首页" in status
 
 
 def test_interactive_console_refreshes_state_before_rendering(monkeypatch) -> None:
@@ -421,7 +431,7 @@ def test_cli_frontend_navigates_all_operator_pages(monkeypatch) -> None:
     assert "运行状态" in rendered
     assert "当前正式模型" in rendered
     assert "CLI 使用帮助" in rendered
-    assert "终端工作台已退出" in rendered
+    assert "视觉识别终端已退出" in rendered
 
 
 def test_cli_frontend_pages_share_operator_state() -> None:
