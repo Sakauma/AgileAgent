@@ -14,6 +14,7 @@ from fair_agent.modules.cli_detection import (
     DetectionInput,
     create_result_dir,
     discover_detection_inputs,
+    normalize_user_path_text,
     render_detection_summary,
     save_detection_results,
 )
@@ -68,6 +69,25 @@ def test_discover_detection_inputs_supports_single_and_recursive_directory(tmp_p
 
     _source, recursive = discover_detection_inputs(tmp_path, recursive=True)
     assert [item.name for item in recursive] == ["first.png", "nested/second.jpg"]
+
+
+def test_windows_paths_are_normalized_for_wsl() -> None:
+    assert normalize_user_path_text(
+        r"\\wsl.localhost\ubuntu2004\home\sakauma\dataset\image.png",
+        host_os="posix",
+    ) == "/home/sakauma/dataset/image.png"
+    assert normalize_user_path_text(
+        r"\\wsl$\Ubuntu-20.04\mnt\d\dataset\image.png",
+        host_os="posix",
+    ) == "/mnt/d/dataset/image.png"
+    assert normalize_user_path_text(
+        r"D:\dataset\image.png",
+        host_os="posix",
+    ) == "/mnt/d/dataset/image.png"
+    assert normalize_user_path_text(
+        r"images\nested\image.png",
+        host_os="posix",
+    ) == "images/nested/image.png"
 
 
 def test_detection_results_are_saved_as_human_and_machine_readable_artifacts(

@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import mimetypes
+import os
 import re
 import uuid
 from collections import Counter
@@ -62,8 +63,39 @@ class DetectionInput:
     name: str
 
 
+def normalize_user_path_text(
+    value: str | Path,
+    *,
+    host_os: str | None = None,
+) -> str:
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    if not text:
+        raise ValueError("输入路径不能为空")
+    if (host_os or os.name) == "nt":
+        return text
+    wsl_unc = re.match(
+        r"^[\\/]+(?:wsl\.localhost|wsl\$)[\\/]+[^\\/]+(?P<path>[\\/].*)?$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if wsl_unc:
+        suffix = str(wsl_unc.group("path") or "/").replace("\\", "/")
+        return "/" + suffix.lstrip("/")
+    windows_drive = re.match(
+        r"^(?P<drive>[A-Za-z]):[\\/](?P<path>.*)$",
+        text,
+    )
+    if windows_drive:
+        drive = str(windows_drive.group("drive")).lower()
+        suffix = str(windows_drive.group("path")).replace("\\", "/")
+        return f"/mnt/{drive}/{suffix.lstrip('/')}"
+    return text.replace("\\", "/")
+
+
 def resolve_user_path(value: str | Path) -> Path:
-    path = Path(value).expanduser()
+    path = Path(normalize_user_path_text(value)).expanduser()
     return (path if path.is_absolute() else resolve_path(path)).resolve()
 
 

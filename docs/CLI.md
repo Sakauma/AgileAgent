@@ -35,6 +35,16 @@ agile-agent
 
 路径包含空格时可以直接粘贴，也可以使用单引号或双引号包裹。识别结束后按 Enter 返回首页。
 
+从 Windows 资源管理器或 VS Code 复制到 WSL SSH 终端的路径也可以直接粘贴。CLI 会自动转换以下形式：
+
+```text
+\\wsl.localhost\ubuntu2004\home\user\images\sample.png
+\\wsl$\Ubuntu-20.04\home\user\images\sample.png
+D:\images\sample.png
+```
+
+它们会分别转换为 WSL 可访问的 `/home/user/images/sample.png` 或 `/mnt/d/images/sample.png`。原生 Linux 绝对路径 `/home/...`、相对路径和 `~` 路径仍然正常支持；输入文件不需要位于仓库目录内。
+
 ## 直接执行识别命令
 
 单张图像：
