@@ -48,6 +48,12 @@ ALL_MODULES = list(dict.fromkeys(
 ))
 
 
+def workbench_modules_for_backend(backend_name: str) -> list[str]:
+    if backend_name == "ascend_acl":
+        return [name for name in WORKBENCH_MODULES if name != "pandas"]
+    return list(WORKBENCH_MODULES)
+
+
 def load_args_config(args: argparse.Namespace) -> Dict[str, Any]:
     overrides = list(getattr(args, "config_overrides", []) or [])
     config_path = getattr(args, "config", AUTO_CONFIG)
@@ -107,6 +113,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     )
     state = build_blackboard(config)
     backend_name = str(config["inference"]["backend"])
+    required_workbench_modules = workbench_modules_for_backend(backend_name)
     required_inference_modules = (
         ASCEND_INFERENCE_MODULES
         if backend_name == "ascend_acl"
@@ -213,7 +220,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         },
         "dependency_groups": {
             "required": REQUIRED_MODULES,
-            "workbench": WORKBENCH_MODULES,
+            "workbench": required_workbench_modules,
             "inference": required_inference_modules,
         },
         "weights": state.get("frozen_assets", {}).get("weights"),
@@ -227,7 +234,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if not quiet:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     missing_required = [name for name in REQUIRED_MODULES if not modules.get(name)]
-    missing_workbench = [name for name in WORKBENCH_MODULES if not modules.get(name)]
+    missing_workbench = [
+        name for name in required_workbench_modules if not modules.get(name)
+    ]
     missing_inference = [name for name in required_inference_modules if not modules.get(name)]
     if missing_required:
         print("缺少必需模块：", ", ".join(missing_required))

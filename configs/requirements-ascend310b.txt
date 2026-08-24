@@ -1,7 +1,8 @@
 # Web and validation-only additions for the named Python 3.9 environment
 # /usr/local/miniconda3/envs/agileagent on Atlas 200I DK A2.  CANN, PyACL,
 # NumPy, OpenCV, Pillow and PyTorch are supplied by the board environment and
-# are intentionally absent.
+# are intentionally absent. Pandas is not used by the ARM inference or CLI
+# path and is also intentionally absent.
 starlette==0.37.2
 uvicorn==0.30.6
 python-multipart==0.0.9

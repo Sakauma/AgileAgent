@@ -285,6 +285,14 @@ def test_doctor_fails_when_workbench_dependency_is_missing(monkeypatch, capsys) 
     assert code == 1
 
 
+def test_ascend_doctor_does_not_require_unused_pandas() -> None:
+    x86_modules = cli.workbench_modules_for_backend("ultralytics_cuda")
+    ascend_modules = cli.workbench_modules_for_backend("ascend_acl")
+    assert "pandas" in x86_modules
+    assert "pandas" not in ascend_modules
+    assert ascend_modules == ["starlette", "uvicorn", "multipart"]
+
+
 def test_pipeline_execute_advances_until_no_action(monkeypatch, tmp_path: Path) -> None:
     config = {
         "automation": {"run_root": str(tmp_path / "runs"), "max_steps_per_run": 8},
