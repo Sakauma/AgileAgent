@@ -67,21 +67,23 @@ chmod +x scripts/bootstrap_x86.sh scripts/start_agent.sh
 
 ## 快速开始
 
-1. 启动 Web 工作台：
+1. 在 SSH 或本地终端进入 CLI 主界面：
+
+   ```bash
+   ./scripts/start_agent.sh --cli
+   ```
+
+   完成引导安装后也可以直接运行 `agile-agent`。不带子命令时会自动进入视觉识别终端，首屏提供单图识别、目录批量识别、最近结果、运行状态和模型信息。
+
+2. CLI 会自动识别 `x86 · CUDA` 或 `ARM · Ascend`，并自动保存每次识别的标注图、JSON、CSV、预测 TXT 和终端摘要。模型、阈值、场景门控与增量专家均绑定当前 production，不需要人工设置。
+
+3. 需要浏览器界面时再启动 Web 工作台：
 
    ```bash
    ./scripts/start_agent.sh
    ```
 
-   页头状态会显示当前自动识别的 `x86 · CUDA` 或 `ARM · Ascend` 运行平台。
-
-2. 在浏览器打开 `http://127.0.0.1:8501`。
-
-3. 无浏览器环境可进入终端工作台：
-
-   ```bash
-   ./scripts/start_agent.sh --cli
-   ```
+   浏览器打开 `http://127.0.0.1:8501`。完整 CLI 指南见 [`docs/CLI.md`](docs/CLI.md)。
 
 ## 使用示例
 
@@ -91,13 +93,21 @@ chmod +x scripts/bootstrap_x86.sh scripts/start_agent.sh
 agile-agent status --format json --refresh
 ```
 
-对单张图像执行 Scene-SensorNet、Base 和 Incremental 组合推理；命令输出包含场景概率、检测框、类别 owner 和模型执行轨迹的 JSON：
+对单张图像执行 Scene-SensorNet、Base 和 Incremental 组合推理。默认输出易读的终端表格，并在 `runs/cli_detections/` 下自动创建独立结果目录：
 
 ```bash
 agile-agent detect --source /path/to/image.png
 ```
 
-检测命令自动使用当前 production 代际、场景门控和已冻结阈值，无需人工选择模型或设置检测参数。
+目录批量识别和机器可读输出：
+
+```bash
+agile-agent detect --source /path/to/images --recursive
+agile-agent detect --source /path/to/image.png \
+  --output /path/to/empty-result-dir --format json
+```
+
+检测命令优先复用本机已验证的正式服务；服务未运行时才加载本地引擎。两条路径使用相同 production 代际、场景门控和冻结阈值。
 
 Web 服务启动后，可通过 HTTP 检查健康状态并提交图像：
 
@@ -188,6 +198,7 @@ docs/            架构、配置、开发、测试、协议和部署文档
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/GETTING-STARTED.md`](docs/GETTING-STARTED.md) | 环境准备与首次运行 |
+| [`docs/CLI.md`](docs/CLI.md) | SSH 交互主界面、单图/批量识别、结果保存与取回 |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 三模型架构、组件边界与数据流 |
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | x86/CUDA 与 Ascend 配置 |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发流程和代码规范 |

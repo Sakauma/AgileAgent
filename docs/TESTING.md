@@ -54,7 +54,7 @@ git diff --check
 
 | 范围 | 当前测试文件 | 主要契约 |
 | --- | --- | --- |
-| 配置、CLI 与运行成熟度 | `test_configuration_runtime.py`、`test_runtime_maturity.py`、`test_agent_workbench.py` | schema/override/脱敏、回环服务、黑板、production 代际、TensorRT 档和发布静态验收 |
+| 配置、CLI 与运行成熟度 | `test_configuration_runtime.py`、`test_runtime_maturity.py`、`test_cli_detection.py`、`test_agent_workbench.py` | schema/override/脱敏、SSH 交互主界面、识别结果落盘、回环服务、黑板、production 代际、TensorRT 档和发布静态验收 |
 | 4+2 固定划分与评分 | `test_strict_4plus2_splits.py`、`test_strict_incremental.py` | Base/Increment 完整互斥划分、两个不同新类轮次、AP50/KRR 重算、固定 owner 融合和 production profile |
 | 顺序增量生命周期 | `test_incremental_workbench.py`、`test_incremental_lifecycle_v2.py`、`test_incremental_guardian.py` | 数据包审计、自动 lock、父子代际、累积 lock 链、候选重检、提升/回滚与 Base/New/KRR 门禁 |
 | 场景校准与误激活诊断 | `test_incremental_rejection.py`、`test_unlabeled_inference.py`、`test_functional_models.py` | 场景先验来源、软阈值、新类原型/冲突处理、无标签全图推理、Scene-SensorNet 验收和三功能模型注册 |

@@ -52,13 +52,21 @@
 
 ## 首次运行
 
-启动 Web 工作台：
+SSH、无显示器设备或普通本地终端优先进入 CLI 主界面：
+
+```bash
+./scripts/start_agent.sh --cli
+```
+
+完成 editable 安装后，直接运行不带子命令的 `agile-agent` 也会进入同一界面。该入口默认使用 `--config auto`：在 `x86_64/AMD64` 上自动加载 CUDA 配置与 `.pt` 模型；在 `aarch64/ARM64` 上自动加载 Ascend 配置与 `.om` 模型，并复用现有 `/usr/local/miniconda3/envs/agileagent` 和 CANN 环境。
+
+CLI 首屏直接提供单图识别、目录批量识别和最近结果。每次识别自动保存标注图、完整 JSON、检测 CSV、归一化预测 TXT 和文本摘要；完整说明见 [`CLI.md`](CLI.md)。
+
+需要 Web 工作台时运行：
 
 ```bash
 ./scripts/start_agent.sh
 ```
-
-该入口默认使用 `--config auto`。在 `x86_64/AMD64` 上自动加载 CUDA 配置与 `.pt` 模型；在 `aarch64/ARM64` 上自动加载 Ascend 配置与 `.om` 模型，并复用现有 `/usr/local/miniconda3/envs/agileagent` 和 CANN 环境。CLI 与 Web 使用同一个选择结果，不会发生一端使用 PT、另一端使用 OM 的分裂。
 
 浏览器打开 `http://127.0.0.1:8501`，或在另一终端检查服务：
 
@@ -66,21 +74,21 @@
 curl -fsS http://127.0.0.1:8501/api/health
 ```
 
-无浏览器环境使用终端工作台：
-
-```bash
-./scripts/start_agent.sh --cli
-```
-
 也可以运行 `agile-agent config validate` 查看 `runtime.architecture`、`backend`、`model_format` 与选择来源；顶层 `--config PATH` 保留为显式覆盖。
 
-单图检测会输出场景概率、六类检测结果、类别 owner 和模型执行轨迹：
+单图检测默认输出终端表格并保存完整结果：
 
 ```bash
 agile-agent detect --source /path/to/image.png
 ```
 
-CLI 会自动使用当前 production 代际、Scene-SensorNet 和已冻结阈值，不提供检测参数或模型档案的人工切换入口。
+目录批量识别：
+
+```bash
+agile-agent detect --source /path/to/images --recursive
+```
+
+CLI 会优先复用已运行的本机正式服务，服务不可用时才加载本地推理引擎。两种执行方式都自动使用当前 production 代际、Scene-SensorNet 和冻结阈值，不提供检测参数或模型档案的人工切换入口。
 
 ## 准备 strict 4+2 数据
 

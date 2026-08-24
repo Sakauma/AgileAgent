@@ -299,11 +299,15 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_console(args: argparse.Namespace) -> int:
     config = load_args_config(args)
-    state = load_or_build_state(config, refresh=True)
+    interactive = not args.once and sys.stdin.isatty()
+    state = load_or_build_state(
+        config,
+        refresh=interactive or bool(getattr(args, "refresh", False)),
+    )
     context = decision_context(config, args)
     decision = build_decision(config, state, context)
     write_decision(config, decision)
-    if args.once or not sys.stdin.isatty():
+    if not interactive:
         print(render_snapshot(build_operator_snapshot(state, decision), "text"))
         return 0
     return run_console_frontend(config["_config_path"])
@@ -333,9 +337,9 @@ def decision_context(config: Dict[str, Any], args: argparse.Namespace) -> Dict[s
     defaults = config.get("decision", {}).get("default_context", {})
     inferred = infer_image_context(config, args.source) if getattr(args, "source", None) else {}
     return {
-        "sensor": args.sensor or inferred.get("sensor") or defaults.get("sensor", "sar"),
-        "scene": args.scene or inferred.get("scene") or defaults.get("scene", "all"),
-        "class_focus": args.class_focus or defaults.get("class_focus", "soldier"),
+        "sensor": getattr(args, "sensor", None) or inferred.get("sensor") or defaults.get("sensor", "sar"),
+        "scene": getattr(args, "scene", None) or inferred.get("scene") or defaults.get("scene", "all"),
+        "class_focus": getattr(args, "class_focus", None) or defaults.get("class_focus", "soldier"),
         "context_model": inferred or None,
     }
 
@@ -533,11 +537,42 @@ def cmd_context_predict(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_detect(args: argparse.Namespace) -> int:
-    from fair_agent.modules.web_inference import WebInferenceEngine, decode_image_bytes
+def build_detection_engine(config: Dict[str, Any]) -> Any:
+    from fair_agent.modules.web_inference import WebInferenceEngine
     from fair_agent.web.app import build_web_settings
 
-    source = resolve_path(args.source)
+    settings = build_web_settings(config)
+    return WebInferenceEngine(
+        settings["detector_path"],
+        settings["context_path"],
+        device_index=settings["device_index"],
+        predict_options=settings["predict"],
+        incremental_protocols=settings["protocols"],
+        class_names=settings["class_names"],
+        base_class_ids=settings["base_class_ids"],
+        base_local_to_global=settings.get("base_local_to_global"),
+        routing_options=settings["routing"],
+        generation_id=settings["generation_id"],
+        base_model_id=settings["base_model_id"],
+        class_owners=settings["class_owners"],
+        backend_name=settings["backend"],
+        native_options=settings["native_backend"],
+        unified_class_gates=settings.get("unified_class_gates"),
+    )
+
+
+def cmd_detect(args: argparse.Namespace) -> int:
+    from fair_agent.modules.cli_detection import (
+        create_result_dir,
+        detect_via_local_api,
+        discover_detection_inputs,
+        probe_local_detection_api,
+        render_detection_summary,
+        save_detection_results,
+    )
+    from fair_agent.modules.web_inference import decode_image_bytes
+
+    engine = None
     try:
         config = load_args_config(args)
         inference = config["inference"]
@@ -548,37 +583,72 @@ def cmd_detect(args: argparse.Namespace) -> int:
                 f"{float(inference['confidence_min']):.2f}到"
                 f"{float(inference['confidence_max']):.2f}。"
             )
-        data = source.read_bytes()
-        image = decode_image_bytes(data, source.name, str(config["decoding"]["backend"]))
-        settings = build_web_settings(config)
-        engine = WebInferenceEngine(
-            settings["detector_path"],
-            settings["context_path"],
-            device_index=settings["device_index"],
-            predict_options=settings["predict"],
-            incremental_protocols=settings["protocols"],
-            class_names=settings["class_names"],
-            base_class_ids=settings["base_class_ids"],
-            base_local_to_global=settings.get("base_local_to_global"),
-            routing_options=settings["routing"],
-            generation_id=settings["generation_id"],
-            base_model_id=settings["base_model_id"],
-            class_owners=settings["class_owners"],
-            backend_name=settings["backend"],
-            native_options=settings["native_backend"],
-            unified_class_gates=settings.get("unified_class_gates"),
+        source, inputs = discover_detection_inputs(
+            args.source,
+            recursive=bool(args.recursive),
         )
-        result = engine.predict(
-            image,
-            source.name,
-            confidence,
-            "auto",
+        source_bytes = [item.path.read_bytes() for item in inputs]
+        api_base_url = probe_local_detection_api(config)
+        results = []
+        if api_base_url is not None:
+            transport = "local_api"
+            request_timeout = max(
+                1.0,
+                float(config.get("performance", {}).get("request_timeout_seconds") or 180),
+            )
+            for index, (item, data) in enumerate(zip(inputs, source_bytes), 1):
+                if len(inputs) > 1:
+                    print(f"[{index}/{len(inputs)}] 正在识别 {item.name}", file=sys.stderr)
+                results.append(
+                    detect_via_local_api(
+                        api_base_url,
+                        data,
+                        item.name,
+                        timeout=request_timeout,
+                    )
+                )
+        else:
+            transport = "direct_engine"
+            print("未发现匹配的本机正式服务，正在加载本地推理引擎……", file=sys.stderr)
+            engine = build_detection_engine(config)
+            accepts_encoded = getattr(engine, "accepts_encoded", None)
+            for index, (item, data) in enumerate(zip(inputs, source_bytes), 1):
+                if len(inputs) > 1:
+                    print(f"[{index}/{len(inputs)}] 正在识别 {item.name}", file=sys.stderr)
+                if callable(accepts_encoded) and accepts_encoded(data):
+                    result = engine.predict_encoded(data, item.name, confidence, "auto")
+                else:
+                    image = decode_image_bytes(
+                        data,
+                        item.name,
+                        str(config["decoding"]["backend"]),
+                    )
+                    result = engine.predict(image, item.name, confidence, "auto")
+                results.append(result)
+        run_dir = create_result_dir(args.output, source)
+        payload = save_detection_results(
+            run_dir,
+            source,
+            inputs,
+            source_bytes,
+            results,
+            transport=transport,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"自动检测失败：{exc}")
         return 1
-    public = {key: value for key, value in result.items() if key != "annotated_png"}
-    print(json.dumps(public, ensure_ascii=False, indent=2))
+    finally:
+        if engine is not None:
+            close = getattr(engine, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    print(f"警告：推理引擎释放资源失败：{exc}", file=sys.stderr)
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(render_detection_summary(payload))
     return 0
 
 
@@ -800,7 +870,17 @@ def cmd_logs(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="IR/SAR 快速学习智能体工作台")
+    parser = argparse.ArgumentParser(
+        description="灵动 Agent：面向 SSH 与本地终端的 IR/SAR 视觉识别主界面",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "常用示例：\n"
+            "  agile-agent\n"
+            "  agile-agent detect --source image.png\n"
+            "  agile-agent detect --source images/ --recursive --output runs/case01\n"
+            "  agile-agent status --format json"
+        ),
+    )
     parser.add_argument(
         "--config",
         default=AUTO_CONFIG,
@@ -833,22 +913,9 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--refresh", action="store_true", help="读取证据并重建黑板。")
     status.set_defaults(func=cmd_status)
 
-    console = sub.add_parser("console", help="在无浏览器环境运行终端工作台。")
-    console.add_argument("--sensor", choices=["ir", "sar"])
-    console.add_argument("--scene", choices=["all", "air", "forest", "sea", "urban"])
-    console.add_argument(
-        "--class-focus",
-        choices=[
-            "soldier",
-            "small_aircraft",
-            "warship",
-            "tank",
-            "patrol_boat",
-            "armored_vehicle",
-        ],
-    )
-    console.add_argument("--source", help="使用 Scene-SensorNet 从图像推断传感器和场景。")
+    console = sub.add_parser("console", help="进入 SSH 友好的视觉识别交互主界面。")
     console.add_argument("--once", action="store_true", help="只打印一次终端总览，不进入交互界面。")
+    console.add_argument("--refresh", action="store_true", help="打印总览前重新采集运行状态。")
     console.set_defaults(func=cmd_console)
 
     decide = sub.add_parser("decide")
@@ -893,8 +960,11 @@ def build_parser() -> argparse.ArgumentParser:
     context_predict.add_argument("--source", required=True)
     context_predict.set_defaults(func=cmd_context_predict)
 
-    detect = sub.add_parser("detect", help="执行完整自动路由检测并输出详细决策轨迹。")
-    detect.add_argument("--source", required=True)
+    detect = sub.add_parser("detect", help="识别单图或目录，并自动保存完整本地结果。")
+    detect.add_argument("--source", required=True, help="图像文件或图像目录。")
+    detect.add_argument("--recursive", action="store_true", help="目录输入时递归扫描子目录。")
+    detect.add_argument("--output", help="本次结果目录；必须不存在或为空。")
+    detect.add_argument("--format", choices=["text", "json"], default="text", help="终端输出格式。")
     detect.set_defaults(func=cmd_detect)
 
     generation = sub.add_parser("generation", help="复核、上线或回滚模型代际。")
@@ -985,7 +1055,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if not effective_argv:
+        effective_argv = ["console"]
+    args = parser.parse_args(effective_argv)
     started = time.perf_counter()
     try:
         returncode = int(args.func(args))

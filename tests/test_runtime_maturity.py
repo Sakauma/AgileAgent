@@ -97,7 +97,7 @@ def test_cli_has_no_retired_image_size_commands() -> None:
     assert "console" in subcommands
 
 
-def test_detect_cli_exposes_only_the_image_source() -> None:
+def test_detect_cli_exposes_result_controls_without_model_tuning() -> None:
     parser = cli.build_parser()
     subcommands = next(
         action for action in parser._actions if action.dest == "command"
@@ -109,21 +109,56 @@ def test_detect_cli_exposes_only_the_image_source() -> None:
         for option in action.option_strings
     }
     assert "--source" in options
+    assert "--output" in options
+    assert "--recursive" in options
+    assert "--format" in options
     assert "--confidence" not in options
     assert "--profile" not in options
 
     args = parser.parse_args(["detect", "--source", "sample.png"])
     assert args.source == "sample.png"
+    assert args.output is None
+    assert args.recursive is False
+    assert args.format == "text"
     assert not hasattr(args, "confidence")
     assert not hasattr(args, "profile")
 
 
-def test_console_hides_manual_detection_decision_controls() -> None:
+def test_console_prioritizes_detection_without_manual_model_controls() -> None:
     source = Path("fair_agent/ui/console.py").read_text(encoding="utf-8")
-    assert "[d]" not in MENU
+    assert "[1] 单图识别" in MENU
+    assert "[2] 批量识别" in MENU
     assert "传感器 [sar/ir" not in source
     assert "关注类别 [soldier" not in source
-    assert 'command == "d"' not in source
+    assert "--confidence" not in source
+    assert "--profile" not in source
+
+
+def test_interactive_console_refreshes_state_before_rendering(monkeypatch) -> None:
+    refresh_values = []
+    config = {
+        "_config_path": "configs/agent_pipeline.yaml",
+        "decision": {"default_context": {}},
+    }
+
+    class InteractiveInput:
+        @staticmethod
+        def isatty() -> bool:
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", InteractiveInput())
+    monkeypatch.setattr(cli, "load_args_config", lambda _args: config)
+    monkeypatch.setattr(
+        cli,
+        "load_or_build_state",
+        lambda _config, refresh=False: refresh_values.append(refresh) or {},
+    )
+    monkeypatch.setattr(cli, "build_decision", lambda *_args: {})
+    monkeypatch.setattr(cli, "write_decision", lambda *_args: {})
+    monkeypatch.setattr(cli, "run_console_frontend", lambda _config_path: 0)
+    args = argparse.Namespace(once=False, refresh=False)
+    assert cli.cmd_console(args) == 0
+    assert refresh_values == [True]
 
 
 def test_config_get_prints_scalars_without_yaml_document_markers(
@@ -374,17 +409,16 @@ def test_cli_frontend_navigates_all_operator_pages(monkeypatch) -> None:
     config = load_config()
     state = build_blackboard(config)
     decision = build_decision(config, state, {"sensor": "sar", "scene": "urban", "class_focus": "soldier"})
-    answers = iter(["2", "3", "4", "5", "q"])
+    answers = iter(["4", "5", "h", "q"])
     output = []
     frontend = ConsoleFrontend(input_fn=lambda _prompt: next(answers), output_fn=output.append, clear_screen=False)
     monkeypatch.setattr(frontend, "_state", lambda: (state, decision))
     assert frontend.run() == 0
     rendered = "\n".join(output)
-    assert "灵动Agent终端工作台" in rendered
-    assert "功能模型" in rendered
-    assert "数据概况" in rendered
-    assert "增量目标检测" in rendered
-    assert "部署与提交" in rendered
+    assert "灵动 Agent · SSH 视觉识别终端" in rendered
+    assert "运行状态" in rendered
+    assert "当前正式模型" in rendered
+    assert "CLI 使用帮助" in rendered
     assert "终端工作台已退出" in rendered
 
 
@@ -393,6 +427,46 @@ def test_cli_frontend_pages_share_operator_state() -> None:
     state = build_blackboard(config)
     decision = build_decision(config, state, {"sensor": "sar", "scene": "all", "class_focus": "soldier"})
     overview = render_page("overview", state, decision)
-    assert "0.8560669777957763" in overview
-    assert "0.91202" not in overview
-    assert "Ascend 310B=ready" in render_page("deployment", state, decision)
+    assert "灵动 Agent · SSH 视觉识别终端" in overview
+    assert "incremental_detection_generation_4plus2" in overview
+    assert "人员 / 小型飞行器 / 舰船 / 坦克 / 巡逻艇 / 装甲车辆" in overview
+    assert "当前正式模型" in render_page("models", state, decision)
+
+
+def test_cli_frontend_runs_single_detection_and_returns_home(monkeypatch) -> None:
+    config = load_config()
+    state = build_blackboard(config)
+    decision = build_decision(
+        config,
+        state,
+        {"sensor": "sar", "scene": "all", "class_focus": "soldier"},
+    )
+    answers = iter(["1", '"/tmp/input image.png"', "/tmp/result", "", "q"])
+    output = []
+    calls = []
+    frontend = ConsoleFrontend(
+        input_fn=lambda _prompt: next(answers),
+        output_fn=output.append,
+        clear_screen=False,
+    )
+    monkeypatch.setattr(frontend, "_state", lambda: (state, decision))
+
+    def fake_call(arguments, *, timeout=600):
+        calls.append((arguments, timeout))
+        return subprocess.CompletedProcess(arguments, 0, "识别完成并已保存", "")
+
+    monkeypatch.setattr(frontend, "_call_cli", fake_call)
+    assert frontend.run() == 0
+    assert calls == [
+        (
+            [
+                "detect",
+                "--source",
+                "/tmp/input image.png",
+                "--output",
+                "/tmp/result",
+            ],
+            3600,
+        )
+    ]
+    assert "识别完成并已保存" in "\n".join(output)

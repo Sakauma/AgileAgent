@@ -110,6 +110,7 @@ venv/
 !/docs/ascend-310b-ssh-environment.md
 !/docs/ARCHITECTURE.md
 !/docs/API.md
+!/docs/CLI.md
 !/docs/CONFIGURATION.md
 !/docs/DEVELOPMENT.md
 !/docs/DEPLOYMENT.md
