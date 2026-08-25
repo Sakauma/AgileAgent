@@ -5,17 +5,17 @@ AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模�
 
 ## 本次验证状态
 
-2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与 runtime release `20260824-4plus2-yolo26-replica-pool-v1` 完成最终验收；三个冻结 OM 继承自 `20260824-4plus2-yolo26-runtime-calibration-v1`：
+2026-08-25 完成板端轻量增量功能的源码接入验证：新增契约 `6 passed`，全量 CPU 回归 `306 passed`，`scripts/verify_release.py` 保持 PASS。2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与 runtime release `20260824-4plus2-yolo26-replica-pool-v1` 完成最终硬件验收；三个冻结 OM 继承自 `20260824-4plus2-yolo26-runtime-calibration-v1`：
 
 - Ascend 定向回归：`100 passed`；
-- 全量回归：`283 passed in 34.19s`；
+- 当时的正式发布回归：`283 passed in 34.19s`；
 - `scripts/verify_release.py`：PASS；
 - `bash scripts/materialize_ascend310b_full_score_release.sh --verify-existing`：33 项发布资产全部 PASS；
 - 三个 systemd unit 均为 active，公共 `8501` 健康检查返回 `status=ready`、`backend=ascend_acl`、`validated=true`、`inference_replicas=3`；
 - 冻结 release 的 Base-mAP50、New-mAP50、KRR 与公共 `8501` FPS 四项满分门禁全部通过。
 - 正式 `8501` mixed 20 图中位 `38.2175 FPS`，纯增量 140 图中位 `37.3997 FPS`，CLI 同一 140 图端到端 `33.504 FPS`。
 
-本轮没有重新训练模型。精度、误激活和性能结论采用当前冻结 release 的候选、lock、正式提升后复验及部署后 benchmark 证据；下文命令仍是后续代码、模型或发布变更时的标准验收入口。
+本次源码接入没有重新训练或替换 production。板端 Adapter 的独立实测记录在 [`ascend-310b-edge-incremental-training.md`](ascend-310b-edge-incremental-training.md)，正式精度、误激活和性能结论仍采用当前冻结 release 的候选、lock、正式提升后复验及部署后 benchmark 证据；下文命令仍是后续代码、模型或发布变更时的标准验收入口。
 
 ## 测试框架与安装
 
@@ -65,6 +65,7 @@ git diff --check
 | Ascend 对齐与性能契约 | `test_ascend_alignment.py`、`test_ascend_benchmark.py` | 逐类 IoU 对齐、业务签名硬门禁、DVPP PNG 格式和 20 图 batch FPS 计算 |
 | Ascend310B v2 满分工作流 | `test_ascend_full_score_workflow.py`、`test_ascend_release.py` | `independent_yolo26_e2e_v1`、三 OM 身份、候选 `8502`、三轮 FPS 门禁、候选授权和正式提升 |
 | Ascend310B v2 正式包 | `test_ascend_packaged_release.py` | 31 项完整性清单、release-local 配置/清单、三个 OM、零训练物化、启停默认发布 ID 和提升后证据 |
+| Ascend310B 板端轻量增量 | `test_ascend_edge_incremental.py` | 注册表驱动轮次、零旧样本、production 输出隔离、训练/ACL 双环境编排和禁止 CPU fallback |
 
 ## 聚焦运行
 
@@ -125,6 +126,14 @@ python -m pytest -q \
   tests/test_ascend_release.py \
   tests/test_ascend_packaged_release.py
 ```
+
+板端轻量增量功能的 CPU 契约层：
+
+```bash
+python -m pytest -q tests/test_ascend_edge_incremental.py
+```
+
+真实 NPU backward、冻结 probe、Adapter 多种子训练、ATC 和 ACL benchmark 不在默认 Pytest 中执行；它们由 [`ascend-310b-edge-incremental-training.md`](ascend-310b-edge-incremental-training.md) 的隔离板端流水线验收。
 
 ## x86/NVIDIA GPU 模型验收
 

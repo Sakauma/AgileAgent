@@ -148,6 +148,14 @@ curl -fsS -F "file=@/path/to/image.png;type=image/png" \
 
 训练默认采用 `1280` 输入、最多 `500` epoch 和 `50` epoch 无改善早停。数据边界、冻结规则和逐轮证据格式见 [`docs/compliant-incremental-learning.md`](docs/compliant-incremental-learning.md)。
 
+## 可选额外功能：Ascend310B 板端增量训练
+
+[`extras/ascend_edge_incremental/`](extras/ascend_edge_incremental/) 提供隔离的板端轻量增量训练能力。它按类别注册表逐轮读取 Increment train/dev，冻结现有 Base、Incremental 与 Scene-SensorNet，只在 `npu:0` 更新每个新增类别 8 个参数的无 MatMul 置信度 Adapter；随后独立执行 mixed dev 强度选择、mixed lock 联合评分、ONNX/OM 导出和 ACL 延迟验证。
+
+该功能使用独立 Conda 前缀，拒绝 CPU fallback 和 production 路径输出，不修改现有正式模型、CANN 或服务配置。2026-08-25 实测两轮训练搜索耗时约 9 分 16 秒，必需 NPU 探测、训练和 ONNX/OM 导出合计约 12 分 12 秒；mixed lock 的 Base mAP50 / New-mAP50 / KRR / Full-mAP50 为 `0.816663 / 0.649306 / 1.000000 / 0.736421`，保守串行叠加预计 `37.9639 FPS`。
+
+这项能力用于端侧增量更新演示和候选证据，不等同于完整 YOLO26s 微调，也不会自动替换当前满分 production。环境准备、一键运行、890 图二号诊断、结果解释和晋级约束见 [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md)。
+
 ## Ascend310B v2 部署
 
 板端需要已配置的 CANN 运行时和 `/usr/local/miniconda3/envs/agileagent` 环境。仓库中的正式包已经包含三个 OM、配置、源 checkpoint、ONNX、AIPP、构建 provenance、冻结预测和验收报告。
@@ -193,6 +201,7 @@ tools/           数据处理、训练、选模、校准、评分和发布工具
 scripts/         环境引导、服务启动、OM 构建与板端验收脚本
 tests/           单元、集成和发布契约测试
 docs/            架构、配置、开发、测试、协议和部署文档
+extras/          与 production 隔离的可选能力和实验入口
 ```
 
 ## 文档
@@ -206,6 +215,7 @@ docs/            架构、配置、开发、测试、协议和部署文档
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发流程和代码规范 |
 | [`docs/TESTING.md`](docs/TESTING.md) | 测试范围、命令和设备要求 |
 | [`docs/compliant-incremental-learning.md`](docs/compliant-incremental-learning.md) | 两轮增量数据与评测契约 |
+| [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md) | 板端轻量增量训练环境、操作、指标与边界 |
 | [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md) | Ascend310B v2 模型转换、内容门控与评分方法 |
 | [`docs/ascend-310b-current-status.md`](docs/ascend-310b-current-status.md) | 当前 release 状态和证据索引 |
 | [`docs/ascend-310b-deployment.md`](docs/ascend-310b-deployment.md) | 板端物化、启动、验收和路由操作 |
