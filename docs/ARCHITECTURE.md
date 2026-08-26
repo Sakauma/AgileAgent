@@ -128,6 +128,12 @@ Base/Increment train/dev 与 mixed dev
 
 `configs/incremental_round_registry_4plus2.yaml` 是类别与轮次的权威注册表。它定义 Base 四类、`round_01_patrol_boat`、`round_02_armored_vehicle`、每轮局部到全局映射、父子代际和 train/dev/lock 清单。每轮增量训练只读取当轮 Increment train/dev 视图；Base 与已学专家权重保持冻结。Scene-SensorNet 与场景门控属于 `system_calibration`，冻结参数后的累计评分属于 `joint_evaluation`。
 
+### Ascend310B 断网增量演示
+
+`scripts/run_ascend310b_incremental_demo.sh` 将当前两轮注册表和现场 Increment 目录对齐，调用 `extras/ascend_edge_incremental/` 在 `npu:0` 训练每类 8 参数置信度 Adapter。通过 mixed lock 和 OM 门禁后，`promote_demo.py` 生成独立演示配置，`WebInferenceEngine` 在冻结 score calibration 之前使用 `edge_incremental_adapter.py` 的 8 维等价实现更新新类置信度。最后用启用 Adapter 的 DVPP + Scene + Base + Specialist + 门控/融合完整链路重测 FPS。
+
+演示配置和 production 配置分离；任一门禁失败时将演示清单撤销为不可加载，不改写当前满分 release。
+
 ### Ascend310B1 v2 发布
 
 ```text
@@ -156,6 +162,7 @@ Base/Increment train/dev 与 mixed dev
 | `IncrementalBatchStore` / `TrainingJobManager` | `fair_agent/modules/incremental_workbench.py` | 审计上传数据、生成隔离视图、保存批次状态并管理训练任务 |
 | `IncrementalLifecycle` | `fair_agent/modules/incremental_lifecycle.py` | 串联 dev 校准、候选登记、lock 复核、shadow 加载和 production 切换 |
 | `OnsiteIncrementalWorkflow` | `fair_agent/modules/onsite_incremental.py` | 现场 4+2+n 预检、动态轮次、候选 FPS/板端门禁、原子晋级和回滚 |
+| `EdgeIncrementalAdapter` | `fair_agent/modules/edge_incremental_adapter.py` | 加载已验收的板端 8 维 Adapter，在冻结校准前执行 Torch/OM 等价置信度更新 |
 | `load_incremental_round_registry()` | `fair_agent/modules/incremental_round_registry.py` | 校验两轮类别注入、数据范围、冻结条件和父子代际契约 |
 
 ## 配置与状态边界

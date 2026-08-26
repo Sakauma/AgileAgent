@@ -17,6 +17,7 @@ venv/
 /datasets*/
 /datasets_r1_base_train
 /runs/
+/.edge_incremental_demo_contracts/
 /reports/
 /artifacts/
 /candidates/
@@ -107,6 +108,7 @@ venv/
 !/docs/ascend-310b-deployment.md
 !/docs/ascend-310b-current-status.md
 !/docs/ascend-310b-edge-incremental-training.md
+!/docs/ascend-310b-offline-incremental-demo.md
 !/docs/ascend-310b-full-score-method.md
 !/docs/ascend-310b-ssh-environment.md
 !/docs/ARCHITECTURE.md

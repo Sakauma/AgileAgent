@@ -74,6 +74,7 @@ def neutralize_policy(
     routing["conflict_base_confidence"] = 1.0
     routing["specialist_margin"] = 0.0
     routing["score_calibration"] = {"enabled": False}
+    routing["edge_incremental_adapter"] = {"enabled": False}
     routing["cross_class_suppression"] = {
         "enabled": False,
         "strategy": "highest_confidence",
@@ -91,6 +92,7 @@ def neutralize_policy(
             "known_scene_soft_gates",
             "content_execution_gate",
             "score_calibration",
+            "edge_incremental_adapter",
             "old_new_conflict_arbitration",
             "cross_class_suppression",
         ],

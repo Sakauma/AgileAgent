@@ -67,6 +67,7 @@ git diff --check
 | Ascend310B v2 满分工作流 | `test_ascend_full_score_workflow.py`、`test_ascend_release.py` | `independent_yolo26_e2e_v1`、三 OM 身份、候选 `8502`、三轮 FPS 门禁、候选授权和正式提升 |
 | Ascend310B v2 正式包 | `test_ascend_packaged_release.py` | 31 项完整性清单、release-local 配置/清单、三个 OM、零训练物化、启停默认发布 ID 和提升后证据 |
 | Ascend310B 板端轻量增量 | `test_ascend_edge_incremental.py` | 注册表驱动轮次、零旧样本、production 输出隔离、训练/ACL 双环境编排和禁止 CPU fallback |
+| 310B 断网 `4→4+2` 演示 | `test_edge_incremental_demo.py` | 增量目录自动对齐、8 维运行时等价、隔离演示晋级、精度/OM/FPS 三门禁和强制离线 |
 
 ## 聚焦运行
 
@@ -142,10 +143,12 @@ python -m pytest -q \
 板端轻量增量功能的 CPU 契约层：
 
 ```bash
-python -m pytest -q tests/test_ascend_edge_incremental.py
+python -m pytest -q \
+  tests/test_ascend_edge_incremental.py \
+  tests/test_edge_incremental_demo.py
 ```
 
-真实 NPU backward、冻结 probe、Adapter 多种子训练、ATC 和 ACL benchmark 不在默认 Pytest 中执行；它们由 [`ascend-310b-edge-incremental-training.md`](ascend-310b-edge-incremental-training.md) 的隔离板端流水线验收。
+真实 NPU backward、冻结 probe、Adapter 多种子训练、ATC、ACL benchmark 和启用 Adapter 后的完整图像 FPS 不在默认 Pytest 中执行；它们由 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md) 的板端一键流水线验收。
 
 ## x86/NVIDIA GPU 模型验收
 

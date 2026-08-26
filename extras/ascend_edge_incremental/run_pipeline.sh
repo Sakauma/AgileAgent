@@ -22,15 +22,10 @@ fi
 
 source "${CANN_ENV}"
 cd "${REPO_ROOT}"
-extra_args=()
-if [[ -n "${ASCEND_OPP_PATH:-}" ]]; then
-  extra_args+=(--opp-source "${ASCEND_OPP_PATH}")
-fi
 PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
   exec "${PRODUCTION_PYTHON}" -m extras.ascend_edge_incremental.workflow \
     run \
     --repo-root "${REPO_ROOT}" \
     --training-python "${TRAINING_PYTHON}" \
     --production-python "${PRODUCTION_PYTHON}" \
-    "${extra_args[@]}" \
     "$@"

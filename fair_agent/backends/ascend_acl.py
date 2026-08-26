@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from PIL import Image
 
-from fair_agent.core.config import rel_path, resolve_path
+from fair_agent.core.config import registry_source_key, resolve_path
 from fair_agent.core.hashes import sha256_file
 
 
@@ -1058,7 +1058,7 @@ class AscendAclModel:
 def _validated_model_entry(
     options: Mapping[str, Any], weights: str | Path
 ) -> Mapping[str, Any]:
-    source_key = rel_path(resolve_path(weights))
+    source_key = registry_source_key(weights)
     entry = options.get("models", {}).get(source_key)
     if not isinstance(entry, Mapping):
         raise RuntimeError(f"Ascend配置未登记模型：{source_key}")

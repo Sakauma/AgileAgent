@@ -59,6 +59,7 @@ KNOWN_SECTION_KEYS = {
         "incremental_enabled", "require_acceptance_passed", "consensus_iou", "fusion_iou",
         "max_specialists_per_image", "conflict_iou", "conflict_incremental_coverage", "conflict_base_confidence",
         "specialist_margin", "preserve_base_class_owners", "cross_class_suppression", "score_calibration",
+        "edge_incremental_adapter",
         "detection_evidence_weight", "context_evidence_weight",
         "neutral_context_score", "default_routing_prior",
         "parallel_model_execution", "parallel_context_execution", "parallel_context_batch_execution", "max_model_workers",
@@ -209,6 +210,22 @@ def rel_path(path: Path) -> str:
         return path.resolve().relative_to(ROOT).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def registry_source_key(value: Union[str, Path]) -> str:
+    """Return the stable repository key used by runtime artifact registries.
+
+    Registry keys describe the logical source asset.  They must therefore not
+    follow a frozen asset symlink out of an isolated demo or release checkout.
+    """
+
+    path = Path(value)
+    if not path.is_absolute():
+        return path.as_posix()
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return rel_path(path)
 
 
 def _expand_environment(value: Any, path: str = "") -> Any:
@@ -496,6 +513,40 @@ def validate_config(
                             )
                         _number(raw_source, "temperature", errors, 0.05, 20.0)
                         _number(raw_source, "bias", errors, -10.0, 10.0)
+    edge_adapter = routing.get("edge_incremental_adapter")
+    if edge_adapter is not None:
+        if not isinstance(edge_adapter, Mapping):
+            errors.append("routing.edge_incremental_adapter必须是映射")
+        else:
+            unknown_adapter = sorted(
+                set(edge_adapter)
+                - {
+                    "enabled",
+                    "manifest",
+                    "require_accepted",
+                    "required_protocol_id",
+                }
+            )
+            if unknown_adapter:
+                errors.append(
+                    "routing.edge_incremental_adapter包含未知字段："
+                    + ", ".join(unknown_adapter)
+                )
+            if not isinstance(edge_adapter.get("enabled"), bool):
+                errors.append("routing.edge_incremental_adapter.enabled必须为布尔值")
+            if not isinstance(edge_adapter.get("require_accepted", True), bool):
+                errors.append(
+                    "routing.edge_incremental_adapter.require_accepted必须为布尔值"
+                )
+            if edge_adapter.get("enabled") is True:
+                if not str(edge_adapter.get("manifest") or "").strip():
+                    errors.append(
+                        "routing.edge_incremental_adapter.manifest不能为空"
+                    )
+                if not str(edge_adapter.get("required_protocol_id") or "").strip():
+                    errors.append(
+                        "routing.edge_incremental_adapter.required_protocol_id不能为空"
+                    )
     if abs(float(routing.get("detection_evidence_weight", 0)) + float(routing.get("context_evidence_weight", 0)) - 1.0) > 1e-9:
         errors.append("routing的检测证据权重与上下文证据权重之和必须为1")
     _number(routing, "max_specialists_per_image", errors, 1)

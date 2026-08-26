@@ -25,6 +25,10 @@ from fair_agent.modules.detection_fusion import (
     pairwise_box_overlap_metrics,
     suppress_cross_class_overlaps,
 )
+from fair_agent.modules.edge_incremental_adapter import (
+    apply_edge_incremental_adapter,
+    load_edge_incremental_adapter,
+)
 from fair_agent.modules.incremental_rejection import apply_positive_prototype_to_image
 
 
@@ -1058,6 +1062,15 @@ class WebInferenceEngine:
         self.score_calibration = dict(
             routing.get("score_calibration") or {"enabled": False}
         )
+        self.edge_incremental_adapter = load_edge_incremental_adapter(
+            routing.get("edge_incremental_adapter"),
+            repo_root=Path(__file__).resolve().parents[2],
+        )
+        self.edge_incremental_adapter_status = (
+            self.edge_incremental_adapter.public_status()
+            if self.edge_incremental_adapter is not None
+            else {"active": False}
+        )
         self.max_specialists = int(routing["max_specialists_per_image"])
         self.conflict_iou = float(routing["conflict_iou"])
         self.conflict_incremental_coverage = (
@@ -1647,13 +1660,20 @@ class WebInferenceEngine:
                 effective_thresholds, context_score = protocol_effective_thresholds(
                     protocol, contexts[image_index], float(confidence)
                 )
+                remapped_candidates = remap_specialist_records_dynamic(
+                    result_records(prediction),
+                    local_to_global,
+                    self.class_names,
+                    str(protocol_id),
+                )
+                adapted_candidates = apply_edge_incremental_adapter(
+                    remapped_candidates,
+                    contexts[image_index],
+                    images[image_index].size,
+                    getattr(self, "edge_incremental_adapter", None),
+                )
                 raw_candidates = calibrate_record_confidences(
-                    remap_specialist_records_dynamic(
-                        result_records(prediction),
-                        local_to_global,
-                        self.class_names,
-                        str(protocol_id),
-                    ),
+                    adapted_candidates,
                     getattr(self, "score_calibration", None),
                 )
                 threshold_candidates, threshold_rejections = apply_protocol_thresholds(
@@ -1809,6 +1829,9 @@ class WebInferenceEngine:
                 "generation_id": self.generation_id,
                 "base_model_id": self.base_model_id,
                 "class_owners": {str(key): value for key, value in self.class_owners.items()},
+                "edge_incremental_adapter": getattr(
+                    self, "edge_incremental_adapter_status", {"active": False}
+                ),
             }
             results.append({
                 "filename": filename,
@@ -2285,13 +2308,20 @@ class WebInferenceEngine:
             if not isinstance(local_to_global, Mapping):
                 local_to_global = {0: class_ids[0]}
             conversion_started = time.perf_counter()
+            remapped_candidates = remap_specialist_records_dynamic(
+                result_records(specialist_prediction),
+                local_to_global,
+                self.class_names,
+                protocol_id,
+            )
+            adapted_candidates = apply_edge_incremental_adapter(
+                remapped_candidates,
+                context,
+                rgb_image.size,
+                getattr(self, "edge_incremental_adapter", None),
+            )
             raw_candidates = calibrate_record_confidences(
-                remap_specialist_records_dynamic(
-                    result_records(specialist_prediction),
-                    local_to_global,
-                    self.class_names,
-                    protocol_id,
-                ),
+                adapted_candidates,
                 getattr(self, "score_calibration", None),
             )
             routing_conversion_ms += (time.perf_counter() - conversion_started) * 1000
@@ -2462,6 +2492,9 @@ class WebInferenceEngine:
             "class_owners": {
                 str(key): value for key, value in getattr(self, "class_owners", {}).items()
             },
+            "edge_incremental_adapter": getattr(
+                self, "edge_incremental_adapter_status", {"active": False}
+            ),
         }
         routing_decision_ms += (time.perf_counter() - decision_started) * 1000
         result = {

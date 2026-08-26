@@ -131,6 +131,23 @@ CLI 会自动检查当前配置的本机服务端口：
 
 Ascend310B 批量识别默认以 20 图为一个请求，并复用正式服务的三实例推理池。终端只显示赛题口径的“端到端推理时间 / FPS”：包含 DVPP、Scene/Base/Specialist OM、内容门控、融合与 NMS，不包含 HTTP 上传解析、结果落盘和标注图渲染。结果保存会与后续推理重叠执行，但不会被包装成推理速度。
 
+### 板端增量演示后进入 CLI
+
+当前 `4→4+2` 的断网增量演示使用：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
+```
+
+全部门禁通过后，`demo_report.json` 会给出隔离演示配置。使用它启动 CLI 即可查看板端学习后的结果：
+
+```bash
+AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml \
+  ./scripts/start_agent.sh --cli
+```
+
+该配置只在本次命令环境中生效；不设置时仍启动原满分 production。完整说明见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+
 ## 将结果复制到 SSH 客户端
 
 识别结果首先保存在运行 CLI 的设备上。退出板端 SSH 会话后，在自己的电脑终端执行：

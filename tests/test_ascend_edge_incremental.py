@@ -173,6 +173,7 @@ def test_workflow_plan_separates_runtimes_and_orders_freeze_before_lock(
     names = [stage.name for stage in stages]
 
     assert by_name["freeze_training_probe"].command[0] == str(production_python)
+    assert by_name["compile_om"].use_production_python_path is True
     assert by_name["train_registered_rounds"].command[0] == str(training_python)
     assert "--registry" in by_name["train_registered_rounds"].command
     assert names.index("train_registered_rounds") < names.index("evaluate_lock")

@@ -12,6 +12,7 @@ agile-agent incremental onsite --bundle /path/to/onsite_increment.zip
 
 ## 能力边界
 
+- 现场若演示的是赛题已有 `4→4+2` 过程，应直接在 310B 断网板端运行 [`run_ascend310b_incremental_demo.sh`](../scripts/run_ascend310b_incremental_demo.sh)；这条路径已经完成真实 NPU 训练、OM、隔离部署、精度和 30 FPS 整链实测，不走本页的第 7 类新专家流程。
 - `n` 必须是当前 production 没有学习过的类别。已有类别追加样本属于目标增量更新，不走本入口。
 - 真正的新类别需要训练新的检测专家。310B 上的轻量置信度 Adapter 只能校准已有候选，不能获得第 7 类之后的新目标定位能力。
 - 新专家训练必须在装有 PyTorch、Ultralytics 和可用 NVIDIA GPU 的 CUDA 节点执行，不允许 CPU fallback。

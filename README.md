@@ -165,7 +165,15 @@ agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --target x
 
 该功能使用独立 Conda 前缀，拒绝 CPU fallback 和 production 路径输出，不修改现有正式模型、CANN 或服务配置。2026-08-25 实测两轮训练搜索耗时约 9 分 16 秒，必需 NPU 探测、训练和 ONNX/OM 导出合计约 12 分 12 秒；mixed lock 的 Base mAP50 / New-mAP50 / KRR / Full-mAP50 为 `0.816663 / 0.649306 / 1.000000 / 0.736421`，保守串行叠加预计 `37.9639 FPS`。
 
-这项能力用于端侧增量更新演示和候选证据，不等同于完整 YOLO26s 微调，也不会自动替换当前满分 production。环境准备、一键运行、890 图二号诊断、结果解释和晋级约束见 [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md)。
+现场演示当前 `4→4+2` 时，在已预装离线训练环境的 310B 上只需一条命令：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
+```
+
+该入口自动完成数据对齐、两轮 NPU 训练、dev/lock、ONNX/OM、隔离演示部署，并在 Adapter 真正接入运行时后复测完整图像链路 FPS。脚本不联网，不把 Base 图像用于训练，也不会覆盖当前满分 production。完整现场手册见 [`docs/ascend-310b-offline-incremental-demo.md`](docs/ascend-310b-offline-incremental-demo.md)；底层环境、实测证据和边界见 [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md)。
+
+2026-08-26 板端整链验收已通过：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`，启用 Adapter 后完整图像链路中位 `38.6995 FPS`；热态一键全流程耗时 `16分47秒`，首次冷态建议预留 30 分钟。
 
 ## Ascend310B v2 部署
 
@@ -227,6 +235,7 @@ extras/          与 production 隔离的可选能力和实验入口
 | [`docs/TESTING.md`](docs/TESTING.md) | 测试范围、命令和设备要求 |
 | [`docs/compliant-incremental-learning.md`](docs/compliant-incremental-learning.md) | 两轮增量数据与评测契约 |
 | [`docs/onsite-4plus2plusn.md`](docs/onsite-4plus2plusn.md) | 现场新类别一键训练、候选部署、验收与回滚 |
+| [`docs/ascend-310b-offline-incremental-demo.md`](docs/ascend-310b-offline-incremental-demo.md) | 310B 断网一键 `4→4+2` 训练、演示部署与验收 |
 | [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md) | 板端轻量增量训练环境、操作、指标与边界 |
 | [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md) | Ascend310B v2 模型转换、内容门控与评分方法 |
 | [`docs/ascend-310b-current-status.md`](docs/ascend-310b-current-status.md) | 当前 release 状态和证据索引 |

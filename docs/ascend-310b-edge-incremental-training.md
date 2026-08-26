@@ -21,6 +21,18 @@
 
 这不是完整 YOLO26s 微调，也不能为完全没有候选框的新类别学习新的定位能力。流水线不会自动覆盖或晋级 production，当前正式 OM、CANN 和服务配置保持不变。
 
+## 现场主入口
+
+已经验证的板端训练能力现在已封装为当前 `4→4+2` 的断网一键演示：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
+```
+
+该入口自动对齐当前固定 split，调用本目录的底层流水线，然后把通过门禁的 Adapter 部署到隔离演示配置，最后将 Adapter 实际接入完整图像推理链路重测 FPS。它不覆盖满分 production。现场操作、失败撤销和演示 CLI 启动方式见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+
+下文保留底层手工入口，用于研发调试和重现单个阶段。
+
 ## 数据与协议边界
 
 类别、轮次、父子代际和 split 全部读取 [`configs/incremental_round_registry_4plus2.yaml`](../configs/incremental_round_registry_4plus2.yaml)，训练入口不固定写死类别 `4/5` 或两条 split 路径。当前 Adapter 实现要求每轮注册一个新增类别。
@@ -114,7 +126,7 @@ RUN_ROOT="$HOME/agileagent/edge_incremental_runs/$(date +%Y%m%d-%H%M%S)"
   --encoded
 ```
 
-默认参数复现实验配置：5 个 seed、3 个学习率、每候选 80 epoch、4096 条平衡训练行、batch 256。包装脚本会加载现有 CANN 环境；若板端 `vendors/customize` 存在 root-only 文件，它只为 torch_npu 训练进程生成一个不含该目录的本地 OPP 视图，绝不修改 CANN。ATC 与 ACL 阶段仍使用原始 OPP。
+默认参数复现实验配置：5 个 seed、3 个学习率、每候选 80 epoch、4096 条平衡训练行、batch 256。包装脚本会加载现有 CANN 环境并默认使用该板已验证的原始 OPP。首次 torch_npu 图编译期间可能打印 `vendors/customize` root-only 文件的 Python traceback，实测中该警告非致命，约 176 秒后继续。不应为了消除警告而排除整个 `vendors`，否则会丢失 AutoTiling 注册。`--opp-source` 只作为其他板型的显式诊断选项，不再自动启用。
 
 完整执行顺序是：
 

@@ -22,6 +22,7 @@ class Stage:
     name: str
     command: tuple[str, ...]
     use_training_opp: bool = False
+    use_production_python_path: bool = False
 
     def public(self) -> dict[str, object]:
         return {
@@ -29,6 +30,7 @@ class Stage:
             "command": list(self.command),
             "shell": shlex.join(self.command),
             "uses_training_opp_overlay": self.use_training_opp,
+            "uses_production_python_path": self.use_production_python_path,
         }
 
 
@@ -270,6 +272,7 @@ def build_stages(args: argparse.Namespace) -> list[Stage]:
                     "--soc_version=Ascend310B1",
                     "--precision_mode=allow_fp32_to_fp16",
                 ),
+                use_production_python_path=True,
             ),
             Stage(
                 "benchmark_om",
@@ -350,6 +353,11 @@ def run(args: argparse.Namespace, stages: Sequence[Stage]) -> int:
             print(f"\n[{index}/{len(stages)}] {stage.name}", flush=True)
             print(f"$ {shlex.join(stage.command)}", flush=True)
             environment = base_environment.copy()
+            if stage.use_production_python_path:
+                production_bin = str(args.production_python.expanduser().resolve().parent)
+                environment["PATH"] = (
+                    f"{production_bin}{os.pathsep}{environment.get('PATH', '')}"
+                )
             if stage.use_training_opp:
                 environment["ASCEND_OPP_PATH"] = str(output / "opp_overlay")
             elif original_opp is not None:

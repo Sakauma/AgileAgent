@@ -9,7 +9,7 @@ from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from PIL import Image
 
-from fair_agent.core.config import rel_path, resolve_path
+from fair_agent.core.config import registry_source_key, rel_path, resolve_path
 from fair_agent.core.hashes import sha256_file
 
 
@@ -101,7 +101,7 @@ class TensorRTEngineBackend:
                 f"engine={backend_options['expected_compute_capability']}, runtime={capability}"
             )
 
-        source_key = rel_path(resolve_path(weights))
+        source_key = registry_source_key(weights)
         entry = backend_options.get("engines", {}).get(source_key)
         if not isinstance(entry, Mapping):
             raise RuntimeError(f"TensorRT配置未登记模型：{source_key}")
@@ -241,7 +241,7 @@ class TensorRTNativeBackend:
         if native_options.get("validated") is not True:
             raise RuntimeError("TensorRT原生后端尚未通过精度与性能验收。")
         library = resolve_path(native_options["library"])
-        source_key = rel_path(resolve_path(weights)) if weights is not None else None
+        source_key = registry_source_key(weights) if weights is not None else None
         engine_entry = native_options.get("engines", {}).get(source_key, {}) if source_key else {}
         detector_engine = resolve_path(engine_entry.get("path") or native_options.get("base_engine", ""))
         context_entry = native_options["context_engine"]

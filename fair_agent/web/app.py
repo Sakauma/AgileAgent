@@ -35,7 +35,7 @@ from fair_agent.modules.web_inference import (
 from fair_agent.core.config import (
     inference_backend_options,
     load_config,
-    rel_path,
+    registry_source_key,
     resolve_path,
     runtime_platform_info,
 )
@@ -99,7 +99,7 @@ def _selected_model_artifacts(
     configured_models = backend_options.get("models") or {}
 
     def ascend_model(source: str | Path) -> Path:
-        source_key = rel_path(resolve_path(source))
+        source_key = registry_source_key(source)
         entry = configured_models.get(source_key)
         if not isinstance(entry, Mapping) or not entry.get("path"):
             raise ValueError(f"Ascend 配置未登记运行模型：{source_key}")

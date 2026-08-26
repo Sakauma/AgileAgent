@@ -15,6 +15,7 @@ from fair_agent.modules.web_inference import image_png_bytes
 from fair_agent.web.app import (
     AtomicEngineProvider,
     BatchResultStore,
+    _selected_model_artifacts,
     build_web_settings,
     create_app,
 )
@@ -274,6 +275,34 @@ def test_health_reports_ascend_device_for_ascend_backend() -> None:
     assert response.status_code == 200
     assert response.json()["device"] == "ascend:0"
     assert response.json()["model_format"] == "om"
+
+
+def test_ascend_model_registry_lookup_does_not_resolve_frozen_asset_symlink(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import fair_agent.core.config as core_config
+
+    candidate_root = tmp_path / "candidate"
+    production_root = tmp_path / "production"
+    source = candidate_root / "models" / "base.pt"
+    target = production_root / "models" / "base.pt"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"frozen")
+    source.parent.mkdir(parents=True)
+    source.symlink_to(target)
+    monkeypatch.setattr(core_config, "ROOT", candidate_root)
+
+    artifacts = _selected_model_artifacts(
+        "ascend_acl",
+        {
+            "models": {"models/base.pt": {"path": "runs/base.om"}},
+            "context_model": {"path": "runs/context.om"},
+        },
+        {"detector_path": source, "protocols": {}},
+        tmp_path / "ignored-context.pt",
+    )
+
+    assert artifacts["base"].name == "base.om"
 
 
 def test_single_detection_api_returns_public_json() -> None:

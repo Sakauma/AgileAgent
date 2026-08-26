@@ -80,6 +80,11 @@ def main() -> int:
         "onnx": str(output),
         "candidate_slots": args.candidate_slots,
         "feature_dim": FEATURE_DIM,
+        "feature_contract": "candidate_confidence_context_v1",
+        "effective_weights": {
+            str(class_id): [float(value) for value in row.tolist()]
+            for class_id, row in zip(protocol.new_class_ids, weights)
+        },
         "output_dim": len(protocol.new_class_ids),
         "opset": 11,
         "onnx_checker_passed": True,
