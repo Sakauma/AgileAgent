@@ -5,7 +5,7 @@ AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模�
 
 ## 本次验证状态
 
-2026-08-25 完成板端轻量增量功能的源码接入验证：新增契约 `6 passed`，全量 CPU 回归 `306 passed`，`scripts/verify_release.py` 保持 PASS。2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与 runtime release `20260824-4plus2-yolo26-replica-pool-v1` 完成最终硬件验收；三个冻结 OM 继承自 `20260824-4plus2-yolo26-runtime-calibration-v1`：
+2026-08-26 完成现场 4+2+n 一键增量总控验证：现场专项 `12 passed`，全量 CPU 回归 `320 passed`，`scripts/verify_release.py` 保持 PASS。2026-08-25 完成板端轻量增量功能的源码接入验证：新增契约 `6 passed`，当时全量 CPU 回归 `306 passed`。2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与 runtime release `20260824-4plus2-yolo26-replica-pool-v1` 完成最终硬件验收；三个冻结 OM 继承自 `20260824-4plus2-yolo26-runtime-calibration-v1`：
 
 - Ascend 定向回归：`100 passed`；
 - 当时的正式发布回归：`283 passed in 34.19s`；
@@ -58,6 +58,7 @@ git diff --check
 | 配置、CLI 与运行成熟度 | `test_configuration_runtime.py`、`test_runtime_maturity.py`、`test_cli_detection.py`、`test_agent_workbench.py` | schema/override/脱敏、SSH 交互主界面、识别结果落盘、回环服务、黑板、production 代际、TensorRT 档和发布静态验收 |
 | 4+2 固定划分与评分 | `test_strict_4plus2_splits.py`、`test_strict_incremental.py` | Base/Increment 完整互斥划分、两个不同新类轮次、AP50/KRR 重算、固定 owner 融合和 production profile |
 | 顺序增量生命周期 | `test_incremental_workbench.py`、`test_incremental_lifecycle_v2.py`、`test_incremental_guardian.py` | 数据包审计、自动 lock、父子代际、累积 lock 链、候选重检、提升/回滚与 Base/New/KRR 门禁 |
+| 现场 4+2+n 一键总控 | `test_onsite_incremental.py` | ZIP 只读契约、CUDA/Ascend 预检、动态类 ID、候选先验收、FPS 后晋级和板端报告/回滚协议 |
 | 场景校准与误激活诊断 | `test_incremental_rejection.py`、`test_unlabeled_inference.py`、`test_functional_models.py` | 场景先验来源、软阈值、新类原型/冲突处理、无标签全图推理、Scene-SensorNet 验收和三功能模型注册 |
 | Web 推理和 UI | `test_web_inference.py`、`test_web_ui_flow.py` | 六类映射、内容双证据门控、并行/有序模型执行、批量 ZIP、health、单图/批量 API 和前端交互 |
 | 提交输出安全 | `test_submission_safety.py` | 输出根范围、重复 stem、GPU 设备强制和推理结果计数 |
@@ -102,6 +103,17 @@ python -m pytest -q \
   tests/test_unlabeled_inference.py \
   tests/test_functional_models.py
 ```
+
+现场 4+2+n 编排契约：
+
+```bash
+python -m pytest -q tests/test_onsite_incremental.py
+python -m fair_agent.cli incremental onsite \
+  --bundle /path/to/new_classes.zip \
+  --plan-only
+```
+
+Pytest 不启动真实训练或远程板端命令；通过 fake manager/engine 验证只有累计 lock 和 FPS/Ascend 门禁全部通过后才能晋级。正式现场演练仍需在 CUDA 节点运行 `--plan-only`，并在 Ascend 目标上执行真实候选 OM、精度和 30 FPS 编排。
 
 Web/CLI：
 

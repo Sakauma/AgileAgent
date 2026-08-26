@@ -148,6 +148,17 @@ curl -fsS -F "file=@/path/to/image.png;type=image/png" \
 
 训练默认采用 `1280` 输入、最多 `500` epoch 和 `50` epoch 无改善早停。数据边界、冻结规则和逐轮证据格式见 [`docs/compliant-incremental-learning.md`](docs/compliant-incremental-learning.md)。
 
+### 现场 4+2+n 一键增量
+
+若现场继续提供真正的新类别 ZIP，可在 CUDA 节点先执行只读预检，再用同一入口自动完成导入、类别注册、训练、累计 lock、FPS、部署和回滚：
+
+```bash
+agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --plan-only
+agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --target x86
+```
+
+本轮新类自动分配到全局 `6...`，Base、现有二类专家和历史专家保持冻结。入口同时接受标准 `images/labels + data.yaml` 与赛题现有“图像/标签平铺 + classes.txt”ZIP。所有精度与 FPS 门禁通过前不会切换 production。真正的新类必须在 CUDA 节点训练；Ascend310B 目标还必须提供包含 ONNX/OM 构建、隔离候选、累计精度、30 FPS、原子提升和回滚的部署编排。完整数据格式、命令、门禁、状态文件和板端边界见 [`docs/onsite-4plus2plusn.md`](docs/onsite-4plus2plusn.md)。
+
 ## 可选额外功能：Ascend310B 板端增量训练
 
 [`extras/ascend_edge_incremental/`](extras/ascend_edge_incremental/) 提供隔离的板端轻量增量训练能力。它按类别注册表逐轮读取 Increment train/dev，冻结现有 Base、Incremental 与 Scene-SensorNet，只在 `npu:0` 更新每个新增类别 8 个参数的无 MatMul 置信度 Adapter；随后独立执行 mixed dev 强度选择、mixed lock 联合评分、ONNX/OM 导出和 ACL 延迟验证。
@@ -215,6 +226,7 @@ extras/          与 production 隔离的可选能力和实验入口
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发流程和代码规范 |
 | [`docs/TESTING.md`](docs/TESTING.md) | 测试范围、命令和设备要求 |
 | [`docs/compliant-incremental-learning.md`](docs/compliant-incremental-learning.md) | 两轮增量数据与评测契约 |
+| [`docs/onsite-4plus2plusn.md`](docs/onsite-4plus2plusn.md) | 现场新类别一键训练、候选部署、验收与回滚 |
 | [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md) | 板端轻量增量训练环境、操作、指标与边界 |
 | [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md) | Ascend310B v2 模型转换、内容门控与评分方法 |
 | [`docs/ascend-310b-current-status.md`](docs/ascend-310b-current-status.md) | 当前 release 状态和证据索引 |

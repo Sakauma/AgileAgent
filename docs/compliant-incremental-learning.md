@@ -22,7 +22,7 @@
 - 将专家局部类别映射到全局新增类别 ID；
 - 学习只服务于新增类别的专属产物。
 
-该阶段只允许读取当轮 Increment train/dev 图像与标签、通用预训练初始化、冻结父代元数据和必要配置。禁止 Base 图像/标签、历史增量轮次样本回放和旧特征缓存；Base 与历史专家权重始终冻结。类别 ID、轮次、局部到全局映射以及父子代际只能来自 `configs/incremental_round_registry_4plus2.yaml`，训练与评估代码不再固定写死 `4/5`。
+该阶段只允许读取当轮 Increment train/dev 图像与标签、通用预训练初始化、冻结父代元数据和必要配置。禁止 Base 图像/标签、历史增量轮次样本回放和旧特征缓存；Base 与历史专家权重始终冻结。正式 4+2 的类别 ID、轮次、局部到全局映射以及父子代际来自 `configs/incremental_round_registry_4plus2.yaml`；现场 `4+2+n` 则由当前 production 与新批次类别注册表派生本轮不可覆盖的 `round_contract.yaml`。两种入口都不在训练与评估代码中固定写死 `4/5`。
 
 Scene-SensorNet、六类场景先验、门控阈值、场景惩罚、融合参数以及 mixed lock 评分均明确排除在 `incremental_learning` 之外。
 
@@ -72,6 +72,12 @@ Scene-SensorNet、六类场景先验、门控阈值、场景惩罚、融合参�
 当前 production 由四类冻结 Base 检测器、二类增量专家和 Scene-SensorNet 组成。Base 固定负责全局类 `0–3`，增量专家固定负责全局类 `4–5`。两个检测器对每张图都执行；场景概率只软调节逐类有效阈值，不改变类别 owner，也不做硬路由。
 
 当前 production 是已经通过六类指标的联合二类专家正式版本。两轮顺序类别注入作为独立的合规证据链运行；候选完成逐轮训练、冻结评估、登记和晋级后，再按正式发布流程替换 production。
+
+## 现场 4+2+n 扩展
+
+现场新类包是当前 4+2 production 之后的新一轮类别增量。每包可登记一个或多个真正新类别，由同一个本轮专家负责；全局 ID 从当前类别注册表继续分配。`agile-agent incremental onsite` 会生成 `runs/onsite_incremental/<run_id>/round_contract.yaml`，其中固化父代、本轮新类、局部映射、零旧样本和冻结要求。
+
+现场总控不会将 Scene-SensorNet 或联合门禁重新定义为增量学习。训练仍只读取当轮 Increment train/dev；随后在累计 Base、历史增量轮次与本轮 lock 上只读计算 New-mAP50、KRR 和 Full-mAP50。候选还必须通过完整图像推理 FPS 门禁，才允许部署晋级。完整操作见 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md)。
 
 ## 机器可读规则
 

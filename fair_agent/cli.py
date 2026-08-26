@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import json
 import os
@@ -9,7 +10,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import yaml
 
@@ -1005,6 +1006,40 @@ def _incremental_services(config: Dict[str, Any]):
     ), event_log
 
 
+def _render_onsite_progress(event: Mapping[str, Any]) -> None:
+    status = str(event.get("status") or "")
+    messages = {
+        "PREFLIGHT_PASSED": "预检通过",
+        "AUDITED": "数据审计通过",
+        "CLASSES_REGISTERED": "新类别已登记",
+        "DATA_READY": "train/dev/lock 已封存",
+        "TRAINING_STARTED": "新专家训练已启动",
+        "TRAINING_RUNNING": "新专家训练进行中",
+        "ACCEPTED": "累计 lock 精度门禁通过",
+        "CANDIDATE_ACCEPTED": "候选代际已冻结",
+        "FPS_GATE_PASSED": "候选 FPS 门禁通过",
+        "ASCEND_GATES_PASSED": "Ascend 候选精度与 FPS 门禁通过",
+        "PROMOTED": "production 已晋级",
+        "REJECTED": "候选未通过门禁",
+        "FAILED": "现场增量失败",
+        "CANCELLED": "已取消训练并保留父代际",
+        "ROLLED_BACK": "已回滚父代际",
+        "ROLLBACK_FAILED": "自动回滚失败",
+    }
+    message = messages.get(status, status or "状态更新")
+    suffix = ""
+    if status == "PREFLIGHT_PASSED" and event.get("run_id"):
+        suffix = f" · run_id={event['run_id']}"
+    elif status == "TRAINING_STARTED" and event.get("job_id"):
+        suffix = f" · job_id={event['job_id']}"
+    elif status == "TRAINING_RUNNING":
+        suffix = (
+            f" · {float(event.get('elapsed_seconds') or 0.0):.0f}s"
+            f" · {event.get('job_status') or 'RUNNING'}"
+        )
+    print(f"◆ {message}{suffix}", file=sys.stderr, flush=True)
+
+
 def cmd_incremental(args: argparse.Namespace) -> int:
     config = load_args_config(args)
     store, manager, _event_log = _incremental_services(config)
@@ -1034,6 +1069,112 @@ def cmd_incremental(args: argparse.Namespace) -> int:
         return 1 if isinstance(payload, dict) and payload.get("status") in {"REJECTED", "FAILED", "ROLLED_BACK", "ROLLBACK_FAILED"} else 0
     except (OSError, KeyError, ValueError) as exc:
         print(f"增量生命周期操作失败：{exc}", file=sys.stderr)
+        return 2
+
+
+def cmd_onsite_incremental(args: argparse.Namespace) -> int:
+    """Run or inspect the candidate-first 4+2+n onsite workflow."""
+
+    from fair_agent.modules.onsite_incremental import (
+        LoopbackGenerationController,
+        OnsiteIncrementalWorkflow,
+    )
+
+    config = load_args_config(args)
+    if args.incremental_action in {"onsite-status", "onsite"} and (
+        args.incremental_action == "onsite-status" or bool(args.plan_only)
+    ):
+        workflow = OnsiteIncrementalWorkflow(
+            config,
+            None,
+            None,
+            None,
+            run_root=getattr(args, "run_root", None),
+        )
+        try:
+            payload = (
+                workflow.status(args.run_id)
+                if args.incremental_action == "onsite-status"
+                else workflow.plan(
+                    args.bundle,
+                    class_names=args.class_names,
+                    target=args.target,
+                    deployment_spec=args.deployment_spec,
+                    probe_training=True,
+                    allow_provisional_names=bool(args.allow_provisional_names),
+                )
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 2 if payload.get("ready") is False else 0
+        except (OSError, KeyError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            print(f"现场增量操作失败：{exc}", file=sys.stderr)
+            return 2
+
+    staged_config = copy.deepcopy(config)
+    # The onsite coordinator owns the final deployment boundary.  The normal
+    # lifecycle may train, calibrate, register and recheck the candidate, but it
+    # must not switch production before the FPS/board gates have completed.
+    staged_config["generation"]["auto_promote"] = False
+    store, manager, event_log = _incremental_services(staged_config)
+    runtime_controller = None
+    platform = runtime_platform_info(staged_config)
+    resolved_target = (
+        "ascend310b"
+        if args.target == "auto" and platform["device_family"] == "ascend_310b"
+        else "x86"
+        if args.target == "auto"
+        else args.target
+    )
+    if not bool(args.no_deploy) and resolved_target == "x86":
+        try:
+            runtime_controller = LoopbackGenerationController(staged_config)
+            runtime_controller.require_compatible_service()
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"现场增量预检失败：{exc}", file=sys.stderr)
+            return 2
+    workflow = OnsiteIncrementalWorkflow(
+        staged_config,
+        store,
+        manager,
+        event_log,
+        run_root=getattr(args, "run_root", None),
+        promoter=(
+            runtime_controller.promote
+            if runtime_controller is not None
+            else None
+        ),
+        rollback=(
+            runtime_controller.rollback
+            if runtime_controller is not None
+            else None
+        ),
+        progress_callback=_render_onsite_progress,
+    )
+    try:
+        payload = workflow.run(
+            args.bundle,
+            name=args.name,
+            class_names=args.class_names,
+            target=args.target,
+            deployment_spec=args.deployment_spec,
+            auto_deploy=not bool(args.no_deploy),
+            allow_provisional_names=bool(args.allow_provisional_names),
+            fps_probe_size=args.fps_probe_size,
+            fps_warmup_rounds=args.fps_warmup_rounds,
+            fps_rounds=args.fps_rounds,
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        if payload.get("ready") is False:
+            return 2
+        return 1 if str(payload.get("status")) in {
+            "FAILED",
+            "REJECTED",
+            "ROLLED_BACK",
+            "ROLLBACK_FAILED",
+            "CANCELLED",
+        } else 0
+    except (OSError, KeyError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"现场增量操作失败：{exc}", file=sys.stderr)
         return 2
 
 
@@ -1215,6 +1356,52 @@ def build_parser() -> argparse.ArgumentParser:
     incremental_status = incremental_lifecycle_sub.add_parser("status", help="按训练run_id查询完整生命周期状态。")
     incremental_status.add_argument("--run-id", required=True)
     incremental_status.set_defaults(func=cmd_incremental)
+    incremental_onsite = incremental_lifecycle_sub.add_parser(
+        "onsite",
+        help="一条命令执行现场 4+2+n 审计、训练、验收与受控部署。",
+    )
+    incremental_onsite.add_argument("--bundle", required=True, help="现场新增类别 ZIP 数据包。")
+    incremental_onsite.add_argument("--name", help="本轮现场增量的显示名称。")
+    incremental_onsite.add_argument(
+        "--class-names",
+        help="逗号分隔的新类别名称；数据包有 classes.yaml/data.yaml 时可省略。",
+    )
+    incremental_onsite.add_argument(
+        "--target",
+        choices=("auto", "x86", "ascend310b"),
+        default="auto",
+        help="部署目标；auto 在 CUDA 主机上选择 x86。",
+    )
+    incremental_onsite.add_argument(
+        "--deployment-spec",
+        help="Ascend310B 跨设备导出、候选门禁、提升和回滚编排 YAML。",
+    )
+    incremental_onsite.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="只执行只读能力预检并输出完整阶段计划。",
+    )
+    incremental_onsite.add_argument(
+        "--no-deploy",
+        action="store_true",
+        help="完成训练与累计 lock 验收后保留候选，不切换 production。",
+    )
+    incremental_onsite.add_argument(
+        "--allow-provisional-names",
+        action="store_true",
+        help="允许使用自动生成的临时类别名称；正式现场演示不推荐。",
+    )
+    incremental_onsite.add_argument("--run-root", help="现场运行状态目录。")
+    incremental_onsite.add_argument("--fps-probe-size", type=int)
+    incremental_onsite.add_argument("--fps-warmup-rounds", type=int, default=2)
+    incremental_onsite.add_argument("--fps-rounds", type=int)
+    incremental_onsite.set_defaults(func=cmd_onsite_incremental)
+    incremental_onsite_status = incremental_lifecycle_sub.add_parser(
+        "onsite-status", help="读取一次现场 4+2+n 运行的阶段、门禁和回滚状态。"
+    )
+    incremental_onsite_status.add_argument("--run-id", required=True)
+    incremental_onsite_status.add_argument("--run-root", help="现场运行状态目录。")
+    incremental_onsite_status.set_defaults(func=cmd_onsite_incremental)
 
     incremental_data = sub.add_parser("incremental-data", help="管理上传、审计、注入和训练增量数据批次。")
     incremental_sub = incremental_data.add_subparsers(dest="incremental_action", required=True)

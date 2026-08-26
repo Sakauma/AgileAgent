@@ -118,6 +118,20 @@ round_01_patrol_boat
 
 每轮训练视图只包含当前新增类别的图像和投影标签。四类 Base 与此前轮次专家权重保持冻结；当前轮次的 train/dev 用于训练和选模，lock 在候选参数冻结后用于累计评估。
 
+### 3.1 现场 4+2+n 总控
+
+`fair_agent/modules/onsite_incremental.py` 将动态新类批次编排为候选优先状态机。入口为：
+
+```bash
+python -m fair_agent.cli incremental onsite \
+  --bundle /path/to/new_classes.zip \
+  --plan-only
+```
+
+正式运行时，CLI 深拷贝有效配置并将 `generation.auto_promote` 临时设为 `false`，使普通训练生命周期只运行到 `ACCEPTED`。总控随后执行候选 FPS 或 Ascend 外部门禁，最后调用代际原子晋级并冻结 accepted lineage。x86 若发现当前工程的正式服务正在运行，会通过 loopback 控制接口让 `AtomicEngineProvider` 完成内存引擎热切换；无服务时登记为下次启动生效。任何候选门禁失败都不能改变 production；板端部署失败会执行 deployment spec 中不可省略的 rollback。
+
+x86 默认允许每图最多 16 个历史/新类专家，当前 4+2 仍只加载一个专家，因此冻结六类输出不变。现场预检会计算晋级后的实际专家数量，超过预算时拒绝开始。数据格式、跨设备变量和状态文件见 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md)。
+
 ### 4. Scene-SensorNet 与系统校准
 
 Scene-SensorNet 是独立功能模型，配置位于 `configs/scene_sensor_model_4plus2.yaml`：

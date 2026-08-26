@@ -36,7 +36,9 @@ routing:
   require_acceptance_passed: true
   consensus_iou: 0.30
   fusion_iou: 0.60
-  max_specialists_per_image: 1
+  # 当前 4+2 只有一个专家，因此输出不变；现场 4+2+n 允许冻结历史专家与
+  # 本轮新专家同时参与累计类别推理。现场总控仍会在晋级前执行完整 FPS 门禁。
+  max_specialists_per_image: 16
   # 4+2冻结评估采用固定owner直接拼接；1.0避免跨类别框被额外仲裁。
   conflict_iou: 1.00
   conflict_base_confidence: 0.01

@@ -42,6 +42,7 @@ curl -fsS http://127.0.0.1:8501/api/health
   "queue": {},
   "generation_id": "incremental_detection_generation_4plus2",
   "generation_name": "4+2 增量检测生产代际",
+  "runtime_generation_control": "onsite_generation_v1",
   "classes": [
     "soldier",
     "small_aircraft",
@@ -117,6 +118,8 @@ curl -fsS \
 | `POST /api/incremental/jobs/{job_id}/cancel?batch_id=...` | 取消任务 |
 
 正式 4+2 顺序增量的类别、轮次和父子代际以 `configs/incremental_round_registry_4plus2.yaml` 为准。工作台上传接口负责批次审计与任务编排；正式候选登记和晋级仍由 `tools/13_register_incremental_round_candidate.py`、`tools/12_summarize_incremental_rounds.py` 与 `tools/10_promote_scene_aware_4plus2.py` 完成。
+
+`POST /api/runtime/generation` 是 `agile-agent incremental onsite` 使用的本机内部接口，不属于外部集成 API。它同时校验实际 TCP 客户端为 loopback、专用请求契约、运行中父代和候选复核清单，只允许 `promote` / `rollback`；候选在服务进程内完成 shadow 加载后才由 `AtomicEngineProvider` 原子换代。现场操作应调用一键 CLI，不应手工调用该接口。
 
 ## 审计日志
 

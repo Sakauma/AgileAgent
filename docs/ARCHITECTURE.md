@@ -155,6 +155,7 @@ Base/Increment train/dev 与 mixed dev
 | `SceneSensorNet` | `fair_agent/models/context.py` | 共享卷积特征并输出传感器与场景两个分类头 |
 | `IncrementalBatchStore` / `TrainingJobManager` | `fair_agent/modules/incremental_workbench.py` | 审计上传数据、生成隔离视图、保存批次状态并管理训练任务 |
 | `IncrementalLifecycle` | `fair_agent/modules/incremental_lifecycle.py` | 串联 dev 校准、候选登记、lock 复核、shadow 加载和 production 切换 |
+| `OnsiteIncrementalWorkflow` | `fair_agent/modules/onsite_incremental.py` | 现场 4+2+n 预检、动态轮次、候选 FPS/板端门禁、原子晋级和回滚 |
 | `load_incremental_round_registry()` | `fair_agent/modules/incremental_round_registry.py` | 校验两轮类别注入、数据范围、冻结条件和父子代际契约 |
 
 ## 配置与状态边界

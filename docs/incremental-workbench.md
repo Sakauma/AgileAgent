@@ -41,6 +41,21 @@ AUDITED
 
 生命周期完成固定拆分、训练快照、GPU 训练、逐类阈值校准、混淆图、候选登记、lock 复核、shadow 预热和 production 切换。
 
+现场真正新类别使用候选优先的一键总控：
+
+```text
+PREFLIGHT_PASSED
+  -> AUDITED
+  -> CLASSES_REGISTERED
+  -> DATA_READY
+  -> TRAINING_STARTED
+  -> CANDIDATE_ACCEPTED
+  -> FPS_GATE_PASSED / ASCEND_GATES_PASSED
+  -> PROMOTED
+```
+
+该总控会临时禁止普通生命周期提前自动晋级；累计 lock 与候选 FPS 或板端完整门禁全部通过后才切换 production。若本机正式服务正在运行，则在服务内部原子热切换；否则更新注册表供下一进程自动加载。失败时保留父代际或执行已登记回滚。详见 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md)。
+
 正式 4+2 类别增量使用 `configs/incremental_round_registry_4plus2.yaml` 将同一 R2 数据包登记为两个不同类别轮次。Round 1 只训练 patrol_boat 专家；Round 2 的父代是 Round 1 冻结子代，只训练 armored_vehicle 专家。每轮用 `tools/13_register_incremental_round_candidate.py` 登记为 candidate，两轮由 `tools/12_summarize_incremental_rounds.py` 汇总；登记阶段不会切换 production。Scene-SensorNet 和场景门控属于独立 `system_calibration`，不进入增量训练数据计数。
 
 ## 批次目录
@@ -68,6 +83,9 @@ agile-agent incremental-data show --batch-id BATCH_ID
 agile-agent incremental-data rename --batch-id BATCH_ID --class-names 新类别名称
 agile-agent incremental run --batch BATCH_ID
 agile-agent incremental status --run-id TRAIN_JOB_ID
+agile-agent incremental onsite --bundle /path/to/new_classes.zip --plan-only
+agile-agent incremental onsite --bundle /path/to/new_classes.zip --target x86
+agile-agent incremental onsite-status --run-id ONSITE_RUN_ID
 ```
 
 ## 配置

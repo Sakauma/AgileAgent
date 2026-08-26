@@ -121,6 +121,7 @@ venv/
 !/docs/current-metrics.md
 !/docs/functional-models.md
 !/docs/incremental-workbench.md
+!/docs/onsite-4plus2plusn.md
 
 # Local legacy snapshots and generated demonstration artifacts.
 /archive/3plus1/

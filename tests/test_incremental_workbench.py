@@ -31,6 +31,34 @@ def dataset_zip(class_name: str = "unknown_vehicle", count: int = 5, class_id: i
     return output.getvalue()
 
 
+def classes_yaml_dataset_zip(class_name: str = "onsite_vehicle") -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("classes.yaml", f"names:\n  0: {class_name}\n")
+        for index in range(3):
+            archive.writestr(f"images/train/onsite_{index}.png", png_bytes())
+            archive.writestr(
+                f"labels/train/onsite_{index}.txt", "0 0.5 0.5 0.2 0.2\n"
+            )
+    return output.getvalue()
+
+
+def classes_txt_dataset_zip(class_name: str = "onsite_vehicle") -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr(
+            "classes.txt",
+            "soldier\nsmall_aircraft\nwarship\ntank\n"
+            f"{class_name}\n",
+        )
+        for index in range(3):
+            archive.writestr(f"onsite_{index}.png", png_bytes())
+            archive.writestr(
+                f"onsite_{index}.txt", "4 0.5 0.5 0.2 0.2\n"
+            )
+    return output.getvalue()
+
+
 def unnamed_dataset_zip(label_line: str = "0 0.5 0.5 0.2 0.2") -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
@@ -100,6 +128,23 @@ def test_existing_class_is_detected_as_target_incremental(tmp_path: Path) -> Non
     store, _event_log = make_store(tmp_path)
     manifest = store.create("warship.zip", dataset_zip("warship"))
     assert manifest["audit"]["incremental_mode"] == "target_incremental"
+
+
+def test_classes_yaml_is_a_first_class_onsite_name_contract(tmp_path: Path) -> None:
+    store, _event_log = make_store(tmp_path)
+    manifest = store.create("onsite.zip", classes_yaml_dataset_zip())
+    assert manifest["status"] == "AUDITED"
+    assert manifest["audit"]["class_map"] == {"0": "onsite_vehicle"}
+    assert manifest["audit"]["requires_class_confirmation"] is False
+
+
+def test_flat_classes_txt_is_a_first_class_onsite_name_contract(tmp_path: Path) -> None:
+    store, _event_log = make_store(tmp_path)
+    manifest = store.create("onsite-flat.zip", classes_txt_dataset_zip())
+    assert manifest["status"] == "AUDITED"
+    assert manifest["audit"]["class_map"] == {"0": "onsite_vehicle"}
+    assert manifest["audit"]["local_to_global"] == {"0": 4}
+    assert manifest["audit"]["requires_class_confirmation"] is False
 
 
 def test_archive_path_traversal_is_rejected_without_writing_outside_root(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import threading
 import time
@@ -52,6 +53,8 @@ BATCH_RESULT_METADATA_BASE_BYTES = 128 * 1024
 BATCH_RESULT_METADATA_PER_ROW_BYTES = 4096
 LOW_LATENCY_PROFILE_HEADER = "x-agile-agent-execution-profile"
 LOW_LATENCY_PROFILE_VALUE = "speculative-low-latency"
+RUNTIME_CONTROL_CAPABILITY = "onsite_generation_v1"
+RUNTIME_CONTROL_HEADER = "x-agile-agent-control"
 
 
 def low_latency_requested(request: Request) -> bool:
@@ -798,6 +801,13 @@ async def health(request: Request) -> JSONResponse:
                 "inference_replicas": len(pool),
                 "generation_id": settings["generation_id"],
                 "generation_name": settings["generation_name"],
+                "runtime_generation_control": (
+                    RUNTIME_CONTROL_CAPABILITY
+                    if manager is not None
+                    and callable(getattr(manager, "promote", None))
+                    and callable(getattr(manager, "rollback", None))
+                    else None
+                ),
                 "classes": [
                     settings["class_names"][class_id]
                     for class_id in settings["active_class_ids"]
@@ -1190,6 +1200,99 @@ def _incremental_error(exc: Exception) -> JSONResponse:
     return JSONResponse({"error": f"增量工作台暂时不可用：{exc}"}, status_code=503)
 
 
+def _is_loopback_request(request: Request) -> bool:
+    client = request.client
+    if client is None:
+        return False
+    host = str(client.host).strip().strip("[]")
+    if host == "testclient":
+        # Starlette's in-process TestClient has no real socket address.
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host.casefold() == "localhost"
+
+
+async def runtime_generation_control(request: Request) -> JSONResponse:
+    """Perform a local-only, engine-aware production transition."""
+
+    if not _is_loopback_request(request):
+        return JSONResponse({"error": "运行时代际控制只允许本机回环请求。"}, status_code=403)
+    if (
+        request.headers.get(RUNTIME_CONTROL_HEADER, "")
+        != RUNTIME_CONTROL_CAPABILITY
+        or not request.headers.get("content-type", "")
+        .lower()
+        .startswith("application/json")
+    ):
+        return JSONResponse({"error": "运行时代际控制请求契约无效。"}, status_code=403)
+    content_length = request.headers.get("content-length")
+    try:
+        if content_length is not None and int(content_length) > 64 * 1024:
+            raise ValueError("运行时代际控制请求过大。")
+        payload = await request.json()
+        if not isinstance(payload, Mapping):
+            raise ValueError("运行时代际控制请求必须是 JSON 对象。")
+        manager = getattr(request.app.state, "runtime_manager", None)
+        if (
+            manager is None
+            or not callable(getattr(manager, "promote", None))
+            or not callable(getattr(manager, "rollback", None))
+        ):
+            return JSONResponse({"error": "当前服务未启用原子运行时管理。"}, status_code=409)
+        action = str(payload.get("action") or "")
+        if action == "promote":
+            candidate_id = str(payload.get("candidate_id") or "").strip()
+            manifest_path = str(payload.get("manifest_path") or "").strip()
+            expected_parent = str(payload.get("expected_parent_id") or "").strip()
+            if not candidate_id or not manifest_path or not expected_parent:
+                raise ValueError("候选、复核清单和预期父代均不能为空。")
+            running_id = str(manager.settings().get("generation_id") or "")
+            if running_id != expected_parent:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "运行中代际与预期父代不一致："
+                            f"{running_id or 'unknown'} != {expected_parent}"
+                        )
+                    },
+                    status_code=409,
+                )
+            from fair_agent.modules.generation_management import (
+                shadow_load_generation,
+            )
+
+            shadow_engine, smoke = await run_in_threadpool(
+                shadow_load_generation, manager.config, candidate_id
+            )
+            try:
+                result = await run_in_threadpool(
+                    manager.promote,
+                    candidate_id,
+                    manifest_path,
+                    shadow_engine,
+                    smoke,
+                )
+            except Exception:
+                close = getattr(shadow_engine, "close", None)
+                if callable(close):
+                    close()
+                raise
+        elif action == "rollback":
+            target_id = str(payload.get("target_id") or "").strip()
+            if not target_id:
+                raise ValueError("回滚目标代际不能为空。")
+            result = await run_in_threadpool(manager.rollback, target_id)
+        else:
+            raise ValueError("运行时代际控制 action 仅支持 promote 或 rollback。")
+        return JSONResponse({"ok": True, "result": result})
+    except (json.JSONDecodeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except (OSError, RuntimeError) as exc:
+        return JSONResponse({"error": f"运行时代际切换失败：{exc}"}, status_code=503)
+
+
 async def incremental_batches(request: Request) -> JSONResponse:
     store: IncrementalBatchStore = request.app.state.incremental_store
     if request.method == "GET":
@@ -1393,6 +1496,7 @@ def create_app(
             Route("/api/incremental/jobs/{job_id:str}", incremental_job_detail, methods=["GET"]),
             Route("/api/incremental/jobs/{job_id:str}/logs", incremental_job_logs, methods=["GET"]),
             Route("/api/incremental/jobs/{job_id:str}/cancel", incremental_job_cancel, methods=["POST"]),
+            Route("/api/runtime/generation", runtime_generation_control, methods=["POST"]),
             Route("/api/logs", runtime_logs, methods=["GET"]),
             Mount("/", app=StaticFiles(directory=STATIC_ROOT, html=True), name="static"),
         ],

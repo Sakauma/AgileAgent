@@ -64,7 +64,7 @@ def _slug(value: str) -> str:
 
 
 def _class_names_from_yaml(root: Path) -> Dict[int, str]:
-    for name in ("data.yaml", "dataset.yaml", "batch.yaml"):
+    for name in ("classes.yaml", "data.yaml", "dataset.yaml", "batch.yaml"):
         matches = sorted(root.rglob(name))
         for path in matches:
             try:
@@ -79,6 +79,17 @@ def _class_names_from_yaml(root: Path) -> Dict[int, str]:
                     return {int(key): str(value) for key, value in names.items()}
                 except (TypeError, ValueError):
                     continue
+    for path in sorted(root.rglob("classes.txt")):
+        try:
+            values = [
+                value.strip()
+                for value in path.read_text(encoding="utf-8").splitlines()
+                if value.strip()
+            ]
+        except (OSError, UnicodeDecodeError):
+            continue
+        if values:
+            return {index: value for index, value in enumerate(values)}
     return {}
 
 
@@ -566,7 +577,6 @@ class IncrementalBatchStore:
                 raise ValueError("只有审计通过的批次可以注入。")
             if manifest["status"] == "INJECTED":
                 return manifest
-            audit = manifest.get("audit", {})
             current_compliance = audit_incremental_records(manifest["files"], self.settings)
             manifest["audit"].update(current_compliance)
             _atomic_json(self._manifest_path(batch_id), manifest)
