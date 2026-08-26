@@ -46,6 +46,36 @@ def test_effective_config_rejects_unknown_runtime_field() -> None:
         validate_config(config)
 
 
+def test_asset_inventory_rejects_yaml_folded_sequence_entries() -> None:
+    config = clean_config()
+    required_assets = config["assets"]["required"]
+    config["assets"]["required"] = [
+        " - ".join(required_assets[:6]),
+        *required_assets[6:],
+    ]
+
+    with pytest.raises(ValueError, match="疑似YAML列表缩进错误"):
+        validate_config(config)
+
+
+@pytest.mark.parametrize(
+    "missing_key",
+    [
+        "round_registry",
+        "round_candidate_registration_tool",
+        "round_summary_tool",
+        "strict_promotion_tool",
+        "strict_runtime_source",
+    ],
+)
+def test_incremental_round_source_contract_is_required(missing_key: str) -> None:
+    config = clean_config()
+    config["incremental"].pop(missing_key)
+
+    with pytest.raises(ValueError, match=f"incremental.{missing_key}"):
+        validate_config(config)
+
+
 def test_ascend_dvpp_scene_resize_stages_require_even_bounded_shapes() -> None:
     config = clean_config()
     config["ascend_backend"]["dvpp_scene_resize_stages"] = [

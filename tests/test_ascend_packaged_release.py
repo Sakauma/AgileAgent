@@ -50,10 +50,11 @@ def test_packaged_release_has_complete_verified_checksum_inventory() -> None:
 
 
 def test_packaged_release_config_and_manifests_are_self_contained() -> None:
-    config = yaml.safe_load(
-        (PACKAGE / "configs/agent_pipeline_ascend310b.yaml").read_text(
-            encoding="utf-8"
-        )
+    config_path = PACKAGE / "configs/agent_pipeline_ascend310b.yaml"
+    config_text = config_path.read_text(encoding="utf-8")
+    config = yaml.safe_load(config_text)
+    source_config = yaml.safe_load(
+        (ROOT / "configs/agent_pipeline_ascend310b.yaml").read_text(encoding="utf-8")
     )
     ascend = config["ascend_backend"]
     manifest_path = release_local_path(ascend["build_manifest"])
@@ -67,6 +68,30 @@ def test_packaged_release_config_and_manifests_are_self_contained() -> None:
     assert ascend["context_mode"] == "model"
     assert ascend["schedule_mode"] == "unified_enqueue"
     assert len(ascend["models"]) == 2
+    assert not any(
+        marker in config_text
+        for marker in (
+            "strict_3plus1",
+            "three_class_base",
+            "yolo11",
+            "warship_3plus1",
+            "submission_infer_base_3class",
+        )
+    )
+    for section in (
+        "incremental_workbench",
+        "generation",
+        "native_backend",
+        "tensorrt_backend",
+        "assets",
+        "blackboard",
+        "detector",
+        "incremental",
+    ):
+        assert config[section] == source_config[section]
+    assert config["performance"]["benchmark_split"] == (
+        source_config["performance"]["benchmark_split"]
+    )
     assert sha256_file(manifest_path) == ascend["build_manifest_sha256"]
     assert sha256_file(validation_path) == ascend["validation_report_sha256"]
 
@@ -104,6 +129,9 @@ def test_packaged_release_config_and_manifests_are_self_contained() -> None:
         local = release_local_path(entry["path"])
         assert local.is_file()
         assert sha256_file(local) == entry["sha256"]
+
+    release = json.loads((PACKAGE / "release.json").read_text(encoding="utf-8"))
+    assert release["config_sha256"] == sha256_file(config_path)
 
 
 def test_model_manifest_promotes_packaged_ascend_release() -> None:

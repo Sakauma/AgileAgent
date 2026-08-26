@@ -371,6 +371,24 @@ def test_static_release_verification_passes() -> None:
     assert result["blockers"] == []
 
 
+def test_ascend_static_release_verification_passes() -> None:
+    config_path = "configs/agent_pipeline_ascend310b.yaml"
+    config = load_config(config_path)
+    required_assets = config["assets"]["required"]
+
+    assert config["incremental"]["round_registry"] == (
+        "configs/incremental_round_registry_4plus2.yaml"
+    )
+    assert len(required_assets) == 13
+    assert len(required_assets) == len(set(required_assets))
+    assert all(" - " not in path for path in required_assets)
+
+    result = verify_release(config_path)
+    assert result["status"] == "passed", result["errors"]
+    assert set(result["required_assets"]) == set(required_assets)
+    assert all(item["exists"] for item in result["required_assets"].values())
+
+
 def test_manifest_blocks_uncalibrated_or_overlapping_true_new_class() -> None:
     manifest = json.loads(Path("models/manifest.json").read_text(encoding="utf-8"))
     assert _validate_model_manifest(manifest) == []

@@ -3,7 +3,24 @@
   "kind": "ascend310b_full_score_primary_release",
   "release_root": "/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1",
   "config": "/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1/configs/agent_pipeline_ascend310b.yaml",
-  "config_sha256": "2f248947b464c7e53cfff652cd92d0037856843250c0b172003c2c01e50ef08d",
+  "config_sha256": "e99ba8492664072e59f1cac2aa2cbb1f87cb0b86bb50b38cdc63dfdcb7a38acd",
+  "validated_config_sha256": "2f248947b464c7e53cfff652cd92d0037856843250c0b172003c2c01e50ef08d",
+  "config_cleanup": {
+    "kind": "inactive_legacy_section_cleanup",
+    "inference_contract_unchanged": true,
+    "ascend_backend_unchanged": true,
+    "updated_sections": [
+      "incremental_workbench",
+      "performance.benchmark_split",
+      "generation",
+      "native_backend",
+      "tensorrt_backend",
+      "assets",
+      "blackboard.demo_evidence",
+      "detector",
+      "incremental.round_registry"
+    ]
+  },
   "public_port": 8501,
   "internal_port": 18501,
   "candidate_port_reserved": 8502,

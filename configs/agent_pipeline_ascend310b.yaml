@@ -334,19 +334,19 @@ assets:
   generation_registry: models/generations.json
   checksums: models/SHA256SUMS.txt
   required:
-  - models/production/incremental_detection/four_class_base_detector.pt
+    - models/production/incremental_detection/four_class_base_detector.pt
     - models/production/incremental_detection/incremental_detector.pt
     - models/production/incremental_detection/calibration.json
     - models/production/incremental_detection/base_context_prior.json
     - models/production/incremental_detection/incremental_context_prior.json
     - models/production/incremental_detection/metrics.json
-  - models/production/incremental_detection/profile.json
-  - models/context/scene_sensor_net.pt
-  - models/context/scene_sensor_metrics.json
-  - models/context/scene_selection.json
-  - models/manifest.json
-  - models/generations.json
-  - configs/agent_demo_state.json
+    - models/production/incremental_detection/profile.json
+    - models/context/scene_sensor_net.pt
+    - models/context/scene_sensor_metrics.json
+    - models/context/scene_selection.json
+    - models/manifest.json
+    - models/generations.json
+    - configs/agent_demo_state.json
 automation:
   audit_before_execute: true
   run_root: reports/agent_runs
@@ -393,6 +393,13 @@ incremental:
   - target_incremental
   learning_data_scope: incremental_dataset_only
   policy: configs/incremental_detection_policy.yaml
+  round_registry: configs/incremental_round_registry_4plus2.yaml
+  minimum_distinct_new_class_rounds: 2
+  round_candidate_registration_tool: tools/13_register_incremental_round_candidate.py
+  round_summary_tool: tools/12_summarize_incremental_rounds.py
+  strict_promotion_tool: tools/10_promote_scene_aware_4plus2.py
+  strict_runtime_source: models/generations.json
+  scene_sensor_is_incremental_learner: false
   expected_protocols:
   - incremental_detector
   require_compliant_no_old_data: true

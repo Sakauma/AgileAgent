@@ -96,6 +96,15 @@ KNOWN_SECTION_KEYS = {
     "gates": {"official_hard", "advisory"},
     "incremental_guardian": {"enabled", "dynamic_confusion", "recovery_actions"},
     "model": {"weights", "expected_sha256"},
+    "assets": {"manifest", "generation_registry", "checksums", "required"},
+    "incremental": {
+        "task_type", "primary_mode", "supported_modes", "learning_data_scope",
+        "policy", "round_registry", "minimum_distinct_new_class_rounds",
+        "round_candidate_registration_tool", "round_summary_tool",
+        "strict_promotion_tool", "strict_runtime_source",
+        "scene_sensor_is_incremental_learner", "expected_protocols",
+        "require_compliant_no_old_data",
+    },
     "logging": {"root", "max_file_bytes", "retained_files", "request_bodies"},
     "incremental_workbench": {
         "root", "max_archive_bytes", "max_extracted_bytes", "max_extracted_files",
@@ -1088,10 +1097,52 @@ def validate_config(
     if len(expected) != 64 or any(ch not in "0123456789abcdefABCDEF" for ch in expected):
         errors.append("model.expected_sha256 must be a 64-character hexadecimal digest")
     assets = _require_mapping(config, "assets", errors)
-    if not assets.get("manifest") or not assets.get("checksums"):
-        errors.append("assets.manifest 与 assets.checksums 必填")
-    if not isinstance(assets.get("required"), list) or not assets.get("required"):
+    if (
+        not assets.get("manifest")
+        or not assets.get("generation_registry")
+        or not assets.get("checksums")
+    ):
+        errors.append(
+            "assets.manifest、assets.generation_registry 与 assets.checksums 必填"
+        )
+    required_assets = assets.get("required")
+    if not isinstance(required_assets, list) or not required_assets:
         errors.append("assets.required must be a non-empty list")
+    else:
+        invalid_asset_indexes = [
+            index
+            for index, item in enumerate(required_assets)
+            if not isinstance(item, str)
+            or not item.strip()
+            or item != item.strip()
+            or any(character.isspace() for character in item)
+        ]
+        if invalid_asset_indexes:
+            errors.append(
+                "assets.required每项必须是独立且不含空白的非空路径；"
+                "疑似YAML列表缩进错误："
+                + ", ".join(str(index) for index in invalid_asset_indexes)
+            )
+        normalized_assets = [
+            item for item in required_assets if isinstance(item, str) and item
+        ]
+        if len(normalized_assets) != len(set(normalized_assets)):
+            errors.append("assets.required不得包含重复路径")
+        linked_assets = {
+            "model.weights": model.get("weights"),
+            "assets.manifest": assets.get("manifest"),
+            "assets.generation_registry": assets.get("generation_registry"),
+        }
+        missing_linked_assets = [
+            name
+            for name, path in linked_assets.items()
+            if path and path not in normalized_assets
+        ]
+        if missing_linked_assets:
+            errors.append(
+                "assets.required缺少运行时引用："
+                + ", ".join(missing_linked_assets)
+            )
     functional = _require_mapping(config, "functional_models", errors)
     if not functional.get("registry") or int(functional.get("required_count") or 0) < 3:
         errors.append("functional_models必须声明至少3种功能模型")
@@ -1105,6 +1156,39 @@ def validate_config(
         errors.append("incremental.primary_mode未注册")
     if incremental.get("learning_data_scope") != "incremental_dataset_only":
         errors.append("incremental.learning_data_scope must be incremental_dataset_only")
+    incremental_path_contract = (
+        "policy",
+        "round_registry",
+        "round_candidate_registration_tool",
+        "round_summary_tool",
+        "strict_promotion_tool",
+        "strict_runtime_source",
+    )
+    for key in incremental_path_contract:
+        value = incremental.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"incremental.{key}必须是非空路径")
+    minimum_rounds = incremental.get("minimum_distinct_new_class_rounds")
+    if (
+        isinstance(minimum_rounds, bool)
+        or not isinstance(minimum_rounds, int)
+        or minimum_rounds < 2
+    ):
+        errors.append("incremental.minimum_distinct_new_class_rounds必须是不小于2的整数")
+    if incremental.get("scene_sensor_is_incremental_learner") is not False:
+        errors.append("incremental.scene_sensor_is_incremental_learner必须为false")
+    expected_protocols = incremental.get("expected_protocols")
+    if (
+        not isinstance(expected_protocols, list)
+        or not expected_protocols
+        or not all(
+            isinstance(protocol, str) and protocol.strip()
+            for protocol in expected_protocols
+        )
+    ):
+        errors.append("incremental.expected_protocols必须是非空字符串列表")
+    if incremental.get("require_compliant_no_old_data") is not True:
+        errors.append("incremental.require_compliant_no_old_data必须为true")
     automation = _require_mapping(config, "automation", errors)
     if not isinstance(automation.get("allowed_output_roots"), list) or not automation.get("allowed_output_roots"):
         errors.append("automation.allowed_output_roots must be a non-empty list")
