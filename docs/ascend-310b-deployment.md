@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Ascend 310B 部署实现
 
-截至 2026-08-24，Ascend310B1 production 是 4+2 独立 YOLO26s 三-OM release：
+截至 2026-08-26，Ascend310B1 production 是 4+2 独立 YOLO26s 三-OM release，并已交付断网 `4→4+1→4+2` 隔离增量演示：
 
 ```text
 /home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-replica-pool-v1
@@ -44,7 +44,7 @@
 
 ## 正式拓扑
 
-| 职责 | 地址 | 当前状态 |
+| 职责 | 地址 | 运行态职责 |
 | --- | --- | --- |
 | 公共入口 | `127.0.0.1:8501` | 精确路由到主实例 |
 | 4+2 主实例 | `127.0.0.1:18501` | `independent_yolo26_e2e_v1` |
@@ -61,7 +61,7 @@ agileagent-ascend310b-route.service
 
 正式提升不终止回滚 listener。删除唯一带 `AGILE_AGENT_ASCEND310B_PRIMARY` comment 的规则后，新连接会直接进入回滚 listener。
 
-## 从仓库零训练物化
+## 从仓库物化正式 release
 
 可版本化模型包：
 
@@ -80,7 +80,7 @@ chmod +x scripts/materialize_ascend310b_full_score_release.sh
 ./scripts/materialize_ascend310b_full_score_release.sh
 ```
 
-物化脚本只做包完整性检查、源码与资产复制以及 `tools/95_verify_ascend_release.py --require-validation`。它不训练、不导出 ONNX、不运行 ATC、不安装依赖，也不修改服务或端口。目标已存在时只读复核：
+物化脚本执行包完整性检查、源码与资产复制以及 `tools/95_verify_ascend_release.py --require-validation`，将已构建、已验收的模型身份确定性复原到目标目录。目标已存在时只读复核：
 
 ```bash
 ./scripts/materialize_ascend310b_full_score_release.sh --verify-existing
@@ -202,6 +202,33 @@ Full-mAP50 为 `0.7220053258`。公共 `8501` mixed 20 图逐轮 FPS：
 models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/
 reports/ascend310b/20260824-replica-pool-v1/
 ```
+
+## 断网增量演示部署
+
+现场已有两类的演示从板端仓库运行：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh \
+  /path/to/datasets_r2_inc_train
+```
+
+脚本使用独立 `agileagent_train` 环境在 `npu:0` 更新 Adapter，production Python 继续负责冻结候选、ATC/ACL 和运行时验收。通过 Base/New/KRR、OM 数值与 30 FPS 门禁后，产出：
+
+```text
+runs/ascend_edge_incremental_demo/<run_id>/deployment/
+├── edge_adapter_bank.om
+├── adapter_manifest.json
+└── agent_pipeline_ascend310b_demo.yaml
+```
+
+学习后的 CLI 由独立配置启动：
+
+```bash
+AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml \
+  ./scripts/start_agent.sh --cli
+```
+
+`board-full-check-v6` 的实测 Base/New/KRR/Full 为 `0.816663 / 0.624935 / 1.000000 / 0.726497`，完整图像链路中位 `38.6995 FPS`，候选状态 `accepted`。完整操作见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
 
 ## 重新测量所需数据
 

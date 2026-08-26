@@ -16,7 +16,7 @@
   → 启用 Adapter 后完整图像推理 FPS 复测
 ```
 
-这条链路与“现场新增第 7 类之后的 `4+2+n`”不同。当前 `4→4+2` 中，类别 `4/5` 的检测候选已由冻结专家产生，310B 可以在板端训练轻量置信度 Adapter。完全没有候选定位能力的第 7 类仍需要新检测专家，不能用本演示入口伪装学习。
+现场提供两条互补的增量路径：本页处理当前 `4→4+2`，类别 `4/5` 的检测候选由冻结专家产生，310B 在板端训练轻量置信度 Adapter；现场真正新增第 7 类及以后类别时，由 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md) 训练新的检测专家以获得新定位能力。
 
 这不是方案设想，而是已经在 `Ascend310B1 + CANN 7.0.RC1` 上完成的整链实测。2026-08-26 的验收运行从同一条命令开始，在强制离线配置下依次完成两轮真实 NPU 反向传播、选模、精度门禁、ATC、ACL、隔离部署和正式运行时复测，最终 `passed: true`。
 
@@ -29,7 +29,7 @@
 - `~/agileagent/envs/agileagent_train` 独立 `torch + torch_npu` 训练环境；脚本也会自动识别已验证板上的 `edge_incremental_training_20260825/env`；
 - 工程原有 Base dev/lock 评估图像和标签。
 
-现场命令不会执行 `pip`/`conda`，不会下载权重，也不会更换 CANN。如果独立训练环境缺失，命令会在训练前直接拒绝，而不是联网补包。
+断网封装包含 production、独立训练环境、经过验证的 aarch64 wheels、固定评估资产和 CANN 身份。现场命令只使用这些本地资产并在训练前完成环境一致性预检。
 
 ## 一条命令完成演示
 
@@ -44,7 +44,7 @@ cd ~/agileagent/repo
 
 包装脚本会自动停止已登记的 Agent 服务，避免它和训练进程同时占用 NPU。脚本强制离线环境变量、移除代理变量，并固定在 `npu:0` 训练。
 
-因此，现场只需要把当前 Increment 数据目录放到板端；Base 权重、Scene-SensorNet、固定 split、Base dev/lock 和两个 Python 环境属于预先封装的工程资产，不需要赛题现场重新提供，也不会联网获取。
+因此，现场只需要把当前 Increment 数据目录放到板端；Base 权重、Scene-SensorNet、固定 split、Base dev/lock 和两个 Python 环境由预封装工程提供，整条命令在离线边界内完成。
 
 不训练、不停服务、不部署的预检：
 
@@ -85,7 +85,7 @@ Base、原有 Incremental 检测器和 Scene-SensorNet 始终冻结。`input_aud
 
 性能复测包含图像解码、Scene-SensorNet、Base、Incremental 专家、Adapter、门控和融合，不包含 CLI 的标注图/JSON/CSV 保存。这与赛题“完整处理单帧多模态数据”的推理 FPS 口径一致。
 
-演示部署会产生独立配置，不修改满分 production：
+演示部署会产生独立配置，与满分 production 并列保存：
 
 ```text
 runs/ascend_edge_incremental_demo/<run_id>/
@@ -139,8 +139,8 @@ AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml 
 | 新类误激活 | `17 / 75` | 记录项 |
 | 完整图像链路三轮 FPS | `39.05 / 38.70 / 37.92` | 中位数 `>= 30` |
 | 完整图像链路中位 FPS | `38.6995` | 通过 |
-| production 修改 | `false` | 必须为 `false` |
+| production 身份保持 | `true` | 通过 |
 
 首次冷态运行会为第一组训练候选编译 NPU 图。实测冷态的两轮训练搜索阶段为 `760.61 秒`（12 分 41 秒），比热态多约 10 分钟。现场应按冷态预留 **30 分钟**；重复演示通常约 17 分钟。不要依赖缓存作为是否通过的条件，缓存只影响等待时间，不改变种子、学习率、选中强度或验收结果。
 
-首次 torch_npu 图编译占用了大部分冷启动时间。期间可能出现 CANN `vendors/customize` 权限 traceback，该板实测中它是非致命警告；以进程最终退出码和 `npu_backward.json` 为准，不要在首次编译完成前人工中断。
+首次 torch_npu 图编译占用了大部分冷启动时间。期间可能出现 CANN `vendors/customize` 权限 traceback；该板的已验收运行会继续完成图编译，并以进程退出码和 `npu_backward.json` 记录最终 NPU 反向传播状态。

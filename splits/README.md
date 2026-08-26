@@ -29,6 +29,8 @@
 
 每轮训练视图只保留注册表声明的新增类，并映射为专家局部类别。类别、轮次和父子代际由 `configs/incremental_round_registry_4plus2.yaml` 管理。
 
+同一组 Round 1/2 清单也驱动 Ascend310B 断网一键增量演示：脚本从现场 Increment 目录对齐清单，在各轮 train/dev 上训练 Adapter，再使用累计 mixed lock 做冻结验收，保持 x86 与板端的类别顺序和数据口径一致。
+
 ## 生成与复核
 
 从仓库根目录运行：

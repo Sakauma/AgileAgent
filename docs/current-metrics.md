@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # 当前指标总账
 
-本文统一记录 4+2 正式推理的赛题硬指标、逐类诊断、场景模型准确率与 Ascend310B1 端侧性能。截至 2026-08-24，x86/CUDA 和 Ascend310B1 都已完成全类别重叠抑制；Ascend 还完成了 mixed dev 约束校准、lock 冻结验收、公共 `8501` 原子提升和部署后独立 FPS 复验。
+本文统一记录 4+2 正式推理的赛题硬指标、逐类诊断、场景模型准确率、Ascend310B1 端侧性能与板端离线增量结果。截至 2026-08-26，x86/CUDA 和 Ascend310B1 都已完成全类别重叠抑制；Ascend 还完成了 mixed dev 约束校准、lock 冻结验收、公共 `8501` 原子提升、部署后独立 FPS 复验，以及 `4→4+1→4+2` 真实 NPU 增量训练与隔离演示验收。
 
 ## 结论与硬门禁
 
@@ -12,6 +12,7 @@
 | x86/CUDA，修改后 mixed lock | `0.845782` | `0.750368` | `0.997179` | 不适用 | 三项精度门禁全部通过 |
 | Ascend310B1 当前 runtime release，lock / `8501` 实测 | `0.816663` | `0.611461` | `1.000000` | `38.2175` | 四项已上板实测通过 |
 | Ascend310B1 mixed dev 选参点 | `0.823083` | `0.705836` | `1.000000` | `39.1389` | 只用于选参，不代替 lock |
+| Ascend310B1 板端增量隔离演示，lock / 完整链路 | `0.816663` | `0.624935` | `1.000000` | `38.6995` | 四项已上板实测通过 |
 
 当前 Ascend release 的四项硬门禁全部通过；lock 新类误激活从上一代的 `35/75` 降至 `17/75`。
 
@@ -138,6 +139,30 @@ lock 上三项场景功能验收均通过。
 
 冻结策略使 lock 误激活从上一代的 `35/75 = 0.466667` 降至 `17/75 = 0.226667`，降幅 `51.43%`。mixed dev 为 `4/75 = 0.053333`；该值只用于选参诊断，不代替 lock 结果。
 
+## Ascend310B1 板端离线增量结果
+
+`board-full-check-v6` 使用同一条断网命令完成 Increment 输入审计、两轮 `npu:0` 真实反向传播、dev 选择、mixed lock、ONNX/OM、ACL 数值核对、隔离演示部署和启用 Adapter 后的完整图像 FPS 复测。训练审计记录 `base_images_used_for_training=0`、`old_raw_image_count=0`，三个 production 模型保持冻结。
+
+| 指标 | 实测 | 门禁或用途 |
+| --- | ---: | --- |
+| Base mAP50 | `0.816663` | `>=0.80` |
+| New-mAP50 | `0.624935` | `>=0.60` |
+| KRR | `1.000000` | `>=0.95` |
+| Full-mAP50 | `0.726497` | 累计诊断 |
+| 新类误激活 | `17/75` | 冻结诊断 |
+| Adapter OM 最大绝对误差 | `5.96e-08` | 数值一致性通过 |
+| 完整图像链路三轮 FPS | `39.05 / 38.70 / 37.92` | 中位 `>=30` |
+| 完整图像链路中位 FPS | `38.6995` | `+8.6995` 余量 |
+
+| 阶段 | 热态耗时 |
+| --- | ---: |
+| 两轮 5 seed × 3 LR 训练搜索 | `155.17 秒` |
+| ONNX 导出 | `4.82 秒` |
+| ATC 编译 OM | `87.67 秒` |
+| 输入审计至隔离部署及 FPS 门禁完整命令 | `1007.07 秒` |
+
+首次冷态的两轮训练搜索为 `760.61 秒`，主要差异来自 torch_npu 图编译；模型选择、门禁和最终指标保持一致。通过门禁的候选状态为 `accepted`，以独立演示配置接入运行时，production 身份保持不变。
+
 ## 证据索引
 
 - x86 双口径及逐类结果：`models/production/incremental_detection/evidence/all_images_diagnostics.json`
@@ -149,3 +174,4 @@ lock 上三项场景功能验收均通过。
 - Ascend 候选 FPS：`validation/benchmark.json` 与 `validation/benchmark-repeat-1.json`
 - Ascend 公共入口冻结与 FPS：`validation/frozen-predictions-post-promotion.jsonl`、`validation/score-post-promotion.json` 与 `validation/benchmark-post-promotion.json`
 - Ascend 三实例推理池与正式最坏分布复验：`reports/ascend310b/20260824-replica-pool-v1/`
+- Ascend 板端离线增量方法、耗时与门禁：`docs/ascend-310b-offline-incremental-demo.md`

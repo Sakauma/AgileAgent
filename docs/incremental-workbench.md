@@ -56,6 +56,21 @@ PREFLIGHT_PASSED
 
 该总控会临时禁止普通生命周期提前自动晋级；累计 lock 与候选 FPS 或板端完整门禁全部通过后才切换 production。若本机正式服务正在运行，则在服务内部原子热切换；否则更新注册表供下一进程自动加载。失败时保留父代际或执行已登记回滚。详见 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md)。
 
+赛题已有两类的板端现场演示使用独立的断网生命周期：
+
+```text
+INPUT_AUDITED
+  -> ROUNDS_ALIGNED
+  -> NPU_TRAINED
+  -> DEV_SELECTED
+  -> LOCK_ACCEPTED
+  -> OM_VALIDATED
+  -> DEMO_PROMOTED
+  -> RUNTIME_FPS_PASSED
+```
+
+`scripts/run_ascend310b_incremental_demo.sh` 只需 Increment 数据目录，即可在 Ascend310B 上完成 `4→4+1→4+2` 两轮 Adapter 更新、隔离演示配置和完整图像链路复测；状态与证据保存在 `runs/ascend_edge_incremental_demo/<run_id>/`。该路径已于 2026-08-26 完成断网实机整链验收，详见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+
 正式 4+2 类别增量使用 `configs/incremental_round_registry_4plus2.yaml` 将同一 R2 数据包登记为两个不同类别轮次。Round 1 只训练 patrol_boat 专家；Round 2 的父代是 Round 1 冻结子代，只训练 armored_vehicle 专家。每轮用 `tools/13_register_incremental_round_candidate.py` 登记为 candidate，两轮由 `tools/12_summarize_incremental_rounds.py` 汇总；登记阶段不会切换 production。Scene-SensorNet 和场景门控属于独立 `system_calibration`，不进入增量训练数据计数。
 
 ## 批次目录
@@ -86,6 +101,12 @@ agile-agent incremental status --run-id TRAIN_JOB_ID
 agile-agent incremental onsite --bundle /path/to/new_classes.zip --plan-only
 agile-agent incremental onsite --bundle /path/to/new_classes.zip --target x86
 agile-agent incremental onsite-status --run-id ONSITE_RUN_ID
+```
+
+Ascend310B 已有两类断网演示：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
 ```
 
 ## 配置

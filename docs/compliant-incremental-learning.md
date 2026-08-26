@@ -26,6 +26,8 @@
 
 Scene-SensorNet、六类场景先验、门控阈值、场景惩罚、融合参数以及 mixed lock 评分均明确排除在 `incremental_learning` 之外。
 
+Ascend310B 断网演示采用相同口径：当轮 `incremental_learning` 只读取对应 Increment train/dev，并在 `npu:0` 更新该新类的 8 参数置信度 Adapter；mixed dev 强度选择属于 `system_calibration`，mixed lock、OM 数值和完整图像 FPS 属于 `joint_evaluation` / 部署验收。`input_audit.json` 固化 `base_images_used_for_training=0` 与 `old_raw_image_count=0`，因此板端真实反向传播既形成增量参数更新证据，也保持基础阶段和增量阶段的数据边界。
+
 ## 系统级校准
 
 系统级校准是三模型协同所需的独立步骤，可以使用基础与增量数据，但不得反向更新任何检测器权重：
@@ -79,6 +81,8 @@ Scene-SensorNet、六类场景先验、门控阈值、场景惩罚、融合参�
 
 现场总控不会将 Scene-SensorNet 或联合门禁重新定义为增量学习。训练仍只读取当轮 Increment train/dev；随后在累计 Base、历史增量轮次与本轮 lock 上只读计算 New-mAP50、KRR 和 Full-mAP50。候选还必须通过完整图像推理 FPS 门禁，才允许部署晋级。完整操作见 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md)。
 
+现场演示赛题已有两类时，使用 `scripts/run_ascend310b_incremental_demo.sh` 在板端重放 `4→4+1→4+2`；现场出现真正第 7 类及以后类别时，使用 `agile-agent incremental onsite` 训练新检测专家并按部署编排进入 Ascend 候选门禁。两条路径共享注册表、零旧样本训练、父子代际和联合指标口径，分别覆盖“已有候选的端侧 Adapter 更新”和“新增定位能力的检测专家更新”。
+
 ## 机器可读规则
 
 统一口径固化在以下文件：
@@ -91,7 +95,9 @@ models/manifest.json
 models/production/incremental_detection/calibration.json
 models/production/incremental_detection/metrics.json
 models/candidates/incremental_detection/<generation_id>/registration.json
-models/production/incremental_detection/evidence/sequential_round_evidence.json
+<production-evidence-root>/sequential_round_evidence.json
+runs/ascend_edge_incremental_demo/<run_id>/demo_report.json
+runs/onsite_incremental/<run_id>/round_contract.yaml
 ```
 
 新产物使用 `phase`、`counted_as_incremental_learning`、`detector_weights_updated`、`round_id`、`parent_generation_id` 和 `generation_id` 显式声明阶段与代际。联合二类 4+2 production 记录当前部署性能；两轮顺序注入产物记录逐类增量合规证据。

@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Ascend 310B SSH 连接与运行环境
 
-本文记录 Atlas 200I DK A2 的连接方式、CANN/Python 环境和当前正式服务。仓库不保存任何账户密码、私钥或改密信息；登录时使用设备当前凭据交互认证。
+本文记录 Atlas 200I DK A2 的连接方式、CANN/Python 环境、正式 release 和服务拓扑。连接凭据由设备交互认证或 SSH key 管理，仓库文档只记录非敏感运行参数。
 
 ## 环境快照
 
@@ -17,6 +17,7 @@
 | Conda base | `/usr/local/miniconda3` |
 | 正式环境 | `/usr/local/miniconda3/envs/agileagent` |
 | 正式 Python | `/usr/local/miniconda3/envs/agileagent/bin/python` |
+| 独立训练环境 | `~/agileagent/envs/agileagent_train`，`torch + torch_npu` |
 | 正式 release | `/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-replica-pool-v1` |
 | 回滚 release | `/home/HwHiAiUser/agileagent/releases/20260824-4plus2-yolo26-runtime-calibration-v1` |
 | 公共入口 | `127.0.0.1:8501` |
@@ -119,7 +120,7 @@ atc --version
 models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 ```
 
-零训练物化：
+正式 release 物化：
 
 ```bash
 cd /home/HwHiAiUser/agileagent/repo
@@ -132,11 +133,11 @@ cd /home/HwHiAiUser/agileagent/repo
 ./scripts/materialize_ascend310b_full_score_release.sh --verify-existing
 ```
 
-物化不训练、不导出、不运行 ATC、不安装依赖，也不启停服务。
+物化复原已构建的三个 OM、配置、来源与验收证据；训练、候选构建和服务切换分别由独立入口编排。
 
 ## 服务拓扑
 
-当前正式设备使用三个 systemd unit：
+正式设备已登记三个 systemd unit：
 
 ```text
 agileagent-ascend310b-main.service       18501 的 4+2 主实例
@@ -157,7 +158,7 @@ ss -H -ltn 'sport = :8501 or sport = :18501 or sport = :8502'
 sudo /usr/local/sbin/agileagent-ascend310b-primary-route status 18501
 ```
 
-三个 unit 均应返回 `active`，`8501/18501` 均有物理 listener，`8502` 无 listener。
+正式运行态下三个 unit 均返回 `active`，`8501/18501` 均有物理 listener，`8502` 保持候选专用。2026-08-26 验收收尾后，三个服务已停止；按安装器或 systemd unit 再次启动即可恢复该拓扑。
 
 公共健康响应必须包含：
 
@@ -200,6 +201,15 @@ curl -fsS -F "file=@sample.png;type=image/png" \
 ```
 
 正式 release 已完成公共入口 `30 + 3×20` 部署后复验，mixed 三轮为 `35.3751 / 38.6201 / 38.2175 FPS`，中位 `38.2175 FPS`；纯增量 140 图三轮为 `38.5337 / 36.0538 / 37.3997 FPS`，中位 `37.3997 FPS`。CLI 按正式 20 图分批识别同一 140 图为 `33.504 FPS`。重新计算 Base/New/KRR 需要同版 89 图和标签。
+
+板端断网增量演示复用正式 Python 和独立训练环境：
+
+```bash
+cd /home/HwHiAiUser/agileagent/repo
+./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
+```
+
+该入口已完成 `4→4+1→4+2` 实机验收，完整链路中位 `38.6995 FPS`；详细环境变量、训练/导出耗时和隔离配置见 `docs/ascend-310b-offline-incremental-demo.md`。
 
 ## 回滚
 

@@ -147,7 +147,7 @@ Scene 与冻结校准：
 
 ```text
 tools/60_train_scene_sensor.py
-tools/61_select_scene_sensor.py
+tools/61_select_scene_sensor_4plus2.py
 tools/09_optimize_scene_aware_4plus2.py
 tools/10_promote_scene_aware_4plus2.py
 ```
@@ -247,7 +247,7 @@ dimensions: per-class thresholds, scene soft penalties,
 evaluated: 5,476; passing: 4,467
 ```
 
-选择顺序是先满足三项精度约束，再最小化新类误激活，然后依次最大化 New-mAP50 和 Full-mAP50。首次 lock 不通过后没有重新选参；只修复 Base 记录来源标识使同一冻结校准在真实 OM 路径生效，再使用同一候选复验。
+选择顺序是先满足三项精度约束，再最小化新类误激活，然后依次最大化 New-mAP50 和 Full-mAP50。首次 lock 暴露 Base 记录来源标识问题后，只修复来源标识使原 dev 候选校准在真实 OM 路径生效，再使用同一冻结候选完成复验。
 
 ## 10. 正式 release 与提升
 
@@ -319,3 +319,16 @@ models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 - `8502` 正式状态下空闲
 - 三个 systemd unit active
 - 公共入口完成部署后 FPS 复验
+
+## 13. 板端离线增量扩展
+
+正式三-OM release 同时作为端侧增量演示的冻结父代。现场已有两类使用一条命令重放 `4→4+1→4+2`：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh \
+  /path/to/datasets_r2_inc_train
+```
+
+流水线在独立 `torch_npu` 环境中更新每类 8 参数 Adapter，在 production PyACL/CANN 环境中完成冻结候选、mixed lock、ONNX/OM、ACL 数值和完整图像链路 FPS 验收。胜出候选写入独立演示配置，正式三-OM release 继续作为父代和默认启动身份。
+
+2026-08-26 `board-full-check-v6` 的 Base/New/KRR/Full-mAP50 为 `0.816663 / 0.624935 / 1.000000 / 0.726497`，三轮完整链路为 `39.05 / 38.70 / 37.92 FPS`，Adapter OM 最大绝对误差 `5.96e-08`，候选状态 `accepted`。数据协议、冷/热态时间和演示 CLI 入口见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。

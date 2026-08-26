@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Ascend 310B 当前状态
 
-截至 2026-08-24，4+2 独立 YOLO26s 三-OM 方案已完成 mixed dev 约束校准、lock 冻结验收、三实例推理池 release 物化、公共 `8501` 原子提升和纯增量最坏分布复验。Base mAP50、New-mAP50、KRR 和 FPS 四项赛题门禁均进入满分档。
+截至 2026-08-26，4+2 独立 YOLO26s 三-OM 方案已完成 mixed dev 约束校准、lock 冻结验收、三实例推理池 release 物化、公共 `8501` 原子提升和纯增量最坏分布复验；断网 `4→4+1→4+2` 板端演示也已完成真实 NPU 训练、OM、隔离部署和完整运行时 FPS 验收。正式 release 与增量演示的 Base mAP50、New-mAP50、KRR 和 FPS 四项赛题门禁均进入满分档。
 
 ## 正式指标
 
@@ -21,6 +21,24 @@
 | 候选独立复跑，20 图 | `37.4577` | `37.9696` | `38.5046` | `37.9696` | PASS |
 | 公共 `8501` mixed，20 图 | `35.3751` | `38.6201` | `38.2175` | `38.2175` | PASS |
 | 公共 `8501` 纯增量，140 图 | `38.5337` | `36.0538` | `37.3997` | `37.3997` | PASS |
+| 板端增量隔离演示，20 图 | `39.05` | `38.70` | `37.92` | `38.6995` | PASS |
+
+## 板端离线增量演示
+
+`scripts/run_ascend310b_incremental_demo.sh` 已在强制断网环境下完成 `board-full-check-v6`。命令从 Increment 数据目录自动对齐两轮注册表，在 `npu:0` 更新每类 8 参数 Adapter，随后完成 mixed lock、ONNX/OM、ACL 数值核对、隔离配置部署和真实完整图像链路复测。
+
+| 指标 | 实测 |
+| --- | ---: |
+| Base mAP50 | `0.816663` |
+| New-mAP50 | `0.624935` |
+| KRR | `1.000000` |
+| Full-mAP50 | `0.726497` |
+| 新类误激活 | `17/75` |
+| Adapter OM 最大绝对误差 | `5.96e-08` |
+| 完整图像链路中位 FPS | `38.6995` |
+| NPU 训练搜索 / 完整热态命令 | `155.17 / 1007.07 秒` |
+
+演示候选以 `accepted` 状态写入独立运行目录，`base_images_used_for_training=0`、`old_raw_image_count=0`，production 模型和配置身份保持原样。
 
 ## 当前正式身份
 
@@ -31,14 +49,14 @@
 | 公共入口 | `127.0.0.1:8501` |
 | 主实例 | `127.0.0.1:18501` |
 | 回滚实例 | `20260824-4plus2-yolo26-runtime-calibration-v1`，物理监听 `8501` |
-| 候选端口 | `127.0.0.1:8502`，当前不监听 |
-| 路由 | `route=primary public=8501 target=18501` |
+| 候选端口 | `127.0.0.1:8502`，候选验收时使用 |
+| 已验收路由 | `route=primary public=8501 target=18501` |
 | 布局 | `independent_yolo26_e2e_v1` |
 | Context | `model`，真实 Scene-SensorNet |
 | 推理池 | `3` 个同构实例，批次均衡分片并按输入顺序合并 |
 | 类别 | `soldier / small_aircraft / warship / tank / patrol_boat / armored_vehicle` |
 
-`agileagent-ascend310b-main.service`、`agileagent-ascend310b-rollback.service` 和 `agileagent-ascend310b-route.service` 均为 `active`。物理 `8501` 回滚 listener 与 `18501` 主实例同时存在；公共请求由唯一精确 loopback NAT 规则进入主实例，删除该规则即回到旧 release。
+三项 systemd unit 与精确 loopback 路由均已完成 active 状态验收。2026-08-26 全部任务收尾后，板端三个 Agent 服务已停止，设备处于静默待机；再次启动这些 unit 即恢复已验收的 `8501 → 18501` 正式拓扑。物理 `8501` 回滚 listener 与 `18501` 主实例在运行态同时存在，移除唯一精确路由即可回到上一 release。
 
 健康响应已确认：
 
@@ -76,7 +94,7 @@
 | patrol_boat AP50 | `0.406635` | `0.476365` | `+0.069730` |
 | armored_vehicle AP50 | `0.831083` | `0.746557` | `-0.084526` |
 
-precision 和误激活率仍未达工程建议线，因此继续作为风险诊断；它们不是当前赛题的四项满分门禁。
+precision、recall 和误激活率继续作为工程优化与错误分析信号；当前赛题的四项满分门禁均已通过。
 
 ## 活动入口
 
@@ -84,5 +102,7 @@ precision 和误激活率仍未达工程建议线，因此继续作为风险诊�
 - [满分方法与复现手册](ascend-310b-full-score-method.md)
 - [部署、切换和回滚](ascend-310b-deployment.md)
 - [板端连接与运行环境](ascend-310b-ssh-environment.md)
+- [断网一键增量学习演示](ascend-310b-offline-incremental-demo.md)
+- [板端轻量增量训练实现](ascend-310b-edge-incremental-training.md)
 - [正式模型包](../models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/README.md)
 - [三实例推理池验收证据](../reports/ascend310b/20260824-replica-pool-v1/README.md)

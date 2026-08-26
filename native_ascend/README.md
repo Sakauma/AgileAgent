@@ -1,6 +1,6 @@
 # Ascend C ABI 契约夹具
 
-`native_ascend/` 提供可构建的 C ABI 契约夹具，用于验证 Python 与未来原生 Ascend 运行库之间的版本、状态、错误和生命周期接口。
+`native_ascend/` 提供可构建的 C ABI 契约夹具，用于验证 Python 与原生 Ascend 运行库之间的版本、状态、错误和生命周期接口，并为原生后端实现提供稳定集成边界。
 
 ## 构建
 

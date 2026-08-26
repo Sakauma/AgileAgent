@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # 三个功能模型
 
-AgileAgent 的当前 x86/CUDA production 使用环境认知、四类基础目标检测和二类增量目标检测形成 strict 4+2 推理链路。
+AgileAgent 的当前 production 使用环境认知、四类基础目标检测和二类增量目标检测形成 strict 4+2 推理链路；x86/CUDA 运行 PT 权重，Ascend310B 运行同职责的三-OM release。板端离线增量演示还可以在冻结三模型之后接入每类 8 参数的置信度 Adapter。
 
 ## 模型职责
 
@@ -89,4 +89,22 @@ Scene-SensorNet 为双头 CNN，权重位于 `models/context/scene_sensor_net.pt
 
 上表是当前 `20260824-4plus2-yolo26-runtime-calibration-v1` 的真实 OM lock 和部署后板端结果。候选与 release-local 复验精度完全一致，四项满分门禁均通过。
 
-完整硬门禁、逐类精度、误激活、场景模型与四组 FPS 见 `docs/current-metrics.md`；模型身份、评分产物和部署入口见 `docs/ascend-310b-current-status.md`。
+### 板端离线增量 Adapter
+
+`scripts/run_ascend310b_incremental_demo.sh` 从当前 Increment 数据目录重建 `4→4+1→4+2` 轮次，在 `npu:0` 训练两组 8 参数 Adapter。它使用冻结检测器候选的置信度、框面积、场景概率和传感器概率形成 8 维输入，在正式 score calibration 之前更新新增类置信度；Base、Incremental 检测器和 Scene-SensorNet 权重保持冻结。
+
+2026-08-26 `board-full-check-v6` 已完成训练、mixed lock、ONNX/OM、ACL 数值对齐、隔离部署和启用 Adapter 后的完整图像链路复测：
+
+| 指标 | 隔离演示实测 |
+| --- | ---: |
+| Base mAP50 | `0.816663` |
+| New-mAP50 | `0.624935` |
+| KRR | `1.000000` |
+| Full-mAP50 | `0.726497` |
+| 新类误激活 | `17/75` |
+| Adapter OM 最大绝对误差 | `5.96e-08` |
+| 完整图像链路中位 FPS | `38.6995` |
+
+通过门禁的 Adapter 由独立 `agent_pipeline_ascend310b_demo.yaml` 激活，结果中的 `agent.decision.edge_incremental_adapter` 记录运行身份；原 production 与父代 release 保持可直接启动。
+
+完整硬门禁、逐类精度、误激活、场景模型、正式 release FPS 与板端增量结果见 `docs/current-metrics.md`；模型身份、评分产物和部署入口见 `docs/ascend-310b-current-status.md`。

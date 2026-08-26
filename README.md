@@ -150,20 +150,20 @@ curl -fsS -F "file=@/path/to/image.png;type=image/png" \
 
 ### 现场 4+2+n 一键增量
 
-若现场继续提供真正的新类别 ZIP，可在 CUDA 节点先执行只读预检，再用同一入口自动完成导入、类别注册、训练、累计 lock、FPS、部署和回滚：
+若现场继续提供真正的新类别 ZIP，可在 CUDA 节点先执行只读预检，再用同一入口自动完成导入、类别注册、训练、累计 lock、FPS、候选部署和代际切换：
 
 ```bash
 agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --plan-only
 agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --target x86
 ```
 
-本轮新类自动分配到全局 `6...`，Base、现有二类专家和历史专家保持冻结。入口同时接受标准 `images/labels + data.yaml` 与赛题现有“图像/标签平铺 + classes.txt”ZIP。所有精度与 FPS 门禁通过前不会切换 production。真正的新类必须在 CUDA 节点训练；Ascend310B 目标还必须提供包含 ONNX/OM 构建、隔离候选、累计精度、30 FPS、原子提升和回滚的部署编排。完整数据格式、命令、门禁、状态文件和板端边界见 [`docs/onsite-4plus2plusn.md`](docs/onsite-4plus2plusn.md)。
+本轮新类自动分配到全局 `6...`，Base、现有二类专家和历史专家保持冻结。入口同时接受标准 `images/labels + data.yaml` 与赛题现有“图像/标签平铺 + classes.txt”ZIP。CUDA 节点负责新检测专家训练；Ascend310B 部署编排连续完成 ONNX/OM 构建、隔离候选、累计精度、30 FPS、原子提升和回滚。系统以全部精度与 FPS 门禁作为 production 切换条件。完整数据格式、命令、门禁、状态文件和板端流程见 [`docs/onsite-4plus2plusn.md`](docs/onsite-4plus2plusn.md)。
 
-## 可选额外功能：Ascend310B 板端增量训练
+## Ascend310B 板端增量训练与离线演示
 
 [`extras/ascend_edge_incremental/`](extras/ascend_edge_incremental/) 提供隔离的板端轻量增量训练能力。它按类别注册表逐轮读取 Increment train/dev，冻结现有 Base、Incremental 与 Scene-SensorNet，只在 `npu:0` 更新每个新增类别 8 个参数的无 MatMul 置信度 Adapter；随后独立执行 mixed dev 强度选择、mixed lock 联合评分、ONNX/OM 导出和 ACL 延迟验证。
 
-该功能使用独立 Conda 前缀，拒绝 CPU fallback 和 production 路径输出，不修改现有正式模型、CANN 或服务配置。2026-08-25 实测两轮训练搜索耗时约 9 分 16 秒，必需 NPU 探测、训练和 ONNX/OM 导出合计约 12 分 12 秒；mixed lock 的 Base mAP50 / New-mAP50 / KRR / Full-mAP50 为 `0.816663 / 0.649306 / 1.000000 / 0.736421`，保守串行叠加预计 `37.9639 FPS`。
+该功能使用独立 Conda 前缀和运行目录，将训练产物、候选配置与当前 production 完整隔离。2026-08-25 底层流水线实测两轮训练搜索耗时约 9 分 16 秒，NPU 探测、训练和 ONNX/OM 导出合计约 12 分 12 秒；mixed lock 的 Base mAP50 / New-mAP50 / KRR / Full-mAP50 为 `0.816663 / 0.649306 / 1.000000 / 0.736421`，Adapter OM 的保守串行投影为 `37.9639 FPS`。
 
 现场演示当前 `4→4+2` 时，在已预装离线训练环境的 310B 上只需一条命令：
 
@@ -171,7 +171,7 @@ agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --target x
 ./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
 ```
 
-该入口自动完成数据对齐、两轮 NPU 训练、dev/lock、ONNX/OM、隔离演示部署，并在 Adapter 真正接入运行时后复测完整图像链路 FPS。脚本不联网，不把 Base 图像用于训练，也不会覆盖当前满分 production。完整现场手册见 [`docs/ascend-310b-offline-incremental-demo.md`](docs/ascend-310b-offline-incremental-demo.md)；底层环境、实测证据和边界见 [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md)。
+该入口自动完成数据对齐、两轮 NPU 训练、dev/lock、ONNX/OM、隔离演示部署，并在 Adapter 接入运行时后复测完整图像链路 FPS。脚本启用强制离线配置，训练数据范围固定为 Increment train/dev，Base 图像只参与冻结后的联合评分；验收结果写入独立演示通道，当前满分 production 保持可随时启动。完整现场手册见 [`docs/ascend-310b-offline-incremental-demo.md`](docs/ascend-310b-offline-incremental-demo.md)；底层环境与实测证据见 [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md)。
 
 2026-08-26 板端整链验收已通过：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`，启用 Adapter 后完整图像链路中位 `38.6995 FPS`；热态一键全流程耗时 `16分47秒`，首次冷态建议预留 30 分钟。
 
@@ -233,6 +233,11 @@ extras/          与 production 隔离的可选能力和实验入口
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | x86/CUDA 与 Ascend 配置 |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发流程和代码规范 |
 | [`docs/TESTING.md`](docs/TESTING.md) | 测试范围、命令和设备要求 |
+| [`docs/API.md`](docs/API.md) | Web API、增量工作台接口和运行时控制接口 |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | x86、WSL 与 Ascend310B 部署总览 |
+| [`docs/current-metrics.md`](docs/current-metrics.md) | x86、Ascend 与板端增量演示指标总账 |
+| [`docs/functional-models.md`](docs/functional-models.md) | Scene、Base、Incremental 三模型职责与协作策略 |
+| [`docs/incremental-workbench.md`](docs/incremental-workbench.md) | 数据上传、审计、训练、生命周期与代际操作 |
 | [`docs/compliant-incremental-learning.md`](docs/compliant-incremental-learning.md) | 两轮增量数据与评测契约 |
 | [`docs/onsite-4plus2plusn.md`](docs/onsite-4plus2plusn.md) | 现场新类别一键训练、候选部署、验收与回滚 |
 | [`docs/ascend-310b-offline-incremental-demo.md`](docs/ascend-310b-offline-incremental-demo.md) | 310B 断网一键 `4→4+2` 训练、演示部署与验收 |
@@ -240,6 +245,7 @@ extras/          与 production 隔离的可选能力和实验入口
 | [`docs/ascend-310b-full-score-method.md`](docs/ascend-310b-full-score-method.md) | Ascend310B v2 模型转换、内容门控与评分方法 |
 | [`docs/ascend-310b-current-status.md`](docs/ascend-310b-current-status.md) | 当前 release 状态和证据索引 |
 | [`docs/ascend-310b-deployment.md`](docs/ascend-310b-deployment.md) | 板端物化、启动、验收和路由操作 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 开发、测试、文档与提交协作规范 |
 
 ## 许可证
 

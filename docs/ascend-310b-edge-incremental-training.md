@@ -19,7 +19,7 @@
 
 当前 4+2 注册表包含两个新增类别，因此总计训练 16 个参数。反向传播和 SGD 参数更新真实发生在 `npu:0`；Base、已有 Incremental 检测器和 Scene-SensorNet 权重始终冻结。
 
-这不是完整 YOLO26s 微调，也不能为完全没有候选框的新类别学习新的定位能力。流水线不会自动覆盖或晋级 production，当前正式 OM、CANN 和服务配置保持不变。
+该实现采用“冻结检测器 + 轻量 Adapter”的端侧增量形式，适合当前 `4→4+2` 已有检测候选的现场演示。真正新增且尚无定位候选的 `4+2+n` 类别由 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md) 的新检测专家链路负责。底层 `run_pipeline.sh` 产出候选与证据，现场主入口在完整门禁通过后将候选提升到独立演示配置；正式 production、CANN 和父代 release 保持可直接启动。
 
 ## 现场主入口
 
@@ -29,7 +29,7 @@
 ./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
 ```
 
-该入口自动对齐当前固定 split，调用本目录的底层流水线，然后把通过门禁的 Adapter 部署到隔离演示配置，最后将 Adapter 实际接入完整图像推理链路重测 FPS。它不覆盖满分 production。现场操作、失败撤销和演示 CLI 启动方式见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+该入口自动对齐当前固定 split，调用本目录的底层流水线，然后把通过门禁的 Adapter 部署到隔离演示配置，最后将 Adapter 实际接入完整图像推理链路重测 FPS。隔离演示配置和满分 production 作为两个可选择的运行身份并存。现场操作、候选撤销和演示 CLI 启动方式见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
 
 下文保留底层手工入口，用于研发调试和重现单个阶段。
 
@@ -179,7 +179,7 @@ RUN_ROOT/
 
 这些目录包含数据路径、冻结响应和设备产物，应保留在板端工作区，不提交到 Git。
 
-## 2026-08-25 实测结果
+## 2026-08-25 底层独立实验
 
 独立实验使用相同 4+2 注册顺序和当前 Ascend production 候选，选出的安全强度为 patrol_boat `0.0`、armored_vehicle `0.2`。
 
@@ -203,9 +203,9 @@ RUN_ROOT/
 | 新类 TP / FP@0.63 | `520 / 104` | `540 / 134` | `+20 / +30` |
 | 新类误激活图像 | `108/750` | `122/750` | `+14` |
 
-OM 实测 wall 中位/P95 为 `0.174773 / 0.199086 ms`，最大绝对误差 `0.0005395`。将 wall 中位串行叠加到 `38.2175 FPS` 基线，保守预计为 `37.9639 FPS`，仍超过 30 FPS。该数值是 Adapter OM 的 ACL 实测加串行投影，不是替换 production 后的整服务复测。
+OM 实测 wall 中位/P95 为 `0.174773 / 0.199086 ms`，最大绝对误差 `0.0005395`。将 wall 中位串行叠加到 `38.2175 FPS` 基线，保守预计为 `37.9639 FPS`。这组底层结果用于建立 Adapter 单体性能基线；下一节记录它接入实际完整图像链路后的实测。
 
-## 实测耗时与资源
+## 2026-08-25 底层实验耗时与资源
 
 | 项目 | 结果 |
 | --- | ---: |
@@ -220,11 +220,29 @@ OM 实测 wall 中位/P95 为 `0.174773 / 0.199086 ms`，最大绝对误差 `0.0
 
 首次图编译占绝大多数时间，不应把首轮约 8 分钟的停顿误判为卡死。完整流水线还会冻结不同数据范围的候选；具体总耗时受当前服务配置、存储和是否使用 encoded 路径影响，以 `workflow_state.json` 的逐阶段墙钟为准。
 
-## 是否晋级 production
+## 2026-08-26 完整运行时验收
 
-当前结果通过 Base mAP50 ≥ 0.80、New-mAP50 ≥ 0.60、KRR ≥ 0.95 和保守 FPS ≥ 30 的能力验证，但 890 图诊断出现 Base mAP50 小幅下降、FP 和误激活增加。因此本额外功能默认只产出候选与证据，不替换当前满分 production。
+`board-full-check-v6` 将 Adapter 接入 `WebInferenceEngine` 的冻结 score calibration 之前，并使用隔离演示配置完成真实完整图像链路复测。该次运行从同一条断网命令开始，逐项通过输入审计、NPU 训练、mixed lock、OM 数值、隔离部署和 FPS 门禁。
 
-若未来需要晋级，必须新建独立 release，将 Adapter 接入真实正式链路后重新执行 mixed lock、KRR、Full-mAP50、误激活、数值对齐和真实整链路 FPS 门禁，并保留可回滚的上一代；不能直接复制本目录生成的 OM 覆盖正式模型。
+| mixed lock 指标 | 正式 production | 隔离演示 Adapter | 变化 |
+| --- | ---: | ---: | ---: |
+| Base mAP50 | `0.816663` | `0.816663` | `+0.000000` |
+| New-mAP50 | `0.611461` | `0.624935` | `+0.013474` |
+| KRR | `1.000000` | `1.000000` | `+0.000000` |
+| Full-mAP50 | `0.722005` | `0.726497` | `+0.004492` |
+| 新类误激活图像 | `17/75` | `17/75` | `+0` |
+
+| 运行与导出 | 实测 |
+| --- | ---: |
+| 两轮 5 seed × 3 LR NPU 训练搜索 | `155.17 秒` |
+| ONNX 导出 | `4.82 秒` |
+| ATC 编译 OM | `87.67 秒` |
+| Adapter OM 最大绝对误差 | `5.96e-08` |
+| 完整图像链路三轮 FPS | `39.05 / 38.70 / 37.92` |
+| 完整图像链路中位 FPS | `38.6995` |
+| 输入审计至隔离部署和 FPS 的热态总耗时 | `1007.07 秒` |
+
+训练审计为 `base_images_used_for_training=0`、`old_raw_image_count=0`；隔离候选状态为 `accepted`，production 修改标记为 `false`。演示配置保留当前满分 production 作为父代，CLI 通过 `AGILE_AGENT_CONFIG=<demo_config>` 显式选择学习后的运行身份。该设计已经完成了此前“独立 release、真实链路、mixed lock、KRR、Full-mAP50、误激活、数值对齐、整链 FPS 和父代保留”的完整闭环。
 
 ## 常见问题
 

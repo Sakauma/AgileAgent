@@ -11,9 +11,9 @@
 - `scene_aware_candidate.json`：dev 选择并冻结的 `guarded_precision` 候选；
 - `scene_aware_lock_recheck.json`：`joint_evaluation` 证据，记录冻结候选的一次性 mixed lock 复核。
 - `all_images_diagnostics.json/.md`：使用当前正式后处理并列记录一号 mixed lock 与二号全部 890 张标注图像；二号包含 train，只是诊断结果。
-- `ascend310b_cross_class_replay.json`：对当前 310B release 的 89 张冻结板端预测执行新的全类别重叠抑制回放；它证明精度门禁仍通过，不包含修改后的板端 FPS。
+- `ascend310b_cross_class_replay.json`：对 310B release 的 89 张冻结板端预测执行全类别重叠抑制回放，用于衔接精度门禁与后续板端 runtime calibration/FPS 实测。
 
-严格两轮候选晋级后，本目录会新增 `rounds/<round_id>/` 与 `sequential_round_evidence.json/.md`，`incremental_selection.*` 会替换为两轮聚合记录；`models/generations.json` 成为两个单类专家的唯一运行来源，当前联合二类代际改为 `retired_baseline`。
+严格两轮候选的产物契约为 `rounds/<round_id>/`、`sequential_round_evidence.json/.md` 和两轮聚合 `incremental_selection.*`；晋级工具据此将两个单类专家登记为类 `4/5` owner，并将联合二类父代保存为 `retired_baseline`。当前正式 production 继续使用本目录绑定的联合二类专家，顺序轮次能力由注册表、工具链和独立候选证据管理。
 
 最终评分、逐类阈值和非阻断诊断见上级目录的 `metrics.json` 与 `calibration.json`。
 

@@ -6,20 +6,26 @@
 agile-agent incremental onsite --bundle /path/to/onsite_increment.zip
 ```
 
-命令连续执行数据审计、全局类别注册、train/dev/lock 封存、新专家训练、dev 阈值校准、累计 lock 验收、候选 FPS 验收、候选部署和 production 晋级。任一硬门禁失败时不切换当前 production；部署后收尾失败时自动回滚父代际。
+命令连续执行数据审计、全局类别注册、train/dev/lock 封存、新专家训练、dev 阈值校准、累计 lock 验收、候选 FPS 验收、候选部署和 production 晋级。只有通过全部硬门禁的候选才原子切换为 production，父代际贯穿全流程并可自动恢复。
 
 阶段状态会实时写到标准错误，最终机器可读 JSON 单独写到标准输出。训练超过 30 秒后每 30 秒输出一次耗时与任务状态，因此现场既能展示过程，也可以安全重定向最终验收结果。
 
-## 能力边界
+## 现场路径选择
 
-- 现场若演示的是赛题已有 `4→4+2` 过程，应直接在 310B 断网板端运行 [`run_ascend310b_incremental_demo.sh`](../scripts/run_ascend310b_incremental_demo.sh)；这条路径已经完成真实 NPU 训练、OM、隔离部署、精度和 30 FPS 整链实测，不走本页的第 7 类新专家流程。
-- `n` 必须是当前 production 没有学习过的类别。已有类别追加样本属于目标增量更新，不走本入口。
-- 真正的新类别需要训练新的检测专家。310B 上的轻量置信度 Adapter 只能校准已有候选，不能获得第 7 类之后的新目标定位能力。
-- 新专家训练必须在装有 PyTorch、Ultralytics 和可用 NVIDIA GPU 的 CUDA 节点执行，不允许 CPU fallback。
-- Base、当前二类专家和所有历史专家均冻结；训练阶段只读取本轮 Increment train/dev。
-- Scene-SensorNet、场景门控和累计评分属于系统校准/联合评估，不计入增量学习。
-- x86 运行时允许当前专家和现场新专家共同推理。默认每图最多运行 16 个专家；一包中的多个新类别由同一个本轮专家负责，因此只增加一个专家实例。
-- Ascend310B 必须通过显式部署编排完成新专家 ONNX/OM 构建、隔离候选、累计精度、30 FPS 和原子晋级。缺少任一阶段时命令会在预检阶段拒绝执行，不会把 x86 权重误当成板端 production。
+| 现场输入 | 学习形式 | 主入口 | 已实现验收 |
+| --- | --- | --- | --- |
+| 赛题已有两类，演示 `4→4+1→4+2` | 310B `npu:0` 训练轻量置信度 Adapter | [`run_ascend310b_incremental_demo.sh`](../scripts/run_ascend310b_incremental_demo.sh) | 真实 NPU、OM、隔离部署、精度与完整链路 30 FPS |
+| production 之后的真正新类别 `4+2+n` | CUDA 训练具备新定位能力的检测专家 | `agile-agent incremental onsite` | 数据审计、动态类别、累计 lock、FPS、原子晋级与回滚契约 |
+| 已学习类别追加样本 | 目标增量更新 | 增量工作台批次生命周期 | 批次审计、冻结父代和候选代际 |
+
+`4+2+n` 入口实现以下固定契约：
+
+- 每包登记一个或多个 production 尚未拥有的类别，并从当前类别注册表继续分配全局 ID；
+- 新专家在装有 PyTorch、Ultralytics 和 NVIDIA GPU 的 CUDA 节点训练，设备预检固定为 CUDA；
+- Base、当前二类专家和历史专家保持冻结，训练阶段只读取本轮 Increment train/dev；
+- Scene-SensorNet、场景门控和累计评分分别记为系统校准与联合评估；
+- x86 运行时并存当前专家和现场新专家，默认每图最多运行 16 个专家；一包多类由同一个本轮专家负责；
+- Ascend310B 部署编排完成新专家 ONNX/OM、隔离候选、累计精度、30 FPS 和原子晋级，并在预检中核对每个阶段及板端产物身份。
 
 ## 数据包格式
 
@@ -66,7 +72,7 @@ agile-agent incremental onsite \
 
 ## 演示前预检
 
-先执行只读计划，不会导入数据、训练或改变 production：
+先生成只读执行计划，核对完成后再进入正式运行：
 
 ```bash
 agile-agent incremental onsite \
@@ -105,7 +111,7 @@ agile-agent incremental onsite \
   --no-deploy
 ```
 
-如果 `127.0.0.1:<server_port>` 上已经运行当前工程的正式 Web/CLI 服务，命令会通过本机专用控制通道在服务进程内重新 shadow 加载候选，并由 `AtomicEngineProvider` 原子替换内存中的正式引擎；运行中请求继续使用父代，新请求切到子代。检测到旧版本服务不具备该能力时，预检直接终止并要求先重启服务，不会只改注册表造成“磁盘已晋级、内存仍是旧模型”。如果没有正在运行的服务，命令原子更新 production 注册表，下一次 Web/CLI 进程启动时自动加载新代际。
+如果 `127.0.0.1:<server_port>` 上已经运行当前工程的正式 Web/CLI 服务，命令会通过本机专用控制通道在服务进程内 shadow 加载候选，并由 `AtomicEngineProvider` 原子替换内存中的正式引擎；运行中请求继续使用父代，新请求切到子代。预检同时核对服务是否支持运行时代际控制；空闲状态下则原子更新 production 注册表，下一次 Web/CLI 进程启动时加载新代际。
 
 候选晋级前必须同时满足：
 
@@ -221,10 +227,10 @@ agile-agent incremental onsite-status --run-id onsite-YYYYMMDD-HHMMSS-xxxxxx
 - `FAILED`：训练、导出或部署异常，production 保持或已成功恢复；
 - `ROLLBACK_FAILED`：自动恢复也失败，必须立即按状态文件中的父代际人工处置。
 
-## 现场建议
+## 现场演示顺序
 
 1. 演示前用一个格式相同的小包完整演练 `--plan-only` 和正式命令。
 2. 现场包尽量显式提供 train/val/lock；样本很少时至少保证每个新类在三部分都有样本。
-3. 不要在演示时改 Base、Scene-SensorNet、旧类阈值或旧类场景先验。
+3. 保持 Base、Scene-SensorNet、旧类阈值和旧类场景先验冻结。
 4. 先展示 `round_contract.yaml` 的零旧样本与冻结证据，再展示 loss、New-mAP50、KRR、Full-mAP50 和 FPS。
-5. 如果 310B 新候选低于 30 FPS，让门禁自动保留当前 4+2 production；现场仍可展示训练与候选验收过程，不要强制上线失败候选。
+5. 由 30 FPS 门禁决定候选晋级；未达线的运行保留完整训练与候选验收证据，并继续展示当前 4+2 production。

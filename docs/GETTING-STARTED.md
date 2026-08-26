@@ -88,7 +88,7 @@ agile-agent detect --source /path/to/image.png
 agile-agent detect --source /path/to/images --recursive
 ```
 
-CLI 会优先复用已运行的本机正式服务，服务不可用时才加载本地推理引擎。两种执行方式都自动使用当前 production 代际、Scene-SensorNet 和冻结阈值，不提供检测参数或模型档案的人工切换入口。
+CLI 会优先复用已运行的本机正式服务，也能在当前进程加载同一套本地推理引擎。两种执行方式都自动使用当前 production 代际、Scene-SensorNet、冻结阈值和正式后处理，使交互入口保持简洁一致。
 
 ## 准备 strict 4+2 数据
 
@@ -402,6 +402,34 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" \
   --round-evidence "$ROUND_SUMMARY/round_evidence.json"
 ```
 
+## 在 Ascend310B 上离线演示 4→4+2 增量学习
+
+板端预先封装 production 环境、独立 `torch_npu` 训练环境、CANN、固定 Base 评估资产和当前 Increment 数据后，只需输入 Increment 目录：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh \
+  /path/to/datasets_r2_inc_train
+```
+
+一键入口连续完成 140 张 Increment 图像审计、`4→4+1→4+2` 两轮注册、NPU 反向传播、dev 选择、mixed lock、ONNX/OM、ACL 数值验收、隔离部署和完整图像链路 FPS 复测。训练数据范围固定为当轮 Increment train/dev，Base 与历史专家保持冻结。
+
+先查看完整计划：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh \
+  /path/to/datasets_r2_inc_train \
+  --plan-only
+```
+
+2026-08-26 实机整链结果为 Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497` 和完整链路中位 `38.6995 FPS`。通过门禁后，`demo_report.json` 给出本次隔离配置；使用它启动 CLI 即可查看学习后的结果：
+
+```bash
+AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml \
+  ./scripts/start_agent.sh --cli
+```
+
+完整现场流程、时间和产物结构见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+
 ## 物化并启动 Ascend310B v2
 
 在已经配置 CANN 与 `/usr/local/miniconda3/envs/agileagent` 的板端，从仓库根目录执行：
@@ -486,7 +514,7 @@ CUDA_VISIBLE_DEVICES=2 "$AGENT_PYTHON" -c \
 
 ### 提示输出目录非空
 
-训练、评测、校准和板端评分工具保留现有证据并拒绝静默覆盖。为新运行设置新的 `BASE_RUN`、`INCREMENT_RUN`、`EVAL_ROOT` 或 release candidate 目录。
+训练、评测、校准和板端评分工具按运行目录保存完整证据。为每次运行设置新的 `BASE_RUN`、`INCREMENT_RUN`、`EVAL_ROOT` 或 release candidate 目录，即可保留清晰的实验与代际记录。
 
 ### Ascend 物化提示目标 release 已存在
 

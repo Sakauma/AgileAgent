@@ -3,7 +3,7 @@
 
 AgileAgent 的 Web 服务由 `fair_agent/web/app.py` 提供。x86/CUDA 与 Ascend310B v2 使用同一组 HTTP 路由、六类全局 ID 和类别 owner；运行后端与模型布局通过健康响应区分。
 
-默认地址为 `http://127.0.0.1:8501`。服务面向本机或受控反向代理使用，API 本身不实现用户认证。所有响应包含 `X-Request-ID`，请求也可以主动传入该头以串联审计日志。
+默认地址为 `http://127.0.0.1:8501`。默认监听和运行时代际控制均采用 loopback 边界；需要跨主机访问时，由受控反向代理提供 TLS、身份认证和访问策略。所有响应包含 `X-Request-ID`，请求也可以主动传入该头以串联审计日志。
 
 ## 核心路由
 
@@ -40,6 +40,7 @@ curl -fsS http://127.0.0.1:8501/api/health
   "model_layout": "independent_models_v1",
   "context_mode": "model",
   "queue": {},
+  "inference_replicas": 1,
   "generation_id": "incremental_detection_generation_4plus2",
   "generation_name": "4+2 增量检测生产代际",
   "runtime_generation_control": "onsite_generation_v1",
@@ -87,7 +88,7 @@ curl -fsS \
 | `agent.protocols` | 增量专家输出摘要 |
 | `agent.decision` | 内容门控、融合、冲突抑制、代际和 owner |
 
-`agent.decision.content_execution_gates` 记录 Ascend v2 的场景与 Base 双证据门控。`executed_protocols` 和 `skipped_protocols` 直接反映增量 OM 是否执行。x86/CUDA 与 Ascend 的 `timings` 子字段不同，调用方应按字段名读取。
+`agent.decision.content_execution_gates` 记录 Ascend v2 的场景与 Base 双证据门控。`executed_protocols` 和 `skipped_protocols` 直接反映增量 OM 是否执行。通过板端增量门禁的隔离演示配置还会在 `agent.decision.edge_incremental_adapter` 返回 Adapter 的活动状态、轮次协议和运行身份。x86/CUDA 与 Ascend 的 `timings` 子字段不同，调用方应按字段名读取。
 
 ## 批量检测
 
@@ -119,7 +120,14 @@ curl -fsS \
 
 正式 4+2 顺序增量的类别、轮次和父子代际以 `configs/incremental_round_registry_4plus2.yaml` 为准。工作台上传接口负责批次审计与任务编排；正式候选登记和晋级仍由 `tools/13_register_incremental_round_candidate.py`、`tools/12_summarize_incremental_rounds.py` 与 `tools/10_promote_scene_aware_4plus2.py` 完成。
 
-`POST /api/runtime/generation` 是 `agile-agent incremental onsite` 使用的本机内部接口，不属于外部集成 API。它同时校验实际 TCP 客户端为 loopback、专用请求契约、运行中父代和候选复核清单，只允许 `promote` / `rollback`；候选在服务进程内完成 shadow 加载后才由 `AtomicEngineProvider` 原子换代。现场操作应调用一键 CLI，不应手工调用该接口。
+`POST /api/runtime/generation` 是 `agile-agent incremental onsite` 使用的本机原子代际接口。它同时校验实际 TCP 客户端为 loopback、专用请求契约、运行中父代和候选复核清单，仅接受 `promote` / `rollback`；候选在服务进程内完成 shadow 加载后由 `AtomicEngineProvider` 原子换代，并保留上一代作为回滚目标。现场一键 CLI 负责生成和提交完整请求契约。
+
+## 访问控制边界
+
+- Web/API 默认绑定 `127.0.0.1`，适合板端 CLI、本机浏览器和 SSH 端口转发。
+- 跨主机部署由反向代理终止 TLS，并按现场网络策略增加身份认证、来源限制与速率限制。
+- `/api/runtime/generation` 额外验证真实 TCP 客户端、父代身份、候选 manifest 和验收清单，形成独立于代理层的晋级门禁。
+- 公共配置和健康响应只公开运行身份与能力，不公开权重绝对路径。
 
 ## 审计日志
 

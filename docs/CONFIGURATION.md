@@ -29,7 +29,7 @@ AgileAgent 以 UTF-8 YAML 管理运行、训练、增量协议和 Ascend310B 发
 `load_config()` 按以下顺序得到有效配置：
 
 1. 选择主配置。调用方显式传入 `--config PATH` 时固定使用该文件；默认 `--config auto` 先接受 `AGILE_AGENT_CONFIG`，否则将 `x86_64/AMD64` 映射到 `configs/agent_pipeline.yaml`，将 `aarch64/ARM64` 映射到 `configs/agent_pipeline_ascend310b.yaml`。ARM 设置 `AGILE_AGENT_ASCEND_RELEASE` 时优先使用该 release 内的配置。
-2. 对值完全等于 `${ENV_NAME}` 的字符串做环境变量展开。当前受控配置没有这类占位符。
+2. 对值完全等于 `${ENV_NAME}` 的字符串做环境变量展开；受控主配置当前采用显式值，设备专用副本可使用该语法注入路径。
 3. 应用重复的 `--set KEY=VALUE` 或 `AGILE_AGENT_OVERRIDES` 中的临时覆盖。值使用 YAML 语义解析，因此数字、布尔值和 `null` 保留其类型。
 4. 校验 schema、已知字段、数值范围、后端契约和发布资产身份。
 5. 添加 `_config_path`、`_config_overrides`、`_config_sha256` 和 `_runtime_platform` 运行时元数据。后者记录主机架构、后端、设备族、模型格式及选择来源，不写回 YAML，也不参与配置 SHA256。
@@ -106,6 +106,7 @@ inference:
 - `routing.detection_evidence_weight + routing.context_evidence_weight` 必须等于 `1.0`。
 - `routing.cross_class_suppression` 仅接受 `highest_confidence` 与 `all_classes`；`iou`、`smaller_box_coverage` 和 `incremental_over_base_margin` 都必须位于对应的 `[0,1]` 范围。
 - 启用 `routing.score_calibration` 时，必须同时登记 `frozen_base_model` 与 `incremental_model` 的 logit-affine temperature/bias，并标明 `source_split: mixed_dev_only`。
+- 隔离演示配置通过 `routing.edge_incremental_adapter` 登记已验收 manifest、协议 ID 和加载要求；`WebInferenceEngine` 在冻结 score calibration 之前执行 Adapter 置信度更新。
 - `logging.request_bodies` 必须为 `false`；上传的图像和数据包不写入请求日志。
 - `incremental.learning_data_scope` 必须为 `incremental_dataset_only`，支持模式必须同时包含 `class_incremental` 和 `target_incremental`。
 - `model.expected_sha256`、已验收后端的模型资产和发布报告必须登记有效身份。
@@ -151,6 +152,8 @@ inference:
 x86 的 `soft_threshold_penalty` 根据 Scene-SensorNet 的 `air/forest/sea/urban` 已知类概率调整逐类有效阈值，`hard_routing: false` 使 Base 和 Incremental 类别 owner 保持固定。
 
 `routing.cross_class_suppression` 是数据来源无关的正式后处理：Web、CLI、训练集回放、dev、lock 和未来无标签图像走同一规则，不读取文件名或标签，也不维护类别对白名单。同类重复框仍由模型后端和 class-aware NMS 处理；这一层只在不同类别框高度重叠时按校准后置信度仲裁。Ascend 736 OM 的冻结参数为 `iou=0.90`、`smaller_box_coverage=0.95`。
+
+`routing.edge_incremental_adapter` 在标准 production 配置中保持关闭，由 `promote_demo.py` 为通过门禁的 310B 离线演示生成独立配置。manifest 固化 `run_id`、协议、类别顺序、有效权重、精度结果和运行时验收状态，使 CLI/Web 可以明确显示 Adapter 是否已经接入。
 
 增量工作台的默认训练值为 `imgsz=1280`、`batch=18`、`epochs=500`、`patience=50`、`optimizer=AdamW`、`lr0=0.001`、`seed=20260821`、`deterministic=true` 和 `amp=true`。数据拆分使用 `validation_fraction=0.20`、`lock_fraction=0.20` 与 `split_seed=20260821`。
 
@@ -203,7 +206,7 @@ Ascend 内容执行门控使用 `skip_specialist_on_scene_and_base_evidence_v1`�
 
 ## 环境变量
 
-当前仓库没有 `.env` 文件，默认 x86 启动不要求环境变量。环境变量用于选择配置、解释器、发布目录或构建/评分入口。
+工程以受版本控制的 YAML 和发布清单作为配置主源；默认 x86 启动直接使用这些显式配置。环境变量用于选择配置、解释器、发布目录、板端训练环境或构建/评分入口。
 
 | 变量 | 必需性 | 默认值 | 用途 |
 | --- | --- | --- | --- |
@@ -232,16 +235,21 @@ Ascend 内容执行门控使用 `skip_specialist_on_scene_and_base_evidence_v1`�
 | `AGILE_AGENT_ONNX_DIR` | 构建脚本内部 | 第一个位置参数 | 已解析的 Base/Incremental ONNX 目录 |
 | `AGILE_AGENT_OUTPUT_DIR` | 构建脚本内部 | 第二个位置参数 | OM、ATC 日志和构建清单输出目录 |
 | `AGILE_AGENT_CONTEXT_BUILD_MANIFEST` | 构建脚本内部 | 第三个位置参数 | Scene-SensorNet 父构建清单路径 |
+| `AGILE_EDGE_PRODUCTION_PYTHON` | 310B 增量演示可选 | `/usr/local/miniconda3/envs/agileagent/bin/python` | 运行评估、ATC 编排和正式推理复测的 production Python |
+| `AGILE_EDGE_TRAINING_PYTHON` | 310B 增量演示可选 | 自动选择 `~/agileagent/envs/agileagent_train` 或已验证实验环境 | 执行 `torch_npu` 真实反向传播的独立训练 Python |
+| `AGILE_EDGE_CANN_ENV` | 310B 增量演示可选 | `/usr/local/Ascend/ascend-toolkit/set_env.sh` | 一键演示和底层流水线加载的 CANN 环境脚本 |
+| `AGILE_EDGE_WHEEL_DIR` | 训练环境准备可选 | 由操作者指定 | 离线准备板端训练环境时使用的 aarch64 wheel 目录 |
 
 `build_ascend_yolo26_e2e_oms.sh` 在同一进程内设置上述四个内部变量，并将已解析的路径传给构建清单生成器。
 
 ## 按环境选择配置
 
-仓库使用独立 YAML 表示平台配置，不使用 `.env.development`、`.env.test` 或 `.env.production` 文件。
+仓库使用独立 YAML 表示 x86、Ascend、候选和 release-local 平台配置，运行环境通过配置选择变量组合这些文件。
 
 - x86/CUDA 日常运行使用 `configs/agent_pipeline.yaml`。
 - x86/CUDA 设备专用 TensorRT 档从主配置复制，填入当前 TensorRT 版本、GPU 计算能力和 engine 路径后，交给 `scripts/export_tensorrt_engines.sh <profile.yaml>`。
 - Ascend310B v2 源码校验使用 `configs/agent_pipeline_ascend310b.yaml`；物化后的服务使用 release-local `configs/agent_pipeline_ascend310b.yaml`。
 - Ascend 候选验证由 `run_ascend310b_score_gate.sh` 在 `8502` 启动独立进程；通过的发布配置由提升工具生成。
+- Ascend 断网增量演示由 `run_ascend310b_incremental_demo.sh` 生成 run-local 配置，并通过 `AGILE_AGENT_CONFIG` 交给 CLI/Web 复现本次 Adapter 结果。
 
 临时差异使用 `--set`，长期平台差异使用独立 YAML。配置更改后重启对应服务，使新的有效配置与运行时注册表同步。

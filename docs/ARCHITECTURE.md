@@ -132,7 +132,7 @@ Base/Increment train/dev 与 mixed dev
 
 `scripts/run_ascend310b_incremental_demo.sh` 将当前两轮注册表和现场 Increment 目录对齐，调用 `extras/ascend_edge_incremental/` 在 `npu:0` 训练每类 8 参数置信度 Adapter。通过 mixed lock 和 OM 门禁后，`promote_demo.py` 生成独立演示配置，`WebInferenceEngine` 在冻结 score calibration 之前使用 `edge_incremental_adapter.py` 的 8 维等价实现更新新类置信度。最后用启用 Adapter 的 DVPP + Scene + Base + Specialist + 门控/融合完整链路重测 FPS。
 
-演示配置和 production 配置分离；任一门禁失败时将演示清单撤销为不可加载，不改写当前满分 release。
+演示配置和 production 配置分离。通过精度、OM 数值一致性和完整链路 FPS 门禁的 Adapter 登记为可加载的隔离候选；其余运行保留完整报告并继续使用当前满分 release。
 
 ### Ascend310B1 v2 发布
 
@@ -163,6 +163,8 @@ Base/Increment train/dev 与 mixed dev
 | `IncrementalLifecycle` | `fair_agent/modules/incremental_lifecycle.py` | 串联 dev 校准、候选登记、lock 复核、shadow 加载和 production 切换 |
 | `OnsiteIncrementalWorkflow` | `fair_agent/modules/onsite_incremental.py` | 现场 4+2+n 预检、动态轮次、候选 FPS/板端门禁、原子晋级和回滚 |
 | `EdgeIncrementalAdapter` | `fair_agent/modules/edge_incremental_adapter.py` | 加载已验收的板端 8 维 Adapter，在冻结校准前执行 Torch/OM 等价置信度更新 |
+| `BatchResultStore` | `fair_agent/web/app.py` | 管理批量识别结果的 TTL、容量、预览和 ZIP 下载 |
+| `CliDetectionRunner` | `fair_agent/modules/cli_detection.py` | 复用正式服务或本地引擎，执行单图/批量识别与结果落盘 |
 | `load_incremental_round_registry()` | `fair_agent/modules/incremental_round_registry.py` | 校验两轮类别注入、数据范围、冻结条件和父子代际契约 |
 
 ## 配置与状态边界
@@ -177,6 +179,7 @@ Base/Increment train/dev 与 mixed dev
 | `splits/strict_4plus2/` | Base、Increment、mixed 及逐轮 train/dev/lock 固定清单 |
 | `data/incremental_batches/` | 上传包、审计结果、训练视图、任务状态和批次级类别注册表 |
 | `reports/agent_logs/` | 以 trace、batch、job 和 generation 标识串联的结构化运行事件 |
+| `runs/ascend_edge_incremental_demo/` | 310B 离线增量演示的计划、训练、验收、OM 与隔离配置 |
 
 ## 目录结构与职责
 

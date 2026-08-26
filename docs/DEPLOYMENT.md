@@ -57,9 +57,9 @@ python scripts/smoke_models.py --load-only
 models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 ```
 
-目标环境为 Ascend310B1、CANN `7.0.RC1` 和 `/usr/local/miniconda3/envs/agileagent`。release 已包含 Base、Incremental、Scene-SensorNet 三个 OM 及构建和验收证据，部署过程无需训练或重新运行 ATC。
+目标环境为 Ascend310B1、CANN `7.0.RC1` 和 `/usr/local/miniconda3/envs/agileagent`。release 已包含 Base、Incremental、Scene-SensorNet 三个 OM 及构建和验收证据，可直接物化为确定性的正式运行目录。
 
-### 零训练物化
+### 正式 release 物化
 
 ```bash
 chmod +x scripts/materialize_ascend310b_full_score_release.sh
@@ -127,6 +127,34 @@ sudo /usr/local/sbin/agileagent-ascend310b-primary-route remove 18501
 sudo /usr/local/sbin/agileagent-ascend310b-primary-route apply 18501
 ```
 
+### 断网一键增量演示
+
+板端同时提供与 production 隔离的 `4→4+1→4+2` 增量学习演示。production 环境负责 ACL 推理，独立 `agileagent_train` 环境负责 `torch_npu` 反向传播；现场只需提供当前 Increment 数据目录：
+
+```bash
+cd ~/agileagent/repo
+
+./scripts/run_ascend310b_incremental_demo.sh \
+  /path/to/datasets_r2_inc_train
+```
+
+命令自动完成输入审计、轮次对齐、两轮 Adapter 训练、dev 选择、mixed lock 验收、ONNX/OM 导出、ACL 数值验证、隔离部署和启用 Adapter 后的完整图像链路 FPS 门禁。演示前可只生成执行计划：
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh \
+  /path/to/datasets_r2_inc_train \
+  --plan-only
+```
+
+通过门禁后，运行目录中的 `demo_report.json` 给出 `demo_config`。使用该配置启动 CLI 即可展示学习后的隔离代际：
+
+```bash
+AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml \
+  ./scripts/start_agent.sh --cli
+```
+
+2026-08-26 实机整链验收结果为 Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497` 和完整图像链路中位 `38.6995 FPS`；热态完整命令耗时 `1007.07 秒`。完整环境准备、产物结构和冷/热态时间见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+
 ## 验收
 
 ```bash
@@ -157,6 +185,6 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-正式验收同时保存 release verifier、健康响应、冻结精度报告和公共入口 batch FPS 报告。候选使用 `8502` 完成隔离评分，通过后由 `tools/111_promote_ascend_full_score_release.py` 生成新 release，再经服务安装器提升。
+正式验收同时保存 release verifier、健康响应、冻结精度报告和公共入口 batch FPS 报告。候选使用 `8502` 完成隔离评分，通过后由 `tools/111_promote_ascend_full_score_release.py` 生成新 release，再经服务安装器提升。平台由架构和显式配置确定：x86 使用 PT/CUDA，ARM 使用 OM/ACL，启动过程不会跨平台静默回退。
 
 详细的板端目录、路由、构建候选、评分和监测命令见 [`ascend-310b-deployment.md`](ascend-310b-deployment.md)，当前 v2 证据索引见 [`ascend-310b-current-status.md`](ascend-310b-current-status.md)。HTTP 契约见 [`API.md`](API.md)。

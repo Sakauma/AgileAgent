@@ -30,7 +30,7 @@ python -m fair_agent.cli doctor
 
 ## 常用开发命令
 
-项目使用 setuptools 和 `pyproject.toml`，没有单独的任务运行器。以下命令覆盖日常安装、启动、静态校验和正式资产检查：
+项目使用 setuptools、`pyproject.toml` 和受版本控制的 `scripts/` 入口组织开发任务。以下命令覆盖日常安装、启动、静态校验和正式资产检查：
 
 | 命令 | 用途 |
 | --- | --- |
@@ -128,9 +128,9 @@ python -m fair_agent.cli incremental onsite \
   --plan-only
 ```
 
-正式运行时，CLI 深拷贝有效配置并将 `generation.auto_promote` 临时设为 `false`，使普通训练生命周期只运行到 `ACCEPTED`。总控随后执行候选 FPS 或 Ascend 外部门禁，最后调用代际原子晋级并冻结 accepted lineage。x86 若发现当前工程的正式服务正在运行，会通过 loopback 控制接口让 `AtomicEngineProvider` 完成内存引擎热切换；无服务时登记为下次启动生效。任何候选门禁失败都不能改变 production；板端部署失败会执行 deployment spec 中不可省略的 rollback。
+正式运行时，CLI 深拷贝有效配置并将 `generation.auto_promote` 临时设为 `false`，使普通训练生命周期运行到 `ACCEPTED`。总控随后执行候选 FPS 或 Ascend 外部门禁，最后调用代际原子晋级并冻结 accepted lineage。x86 正式服务运行时通过 loopback 控制接口让 `AtomicEngineProvider` 完成内存引擎热切换；服务下次启动时也会自动读取已登记代际。未通过门禁的候选保留父代 production，板端部署链路按 deployment spec 执行已登记回滚。
 
-x86 默认允许每图最多 16 个历史/新类专家，当前 4+2 仍只加载一个专家，因此冻结六类输出不变。现场预检会计算晋级后的实际专家数量，超过预算时拒绝开始。数据格式、跨设备变量和状态文件见 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md)。
+x86 默认允许每图最多 16 个历史/新类专家，当前 4+2 加载一个二类专家。现场预检会计算晋级后的实际专家数量，并以专家预算作为启动门禁。数据格式、跨设备变量和状态文件见 [`onsite-4plus2plusn.md`](onsite-4plus2plusn.md)。
 
 ### 4. Scene-SensorNet 与系统校准
 
@@ -189,6 +189,25 @@ Scene-SensorNet 是独立功能模型，配置位于 `configs/scene_sensor_model
 
 内容执行门控读取 Scene 概率和 Base 检测：当 `air >= 0.5` 且 Base 检出 `small_aircraft` 时跳过增量专家。类别 owner 仍由代际注册表固定，阈值保存在 Host 配置中。
 
+### 板端离线增量演示链路
+
+`scripts/run_ascend310b_incremental_demo.sh` 是当前 `4→4+2` 的现场主入口，核心实现位于 `extras/ascend_edge_incremental/`：
+
+| 模块 | 开发职责 |
+| --- | --- |
+| `demo_contract.py` | 将现场 Increment 目录与固定两轮注册表对齐，生成 run-local split 与零旧样本审计 |
+| `workflow.py` | 编排 NPU backward probe、冻结预测、两轮搜索、校准、lock、ONNX、ATC 与 ACL |
+| `promote_demo.py` | 校验精度、数值和投影性能门禁，物化独立 Adapter manifest 与演示配置 |
+| `edge_incremental_adapter.py` | 在正式 score calibration 前执行 8 维置信度更新，并向结果写入活动状态 |
+| `benchmark_demo_runtime.py` | 复用 `AtomicEngineProvider` 三实例池，测量 Adapter 生效后的完整图像链路 FPS |
+
+```bash
+./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train --plan-only
+./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
+```
+
+每次运行写入 `runs/ascend_edge_incremental_demo/<run_id>/`，production 配置与模型资产保持独立。修改该链路时同时运行 `tests/test_edge_incremental_demo.py`、`tests/test_ascend_edge_incremental.py`、Bash 语法检查和板端完整门禁。
+
 ## 配置与正式资产同步
 
 配置变更按责任同步：
@@ -210,7 +229,7 @@ git ls-files --error-unmatch path/to/artifact
 
 ## 代码风格
 
-仓库未配置 Black、Ruff、isort、mypy 或 `.editorconfig`；现有代码约定如下：
+仓库代码风格由现有模块、测试和提交检查共同约束：
 
 - Python 使用四空格缩进、类型注解和 `pathlib.Path`，导入按标准库、第三方库和项目模块分组。
 - 模块、函数、变量和 YAML 键使用 `snake_case`；类使用 `PascalCase`；常量使用 `UPPER_SNAKE_CASE`。
@@ -222,7 +241,7 @@ git ls-files --error-unmatch path/to/artifact
 
 ## 分支与提交约定
 
-默认分支为 `main`。仓库没有强制分支命名规则；需要通过 PR 协作时使用能表达范围的短名称。提交历史采用简短英文主题，祈使句和 `fix:` 等常规前缀均可，仓库未配置自动提交格式校验。
+默认分支为 `main`。通过 PR 协作时使用能表达范围的短分支名称；提交历史采用简短英文主题和祈使句，必要时使用 `fix:` 等常规前缀。
 
 每个提交围绕一个可独立审阅的目标组织。涉及模型或发布包的提交在正文记录平台、输入资产、配置、验证命令和结果；源码提交不包含数据集、凭据、板端环境文件或本地运行目录。
 
