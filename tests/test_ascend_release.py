@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from fair_agent.core.hashes import sha256_file
 from fair_agent.modules.ascend_release import (
@@ -213,12 +214,38 @@ def test_only_current_yolo26_e2e_layout_is_accepted(tmp_path: Path) -> None:
     assert "output_contract_mismatch:base" in result["errors"]
 
 
+@pytest.mark.parametrize(
+    ("method_schema_version", "performance_schema_version"),
+    [(1, 6), (2, 8)],
+)
 def test_formal_release_uses_competition_gates_and_validity_prerequisites(
     tmp_path: Path,
+    method_schema_version: int,
+    performance_schema_version: int,
 ) -> None:
     options = _candidate(tmp_path)
     manifest_digest = options["build_manifest_sha256"]
-    method = Path("configs/ascend310b/full_score_method.yaml").resolve()
+    current_method = Path("configs/ascend310b/full_score_method.yaml").resolve()
+    method = current_method
+    if method_schema_version == 1:
+        legacy_method = yaml.safe_load(
+            current_method.read_text(encoding="utf-8")
+        )
+        legacy_method["schema_version"] = 1
+        performance_gate = legacy_method["competition"]["performance_gate"]
+        performance_gate.clear()
+        performance_gate.update(
+            {
+                "batch_image_count": 20,
+                "batch_rounds": 3,
+                "median_fps_min": 30.0,
+            }
+        )
+        method = tmp_path / "legacy-full-score-method.yaml"
+        method.write_text(
+            yaml.safe_dump(legacy_method, sort_keys=False),
+            encoding="utf-8",
+        )
     accuracy = tmp_path / "full-score-accuracy.json"
     _write_json(
         accuracy,
@@ -239,32 +266,76 @@ def test_formal_release_uses_competition_gates_and_validity_prerequisites(
         },
     )
     performance = tmp_path / "full-score-performance.json"
-    _write_json(
-        performance,
-        {
-            "schema_version": 6,
-            "protocol": {
-                "batch_probe_size": 20,
-                "batch_rounds": 3,
-                "target_batch_fps": 30.0,
-            },
-            "competition": {
-                "batch_image_count": 20,
-                "batch_fps": 39.3,
-                "batch_fps_passed": True,
-                "batch_rounds": [
-                    {"round": 1, "fps": 39.2},
-                    {"round": 2, "fps": 39.3},
-                    {"round": 3, "fps": 39.4},
-                ],
-            },
-            "gates": {
-                "sample_count": True,
-                "request_failures": True,
-                "batch_fps": True,
-            },
+    performance_payload = {
+        "schema_version": performance_schema_version,
+        "protocol": {
+            "batch_probe_size": 20,
+            "batch_rounds": 3,
+            "target_batch_fps": 30.0,
         },
-    )
+        "competition": {
+            "batch_image_count": 20,
+            "batch_fps": 39.3,
+            "batch_fps_passed": True,
+            "batch_rounds": [
+                {"round": 1, "fps": 39.2},
+                {"round": 2, "fps": 39.3},
+                {"round": 3, "fps": 39.4},
+            ],
+        },
+        "gates": {
+            "sample_count": True,
+            "request_failures": True,
+            "batch_fps": True,
+        },
+    }
+    if performance_schema_version == 8:
+        elapsed_ms = [510.0, 500.0, 490.0]
+        performance_payload["protocol"].update(
+            {
+                "fps_calculation": (
+                    "total_frames_divided_by_total_elapsed_seconds"
+                ),
+                "formal_result_format": (
+                    "class_id x_center y_center width height confidence"
+                ),
+                "timed_components": [
+                    "image_decode",
+                    "scene_model",
+                    "decision_model",
+                    "base_detector",
+                    "incremental_detector",
+                    "postprocess",
+                    "formal_result_write",
+                ],
+            }
+        )
+        performance_payload["competition"].update(
+            {
+                "batch_timing_source": "client_full_pipeline_wall_ms",
+                "batch_fps_calculation": (
+                    "total_frames_divided_by_total_elapsed_seconds"
+                ),
+                "batch_total_frames": 60,
+                "batch_total_elapsed_ms": sum(elapsed_ms),
+                "batch_fps": 40.0,
+                "includes_result_persistence": True,
+                "formal_results_valid": True,
+                "batch_rounds": [
+                    {
+                        "round": index + 1,
+                        "image_count": 20,
+                        "full_pipeline_wall_ms": duration,
+                        "result_file_count": 20,
+                        "formal_results_valid": True,
+                        "fps": 20 * 1000.0 / duration,
+                    }
+                    for index, duration in enumerate(elapsed_ms)
+                ],
+            }
+        )
+        performance_payload["gates"]["formal_result_write"] = True
+    _write_json(performance, performance_payload)
     validation = tmp_path / "full-score-validation.json"
     _write_json(
         validation,

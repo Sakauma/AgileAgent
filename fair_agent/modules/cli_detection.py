@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw
 
 from fair_agent.core.audit import make_run_dir
 from fair_agent.core.config import resolve_path
+from fair_agent.modules.formal_results import formal_prediction_lines
 from fair_agent.ui.terminal import panel, table
 
 
@@ -394,20 +395,7 @@ def _annotated_image(
 
 
 def _prediction_lines(result: Mapping[str, Any]) -> list[str]:
-    width = max(1.0, float(result.get("image_width") or 1))
-    height = max(1.0, float(result.get("image_height") or 1))
-    lines = []
-    for item in result.get("detections", []):
-        x1, y1, x2, y2 = [float(value) for value in item["xyxy"]]
-        center_x = ((x1 + x2) / 2.0) / width
-        center_y = ((y1 + y2) / 2.0) / height
-        box_width = (x2 - x1) / width
-        box_height = (y2 - y1) / height
-        lines.append(
-            f"{int(item['class_id'])} {center_x:.6f} {center_y:.6f} "
-            f"{box_width:.6f} {box_height:.6f} {float(item.get('confidence') or 0):.6f}"
-        )
-    return lines
+    return formal_prediction_lines(result)
 
 
 def _owner_for(result: Mapping[str, Any], class_id: int) -> str:
@@ -814,7 +802,24 @@ def render_detection_summary(
             ],
         ),
     ]
-    if performance.get("end_to_end_inference_ms") is not None:
+    if performance.get("full_pipeline_wall_ms") is not None:
+        full_pipeline_fps = performance.get("full_pipeline_fps")
+        sections.append(
+            table(
+                ["全流程总耗时", "全流程 FPS"],
+                [
+                    [
+                        f"{float(performance.get('full_pipeline_wall_ms') or 0):.1f} ms",
+                        (
+                            f"{float(full_pipeline_fps):.2f} FPS"
+                            if full_pipeline_fps is not None
+                            else "—"
+                        ),
+                    ]
+                ],
+            )
+        )
+    elif performance.get("end_to_end_inference_ms") is not None:
         end_to_end_fps = performance.get("end_to_end_inference_fps")
         sections.append(
             table(

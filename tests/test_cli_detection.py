@@ -267,6 +267,9 @@ def test_detect_command_reuses_local_service_and_saves_results(
     assert payload["performance"]["end_to_end_inference_ms"] == 13.0
     assert payload["performance"]["end_to_end_inference_fps"] == 76.923
     assert payload["performance"]["cli_total_wall_ms"] > 0
+    assert payload["performance"]["full_pipeline_wall_ms"] > 0
+    assert payload["performance"]["full_pipeline_fps"] > 0
+    assert payload["performance"]["includes_result_persistence"] is True
     assert (output / "results.json").is_file()
     assert (output / "annotated/001_sample.jpg").is_file()
 
@@ -313,8 +316,8 @@ def test_batch_detect_command_prints_progress_without_filenames_and_summary_only
     captured = capsys.readouterr()
     assert "批量识别完成" in captured.out
     assert "统计摘要" in captured.out
-    assert "端到端推理时间" in captured.out
-    assert "端到端推理 FPS" in captured.out
+    assert "全流程总耗时" in captured.out
+    assert "全流程 FPS" in captured.out
     assert "识别墙钟" not in captured.out
     assert "结果收尾" not in captured.out
     assert "服务处理" not in captured.out
@@ -325,12 +328,18 @@ def test_batch_detect_command_prints_progress_without_filenames_and_summary_only
     saved = json.loads((output / "results.json").read_text(encoding="utf-8"))
     assert saved["performance"]["strategy"] == "chunked_batch_api"
     assert saved["performance"]["measurement_scope"] == (
-        "competition_end_to_end_inference"
+        "official_full_pipeline_with_result_write"
     )
-    assert saved["performance"]["timing_source"] == "api_engine_total_ms"
+    assert saved["performance"]["inference_timing_source"] == "api_engine_total_ms"
     assert saved["performance"]["end_to_end_inference_ms"] == 26.0
     assert saved["performance"]["end_to_end_inference_fps"] == 76.923
     assert saved["performance"]["cli_total_wall_ms"] > 0
+    assert saved["performance"]["full_pipeline_wall_ms"] > 0
+    assert saved["performance"]["full_pipeline_fps"] > 0
+    assert saved["performance"]["fps_calculation"] == (
+        "total_frames_divided_by_total_elapsed_seconds"
+    )
+    assert saved["performance"]["includes_result_persistence"] is True
     assert saved["performance"]["batch_size"] == 2
     assert saved["performance"]["request_count"] == 1
     assert [item["filename"] for item in saved["results"]] == [

@@ -504,6 +504,7 @@ def test_non_competition_diagnostics_do_not_fail_quantized_candidate() -> None:
     competition, diagnostics = _performance_assessment(
         {
             "batch_fps": 47.9,
+            "formal_results_valid": True,
             "median_round_mean_server_ms": 46.9,
             "all_p95_server_ms": 60.0,
             "concurrent_success_count": 8,
@@ -511,7 +512,7 @@ def test_non_competition_diagnostics_do_not_fail_quantized_candidate() -> None:
         config["performance"],
         8,
     )
-    assert competition == {"batch_fps": True}
+    assert competition == {"batch_fps": True, "formal_result_write": True}
     assert diagnostics == {"mean_api_ms": False, "p95_api_ms": False, "concurrency": True}
 
 

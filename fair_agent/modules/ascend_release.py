@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Mapping
@@ -26,6 +27,19 @@ FULL_SCORE_ACCURACY_GATES = {
 FULL_SCORE_BATCH_IMAGE_COUNT = 20
 FULL_SCORE_BATCH_ROUNDS = 3
 FULL_SCORE_BATCH_FPS_MIN = 30.0
+FULL_SCORE_FPS_CALCULATION = "total_frames_divided_by_total_elapsed_seconds"
+FULL_SCORE_TIMED_COMPONENTS = (
+    "image_decode",
+    "scene_model",
+    "decision_model",
+    "base_detector",
+    "incremental_detector",
+    "postprocess",
+    "formal_result_write",
+)
+LEGACY_FULL_SCORE_PERFORMANCE_SCHEMAS = {5, 6, 7}
+
+
 def _load_json(path: Path, errors: List[str], label: str) -> Dict[str, Any]:
     if not path.is_file():
         errors.append(f"missing_{label}:{path}")
@@ -64,18 +78,22 @@ def _verify_file_entry(
 def _verify_full_score_method_entry(
     entry: Any,
     errors: List[str],
-) -> None:
+) -> int | None:
     path = _verify_file_entry(entry, errors, "full_score_method")
     if path is None or not path.is_file():
-        return
+        return None
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         errors.append(f"invalid_full_score_method:{path}:{exc}")
-        return
+        return None
     if not isinstance(payload, Mapping) or payload.get("kind") != "ascend310b_full_score_method":
         errors.append("full_score_method_kind_invalid")
-        return
+        return None
+    schema_version = payload.get("schema_version")
+    if schema_version not in {1, 2}:
+        errors.append("full_score_method_schema_invalid")
+        return None
     accuracy = (payload.get("competition") or {}).get("accuracy_gates") or {}
     performance = (payload.get("competition") or {}).get("performance_gate") or {}
     expected_accuracy = {
@@ -93,14 +111,28 @@ def _verify_full_score_method_entry(
             == FULL_SCORE_BATCH_IMAGE_COUNT
             and int(performance.get("batch_rounds", 0))
             == FULL_SCORE_BATCH_ROUNDS
-            and float(performance.get("median_fps_min", -1.0))
-            == FULL_SCORE_BATCH_FPS_MIN
         )
+        if schema_version == 1:
+            performance_matches = performance_matches and (
+                float(performance.get("median_fps_min", -1.0))
+                == FULL_SCORE_BATCH_FPS_MIN
+            )
+        else:
+            performance_matches = performance_matches and (
+                float(performance.get("aggregate_fps_min", -1.0))
+                == FULL_SCORE_BATCH_FPS_MIN
+                and performance.get("calculation")
+                == FULL_SCORE_FPS_CALCULATION
+                and performance.get("includes_result_persistence") is True
+                and tuple(performance.get("required_components") or ())
+                == FULL_SCORE_TIMED_COMPONENTS
+            )
     except (TypeError, ValueError):
         accuracy_matches = False
         performance_matches = False
     if not accuracy_matches or not performance_matches:
         errors.append("full_score_method_gate_contract_invalid")
+    return int(schema_version)
 
 
 def _verify_full_score_accuracy_report(
@@ -130,10 +162,18 @@ def _verify_full_score_accuracy_report(
 def _verify_full_score_performance_report(
     report: Mapping[str, Any],
     errors: List[str],
+    *,
+    method_schema_version: int | None = None,
 ) -> None:
     schema_version = report.get("schema_version")
-    if schema_version not in {5, 6, 7}:
+    allowed_schemas = LEGACY_FULL_SCORE_PERFORMANCE_SCHEMAS | {8}
+    if schema_version not in allowed_schemas:
         errors.append("full_score_performance_schema_invalid")
+    if (
+        method_schema_version == 1
+        and schema_version not in LEGACY_FULL_SCORE_PERFORMANCE_SCHEMAS
+    ) or (method_schema_version == 2 and schema_version != 8):
+        errors.append("full_score_method_performance_schema_mismatch")
     protocol = report.get("protocol") or {}
     competition = report.get("competition") or {}
     rounds = competition.get("batch_rounds")
@@ -157,6 +197,66 @@ def _verify_full_score_performance_report(
         "api_timings.batch_engine_ms"
     ):
         errors.append("full_score_performance_timing_source_invalid")
+    if schema_version == 8:
+        expected_frames = FULL_SCORE_BATCH_IMAGE_COUNT * FULL_SCORE_BATCH_ROUNDS
+        try:
+            total_frames = int(competition.get("batch_total_frames", 0))
+            total_elapsed_ms = float(
+                competition.get("batch_total_elapsed_ms", 0.0)
+            )
+            fps = float(competition.get("batch_fps", -1.0))
+            round_frames = sum(
+                int(row.get("image_count", 0))
+                for row in rounds
+                if isinstance(row, Mapping)
+            )
+            round_elapsed_ms = sum(
+                float(row.get("full_pipeline_wall_ms", 0.0))
+                for row in rounds
+                if isinstance(row, Mapping)
+            )
+            current_contract_matches = (
+                protocol.get("fps_calculation") == FULL_SCORE_FPS_CALCULATION
+                and tuple(protocol.get("timed_components") or ())
+                == FULL_SCORE_TIMED_COMPONENTS
+                and protocol.get("formal_result_format")
+                == "class_id x_center y_center width height confidence"
+                and competition.get("batch_timing_source")
+                == "client_full_pipeline_wall_ms"
+                and competition.get("batch_fps_calculation")
+                == FULL_SCORE_FPS_CALCULATION
+                and competition.get("includes_result_persistence") is True
+                and competition.get("formal_results_valid") is True
+                and total_frames == expected_frames
+                and round_frames == expected_frames
+                and total_elapsed_ms > 0.0
+                and math.isclose(
+                    round_elapsed_ms,
+                    total_elapsed_ms,
+                    rel_tol=1e-9,
+                    abs_tol=1e-6,
+                )
+                and math.isclose(
+                    fps,
+                    total_frames * 1000.0 / total_elapsed_ms,
+                    rel_tol=1e-9,
+                    abs_tol=1e-9,
+                )
+                and all(
+                    isinstance(row, Mapping)
+                    and int(row.get("image_count", 0))
+                    == FULL_SCORE_BATCH_IMAGE_COUNT
+                    and float(row.get("full_pipeline_wall_ms", 0.0)) > 0.0
+                    and int(row.get("result_file_count", 0))
+                    == FULL_SCORE_BATCH_IMAGE_COUNT
+                    and row.get("formal_results_valid") is True
+                    for row in rounds
+                )
+            )
+        except (TypeError, ValueError, ZeroDivisionError):
+            current_contract_matches = False
+        if not current_contract_matches:
+            errors.append("full_score_performance_full_pipeline_contract_invalid")
     try:
         if float(competition.get("batch_fps", -1.0)) < FULL_SCORE_BATCH_FPS_MIN:
             errors.append("full_score_performance_gate_failed")
@@ -359,7 +459,7 @@ def verify_ascend_artifacts(
                 else REQUIRED_VALIDATION_REPORTS
             )
             if full_score_release:
-                _verify_full_score_method_entry(
+                method_schema_version = _verify_full_score_method_entry(
                     validation_summary.get("method_config"), errors
                 )
                 validity = validation_summary.get("validity")
@@ -393,7 +493,11 @@ def verify_ascend_artifacts(
                     elif full_score_release and name == "accuracy":
                         _verify_full_score_accuracy_report(report, errors)
                     elif full_score_release and name == "performance":
-                        _verify_full_score_performance_report(report, errors)
+                        _verify_full_score_performance_report(
+                            report,
+                            errors,
+                            method_schema_version=method_schema_version,
+                        )
             if validation_summary.get("passed") is not True:
                 errors.append("validation_summary_not_passed")
 

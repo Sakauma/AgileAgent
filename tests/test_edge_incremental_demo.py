@@ -308,3 +308,7 @@ def test_runtime_benchmark_reuses_the_formal_low_latency_pool() -> None:
     assert "AtomicEngineProvider(config)" in source
     assert "predict_encoded_low_latency_batch" in source
     assert 'parser.add_argument("--confidence", type=float, default=0.5)' in source
+    assert '"aggregate_fps": aggregate_fps' in source
+    assert '"includes_result_persistence": True' in source
+    assert "write_formal_prediction_files" in source
+    assert "total_frames * 1000.0 / total_elapsed_ms" in source

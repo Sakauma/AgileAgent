@@ -244,7 +244,7 @@ def run_demo(args: argparse.Namespace) -> int:
         manifest_payload["runtime_acceptance"] = {
             "passed": True,
             "report": str(runtime_report_path),
-            "median_fps": runtime_report["median_fps"],
+            "aggregate_fps": runtime_report["aggregate_fps"],
         }
         _write_json(manifest, manifest_payload)
         evaluation = _read_json(
@@ -273,7 +273,7 @@ def run_demo(args: argparse.Namespace) -> int:
             ),
             "adapter_manifest": str(manifest),
             "metrics": evaluation["edge_adapter"],
-            "runtime_median_fps": runtime_report["median_fps"],
+            "runtime_full_pipeline_fps": runtime_report["aggregate_fps"],
             "training_wall_seconds": training_seconds,
             "total_wall_seconds": finished - started,
             "passed": True,

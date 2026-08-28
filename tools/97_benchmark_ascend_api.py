@@ -21,6 +21,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fair_agent.core.hashes import business_payload_sha256  # noqa: E402
+from fair_agent.modules.formal_results import (  # noqa: E402
+    validate_formal_prediction_files,
+    write_formal_prediction_files,
+)
 
 
 ROUTING_TIMING_KEYS = (
@@ -89,6 +93,21 @@ def distribution(values: list[float]) -> Dict[str, float | int]:
         "max_ms": max(values),
         "fps_from_mean": 1000.0 / mean_ms if mean_ms > 0.0 else 0.0,
     }
+
+
+def aggregate_fps(
+    batch_rounds: list[Dict[str, Any]],
+) -> tuple[int, float, float]:
+    total_frames = sum(int(row["image_count"]) for row in batch_rounds)
+    total_elapsed_ms = sum(
+        float(row["full_pipeline_wall_ms"]) for row in batch_rounds
+    )
+    fps = (
+        total_frames * 1000.0 / total_elapsed_ms
+        if total_elapsed_ms > 0.0
+        else 0.0
+    )
+    return total_frames, total_elapsed_ms, fps
 
 
 def command_snapshot(command: list[str]) -> Dict[str, Any]:
@@ -309,6 +328,11 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8502")
     parser.add_argument("--image-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--result-output-root",
+        type=Path,
+        help="计时写出的正式六列TXT目录；默认位于性能报告旁。",
+    )
     parser.add_argument("--confidence", type=float, default=0.5)
     parser.add_argument("--warmup-requests", type=int, default=30)
     parser.add_argument("--rounds", type=int, default=10)
@@ -329,6 +353,16 @@ def main() -> int:
 
     if args.output.exists():
         raise FileExistsError(f"性能报告已存在，拒绝覆盖：{args.output}")
+    result_output_root = (
+        args.result_output_root
+        if args.result_output_root is not None
+        else args.output.parent / f"{args.output.stem}-formal-results"
+    ).expanduser().resolve()
+    if result_output_root.exists():
+        raise FileExistsError(
+            f"正式结果计时目录已存在，拒绝覆盖：{result_output_root}"
+        )
+    result_output_root.mkdir(parents=True, exist_ok=False)
     if args.warmup_requests < 0 or args.rounds < 0:
         raise ValueError("warmup_requests和rounds必须为非负数。")
     if args.skip_single_requests:
@@ -382,6 +416,7 @@ def main() -> int:
         )
         batch_rounds = []
         for round_index in range(args.batch_rounds):
+            full_pipeline_started = time.perf_counter_ns()
             payload, wall_ms = client.batch(batch_body, batch_boundary)
             system_total_ms = float(payload["system_total_ms"])
             timings = dict(payload.get("timings") or {})
@@ -390,14 +425,39 @@ def main() -> int:
                 raise RuntimeError(
                     "batch响应system_total_ms和timings.batch_engine_ms必须为正数。"
                 )
+            results = payload.get("results")
+            if not isinstance(results, list):
+                raise RuntimeError("batch响应缺少逐图results，无法写出正式结果。")
+            write_started = time.perf_counter_ns()
+            result_dir = result_output_root / f"round-{round_index + 1:02d}"
+            result_paths = write_formal_prediction_files(
+                result_dir,
+                results,
+                [path.name for path in batch_paths],
+            )
+            result_write_ms = (
+                time.perf_counter_ns() - write_started
+            ) / 1_000_000.0
+            full_pipeline_ms = (
+                time.perf_counter_ns() - full_pipeline_started
+            ) / 1_000_000.0
+            formal_results_valid = validate_formal_prediction_files(
+                result_paths,
+                len(batch_paths),
+            )
             batch_rounds.append(
                 {
                     "round": round_index + 1,
                     "image_count": len(batch_paths),
                     "system_total_ms": system_total_ms,
                     "engine_total_ms": engine_total_ms,
-                    "wall_ms": wall_ms,
-                    "fps": len(batch_paths) * 1000.0 / engine_total_ms,
+                    "transport_wall_ms": wall_ms,
+                    "result_write_ms": result_write_ms,
+                    "full_pipeline_wall_ms": full_pipeline_ms,
+                    "fps": len(batch_paths) * 1000.0 / full_pipeline_ms,
+                    "result_output_dir": str(result_dir),
+                    "result_file_count": len(result_paths),
+                    "formal_results_valid": formal_results_valid,
                     "timings": timings,
                 }
             )
@@ -405,8 +465,14 @@ def main() -> int:
         client.close()
 
     median_batch = sorted(
-        batch_rounds, key=lambda row: float(row["engine_total_ms"])
+        batch_rounds, key=lambda row: float(row["full_pipeline_wall_ms"])
     )[len(batch_rounds) // 2]
+    total_frames, total_elapsed_ms, aggregate_batch_fps = aggregate_fps(
+        batch_rounds
+    )
+    formal_results_valid = all(
+        row.get("formal_results_valid") is True for row in batch_rounds
+    )
 
     distributions = {
         "server": distribution([float(row["server_ms"]) for row in rows]),
@@ -429,10 +495,11 @@ def main() -> int:
     gates = {
         "sample_count": len(rows) == args.rounds * args.expected_images,
         "request_failures": True,
-        "batch_fps": float(median_batch["fps"]) >= args.target_batch_fps,
+        "formal_result_write": formal_results_valid,
+        "batch_fps": aggregate_batch_fps >= args.target_batch_fps,
     }
     report = {
-        "schema_version": 7,
+        "schema_version": 8,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "protocol": {
             "transport": "loopback_http_multipart_png_keep_alive",
@@ -448,6 +515,24 @@ def main() -> int:
             "batch_probe_size": len(batch_paths),
             "batch_rounds": args.batch_rounds,
             "target_batch_fps": args.target_batch_fps,
+            "fps_calculation": "total_frames_divided_by_total_elapsed_seconds",
+            "timed_components": [
+                "image_decode",
+                "scene_model",
+                "decision_model",
+                "base_detector",
+                "incremental_detector",
+                "postprocess",
+                "formal_result_write",
+            ],
+            "additional_included_overhead": [
+                "loopback_http_upload_parse",
+                "json_response_serialization_and_parse",
+            ],
+            "formal_result_format": (
+                "class_id x_center y_center width height confidence"
+            ),
+            "formal_result_output_root": str(result_output_root),
             "png_contracts": {
                 "width": 640,
                 "height": 512,
@@ -459,16 +544,31 @@ def main() -> int:
         "distributions": distributions,
         "rounds": rounds,
         "competition": {
-            "batch_fps": float(median_batch["fps"]),
-            "batch_timing_source": "api_timings.batch_engine_ms",
-            "batch_engine_total_ms": float(median_batch["engine_total_ms"]),
-            "batch_system_total_ms": float(median_batch["system_total_ms"]),
-            "batch_wall_ms": float(median_batch["wall_ms"]),
+            "batch_fps": aggregate_batch_fps,
+            "batch_timing_source": "client_full_pipeline_wall_ms",
+            "batch_fps_calculation": (
+                "total_frames_divided_by_total_elapsed_seconds"
+            ),
+            "batch_total_frames": total_frames,
+            "batch_total_elapsed_ms": total_elapsed_ms,
+            "includes_result_persistence": True,
+            "formal_results_valid": formal_results_valid,
+            "median_round_fps_diagnostic": float(median_batch["fps"]),
+            "median_round_engine_ms_diagnostic": float(
+                median_batch["engine_total_ms"]
+            ),
+            "median_round_system_ms_diagnostic": float(
+                median_batch["system_total_ms"]
+            ),
+            "median_round_transport_wall_ms_diagnostic": float(
+                median_batch["transport_wall_ms"]
+            ),
+            "median_round_result_write_ms_diagnostic": float(
+                median_batch["result_write_ms"]
+            ),
             "batch_image_count": len(batch_paths),
             "batch_rounds": batch_rounds,
-            "batch_fps_passed": (
-                float(median_batch["fps"]) >= args.target_batch_fps
-            ),
+            "batch_fps_passed": aggregate_batch_fps >= args.target_batch_fps,
         },
         "requests": rows,
         "environment": {

@@ -24,6 +24,8 @@ from fair_agent.modules.ascend_release import (  # noqa: E402
     FULL_SCORE_BATCH_FPS_MIN,
     FULL_SCORE_BATCH_IMAGE_COUNT,
     FULL_SCORE_BATCH_ROUNDS,
+    FULL_SCORE_FPS_CALCULATION,
+    FULL_SCORE_TIMED_COMPONENTS,
     verify_ascend_artifacts,
 )
 
@@ -93,7 +95,10 @@ def artifact_by_role(manifest: Mapping[str, Any], role: str) -> tuple[str, dict[
 
 
 def validate_method(method: Mapping[str, Any]) -> None:
-    if method.get("kind") != "ascend310b_full_score_method":
+    if (
+        method.get("schema_version") != 2
+        or method.get("kind") != "ascend310b_full_score_method"
+    ):
         raise ValueError("满分方法配置kind非法")
     target = method.get("target") or {}
     if target.get("formal_port") != 8501 or target.get("candidate_port") != 8502:
@@ -110,8 +115,13 @@ def validate_method(method: Mapping[str, Any]) -> None:
     if (
         int(performance.get("batch_image_count", 0)) != FULL_SCORE_BATCH_IMAGE_COUNT
         or int(performance.get("batch_rounds", 0)) != FULL_SCORE_BATCH_ROUNDS
-        or float(performance.get("median_fps_min", -1.0))
+        or float(performance.get("aggregate_fps_min", -1.0))
         != FULL_SCORE_BATCH_FPS_MIN
+        or performance.get("calculation")
+        != FULL_SCORE_FPS_CALCULATION
+        or performance.get("includes_result_persistence") is not True
+        or tuple(performance.get("required_components") or ())
+        != FULL_SCORE_TIMED_COMPONENTS
     ):
         raise ValueError("满分方法性能门禁与正式发布器不一致")
 
@@ -138,8 +148,8 @@ def validate_score(report: Mapping[str, Any]) -> dict[str, float]:
 
 def validate_benchmark(report: Mapping[str, Any], label: str) -> float:
     schema_version = report.get("schema_version")
-    if schema_version not in {5, 6, 7}:
-        raise ValueError(f"{label}必须是benchmark schema v5/v6/v7")
+    if schema_version != 8:
+        raise ValueError(f"{label}必须是全流程benchmark schema v8")
     protocol = report.get("protocol") or {}
     competition = report.get("competition") or {}
     rounds = competition.get("batch_rounds")
@@ -154,15 +164,59 @@ def validate_benchmark(report: Mapping[str, Any], label: str) -> float:
         or len(rounds) != FULL_SCORE_BATCH_ROUNDS
     ):
         raise ValueError(f"{label}的20图三轮协议非法")
-    if schema_version == 7 and competition.get("batch_timing_source") != (
-        "api_timings.batch_engine_ms"
+    if (
+        protocol.get("fps_calculation") != FULL_SCORE_FPS_CALCULATION
+        or tuple(protocol.get("timed_components") or ())
+        != FULL_SCORE_TIMED_COMPONENTS
+        or protocol.get("formal_result_format")
+        != "class_id x_center y_center width height confidence"
+        or competition.get("batch_timing_source")
+        != "client_full_pipeline_wall_ms"
+        or competition.get("batch_fps_calculation")
+        != FULL_SCORE_FPS_CALCULATION
+        or competition.get("includes_result_persistence") is not True
+        or competition.get("formal_results_valid") is not True
     ):
-        raise ValueError(f"{label}没有使用完整图像推理耗时口径")
+        raise ValueError(f"{label}没有使用包含正式结果写出的全流程耗时口径")
+    total_frames = int(competition.get("batch_total_frames", 0))
+    total_elapsed_ms = float(competition.get("batch_total_elapsed_ms", 0.0))
+    expected_frames = FULL_SCORE_BATCH_IMAGE_COUNT * FULL_SCORE_BATCH_ROUNDS
+    if total_frames != expected_frames or total_elapsed_ms <= 0.0:
+        raise ValueError(f"{label}的总帧数/总耗时非法")
+    try:
+        round_frames = sum(int(row.get("image_count", 0)) for row in rounds)
+        round_elapsed_ms = sum(
+            float(row.get("full_pipeline_wall_ms", 0.0)) for row in rounds
+        )
+        rounds_valid = all(
+            isinstance(row, Mapping)
+            and int(row.get("image_count", 0)) == FULL_SCORE_BATCH_IMAGE_COUNT
+            and float(row.get("full_pipeline_wall_ms", 0.0)) > 0.0
+            and int(row.get("result_file_count", 0))
+            == FULL_SCORE_BATCH_IMAGE_COUNT
+            and row.get("formal_results_valid") is True
+            for row in rounds
+        )
+    except (AttributeError, TypeError, ValueError):
+        rounds_valid = False
+        round_frames = 0
+        round_elapsed_ms = 0.0
+    if (
+        not rounds_valid
+        or round_frames != total_frames
+        or abs(round_elapsed_ms - total_elapsed_ms) > 1e-6
+    ):
+        raise ValueError(f"{label}的逐轮全流程计时/正式结果证据非法")
     fps = float(competition.get("batch_fps", -1.0))
+    calculated_fps = total_frames * 1000.0 / total_elapsed_ms
+    if abs(fps - calculated_fps) > 1e-9:
+        raise ValueError(f"{label}没有按总帧数除以总耗时计算FPS")
     if fps < FULL_SCORE_BATCH_FPS_MIN or competition.get("batch_fps_passed") is not True:
         raise ValueError(f"{label}未达到30 FPS满分门禁")
     gates = report.get("gates")
-    if isinstance(gates, Mapping) and any(value is not True for value in gates.values()):
+    if not isinstance(gates, Mapping) or any(
+        value is not True for value in gates.values()
+    ):
         raise ValueError(f"{label}包含失败的请求/样本门禁")
     return fps
 

@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 kind: ascend310b_full_score_method
 
 target:
@@ -16,7 +16,17 @@ competition:
   performance_gate:
     batch_image_count: 20
     batch_rounds: 3
-    median_fps_min: 30.0
+    aggregate_fps_min: 30.0
+    calculation: total_frames_divided_by_total_elapsed_seconds
+    includes_result_persistence: true
+    required_components:
+      - image_decode
+      - scene_model
+      - decision_model
+      - base_detector
+      - incremental_detector
+      - postprocess
+      - formal_result_write
   diagnostics_only:
     - per_box_equivalence
     - business_json_equivalence
@@ -162,6 +172,8 @@ benchmark:
   batch_probe_size: 20
   batch_rounds: 3
   target_batch_fps: 30.0
+  fps_calculation: total_frames_divided_by_total_elapsed_seconds
+  includes_result_persistence: true
   encoded: true
   run_web_pytest_on_board: false
   image_contract:

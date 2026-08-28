@@ -17,6 +17,10 @@ import httpx
 
 from fair_agent.core.config import config_sha256, rel_path, resolve_path
 from fair_agent.core.hashes import business_payload_sha256, sha256_file
+from fair_agent.modules.formal_results import (
+    validate_formal_prediction_files,
+    write_formal_prediction_files,
+)
 
 
 ROUTING_TIMING_KEYS = (
@@ -155,6 +159,7 @@ def _performance_assessment(
     target_mean_ms = 1000.0 / float(performance["target_api_fps"])
     competition_gates = {
         "batch_fps": float(summary["batch_fps"]) >= float(performance["target_api_fps"]),
+        "formal_result_write": summary.get("formal_results_valid") is True,
     }
     diagnostic_checks = {
         "mean_api_ms": float(summary["median_round_mean_server_ms"]) <= target_mean_ms,
@@ -316,6 +321,11 @@ def _benchmark_running_server(
             "mean_inference_ms": statistics.fmean(inference),
         })
 
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    output = resolve_path(performance["report_root"]) / run_id
+    output.mkdir(parents=True, exist_ok=False)
+    formal_result_root = output / "formal-results"
+    formal_result_root.mkdir(parents=True, exist_ok=False)
     batch_paths = paths[: min(int(performance["batch_probe_size"]), len(paths))]
     batch_rounds = []
     with httpx.Client(base_url=base_url, timeout=timeout, trust_env=False) as client:
@@ -324,6 +334,7 @@ def _benchmark_running_server(
                 ("files", (path.name, path.read_bytes(), "application/octet-stream"))
                 for path in batch_paths
             ]
+            full_pipeline_started = time.perf_counter()
             batch_response = client.post(
                 "/api/batch", files=files, data={"confidence": str(confidence)}
             )
@@ -334,16 +345,45 @@ def _benchmark_running_server(
             engine_total_ms = float(batch_timings.get("batch_engine_ms") or 0.0)
             if engine_total_ms <= 0.0:
                 raise RuntimeError("批量API缺少有效的timings.batch_engine_ms")
+            results = batch_payload.get("results")
+            if not isinstance(results, list):
+                raise RuntimeError("批量API缺少逐图results，无法写出正式结果")
+            result_write_started = time.perf_counter()
+            result_dir = formal_result_root / f"round-{round_index + 1:02d}"
+            result_paths = write_formal_prediction_files(
+                result_dir,
+                results,
+                [path.name for path in batch_paths],
+            )
+            result_write_ms = (time.perf_counter() - result_write_started) * 1000
+            full_pipeline_ms = (time.perf_counter() - full_pipeline_started) * 1000
             batch_rounds.append({
                 "round": round_index + 1,
+                "image_count": len(batch_paths),
                 "system_total_ms": system_total_ms,
                 "engine_total_ms": engine_total_ms,
-                "fps": len(batch_paths) / (engine_total_ms / 1000.0),
+                "result_write_ms": result_write_ms,
+                "full_pipeline_wall_ms": full_pipeline_ms,
+                "fps": len(batch_paths) / (full_pipeline_ms / 1000.0),
+                "result_output_dir": str(result_dir),
+                "result_file_count": len(result_paths),
+                "formal_results_valid": validate_formal_prediction_files(
+                    result_paths,
+                    len(batch_paths),
+                ),
                 "timings": batch_timings,
             })
     median_batch = sorted(
-        batch_rounds, key=lambda row: row["engine_total_ms"]
+        batch_rounds, key=lambda row: row["full_pipeline_wall_ms"]
     )[len(batch_rounds) // 2]
+    batch_total_frames = sum(int(row["image_count"]) for row in batch_rounds)
+    batch_total_elapsed_ms = sum(
+        float(row["full_pipeline_wall_ms"]) for row in batch_rounds
+    )
+    aggregate_batch_fps = batch_total_frames * 1000.0 / batch_total_elapsed_ms
+    formal_results_valid = all(
+        row.get("formal_results_valid") is True for row in batch_rounds
+    )
 
     concurrency = int(performance["concurrent_requests"])
     concurrent_paths = [paths[index % len(paths)] for index in range(concurrency)]
@@ -383,10 +423,19 @@ def _benchmark_running_server(
             key: _distribution(values) for key, values in routing_values.items()
         },
         "batch_image_count": len(batch_paths),
-        "batch_timing_source": "api_timings.batch_engine_ms",
-        "batch_engine_total_ms": float(median_batch["engine_total_ms"]),
-        "batch_system_total_ms": float(median_batch["system_total_ms"]),
-        "batch_fps": float(median_batch["fps"]),
+        "batch_timing_source": "client_full_pipeline_wall_ms",
+        "batch_fps_calculation": "total_frames_divided_by_total_elapsed_seconds",
+        "batch_total_frames": batch_total_frames,
+        "batch_total_elapsed_ms": batch_total_elapsed_ms,
+        "batch_fps": aggregate_batch_fps,
+        "formal_results_valid": formal_results_valid,
+        "includes_result_persistence": True,
+        "median_round_fps_diagnostic": float(median_batch["fps"]),
+        "median_round_engine_ms_diagnostic": float(median_batch["engine_total_ms"]),
+        "median_round_system_ms_diagnostic": float(median_batch["system_total_ms"]),
+        "median_round_result_write_ms_diagnostic": float(
+            median_batch["result_write_ms"]
+        ),
         "batch_timings": dict(median_batch["timings"]),
         "batch_rounds": batch_rounds,
         "concurrent_request_count": concurrency,
@@ -398,12 +447,9 @@ def _benchmark_running_server(
     competition_gates, diagnostic_checks = _performance_assessment(
         summary, performance, concurrency
     )
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    output = resolve_path(performance["report_root"]) / run_id
-    output.mkdir(parents=True, exist_ok=False)
     clean_config = {key: value for key, value in config.items() if not str(key).startswith("_")}
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "base_url": base_url,
         "server_mode": server_mode,

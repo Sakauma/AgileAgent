@@ -50,6 +50,23 @@ def test_full_score_method_pins_current_independent_yolo26_contract() -> None:
     MATERIALIZE.validate_method(method)
     PROMOTE.validate_method(method)
 
+    assert method["schema_version"] == 2
+    assert method["competition"]["performance_gate"] == {
+        "batch_image_count": 20,
+        "batch_rounds": 3,
+        "aggregate_fps_min": 30.0,
+        "calculation": "total_frames_divided_by_total_elapsed_seconds",
+        "includes_result_persistence": True,
+        "required_components": [
+            "image_decode",
+            "scene_model",
+            "decision_model",
+            "base_detector",
+            "incremental_detector",
+            "postprocess",
+            "formal_result_write",
+        ],
+    }
     assert method["training"]["method"] == (
         "phase_separated_independent_yolo26s"
     )
@@ -172,29 +189,61 @@ def score_payload(base: float, new: float, krr: float) -> dict:
     }
 
 
-def benchmark_payload(round_fps: list[float], schema_version: int = 7) -> dict:
-    median = sorted(round_fps)[len(round_fps) // 2]
+def benchmark_payload(round_fps: list[float], schema_version: int = 8) -> dict:
+    round_elapsed_ms = [20 * 1000.0 / fps for fps in round_fps]
+    total_elapsed_ms = sum(round_elapsed_ms)
+    aggregate_fps = 60 * 1000.0 / total_elapsed_ms
     return {
         "schema_version": schema_version,
         "protocol": {
             "batch_probe_size": 20,
             "batch_rounds": 3,
             "target_batch_fps": 30.0,
+            "fps_calculation": "total_frames_divided_by_total_elapsed_seconds",
+            "formal_result_format": (
+                "class_id x_center y_center width height confidence"
+            ),
+            "timed_components": [
+                "image_decode",
+                "scene_model",
+                "decision_model",
+                "base_detector",
+                "incremental_detector",
+                "postprocess",
+                "formal_result_write",
+            ],
         },
         "competition": {
             "batch_image_count": 20,
-            "batch_timing_source": "api_timings.batch_engine_ms",
-            "batch_fps": median,
-            "batch_fps_passed": median >= 30.0,
+            "batch_timing_source": "client_full_pipeline_wall_ms",
+            "batch_fps_calculation": (
+                "total_frames_divided_by_total_elapsed_seconds"
+            ),
+            "batch_total_frames": 60,
+            "batch_total_elapsed_ms": total_elapsed_ms,
+            "includes_result_persistence": True,
+            "formal_results_valid": True,
+            "batch_fps": aggregate_fps,
+            "batch_fps_passed": aggregate_fps >= 30.0,
             "batch_rounds": [
-                {"round": index + 1, "fps": fps}
-                for index, fps in enumerate(round_fps)
+                {
+                    "round": index + 1,
+                    "image_count": 20,
+                    "full_pipeline_wall_ms": elapsed_ms,
+                    "result_file_count": 20,
+                    "formal_results_valid": True,
+                    "fps": fps,
+                }
+                for index, (fps, elapsed_ms) in enumerate(
+                    zip(round_fps, round_elapsed_ms)
+                )
             ],
         },
         "gates": {
             "sample_count": True,
             "request_failures": True,
-            "batch_fps": median >= 30.0,
+            "formal_result_write": True,
+            "batch_fps": aggregate_fps >= 30.0,
         },
     }
 
@@ -202,14 +251,13 @@ def benchmark_payload(round_fps: list[float], schema_version: int = 7) -> dict:
 def test_promotion_requires_all_accuracy_and_three_round_fps_gates() -> None:
     metrics = PROMOTE.validate_score(score_payload(0.81, 0.61, 1.0))
     assert metrics["base_map50"] == pytest.approx(0.81)
+    expected_fps = 60 * 1000.0 / sum(
+        20 * 1000.0 / fps for fps in [39.2, 39.4, 39.3]
+    )
     assert PROMOTE.validate_benchmark(
         benchmark_payload([39.2, 39.4, 39.3]),
         "primary",
-    ) == pytest.approx(39.3)
-    assert PROMOTE.validate_benchmark(
-        benchmark_payload([39.2, 39.4, 39.3], schema_version=5),
-        "legacy",
-    ) == pytest.approx(39.3)
+    ) == pytest.approx(expected_fps)
 
     with pytest.raises(ValueError, match="new_map50"):
         PROMOTE.validate_score(score_payload(0.81, 0.59, 1.0))
@@ -218,11 +266,15 @@ def test_promotion_requires_all_accuracy_and_three_round_fps_gates() -> None:
             benchmark_payload([29.0, 29.2, 29.1]),
             "primary",
         )
-    with pytest.raises(ValueError, match="schema v5/v6"):
+    with pytest.raises(ValueError, match="schema v8"):
         PROMOTE.validate_benchmark(
-            benchmark_payload([39.2, 39.4, 39.3], schema_version=4),
-            "obsolete",
+            benchmark_payload([39.2, 39.4, 39.3], schema_version=7),
+            "legacy-engine-only",
         )
+    invalid_calculation = benchmark_payload([39.2, 39.4, 39.3])
+    invalid_calculation["competition"]["batch_fps"] += 1.0
+    with pytest.raises(ValueError, match="总帧数除以总耗时"):
+        PROMOTE.validate_benchmark(invalid_calculation, "miscalculated")
 
 
 def test_score_gate_and_build_scripts_use_current_yolo26_workflow() -> None:

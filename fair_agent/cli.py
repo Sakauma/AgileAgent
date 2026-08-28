@@ -789,8 +789,8 @@ def cmd_detect(args: argparse.Namespace) -> int:
 
         end_to_end_inference_fps = throughput(service_processing_ms)
         performance = {
-            "measurement_scope": "competition_end_to_end_inference",
-            "timing_source": (
+            "measurement_scope": "official_full_pipeline_with_result_write",
+            "inference_timing_source": (
                 "api_engine_total_ms"
                 if transport == "local_api"
                 else "engine_total_ms"
@@ -846,9 +846,19 @@ def cmd_detect(args: argparse.Namespace) -> int:
                     if cli_total_fps is not None
                     else None
                 ),
+                "full_pipeline_wall_ms": round(cli_total_wall_ms, 3),
+                "full_pipeline_fps": (
+                    round(float(cli_total_fps), 3)
+                    if cli_total_fps is not None
+                    else None
+                ),
+                "fps_calculation": (
+                    "total_frames_divided_by_total_elapsed_seconds"
+                ),
+                "includes_result_persistence": True,
                 "target_met": bool(
-                    end_to_end_inference_fps is not None
-                    and end_to_end_inference_fps >= target_fps
+                    cli_total_fps is not None
+                    and cli_total_fps >= target_fps
                 ),
             }
         )

@@ -72,7 +72,11 @@ import yaml
 
 payload = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
 method = yaml.safe_load(open(sys.argv[2], encoding="utf-8"))
-if not isinstance(method, dict) or method.get("kind") != "ascend310b_full_score_method":
+if (
+    not isinstance(method, dict)
+    or method.get("schema_version") != 2
+    or method.get("kind") != "ascend310b_full_score_method"
+):
     raise RuntimeError("满分方法配置schema/kind非法")
 target = method["target"]
 benchmark = method["benchmark"]
@@ -81,7 +85,23 @@ image = benchmark["image_contract"]
 if (
     benchmark["batch_probe_size"] != performance["batch_image_count"]
     or benchmark["batch_rounds"] != performance["batch_rounds"]
-    or float(benchmark["target_batch_fps"]) != float(performance["median_fps_min"])
+    or float(benchmark["target_batch_fps"]) != float(performance["aggregate_fps_min"])
+    or benchmark.get("fps_calculation")
+    != "total_frames_divided_by_total_elapsed_seconds"
+    or benchmark.get("includes_result_persistence") is not True
+    or performance.get("calculation")
+    != "total_frames_divided_by_total_elapsed_seconds"
+    or performance.get("includes_result_persistence") is not True
+    or performance.get("required_components")
+    != [
+        "image_decode",
+        "scene_model",
+        "decision_model",
+        "base_detector",
+        "incremental_detector",
+        "postprocess",
+        "formal_result_write",
+    ]
 ):
     raise RuntimeError("benchmark与competition performance gate不一致")
 if target["candidate_port"] != 8502 or target["formal_port"] != 8501:

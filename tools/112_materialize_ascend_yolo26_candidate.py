@@ -55,7 +55,7 @@ def _absolute_strings(value: Any, prefix: str = "") -> list[str]:
 
 def validate_method(method: Mapping[str, Any]) -> None:
     if (
-        method.get("schema_version") != 1
+        method.get("schema_version") != 2
         or method.get("kind") != "ascend310b_full_score_method"
     ):
         raise ValueError("4+2满分方法schema/kind非法")
@@ -128,11 +128,25 @@ def validate_method(method: Mapping[str, Any]) -> None:
         != {
             "batch_image_count": 20,
             "batch_rounds": 3,
-            "median_fps_min": 30.0,
+            "aggregate_fps_min": 30.0,
+            "calculation": "total_frames_divided_by_total_elapsed_seconds",
+            "includes_result_persistence": True,
+            "required_components": [
+                "image_decode",
+                "scene_model",
+                "decision_model",
+                "base_detector",
+                "incremental_detector",
+                "postprocess",
+                "formal_result_write",
+            ],
         }
         or benchmark.get("batch_probe_size") != 20
         or benchmark.get("batch_rounds") != 3
         or float(benchmark.get("target_batch_fps", -1.0)) != 30.0
+        or benchmark.get("fps_calculation")
+        != "total_frames_divided_by_total_elapsed_seconds"
+        or benchmark.get("includes_result_persistence") is not True
     ):
         raise ValueError("4+2满分方法计分门禁非法")
 
