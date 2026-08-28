@@ -107,7 +107,9 @@ def test_full_score_method_pins_current_independent_yolo26_contract() -> None:
     )
     assert method["reference_result"]["krr"] == 1.0
     assert min(
-        method["reference_result"]["public_8501_batch_median_fps"]
+        method["reference_result"]["official_full_pipeline_public_8501"][
+            "aggregate_fps_runs"
+        ]
     ) >= 30
 
     invalid = copy.deepcopy(method)

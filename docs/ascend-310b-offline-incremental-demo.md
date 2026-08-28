@@ -81,9 +81,9 @@ Base、原有 Incremental 检测器和 Scene-SensorNet 始终冻结。`input_aud
 - New-mAP50 `>= 0.60`；
 - KRR `>= 0.95`；
 - Adapter OM 数值一致性通过；
-- 启用 Adapter 后的完整图像推理中位 FPS `>= 30`。
+- 启用 Adapter 后的全流程 aggregate FPS `>= 30`，按总帧数除以总墙钟耗时计算。
 
-性能复测包含图像解码、Scene-SensorNet、Base、Incremental 专家、Adapter、门控和融合，不包含 CLI 的标注图/JSON/CSV 保存。这与赛题“完整处理单帧多模态数据”的推理 FPS 口径一致。
+性能复测包含图像解码、Scene-SensorNet、决策、Base、Incremental 专家、Adapter、门控、融合和正式六列 TXT 写出。各轮 FPS 仅诊断，门禁统一按所有轮次总帧数除以全流程总墙钟耗时计算。
 
 演示部署会产生独立配置，与满分 production 并列保存：
 
@@ -137,8 +137,8 @@ AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml 
 | KRR | `1.000000` | `>= 0.95` |
 | Full-mAP50 | `0.726497` | 记录项 |
 | 新类误激活 | `17 / 75` | 记录项 |
-| 完整图像链路三轮 FPS | `39.05 / 38.70 / 37.92` | 中位数 `>= 30` |
-| 完整图像链路中位 FPS | `38.6995` | 通过 |
+| 旧 engine-only 图像链路三轮 FPS | `39.05 / 38.70 / 37.92` | 历史诊断 |
+| 旧 engine-only 中位 FPS | `38.6995` | 非当前官方口径，待新工具重测 |
 | production 身份保持 | `true` | 通过 |
 
 首次冷态运行会为第一组训练候选编译 NPU 图。实测冷态的两轮训练搜索阶段为 `760.61 秒`（12 分 41 秒），比热态多约 10 分钟。现场应按冷态预留 **30 分钟**；重复演示通常约 17 分钟。不要依赖缓存作为是否通过的条件，缓存只影响等待时间，不改变种子、学习率、选中强度或验收结果。

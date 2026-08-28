@@ -107,11 +107,11 @@ export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 /usr/local/miniconda3/envs/agileagent/bin/python \
   -m extras.ascend_edge_incremental.workflow plan \
   --output-root "$HOME/agileagent/edge_incremental_runs/plan-check" \
-  --baseline-fps 38.2175 \
+  --baseline-fps 31.961599 \
   --encoded
 ```
 
-`--baseline-fps` 必须填写当前未叠加 Adapter 的实测完整推理 FPS。`38.2175` 是当前 release 的 mixed 20 图中位结果；production 变化后应先重测基线，不能沿用旧数值。
+`--baseline-fps` 必须填写当前未叠加 Adapter 的实测全流程 aggregate FPS。`31.961599` 是当前 release 两次新口径复测中的保守值；计时已包含正式六列结果写出。旧 `38.2175` 是 engine-only 中位结果，不得再作为 baseline；production 变化后也应先重测。
 
 ## 3. 执行 lock 门禁流水线
 
@@ -122,7 +122,7 @@ RUN_ROOT="$HOME/agileagent/edge_incremental_runs/$(date +%Y%m%d-%H%M%S)"
 
 ./extras/ascend_edge_incremental/run_pipeline.sh \
   --output-root "$RUN_ROOT" \
-  --baseline-fps 38.2175 \
+  --baseline-fps 31.961599 \
   --encoded
 ```
 
@@ -147,7 +147,7 @@ RUN_ROOT="$HOME/agileagent/edge_incremental_runs/$(date +%Y%m%d-%H%M%S)"
 ```bash
 ./extras/ascend_edge_incremental/run_pipeline.sh \
   --output-root "$RUN_ROOT" \
-  --baseline-fps 38.2175 \
+  --baseline-fps 31.961599 \
   --encoded \
   --include-all-diagnostics
 ```
@@ -203,7 +203,7 @@ RUN_ROOT/
 | 新类 TP / FP@0.63 | `520 / 104` | `540 / 134` | `+20 / +30` |
 | 新类误激活图像 | `108/750` | `122/750` | `+14` |
 
-OM 实测 wall 中位/P95 为 `0.174773 / 0.199086 ms`，最大绝对误差 `0.0005395`。将 wall 中位串行叠加到 `38.2175 FPS` 基线，保守预计为 `37.9639 FPS`。这组底层结果用于建立 Adapter 单体性能基线；下一节记录它接入实际完整图像链路后的实测。
+OM 实测 wall 中位/P95 为 `0.174773 / 0.199086 ms`，最大绝对误差 `0.0005395`。将 wall 中位串行叠加到当前保守全流程基线 `31.961599 FPS`，预计为 `31.784053 FPS`。这只是 Adapter 单体延迟投影；最终门禁仍必须运行包含正式结果写出的实际全流程基准。
 
 ## 2026-08-25 底层实验耗时与资源
 
@@ -238,11 +238,11 @@ OM 实测 wall 中位/P95 为 `0.174773 / 0.199086 ms`，最大绝对误差 `0.0
 | ONNX 导出 | `4.82 秒` |
 | ATC 编译 OM | `87.67 秒` |
 | Adapter OM 最大绝对误差 | `5.96e-08` |
-| 完整图像链路三轮 FPS | `39.05 / 38.70 / 37.92` |
-| 完整图像链路中位 FPS | `38.6995` |
+| 旧 engine-only 图像链路三轮 FPS | `39.05 / 38.70 / 37.92` |
+| 旧 engine-only 中位 FPS | `38.6995`（非当前官方口径） |
 | 输入审计至隔离部署和 FPS 的热态总耗时 | `1007.07 秒` |
 
-训练审计为 `base_images_used_for_training=0`、`old_raw_image_count=0`；隔离候选状态为 `accepted`，production 修改标记为 `false`。演示配置保留当前满分 production 作为父代，CLI 通过 `AGILE_AGENT_CONFIG=<demo_config>` 显式选择学习后的运行身份。该设计已经完成了此前“独立 release、真实链路、mixed lock、KRR、Full-mAP50、误激活、数值对齐、整链 FPS 和父代保留”的完整闭环。
+训练审计为 `base_images_used_for_training=0`、`old_raw_image_count=0`；隔离候选状态为 `accepted`，production 修改标记为 `false`。演示配置保留当前满分 production 作为父代，CLI 通过 `AGILE_AGENT_CONFIG=<demo_config>` 显式选择学习后的运行身份。精度、隔离、OM 数值和父代保留结论已经闭环；Adapter 完整 FPS 需使用已升级的 aggregate＋正式结果写出工具重新产生证据。
 
 ## 常见问题
 

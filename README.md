@@ -46,11 +46,11 @@ Scene-SensorNet 在 mixed lock 上的 sensor / scene / joint accuracy 为 `0.988
 | Full-mAP50 | `0.722005` |
 | KRR | `1.000000` |
 | 新类误激活 | `17/75 = 0.226667` |
-| 公共 `8501` mixed 20 图中位 FPS | `38.2175` |
-| 公共 `8501` 纯增量 140 图中位 FPS | `37.3997` |
-| CLI 纯增量 140 图端到端 FPS | `33.504` |
+| 公共 `8501` 全流程 aggregate FPS（两次独立复测） | `31.9616 / 32.6565` |
+| 旧 engine-only mixed 20 图中位 FPS（仅诊断） | `38.2175` |
+| 旧 engine-only 纯增量 140 图中位 FPS（仅诊断） | `37.3997` |
 
-上表是当前真实 OM lock 与正式公共入口结果。新旧 runtime 的冻结输出完全一致，四项满分门禁均通过；误激活较上一代 `35/75` 降至 `17/75`。仓库内模型资产仍由 [`runtime-calibration-v1`](models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/README.md) 提供，本轮运行时证据见 [`reports/ascend310b/20260824-replica-pool-v1/`](reports/ascend310b/20260824-replica-pool-v1/README.md)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
+上表是当前真实 OM lock 与正式公共入口结果。正式 FPS 按两次 `30 + 3×20` 复测的“60 帧 ÷ 三轮全流程总墙钟耗时”计算，计入 PNG 解码、Scene、决策、Base/Incremental 检测、后处理和同 stem 六列结果写出；两次均通过 30 FPS 门禁。旧的 `38.x FPS` 只保留为 engine-only 历史诊断，不能再作为官方成绩。新旧 runtime 的冻结输出完全一致，误激活较上一代 `35/75` 降至 `17/75`。仓库内模型资产仍由 [`runtime-calibration-v1`](models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/README.md) 提供，历史 engine-only 证据见 [`reports/ascend310b/20260824-replica-pool-v1/`](reports/ascend310b/20260824-replica-pool-v1/README.md)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
 
 ## 安装
 
@@ -173,7 +173,7 @@ agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --target x
 
 该入口自动完成数据对齐、两轮 NPU 训练、dev/lock、ONNX/OM、隔离演示部署，并在 Adapter 接入运行时后复测完整图像链路 FPS。脚本启用强制离线配置，训练数据范围固定为 Increment train/dev，Base 图像只参与冻结后的联合评分；验收结果写入独立演示通道，当前满分 production 保持可随时启动。完整现场手册见 [`docs/ascend-310b-offline-incremental-demo.md`](docs/ascend-310b-offline-incremental-demo.md)；底层环境与实测证据见 [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md)。
 
-2026-08-26 板端整链验收已通过：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`，启用 Adapter 后完整图像链路中位 `38.6995 FPS`；热态一键全流程耗时 `16分47秒`，首次冷态建议预留 30 分钟。
+2026-08-26 板端整链验收已通过：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`；当时记录的 Adapter `38.6995 FPS` 是未包含正式结果落盘的 legacy engine-only 诊断，不能替代 2026-08-28 启用的新官方全流程口径。热态一键流程耗时 `16分47秒`，首次冷态建议预留 30 分钟。
 
 ## Ascend310B v2 部署
 

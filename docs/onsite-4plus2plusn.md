@@ -120,7 +120,7 @@ agile-agent incremental onsite \
 | Base mAP50 | `>= 0.80` |
 | 本轮 New-mAP50 | `>= 0.60` |
 | 截至本轮全部旧类 KRR | `>= 0.95` |
-| 候选完整图像推理 FPS | `>= 30` |
+| 候选全流程 aggregate FPS | `>= 30`，包含正式六列结果写出 |
 | 数据范围 | 旧图、旧标签和旧缓存交集均为 0 |
 
 Full-mAP50、逐类 AP50、precision、误激活率和混淆诊断会一并记录，但仍沿用当前赛题口径，不替代三项精度硬门禁。
@@ -183,7 +183,7 @@ rollback:
 | `{new_class_ids}` | 逗号分隔的全局新类 ID |
 | `{target_fps}` | 当前性能硬门禁 |
 
-`accuracy_gate` 的 JSON 必须包含 `score_passed: true`；`fps_gate` 必须包含 `competition.batch_fps_passed: true` 且 `competition.batch_fps >= target_fps`。流程固定按以下顺序执行：
+`accuracy_gate` 的 JSON 必须包含 `score_passed: true`；Ascend `fps_gate` 必须是 schema v8，包含 `competition.batch_fps_passed: true`、`includes_result_persistence: true`、`formal_results_valid: true`，并证明 `batch_fps = batch_total_frames × 1000 / batch_total_elapsed_ms >= target_fps`。旧 engine-only 报告会被拒绝。流程固定按以下顺序执行：
 
 ```text
 export
@@ -206,6 +206,7 @@ runs/onsite_incremental/<run_id>/
 ├── state.json
 ├── round_contract.yaml
 ├── candidate-fps.json
+├── candidate-fps-formal-results/
 └── deployment/
     └── <stage>.log
 ```

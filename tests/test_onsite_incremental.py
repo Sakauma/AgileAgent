@@ -8,6 +8,7 @@ import zipfile
 from copy import deepcopy
 from pathlib import Path
 
+import pytest
 from PIL import Image
 from starlette.testclient import TestClient
 
@@ -189,7 +190,15 @@ class _Engine:
         self.closed = False
 
     def predict_batch(self, rows, _confidence, _protocol):
-        return [{"detection_count": 1} for _row in rows]
+        return [
+            {
+                "image_width": int(image.width),
+                "image_height": int(image.height),
+                "detections": [],
+                "detection_count": 0,
+            }
+            for image, _name in rows
+        ]
 
     def close(self):
         self.closed = True
@@ -379,6 +388,21 @@ def test_onsite_candidate_is_promoted_only_after_lock_and_fps_gates(tmp_path: Pa
     statuses = [row["status"] for row in result["history"]]
     assert statuses.index("CANDIDATE_ACCEPTED") < statuses.index("FPS_GATE_PASSED")
     assert statuses.index("FPS_GATE_PASSED") < statuses.index("PROMOTED")
+    fps_report = json.loads(
+        next((tmp_path / "runs").rglob("candidate-fps.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert fps_report["schema_version"] == 2
+    assert fps_report["total_frames"] == 2
+    assert fps_report["aggregate_fps"] == pytest.approx(
+        2000.0 / fps_report["total_elapsed_ms"]
+    )
+    assert fps_report["includes_result_persistence"] is True
+    assert fps_report["formal_results_valid"] is True
+    assert len(
+        list((tmp_path / "runs").rglob("candidate-fps-formal-results/**/*.txt"))
+    ) == 2
 
 
 def test_keyboard_interrupt_cancels_training_and_keeps_parent_production(
@@ -408,7 +432,23 @@ def test_ascend_executor_requires_accuracy_and_complete_fps_reports(tmp_path: Pa
     fps = tmp_path / "benchmark.json"
     accuracy.write_text(json.dumps({"score_passed": True}), encoding="utf-8")
     fps.write_text(
-        json.dumps({"competition": {"batch_fps": 31.2, "batch_fps_passed": True}}),
+        json.dumps(
+            {
+                "schema_version": 8,
+                "competition": {
+                    "batch_fps": 31.2,
+                    "batch_fps_passed": True,
+                    "batch_timing_source": "client_full_pipeline_wall_ms",
+                    "batch_fps_calculation": (
+                        "total_frames_divided_by_total_elapsed_seconds"
+                    ),
+                    "batch_total_frames": 60,
+                    "batch_total_elapsed_ms": 60 * 1000.0 / 31.2,
+                    "includes_result_persistence": True,
+                    "formal_results_valid": True,
+                },
+            }
+        ),
         encoding="utf-8",
     )
     stages = []
@@ -449,6 +489,32 @@ def test_ascend_executor_requires_accuracy_and_complete_fps_reports(tmp_path: Pa
     ]
     rollback = executor.rollback()
     assert rollback["id"] == "rollback"
+
+    fps.write_text(
+        json.dumps(
+            {
+                "schema_version": 7,
+                "competition": {
+                    "batch_fps": 39.0,
+                    "batch_fps_passed": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    legacy_executor = AscendDeploymentExecutor(
+        {
+            "schema_version": 1,
+            "target": "ascend310b",
+            "stages": stages,
+            "rollback": {"command": ["tool", "rollback"]},
+        },
+        tmp_path / "legacy-run",
+        {"target_fps": 30.0},
+        runner=runner,
+    )
+    with pytest.raises(RuntimeError, match="schema v8"):
+        legacy_executor.execute()
 
 
 def test_loopback_runtime_endpoint_promotes_the_loaded_service_atomically(

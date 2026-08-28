@@ -28,6 +28,10 @@ from fair_agent.modules.generation_management import (
 )
 from fair_agent.modules.incremental_lineage import freeze_accepted_batch
 from fair_agent.modules.model_generations import load_generation_registry
+from fair_agent.modules.formal_results import (
+    validate_formal_prediction_files,
+    write_formal_prediction_files,
+)
 
 
 FAILED_STATES = {
@@ -602,9 +606,32 @@ class AscendDeploymentExecutor:
         if stage["id"] == "fps_gate":
             competition = payload.get("competition") or {}
             target = float(self.context["target_fps"])
+            total_frames = int(competition.get("batch_total_frames", 0))
+            total_elapsed_ms = float(
+                competition.get("batch_total_elapsed_ms", 0.0)
+            )
+            fps = float(competition.get("batch_fps", -1.0))
+            full_pipeline_contract = (
+                payload.get("schema_version") == 8
+                and competition.get("batch_timing_source")
+                == "client_full_pipeline_wall_ms"
+                and competition.get("batch_fps_calculation")
+                == "total_frames_divided_by_total_elapsed_seconds"
+                and competition.get("includes_result_persistence") is True
+                and competition.get("formal_results_valid") is True
+                and total_frames > 0
+                and total_elapsed_ms > 0.0
+                and abs(
+                    fps - total_frames * 1000.0 / total_elapsed_ms
+                ) <= 1e-9
+            )
+            if not full_pipeline_contract:
+                raise RuntimeError(
+                    "Ascend FPS gate 缺少schema v8全流程计时或正式结果写出证据。"
+                )
             if (
                 competition.get("batch_fps_passed") is not True
-                or float(competition.get("batch_fps", -1.0)) < target
+                or fps < target
             ):
                 raise RuntimeError(f"Ascend FPS gate 未达到 {target:g} FPS。")
         return {"path": str(report_path), "payload": dict(payload)}
@@ -641,40 +668,94 @@ def benchmark_shadow_engine(
     warmup_rounds: int,
     rounds: int,
     confidence: float,
+    result_output_root: Path,
 ) -> Dict[str, Any]:
     if probe_size <= 0 or rounds <= 0 or warmup_rounds < 0:
         raise ValueError("现场 FPS 验收参数非法。")
-    sources: list[tuple[Image.Image, str]] = []
-    try:
-        for index in range(probe_size):
-            path = image_paths[index % len(image_paths)]
+    indexed_paths = [
+        image_paths[index % len(image_paths)] for index in range(probe_size)
+    ]
+    filenames = [
+        f"onsite-{index:04d}-{path.name}"
+        for index, path in enumerate(indexed_paths)
+    ]
+
+    def decode_sources() -> list[tuple[Image.Image, str]]:
+        rows: list[tuple[Image.Image, str]] = []
+        for path, filename in zip(indexed_paths, filenames):
             with Image.open(path) as source:
                 source.load()
-                sources.append((source.convert("RGB"), f"onsite-{index:04d}-{path.name}"))
+                rows.append((source.convert("RGB"), filename))
+        return rows
+
+    warmup_sources = decode_sources()
+    try:
         for _ in range(warmup_rounds):
-            engine.predict_batch(sources, confidence, "auto")
-        elapsed_rows = []
-        for _ in range(rounds):
-            started = time.perf_counter()
+            engine.predict_batch(warmup_sources, confidence, "auto")
+    finally:
+        for image, _name in warmup_sources:
+            image.close()
+
+    round_rows = []
+    for round_index in range(rounds):
+        started = time.perf_counter()
+        sources = decode_sources()
+        try:
             results = engine.predict_batch(sources, confidence, "auto")
-            elapsed = time.perf_counter() - started
             if len(results) != probe_size:
                 raise RuntimeError("现场候选 batch 返回图像数不完整。")
-            elapsed_rows.append(elapsed)
-    finally:
-        for image, _name in sources:
-            image.close()
-    fps_rows = [probe_size / value for value in elapsed_rows]
+            write_started = time.perf_counter()
+            result_dir = result_output_root / f"round-{round_index + 1:02d}"
+            result_paths = write_formal_prediction_files(
+                result_dir,
+                results,
+                filenames,
+            )
+            result_write_ms = (time.perf_counter() - write_started) * 1000.0
+        finally:
+            for image, _name in sources:
+                image.close()
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        round_rows.append(
+            {
+                "round": round_index + 1,
+                "image_count": probe_size,
+                "full_pipeline_wall_ms": elapsed_ms,
+                "result_write_ms": result_write_ms,
+                "result_file_count": len(result_paths),
+                "formal_results_valid": validate_formal_prediction_files(
+                    result_paths,
+                    probe_size,
+                ),
+                "fps": probe_size * 1000.0 / elapsed_ms,
+            }
+        )
+    total_frames = sum(int(row["image_count"]) for row in round_rows)
+    total_elapsed_ms = sum(
+        float(row["full_pipeline_wall_ms"]) for row in round_rows
+    )
+    aggregate_fps = total_frames * 1000.0 / total_elapsed_ms
+    formal_results_valid = all(
+        row["formal_results_valid"] is True for row in round_rows
+    )
+    fps_rows = [float(row["fps"]) for row in round_rows]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "onsite_incremental_shadow_fps",
         "probe_size": probe_size,
         "warmup_rounds": warmup_rounds,
         "rounds": rounds,
-        "elapsed_seconds": elapsed_rows,
+        "round_results": round_rows,
         "fps_by_round": fps_rows,
-        "median_fps": float(statistics.median(fps_rows)),
-        "timing_scope": "complete_image_inference",
+        "median_round_fps_diagnostic": float(statistics.median(fps_rows)),
+        "total_frames": total_frames,
+        "total_elapsed_ms": total_elapsed_ms,
+        "aggregate_fps": aggregate_fps,
+        "fps_calculation": "total_frames_divided_by_total_elapsed_seconds",
+        "timing_scope": "official_full_pipeline_with_formal_result_write",
+        "includes_result_persistence": True,
+        "formal_results_valid": formal_results_valid,
+        "formal_result_output_root": str(result_output_root),
     }
 
 
@@ -1240,10 +1321,16 @@ class OnsiteIncrementalWorkflow:
                             or self.config["performance"]["benchmark_rounds"]
                         ),
                         confidence=float(self.config["inference"]["confidence_default"]),
+                        result_output_root=(
+                            run_dir / "candidate-fps-formal-results"
+                        ),
                     )
                     target_fps = float(self.config["performance"]["target_api_fps"])
                     performance["target_fps"] = target_fps
-                    performance["passed"] = performance["median_fps"] >= target_fps
+                    performance["passed"] = bool(
+                        performance["formal_results_valid"]
+                        and performance["aggregate_fps"] >= target_fps
+                    )
                     _atomic_json(run_dir / "candidate-fps.json", performance)
                     if not performance["passed"]:
                         self._write_state(

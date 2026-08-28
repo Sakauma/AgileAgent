@@ -15,6 +15,6 @@
 
 所有运行产物写入独立 `runs/ascend_edge_incremental_demo/<run_id>/`，训练固定使用 `npu:0`；production 模型、配置和固定 splits 作为只读父代。通过门禁的 Adapter 由独立演示配置加载，运行数据、checkpoint、ONNX 和 OM 保留在板端运行目录。
 
-2026-08-26 `board-full-check-v6` 已完成断网整链验收：Base/New/KRR/Full mAP50 为 `0.816663 / 0.624935 / 1.000000 / 0.726497`，Adapter OM 最大绝对误差 `5.96e-08`，完整图像链路中位 `38.6995 FPS`，热态完整命令 `1007.07 秒`。候选状态为 `accepted`，训练审计中 Base 与旧类原始图像计数均为 `0`。
+2026-08-26 `board-full-check-v6` 已完成断网整链验收：Base/New/KRR/Full mAP50 为 `0.816663 / 0.624935 / 1.000000 / 0.726497`，Adapter OM 最大绝对误差 `5.96e-08`，热态完整命令 `1007.07 秒`。候选状态为 `accepted`，训练审计中 Base 与旧类原始图像计数均为 `0`。当时记录的 `38.6995 FPS` 不包含正式结果写出，现仅作 legacy engine-only 诊断；新版运行时基准按总帧数除以含六列 TXT 写出的全流程总耗时计算。
 
 现场一键操作见 [`docs/ascend-310b-offline-incremental-demo.md`](../../docs/ascend-310b-offline-incremental-demo.md)；底层前提、命令、产物和实测结果见 [`docs/ascend-310b-edge-incremental-training.md`](../../docs/ascend-310b-edge-incremental-training.md)。

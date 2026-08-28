@@ -5,6 +5,8 @@ AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模�
 
 ## 本次验证状态
 
+2026-08-28 已完成官方 FPS 口径修订与 Ascend310B1 实机复测：全量 CPU 回归 `338 passed in 90.16s`，`scripts/verify_release.py` PASS，板端定向回归 `20 passed`。公共 `8501` 两次独立 `30 + 3×20` 复测的 60 帧全流程 aggregate FPS 为 `31.961599 / 32.656507`；两次均生成并验证 60 个正式六列 TXT，达到 30 FPS 门禁。
+
 2026-08-26 已完成断网一键 `4→4+1→4+2` 板端演示、现场 4+2+n 总控和运行时 Adapter 接入验证：受影响专项 `116 passed`，全量 CPU 回归 `328 passed in 90.95s`，Bash 语法、`git diff --check` 与 `scripts/verify_release.py` 全部通过。2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与 runtime release `20260824-4plus2-yolo26-replica-pool-v1` 完成最终硬件验收；三个冻结 OM 继承自 `20260824-4plus2-yolo26-runtime-calibration-v1`：
 
 - Ascend 定向回归：`100 passed`；
@@ -12,10 +14,10 @@ AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模�
 - `scripts/verify_release.py`：PASS；
 - `bash scripts/materialize_ascend310b_full_score_release.sh --verify-existing`：33 项发布资产全部 PASS；
 - 三个 systemd unit 均为 active，公共 `8501` 健康检查返回 `status=ready`、`backend=ascend_acl`、`validated=true`、`inference_replicas=3`；
-- 冻结 release 的 Base-mAP50、New-mAP50、KRR 与公共 `8501` FPS 四项满分门禁全部通过。
-- 正式 `8501` mixed 20 图中位 `38.2175 FPS`，纯增量 140 图中位 `37.3997 FPS`，CLI 同一 140 图端到端 `33.504 FPS`。
+- 冻结 release 的 Base-mAP50、New-mAP50、KRR 与公共 `8501` 新全流程 aggregate FPS 四项满分门禁全部通过。
+- 旧的 mixed `38.2175 FPS`、纯增量 `37.3997 FPS` 和 CLI `33.504 FPS` 未采用当前“全流程总帧数 ÷ 总耗时＋正式结果写出”契约，只作为 legacy 诊断保留。
 
-板端离线增量演示 `board-full-check-v6` 进一步完成了真实 `npu:0` 两轮训练、ONNX/OM 导出、ACL 数值核对、隔离部署和完整运行时复测：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`，三轮完整图像链路 `39.05 / 38.70 / 37.92 FPS`，中位 `38.6995 FPS`；Adapter OM 最大绝对误差 `5.96e-08`。候选保持 production 原子隔离，并以 `accepted` 状态完成演示通道验收。
+板端离线增量演示 `board-full-check-v6` 进一步完成了真实 `npu:0` 两轮训练、ONNX/OM 导出、ACL 数值核对和隔离部署：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`；Adapter OM 最大绝对误差 `5.96e-08`。当时记录的 `39.05 / 38.70 / 37.92 FPS` 不包含正式结果写出，现仅作 legacy engine-only 诊断。
 
 ## 测试框架与安装
 
@@ -274,7 +276,7 @@ health 必须报告 `status=ready`、`backend=ascend_acl`、`device=ascend:0`、
   "$OUTPUT_DIR"
 ```
 
-该 gate 在 `8502` 启动受控候选，冻结无标签预测，计算 Base mAP50、New-mAP50、KRR，并执行 30 次预热和三轮 20 图 batch FPS。schema v7 使用 `api_timings.batch_engine_ms` 作为完整图像推理耗时，覆盖 DVPP、模型、门控、融合和 NMS，不混入上传解析或保存。执行前后正式 `8501` 都必须 ready，输入必须是根目录内 stem 唯一的 `640×512`、8-bit 灰度/RGB/RGBA PNG。
+该 gate 在 `8502` 启动受控候选，冻结无标签预测，计算 Base mAP50、New-mAP50、KRR，并执行 30 次预热和三轮 20 图 batch FPS。schema v8 从批量请求开始计时，直至正式六列 TXT 写出完成；覆盖图像解码、Scene、决策、Base/Incremental 检测、后处理、传输解析和结果落盘。门禁 FPS 按三轮 60 帧除以三轮全流程总耗时计算，旧 schema v5/v6/v7 证据不能晋级新 release。执行前后正式 `8501` 都必须 ready，输入必须是根目录内 stem 唯一的 `640×512`、8-bit 灰度/RGB/RGBA PNG。
 
 ## 编写新测试
 

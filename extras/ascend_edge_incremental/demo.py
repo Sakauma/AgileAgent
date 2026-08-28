@@ -351,7 +351,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("/usr/local/miniconda3/envs/agileagent/bin/python"),
     )
     parser.add_argument("--opp-source", type=Path)
-    parser.add_argument("--baseline-fps", type=float, default=38.2175)
+    parser.add_argument(
+        "--baseline-fps",
+        type=float,
+        default=31.96159905071153,
+    )
     parser.add_argument("--target-fps", type=float, default=30.0)
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=80)

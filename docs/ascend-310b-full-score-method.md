@@ -14,21 +14,20 @@ models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 | Base mAP50 | `0.8166630282` | ≥0.80 |
 | New-mAP50 | `0.6114608956` | ≥0.60 |
 | KRR | `1.0000000000` | ≥0.95 |
-| 候选 / 独立复跑中位 FPS | `37.3571 / 37.9696` | ≥30 |
-| 公共 `8501` mixed 20 图中位 FPS | `38.2175` | ≥30 |
-| 公共 `8501` 纯增量 140 图中位 FPS | `37.3997` | ≥30 |
+| 公共 `8501` 全流程 aggregate FPS，首次 / 独立复跑 | `31.961599 / 32.656507` | ≥30 |
 
 Full-mAP50 为 `0.7220053258`。旧类 mAP50 增量前后均为 `0.7772775409`，冻结旧类预测完全等价。
 
-公共 `8501` mixed 20 图逐轮 FPS：
+两次公共 `8501` 全流程复测的逐轮 FPS：
 
 ```text
-35.3751 / 38.6201 / 38.2175
+29.0044 / 33.3999 / 33.9618  -> 60帧 / 1877.252759ms = 31.961599 FPS
+31.0727 / 34.1794 / 32.8673  -> 60帧 / 1837.306090ms = 32.656507 FPS
 ```
 
 precision `0.729167`、recall `0.612698`、误激活率 `0.226667` 是非阻断诊断。75 张不含新增类的图像中有 17 张至少误激活一个新增类。
 
-性能运行时使用三个同构 Ascend 引擎均衡分片；单实例内部将下一帧 NPU 推理与上一帧 CPU 融合/NMS 重叠。它不修改模型资产、阈值、场景门控或融合结果。FPS 按完整图像推理耗时计算，不包含 HTTP 上传解析与结果保存。
+性能运行时使用三个同构 Ascend 引擎均衡分片；单实例内部将下一帧 NPU 推理与上一帧 CPU 融合/NMS 重叠。它不修改模型资产、阈值、场景门控或融合结果。正式 FPS 按总处理帧数除以总墙钟耗时计算，计时覆盖 HTTP 上传解析、图像解码、Scene、决策、Base/Incremental 检测、后处理、响应解析和正式六列结果写出。旧 `37–39 FPS` 中位数报告只作 engine-only 历史诊断。
 
 ## 2. 协议口径
 
@@ -309,7 +308,8 @@ models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 - `Base mAP50 >= 0.80`
 - `New-mAP50 >= 0.60`
 - `KRR >= 0.95`
-- 三轮 20 图 batch 中位 `FPS >= 30`
+- 三轮共 60 图的全流程 aggregate `FPS >= 30`
+- 计时包含正式六列 TXT 写出，且 `formal_results_valid:true`
 - `validated:true` 且 `validation_candidate:false`
 - `model_layout: independent_yolo26_e2e_v1`
 - `context_mode: model`

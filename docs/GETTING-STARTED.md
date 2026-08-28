@@ -421,7 +421,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" \
   --plan-only
 ```
 
-2026-08-26 实机整链结果为 Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497` 和完整链路中位 `38.6995 FPS`。通过门禁后，`demo_report.json` 给出本次隔离配置；使用它启动 CLI 即可查看学习后的结果：
+2026-08-26 实机整链结果为 Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`。当时记录的 `38.6995 FPS` 未包含正式结果落盘，只作为 legacy 诊断；新版门禁会在写出正式六列 TXT 后按总帧数除以总墙钟耗时计算 aggregate FPS。通过门禁后，`demo_report.json` 给出本次隔离配置；使用它启动 CLI 即可查看学习后的结果：
 
 ```bash
 AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml \
