@@ -85,7 +85,7 @@ Scene-SensorNet 为双头 CNN，权重位于 `models/context/scene_sensor_net.pt
 | KRR | `1.000000` |
 | Full-mAP50 | `0.722005` |
 | 新类误激活 | `17/75 = 0.226667` |
-| 公共 8501 全流程 aggregate FPS（两次复测） | `31.961599 / 32.656507` |
+| 公共 8501 全流程 aggregate FPS（2026-08-29 复核） | `33.897326` |
 
 上表是当前 `20260824-4plus2-yolo26-runtime-calibration-v1` 的真实 OM lock 和部署后板端结果。候选与 release-local 复验精度完全一致，四项满分门禁均通过。
 
@@ -103,7 +103,7 @@ Scene-SensorNet 为双头 CNN，权重位于 `models/context/scene_sensor_net.pt
 | Full-mAP50 | `0.726497` |
 | 新类误激活 | `17/75` |
 | Adapter OM 最大绝对误差 | `5.96e-08` |
-| 旧 engine-only 图像链路中位 FPS | `38.6995`（非当前官方口径） |
+| 性能证据 | 已归档，需按 schema v8 重新实测 |
 
 通过门禁的 Adapter 由独立 `agent_pipeline_ascend310b_demo.yaml` 激活，结果中的 `agent.decision.edge_incremental_adapter` 记录运行身份；原 production 与父代 release 保持可直接启动。
 

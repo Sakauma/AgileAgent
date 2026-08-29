@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # 当前指标总账
 
-本文统一记录 4+2 正式推理的赛题硬指标、逐类诊断、场景模型准确率、Ascend310B1 端侧性能与板端离线增量结果。截至 2026-08-28，x86/CUDA 和 Ascend310B1 都已完成全类别重叠抑制；Ascend 还完成了 mixed dev 约束校准、lock 冻结验收、公共 `8501` 原子提升，以及按“总帧数 ÷ 全流程总墙钟耗时”重新执行的两次独立 FPS 复验。
+本文统一记录 4+2 正式推理的赛题硬指标、逐类诊断、场景模型准确率、Ascend310B1 端侧性能与板端离线增量结果。截至 2026-08-29，x86/CUDA 和 Ascend310B1 都已完成全类别重叠抑制；Ascend 还完成了 mixed dev 约束校准、lock 冻结验收、公共 `8501` 原子提升，以及按“总帧数 ÷ 全流程总墙钟耗时”执行的三次正式 FPS 验证。
 
 ## 结论与硬门禁
 
@@ -10,9 +10,9 @@
 | 运行点 | Base mAP50 | New-mAP50 | KRR | FPS | 当前判定 |
 | --- | ---: | ---: | ---: | ---: | --- |
 | x86/CUDA，修改后 mixed lock | `0.845782` | `0.750368` | `0.997179` | 不适用 | 三项精度门禁全部通过 |
-| Ascend310B1 当前 runtime release，lock / `8501` 全流程复测 | `0.816663` | `0.611461` | `1.000000` | `31.9616 / 32.6565` | 两次 aggregate FPS 均通过 |
+| Ascend310B1 当前 runtime release，lock / `8501` 全流程复核 | `0.816663` | `0.611461` | `1.000000` | `33.8973` | 四项满分门禁再次通过 |
 | Ascend310B1 mixed dev 选参点 | `0.823083` | `0.705836` | `1.000000` | 不作为正式 FPS | 只用于选参，不代替 lock |
-| Ascend310B1 板端增量隔离演示，lock | `0.816663` | `0.624935` | `1.000000` | 待按新口径重测 | 旧 `38.6995` 为 engine-only 诊断 |
+| Ascend310B1 板端增量隔离演示，lock | `0.816663` | `0.624935` | `1.000000` | 待按新口径重测 | 旧性能证据已归档 |
 
 当前 Ascend release 的四项硬门禁全部通过；lock 新类误激活从上一代的 `35/75` 降至 `17/75`。
 
@@ -95,9 +95,8 @@ lock 上三项场景功能验收均通过。
 | KRR | `1.0000000000` | `>=0.95` | `+0.0500000000` |
 | 公共 `8501` 全流程 aggregate FPS，首次 | `31.9616` | `>=30` | `+1.9616` |
 | 公共 `8501` 全流程 aggregate FPS，独立复跑 | `32.6565` | `>=30` | `+2.6565` |
-| 正式六列 TXT | 每次 `60/60` 有效 | 必须完整写出 | PASS |
-| 旧公共 mixed engine-only 中位 FPS | `38.2175` | 仅诊断 | 非官方口径 |
-| 旧纯增量 engine-only 中位 FPS | `37.3997` | 仅诊断 | 非官方口径 |
+| 公共 `8501` 全流程 aggregate FPS，2026-08-29 复核 | `33.8973` | `>=30` | `+3.8973` |
+| 正式六列 TXT | 三次均 `60/60` 有效 | 必须完整写出 | PASS |
 
 其他精度诊断：
 
@@ -130,8 +129,9 @@ lock 上三项场景功能验收均通过。
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | 首次 | `29.0044` | `33.3999` | `33.9618` | `1877.252759 ms` | **`31.961599`** | PASS |
 | 独立复跑 | `31.0727` | `34.1794` | `32.8673` | `1837.306090 ms` | **`32.656507`** | PASS |
+| 2026-08-29 再次复核 | `34.4918` | `33.6139` | `33.6015` | `1770.051105 ms` | **`33.897326`** | PASS |
 
-两次报告均为 schema v8，`includes_result_persistence=true`、`formal_results_valid=true`，并各生成 60 个格式为 `class_id x_center y_center width height confidence` 的 TXT。2026-08-24 及 2026-08-26 的 `37–39 FPS` 报告未覆盖正式结果写出，统一降级为 legacy engine-only 诊断。
+三次报告均为 schema v8，`includes_result_persistence=true`、`formal_results_valid=true`，并各生成 60 个格式为 `class_id x_center y_center width height confidence` 的 TXT。更早且未覆盖正式结果写出的报告已统一移入 legacy engine-only 档案。
 
 ## Ascend310B1 选参口径与误激活改善
 
@@ -151,8 +151,7 @@ lock 上三项场景功能验收均通过。
 | Full-mAP50 | `0.726497` | 累计诊断 |
 | 新类误激活 | `17/75` | 冻结诊断 |
 | Adapter OM 最大绝对误差 | `5.96e-08` | 数值一致性通过 |
-| 旧 engine-only 图像链路三轮 FPS | `39.05 / 38.70 / 37.92` | 历史诊断 |
-| 旧 engine-only 中位 FPS | `38.6995` | 非当前官方口径 |
+| 性能证据 | 已移入 legacy engine-only 档案 | 需按 schema v8 重新实测 |
 
 | 阶段 | 热态耗时 |
 | --- | ---: |
@@ -171,8 +170,8 @@ lock 上三项场景功能验收均通过。
 - Ascend lock 冻结精度：`validation/score.json`
 - Ascend mixed dev 精度：`validation/score-dev.json`
 - Ascend 选参证据：`validation/runtime-calibration-search.json`
-- Ascend 候选 FPS：`validation/benchmark.json` 与 `validation/benchmark-repeat-1.json`
-- Ascend 公共入口冻结与 FPS：`validation/frozen-predictions-post-promotion.jsonl`、`validation/score-post-promotion.json` 与 `validation/benchmark-post-promotion.json`
-- 新全流程 FPS（板端）：`/home/HwHiAiUser/agileagent/reports/ascend310b/20260828-full-pipeline-fps-v1/`
-- Ascend 三实例推理池与正式最坏分布复验：`reports/ascend310b/20260824-replica-pool-v1/`
+- 不可变 release 内历史性能：随包 schema v5/v6/v7 文件，仅用于完整性与兼容验证
+- 当前四项满分复核：`reports/ascend310b/20260829-full-score-recheck-v1/`
+- 板端完整证据：`/home/HwHiAiUser/agileagent/reports/ascend310b/20260829-full-score-recheck-v1/`
+- 旧计时报告档案：`reports/ascend310b/archive/legacy-engine-only/`
 - Ascend 板端离线增量方法、耗时与门禁：`docs/ascend-310b-offline-incremental-demo.md`

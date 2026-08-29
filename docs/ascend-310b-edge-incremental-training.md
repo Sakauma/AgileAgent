@@ -111,7 +111,7 @@ export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
   --encoded
 ```
 
-`--baseline-fps` 必须填写当前未叠加 Adapter 的实测全流程 aggregate FPS。`31.961599` 是当前 release 两次新口径复测中的保守值；计时已包含正式六列结果写出。旧 `38.2175` 是 engine-only 中位结果，不得再作为 baseline；production 变化后也应先重测。
+`--baseline-fps` 必须填写当前未叠加 Adapter 的实测全流程 aggregate FPS。`31.961599` 是当前 release 三次 schema v8 验证中的保守值；计时已包含正式六列结果写出。legacy engine-only 数值不得作为 baseline；production 变化后也应先重测。
 
 ## 3. 执行 lock 门禁流水线
 
@@ -238,8 +238,7 @@ OM 实测 wall 中位/P95 为 `0.174773 / 0.199086 ms`，最大绝对误差 `0.0
 | ONNX 导出 | `4.82 秒` |
 | ATC 编译 OM | `87.67 秒` |
 | Adapter OM 最大绝对误差 | `5.96e-08` |
-| 旧 engine-only 图像链路三轮 FPS | `39.05 / 38.70 / 37.92` |
-| 旧 engine-only 中位 FPS | `38.6995`（非当前官方口径） |
+| 性能证据 | 已移入 legacy engine-only 档案，待 schema v8 重测 |
 | 输入审计至隔离部署和 FPS 的热态总耗时 | `1007.07 秒` |
 
 训练审计为 `base_images_used_for_training=0`、`old_raw_image_count=0`；隔离候选状态为 `accepted`，production 修改标记为 `false`。演示配置保留当前满分 production 作为父代，CLI 通过 `AGILE_AGENT_CONFIG=<demo_config>` 显式选择学习后的运行身份。精度、隔离、OM 数值和父代保留结论已经闭环；Adapter 完整 FPS 需使用已升级的 aggregate＋正式结果写出工具重新产生证据。

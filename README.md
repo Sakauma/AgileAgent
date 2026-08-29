@@ -46,11 +46,9 @@ Scene-SensorNet 在 mixed lock 上的 sensor / scene / joint accuracy 为 `0.988
 | Full-mAP50 | `0.722005` |
 | KRR | `1.000000` |
 | 新类误激活 | `17/75 = 0.226667` |
-| 公共 `8501` 全流程 aggregate FPS（两次独立复测） | `31.9616 / 32.6565` |
-| 旧 engine-only mixed 20 图中位 FPS（仅诊断） | `38.2175` |
-| 旧 engine-only 纯增量 140 图中位 FPS（仅诊断） | `37.3997` |
+| 公共 `8501` 全流程 aggregate FPS（2026-08-29 复核） | `33.8973` |
 
-上表是当前真实 OM lock 与正式公共入口结果。正式 FPS 按两次 `30 + 3×20` 复测的“60 帧 ÷ 三轮全流程总墙钟耗时”计算，计入 PNG 解码、Scene、决策、Base/Incremental 检测、后处理和同 stem 六列结果写出；两次均通过 30 FPS 门禁。旧的 `38.x FPS` 只保留为 engine-only 历史诊断，不能再作为官方成绩。新旧 runtime 的冻结输出完全一致，误激活较上一代 `35/75` 降至 `17/75`。仓库内模型资产仍由 [`runtime-calibration-v1`](models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/README.md) 提供，历史 engine-only 证据见 [`reports/ascend310b/20260824-replica-pool-v1/`](reports/ascend310b/20260824-replica-pool-v1/README.md)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
+上表是当前真实 OM lock 与正式公共入口结果。正式 FPS 按 `30 + 3×20` 协议的“60 帧 ÷ 三轮全流程总墙钟耗时”计算，计入 PNG 解码、Scene、决策、Base/Incremental 检测、后处理和同 stem 六列结果写出；2026-08-28 的两次复测和 2026-08-29 的再次复核均通过 30 FPS 门禁。新旧 runtime 的冻结输出完全一致，误激活较上一代 `35/75` 降至 `17/75`。仓库内模型资产仍由 [`runtime-calibration-v1`](models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/README.md) 提供，当前四项评分证据见 [`20260829-full-score-recheck-v1`](reports/ascend310b/20260829-full-score-recheck-v1/README.md)，旧计时报告已移入 [`legacy-engine-only` 档案](reports/ascend310b/archive/legacy-engine-only/README.md)，完整状态见 [`docs/current-metrics.md`](docs/current-metrics.md)。
 
 ## 安装
 
@@ -163,7 +161,7 @@ agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --target x
 
 [`extras/ascend_edge_incremental/`](extras/ascend_edge_incremental/) 提供隔离的板端轻量增量训练能力。它按类别注册表逐轮读取 Increment train/dev，冻结现有 Base、Incremental 与 Scene-SensorNet，只在 `npu:0` 更新每个新增类别 8 个参数的无 MatMul 置信度 Adapter；随后独立执行 mixed dev 强度选择、mixed lock 联合评分、ONNX/OM 导出和 ACL 延迟验证。
 
-该功能使用独立 Conda 前缀和运行目录，将训练产物、候选配置与当前 production 完整隔离。2026-08-25 底层流水线实测两轮训练搜索耗时约 9 分 16 秒，NPU 探测、训练和 ONNX/OM 导出合计约 12 分 12 秒；mixed lock 的 Base mAP50 / New-mAP50 / KRR / Full-mAP50 为 `0.816663 / 0.649306 / 1.000000 / 0.736421`，Adapter OM 的保守串行投影为 `37.9639 FPS`。
+该功能使用独立 Conda 前缀和运行目录，将训练产物、候选配置与当前 production 完整隔离。2026-08-25 底层流水线实测两轮训练搜索耗时约 9 分 16 秒，NPU 探测、训练和 ONNX/OM 导出合计约 12 分 12 秒；mixed lock 的 Base mAP50 / New-mAP50 / KRR / Full-mAP50 为 `0.816663 / 0.649306 / 1.000000 / 0.736421`。旧基线上的 Adapter 延迟投影已归档，最终性能只接受启用 Adapter 后的 schema v8 全流程实测。
 
 现场演示当前 `4→4+2` 时，在已预装离线训练环境的 310B 上只需一条命令：
 
@@ -173,7 +171,7 @@ agile-agent incremental onsite --bundle /path/to/onsite_increment.zip --target x
 
 该入口自动完成数据对齐、两轮 NPU 训练、dev/lock、ONNX/OM、隔离演示部署，并在 Adapter 接入运行时后复测完整图像链路 FPS。脚本启用强制离线配置，训练数据范围固定为 Increment train/dev，Base 图像只参与冻结后的联合评分；验收结果写入独立演示通道，当前满分 production 保持可随时启动。完整现场手册见 [`docs/ascend-310b-offline-incremental-demo.md`](docs/ascend-310b-offline-incremental-demo.md)；底层环境与实测证据见 [`docs/ascend-310b-edge-incremental-training.md`](docs/ascend-310b-edge-incremental-training.md)。
 
-2026-08-26 板端整链验收已通过：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`；当时记录的 Adapter `38.6995 FPS` 是未包含正式结果落盘的 legacy engine-only 诊断，不能替代 2026-08-28 启用的新官方全流程口径。热态一键流程耗时 `16分47秒`，首次冷态建议预留 30 分钟。
+2026-08-26 板端整链验收已通过：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`；当时的性能数据不含正式结果落盘，现已统一归档，不替代当前官方全流程口径。热态一键流程耗时 `16分47秒`，首次冷态建议预留 30 分钟。
 
 ## Ascend310B v2 部署
 

@@ -184,8 +184,8 @@ benchmark:
     color_types: [0, 2, 6]
 
 reference_result:
-  date: "2026-08-24"
-  validation_stage: ascend310b_runtime_calibration_public_8501_post_promotion
+  date: "2026-08-29"
+  validation_stage: ascend310b_current_public_8501_full_score_recheck
   old_candidate_confidence: 0.10
   new_candidate_confidence: 0.01
   base_map50: 0.8166630281570453
@@ -200,26 +200,25 @@ reference_result:
   false_activation_rate: 0.22666666666666666
   false_activation_image_count: 17
   false_activation_negative_image_count: 75
-  legacy_engine_only_candidate_batch_median_fps: [38.38771593090211, 39.13894324853229]
-  legacy_engine_only_public_8501_batch_rounds:
-    - [38.58024691358025, 38.669760247486465, 38.66228494104002]
-  legacy_engine_only_public_8501_batch_median_fps: [38.66228494104002]
   official_full_pipeline_public_8501:
-    date: "2026-08-28"
+    date: "2026-08-29"
     benchmark_schema_version: 8
     release: 20260824-4plus2-yolo26-replica-pool-v1
     calculation: total_frames_divided_by_total_elapsed_seconds
-    aggregate_fps_runs: [31.96159905071153, 32.65650744128323]
+    aggregate_fps_runs: [31.96159905071153, 32.65650744128323, 33.89732637126316]
     total_frames_per_run: 60
-    total_elapsed_ms_runs: [1877.252759, 1837.30609]
+    total_elapsed_ms_runs: [1877.252759, 1837.30609, 1770.051105]
     round_fps_runs:
       - [29.004382710149855, 33.399865308363175, 33.96179712496984]
       - [31.072703812948884, 34.17941711878089, 32.86733694341589]
+      - [34.49176269534127, 33.613921113999496, 33.6015332110792]
     result_write_ms_runs:
       - [6.976539, 6.938184, 6.966289]
       - [6.955206, 7.059582, 6.853392]
+      - [6.975039, 6.938663, 6.9041]
     formal_result_files_per_run: 60
     includes_result_persistence: true
     passed: true
+    latest_evidence: reports/ascend310b/20260829-full-score-recheck-v1
   board_accuracy_passed: true
   official_full_pipeline_fps_passed: true

@@ -185,13 +185,15 @@ curl -fsS http://127.0.0.1:8501/api/health
 | KRR | `1.0000000000` | ≥0.95 |
 | 公共 `8501` 全流程 aggregate FPS，首次 | `31.961599` | ≥30 |
 | 公共 `8501` 全流程 aggregate FPS，独立复跑 | `32.656507` | ≥30 |
+| 公共 `8501` 全流程 aggregate FPS，2026-08-29 复核 | `33.897326` | ≥30 |
 
-Full-mAP50 为 `0.7220053258`。公共 `8501` 两次全流程复测的逐轮 FPS：
+Full-mAP50 为 `0.7220053258`。公共 `8501` 三次全流程验证的逐轮 FPS：
 
 - `29.0044 / 33.3999 / 33.9618`，60 帧总耗时 `1877.252759 ms`；
-- `31.0727 / 34.1794 / 32.8673`，60 帧总耗时 `1837.306090 ms`。
+- `31.0727 / 34.1794 / 32.8673`，60 帧总耗时 `1837.306090 ms`；
+- `34.4918 / 33.6139 / 33.6015`，60 帧总耗时 `1770.051105 ms`。
 
-正式 FPS 按 60 帧除以三轮全流程总墙钟耗时计算，包含上传解析、图像解码、三个 OM、场景与内容决策、融合/NMS、响应解析和同 stem 六列 TXT 写出。旧纯增量 `38.5337 / 36.0538 / 37.3997 FPS` 等报告没有结果落盘，只作为 legacy engine-only 诊断。
+正式 FPS 按 60 帧除以三轮全流程总墙钟耗时计算，包含上传解析、图像解码、三个 OM、场景与内容决策、融合/NMS、响应解析和同 stem 六列 TXT 写出。旧计时报告没有结果落盘，已移入 legacy engine-only 档案。
 
 诊断项为 precision `0.729167`、recall `0.612698`、误激活率 `0.226667`。误激活率表示 75 张不含新增类的图像中有 17 张至少激活一个新增类；它不属于四项赛题淘汰门槛。
 
@@ -199,7 +201,8 @@ Full-mAP50 为 `0.7220053258`。公共 `8501` 两次全流程复测的逐轮 FPS
 
 ```text
 models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/validation/
-reports/ascend310b/20260824-replica-pool-v1/
+reports/ascend310b/20260829-full-score-recheck-v1/
+reports/ascend310b/archive/legacy-engine-only/
 ```
 
 ## 断网增量演示部署
@@ -227,7 +230,7 @@ AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml 
   ./scripts/start_agent.sh --cli
 ```
 
-`board-full-check-v6` 的实测 Base/New/KRR/Full 为 `0.816663 / 0.624935 / 1.000000 / 0.726497`，候选状态 `accepted`。其旧 `38.6995 FPS` 未包含正式结果写出，不能作为当前官方 FPS。完整操作见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+`board-full-check-v6` 的实测 Base/New/KRR/Full 为 `0.816663 / 0.624935 / 1.000000 / 0.726497`，候选状态 `accepted`。其性能证据未包含正式结果写出，已归档且不能作为当前官方 FPS。完整操作见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
 
 ## 重新测量所需数据
 

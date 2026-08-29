@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Ascend 310B 当前状态
 
-截至 2026-08-28，4+2 独立 YOLO26s 三-OM 方案已完成 mixed dev 约束校准、lock 冻结验收、三实例推理池 release 物化和公共 `8501` 原子提升。正式 FPS 已按新增答疑修订为“总处理帧数 ÷ 总墙钟耗时”，并在 Ascend310B1 上完成两次独立 `30 + 3×20` 复测；计时包含图像解码、Scene、决策、Base/Incremental 检测、后处理和正式六列结果写出，两次 aggregate FPS 均进入满分档。2026-08-26 的断网增量演示精度与训练隔离结论仍有效，但其旧 FPS 只作为 engine-only 历史诊断。
+截至 2026-08-29，4+2 独立 YOLO26s 三-OM 方案已完成 mixed dev 约束校准、lock 冻结验收、三实例推理池 release 物化和公共 `8501` 原子提升。正式 FPS 按“总处理帧数 ÷ 总墙钟耗时”计算；最新 `30 + 3×20` 复核覆盖图像解码、Scene、决策、Base/Incremental 检测、后处理和正式六列结果写出，四项评分门禁再次全部通过。2026-08-26 的断网增量演示精度与训练隔离结论仍有效，其旧性能证据已归档。
 
 ## 正式指标
 
@@ -19,8 +19,9 @@
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | 首次 | `29.0044` | `33.3999` | `33.9618` | `1877.253 ms` | **`31.9616`** | PASS |
 | 独立复跑 | `31.0727` | `34.1794` | `32.8673` | `1837.306 ms` | **`32.6565`** | PASS |
+| 2026-08-29 再次复核 | `34.4918` | `33.6139` | `33.6015` | `1770.051 ms` | **`33.8973`** | PASS |
 
-旧报告中的候选 `37.x`、公共 mixed `38.2175`、纯增量 `37.3997` 和 Adapter `38.6995 FPS` 均按 `batch_engine_ms` 或不含结果写出的中位数计算，仅保留为 legacy engine-only 诊断，不能与上表官方 aggregate FPS 混用。
+旧报告按 `batch_engine_ms` 或不含结果写出的中位数计算，现已统一移入 [`legacy-engine-only` 档案](../reports/ascend310b/archive/legacy-engine-only/README.md)，不能与上表官方 aggregate FPS 混用。
 
 ## 板端离线增量演示
 
@@ -34,7 +35,7 @@
 | Full-mAP50 | `0.726497` |
 | 新类误激活 | `17/75` |
 | Adapter OM 最大绝对误差 | `5.96e-08` |
-| 旧 engine-only 图像链路中位 FPS | `38.6995`（非当前官方口径） |
+| 性能证据 | 已归档，需按 schema v8 重新实测 |
 | NPU 训练搜索 / 完整热态命令 | `155.17 / 1007.07 秒` |
 
 演示候选以 `accepted` 状态写入独立运行目录，`base_images_used_for_training=0`、`old_raw_image_count=0`，production 模型和配置身份保持原样。
@@ -55,7 +56,7 @@
 | 推理池 | `3` 个同构实例，批次均衡分片并按输入顺序合并 |
 | 类别 | `soldier / small_aircraft / warship / tank / patrol_boat / armored_vehicle` |
 
-三项 systemd unit 与精确 loopback 路由均已完成 active 状态验收。2026-08-28 全流程 FPS 复测收尾后，板端三个 Agent 服务再次停止，设备处于静默待机；再次启动这些 unit 即恢复已验收的 `8501 → 18501` 正式拓扑。物理 `8501` 回滚 listener 与 `18501` 主实例在运行态同时存在，移除唯一精确路由即可回到上一 release。
+三项 systemd unit 与精确 loopback 路由均已完成 active 状态验收。2026-08-29 四项满分复核收尾后，板端三个 Agent 服务和原子路由均恢复为 `inactive`，设备处于静默待机；再次启动这些 unit 即恢复已验收的 `8501 → 18501` 正式拓扑。物理 `8501` 回滚 listener 与 `18501` 主实例在运行态同时存在，移除唯一精确路由即可回到上一 release。
 
 健康响应已确认：
 
@@ -104,4 +105,5 @@ precision、recall 和误激活率继续作为工程优化与错误分析信号�
 - [断网一键增量学习演示](ascend-310b-offline-incremental-demo.md)
 - [板端轻量增量训练实现](ascend-310b-edge-incremental-training.md)
 - [正式模型包](../models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/README.md)
-- [三实例推理池验收证据](../reports/ascend310b/20260824-replica-pool-v1/README.md)
+- [当前四项满分复核证据](../reports/ascend310b/20260829-full-score-recheck-v1/README.md)
+- [旧 engine-only 报告档案](../reports/ascend310b/archive/legacy-engine-only/README.md)

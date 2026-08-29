@@ -200,7 +200,7 @@ curl -fsS -F "file=@sample.png;type=image/png" \
   http://127.0.0.1:8501/api/detect
 ```
 
-2026-08-28 正式 release 已按新官方口径完成公共入口两次独立 `30 + 3×20` 复验：首次三轮为 `29.0044 / 33.3999 / 33.9618 FPS`、60 帧总耗时 `1877.252759 ms`、aggregate `31.961599 FPS`；复跑三轮为 `31.0727 / 34.1794 / 32.8673 FPS`、总耗时 `1837.306090 ms`、aggregate `32.656507 FPS`。计时包含图像解码、Scene、决策、Base/Incremental 检测、后处理和六列 TXT 写出。旧 mixed `38.2175`、纯增量 `37.3997` 与 CLI `33.504 FPS` 均不是当前官方口径。重新计算 Base/New/KRR 仍需要同版 89 图和标签。
+2026-08-29 正式 release 已再次按官方口径完成公共入口 `30 + 3×20` 复核：三轮为 `34.4918 / 33.6139 / 33.6015 FPS`、60 帧总耗时 `1770.051105 ms`、aggregate `33.897326 FPS`。计时包含图像解码、Scene、决策、Base/Incremental 检测、后处理和六列 TXT 写出；89 图重新评分也确认 Base/New/KRR 三项门禁全部通过。旧计时报告已移入 legacy engine-only 档案。
 
 板端断网增量演示复用正式 Python 和独立训练环境：
 
@@ -209,7 +209,7 @@ cd /home/HwHiAiUser/agileagent/repo
 ./scripts/run_ascend310b_incremental_demo.sh /path/to/datasets_r2_inc_train
 ```
 
-该入口已完成 `4→4+1→4+2` 实机精度、训练隔离和 OM 数值验收；旧 `38.6995 FPS` 未包含正式结果落盘，仅作 legacy 诊断。详细环境变量、训练/导出耗时和隔离配置见 `docs/ascend-310b-offline-incremental-demo.md`。
+该入口已完成 `4→4+1→4+2` 实机精度、训练隔离和 OM 数值验收；其旧性能报告未包含正式结果落盘，现已归档。详细环境变量、训练/导出耗时和隔离配置见 `docs/ascend-310b-offline-incremental-demo.md`。
 
 ## 回滚
 

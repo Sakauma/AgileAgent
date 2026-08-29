@@ -5,7 +5,9 @@ AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模�
 
 ## 本次验证状态
 
-2026-08-28 已完成官方 FPS 口径修订与 Ascend310B1 实机复测：全量 CPU 回归 `338 passed in 90.16s`，`scripts/verify_release.py` PASS，板端定向回归 `20 passed`。公共 `8501` 两次独立 `30 + 3×20` 复测的 60 帧全流程 aggregate FPS 为 `31.961599 / 32.656507`；两次均生成并验证 60 个正式六列 TXT，达到 30 FPS 门禁。
+2026-08-29 已在 Ascend310B1 再次完成四项满分复核：89 张 lock 冻结评分的 Base mAP50 / New-mAP50 / KRR 为 `0.816663 / 0.611461 / 1.000000`，公共 `8501` 的 `30 + 3×20` schema v8 全流程 aggregate FPS 为 `33.897326`；60 个正式六列 TXT 全部有效。归档与文档同步后的全量 CPU 回归为 `340 passed in 108.53s`，变更范围 Ruff PASS，`scripts/verify_release.py` PASS；不可变 release 的 33 项资产和历史 schema 验证链也保持 PASS。
+
+2026-08-28 完成官方 FPS 口径修订与首次实机复测：全量 CPU 回归 `338 passed in 90.16s`，`scripts/verify_release.py` PASS，板端定向回归 `20 passed`。公共 `8501` 两次独立全流程 aggregate FPS 为 `31.961599 / 32.656507`，均达到 30 FPS 门禁。
 
 2026-08-26 已完成断网一键 `4→4+1→4+2` 板端演示、现场 4+2+n 总控和运行时 Adapter 接入验证：受影响专项 `116 passed`，全量 CPU 回归 `328 passed in 90.95s`，Bash 语法、`git diff --check` 与 `scripts/verify_release.py` 全部通过。2026-08-24 已在 Ascend310B1 正式环境对当前 4+2 production 与 runtime release `20260824-4plus2-yolo26-replica-pool-v1` 完成最终硬件验收；三个冻结 OM 继承自 `20260824-4plus2-yolo26-runtime-calibration-v1`：
 
@@ -13,11 +15,11 @@ AgileAgent 将验证分为三层：默认静态/CPU 回归、x86/NVIDIA GPU 模�
 - 当时的正式发布回归：`283 passed in 34.19s`；
 - `scripts/verify_release.py`：PASS；
 - `bash scripts/materialize_ascend310b_full_score_release.sh --verify-existing`：33 项发布资产全部 PASS；
-- 三个 systemd unit 均为 active，公共 `8501` 健康检查返回 `status=ready`、`backend=ascend_acl`、`validated=true`、`inference_replicas=3`；
+- 三个 systemd unit 在评分时均为 active，公共 `8501` 健康检查返回 `status=ready`、`backend=ascend_acl`、`validated=true`、`inference_replicas=3`；复核结束后均恢复为 inactive；
 - 冻结 release 的 Base-mAP50、New-mAP50、KRR 与公共 `8501` 新全流程 aggregate FPS 四项满分门禁全部通过。
-- 旧的 mixed `38.2175 FPS`、纯增量 `37.3997 FPS` 和 CLI `33.504 FPS` 未采用当前“全流程总帧数 ÷ 总耗时＋正式结果写出”契约，只作为 legacy 诊断保留。
+- 旧计时报告未采用当前“全流程总帧数 ÷ 总耗时＋正式结果写出”契约，已统一移入 legacy engine-only 档案。
 
-板端离线增量演示 `board-full-check-v6` 进一步完成了真实 `npu:0` 两轮训练、ONNX/OM 导出、ACL 数值核对和隔离部署：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`；Adapter OM 最大绝对误差 `5.96e-08`。当时记录的 `39.05 / 38.70 / 37.92 FPS` 不包含正式结果写出，现仅作 legacy engine-only 诊断。
+板端离线增量演示 `board-full-check-v6` 进一步完成了真实 `npu:0` 两轮训练、ONNX/OM 导出、ACL 数值核对和隔离部署：Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`；Adapter OM 最大绝对误差 `5.96e-08`。该演示的旧性能报告已归档，需由新版工具重新产生正式性能证据。
 
 ## 测试框架与安装
 

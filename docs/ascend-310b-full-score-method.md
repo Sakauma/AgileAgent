@@ -14,20 +14,21 @@ models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 | Base mAP50 | `0.8166630282` | ≥0.80 |
 | New-mAP50 | `0.6114608956` | ≥0.60 |
 | KRR | `1.0000000000` | ≥0.95 |
-| 公共 `8501` 全流程 aggregate FPS，首次 / 独立复跑 | `31.961599 / 32.656507` | ≥30 |
+| 公共 `8501` 全流程 aggregate FPS，2026-08-29 复核 | `33.897326` | ≥30 |
 
 Full-mAP50 为 `0.7220053258`。旧类 mAP50 增量前后均为 `0.7772775409`，冻结旧类预测完全等价。
 
-两次公共 `8501` 全流程复测的逐轮 FPS：
+公共 `8501` 三次 schema v8 全流程验证的逐轮 FPS：
 
 ```text
 29.0044 / 33.3999 / 33.9618  -> 60帧 / 1877.252759ms = 31.961599 FPS
 31.0727 / 34.1794 / 32.8673  -> 60帧 / 1837.306090ms = 32.656507 FPS
+34.4918 / 33.6139 / 33.6015  -> 60帧 / 1770.051105ms = 33.897326 FPS
 ```
 
 precision `0.729167`、recall `0.612698`、误激活率 `0.226667` 是非阻断诊断。75 张不含新增类的图像中有 17 张至少误激活一个新增类。
 
-性能运行时使用三个同构 Ascend 引擎均衡分片；单实例内部将下一帧 NPU 推理与上一帧 CPU 融合/NMS 重叠。它不修改模型资产、阈值、场景门控或融合结果。正式 FPS 按总处理帧数除以总墙钟耗时计算，计时覆盖 HTTP 上传解析、图像解码、Scene、决策、Base/Incremental 检测、后处理、响应解析和正式六列结果写出。旧 `37–39 FPS` 中位数报告只作 engine-only 历史诊断。
+性能运行时使用三个同构 Ascend 引擎均衡分片；单实例内部将下一帧 NPU 推理与上一帧 CPU 融合/NMS 重叠。它不修改模型资产、阈值、场景门控或融合结果。正式 FPS 按总处理帧数除以总墙钟耗时计算，计时覆盖 HTTP 上传解析、图像解码、Scene、决策、Base/Incremental 检测、后处理、响应解析和正式六列结果写出。旧计时报告已移入 legacy engine-only 档案。
 
 ## 2. 协议口径
 
@@ -301,6 +302,12 @@ models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 └── release.json
 ```
 
+上面不可变 release 内的性能文件保持原始 schema，用于历史包散列与兼容验证。当前四项评分证据位于：
+
+```text
+reports/ascend310b/20260829-full-score-recheck-v1/
+```
+
 仓库不包含竞赛原始图像或标签。仅部署、完整性检查和查看既有报告不需要数据集；重新测 FPS 需要至少 20 张契约 PNG，重新计算精度需要同版 89 图和标签。
 
 ## 12. 验收清单
@@ -331,4 +338,4 @@ models/ascend310b/full-score/20260824-4plus2-yolo26-runtime-calibration-v1/
 
 流水线在独立 `torch_npu` 环境中更新每类 8 参数 Adapter，在 production PyACL/CANN 环境中完成冻结候选、mixed lock、ONNX/OM、ACL 数值和完整图像链路 FPS 验收。胜出候选写入独立演示配置，正式三-OM release 继续作为父代和默认启动身份。
 
-2026-08-26 `board-full-check-v6` 的 Base/New/KRR/Full-mAP50 为 `0.816663 / 0.624935 / 1.000000 / 0.726497`，三轮完整链路为 `39.05 / 38.70 / 37.92 FPS`，Adapter OM 最大绝对误差 `5.96e-08`，候选状态 `accepted`。数据协议、冷/热态时间和演示 CLI 入口见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+2026-08-26 `board-full-check-v6` 的 Base/New/KRR/Full-mAP50 为 `0.816663 / 0.624935 / 1.000000 / 0.726497`，Adapter OM 最大绝对误差 `5.96e-08`，候选状态 `accepted`。旧性能数据已归档，Adapter 启用后的正式性能仍需按 schema v8 重测。数据协议、冷/热态时间和演示 CLI 入口见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。

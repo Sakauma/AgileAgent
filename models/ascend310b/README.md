@@ -24,6 +24,6 @@ AGILE_AGENT_ASCEND_PORT=8501 \
   "$RELEASE/src/scripts/start_agent_ascend310b.sh"
 ```
 
-活动包的 Base mAP50、New-mAP50、KRR 分别为 `0.816663/0.611461/1.0`；包内单实例公共 `8501` 复验中位为 `38.662 FPS`，当前三实例正式拓扑独立复验中位为 `38.2175 FPS`，纯增量 140 图中位为 `37.3997 FPS`。lock 新类误激活从上一代的 `35/75` 降至 `17/75`。
+活动包的 Base mAP50、New-mAP50、KRR 分别为 `0.816663/0.611461/1.0`；2026-08-29 当前三实例公共 `8501` 的 schema v8 全流程复核为 `33.897326 FPS`，生成并验证 60 个正式六列 TXT。lock 新类误激活从上一代的 `35/75` 降至 `17/75`。
 
-同一模型包还作为断网板端增量演示的冻结父代。2026-08-26 的隔离 Adapter 候选达到 Base/New/KRR `0.816663/0.624935/1.0` 和完整链路中位 `38.6995 FPS`，并保持正式包身份不变。完整证据和部署入口见 [`docs/ascend-310b-current-status.md`](../../docs/ascend-310b-current-status.md)。
+同一模型包还作为断网板端增量演示的冻结父代。2026-08-26 的隔离 Adapter 候选达到 Base/New/KRR `0.816663/0.624935/1.0`，并保持正式包身份不变；其旧性能数据已归档。当前四项评分证据见 [`reports/ascend310b/20260829-full-score-recheck-v1`](../../reports/ascend310b/20260829-full-score-recheck-v1/README.md)，完整部署状态见 [`docs/ascend-310b-current-status.md`](../../docs/ascend-310b-current-status.md)。

@@ -111,11 +111,49 @@ def test_full_score_method_pins_current_independent_yolo26_contract() -> None:
             "aggregate_fps_runs"
         ]
     ) >= 30
+    assert not any(
+        key.startswith("legacy_engine_only")
+        for key in method["reference_result"]
+    )
 
     invalid = copy.deepcopy(method)
     invalid["reference_result"]["artifact"] = "/home/user/candidate.om"
     with pytest.raises(ValueError, match="绝对路径"):
         MATERIALIZE.validate_method(invalid)
+
+
+def test_current_full_score_evidence_replaces_active_legacy_reports() -> None:
+    current = ROOT / "reports/ascend310b/20260829-full-score-recheck-v1"
+    archive = (
+        ROOT
+        / "reports/ascend310b/archive/legacy-engine-only"
+        / "20260824-replica-pool-v1"
+    )
+    old_active = ROOT / "reports/ascend310b/20260824-replica-pool-v1"
+
+    assert not old_active.exists()
+    archived = sorted(archive.glob("benchmark-*.json"))
+    assert len(archived) == 4
+    assert {
+        json.loads(path.read_text(encoding="utf-8"))["schema_version"]
+        for path in archived
+    } == {7}
+
+    score = json.loads((current / "score.json").read_text(encoding="utf-8"))
+    benchmark = json.loads(
+        (current / "benchmark-public-8501.json").read_text(encoding="utf-8")
+    )
+    metrics = PROMOTE.validate_score(score)
+    fps = PROMOTE.validate_benchmark(benchmark, "current-public-8501")
+
+    assert metrics == {
+        "base_map50": pytest.approx(0.8166630281570453),
+        "new_map50": pytest.approx(0.6114608956156757),
+        "krr": pytest.approx(1.0),
+    }
+    assert fps == pytest.approx(33.89732637126316)
+    assert benchmark["competition"]["batch_total_frames"] == 60
+    assert benchmark["competition"]["formal_results_valid"] is True
 
 
 def test_score_contract_uses_registered_class_ids_and_method_gates() -> None:

@@ -153,7 +153,7 @@ AGILE_AGENT_CONFIG=/absolute/run/deployment/agent_pipeline_ascend310b_demo.yaml 
   ./scripts/start_agent.sh --cli
 ```
 
-2026-08-26 实机整链验收结果为 Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`，热态完整命令耗时 `1007.07 秒`；当时的 `38.6995 FPS` 未包含正式结果落盘，只作 legacy engine-only 诊断。当前正式 release 已在 2026-08-28 按“总帧数 ÷ 全流程总耗时”复测为 `31.961599 / 32.656507 FPS`。完整环境准备、产物结构和冷/热态时间见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
+2026-08-26 实机整链验收结果为 Base mAP50 `0.816663`、New-mAP50 `0.624935`、KRR `1.000000`、Full-mAP50 `0.726497`，热态完整命令耗时 `1007.07 秒`；当时的性能报告未包含正式结果落盘，现已归档。当前正式 release 于 2026-08-29 再次按“总帧数 ÷ 全流程总耗时”复核为 `33.897326 FPS`。完整环境准备、产物结构和冷/热态时间见 [`ascend-310b-offline-incremental-demo.md`](ascend-310b-offline-incremental-demo.md)。
 
 ## 验收
 

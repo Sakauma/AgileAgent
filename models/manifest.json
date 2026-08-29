@@ -344,20 +344,15 @@
         "new_map50": 0.6114608956156757,
         "krr": 1.0,
         "full_map50": 0.7220053258250602,
-        "candidate_batch_median_fps": [
-          38.38771593090211,
-          39.13894324853229
+        "official_full_pipeline_public_8501_fps": [
+          31.96159905071153,
+          32.65650744128323,
+          33.89732637126316
         ],
-        "post_promotion_batch_rounds": [
-          [
-            38.58024691358025,
-            38.669760247486465,
-            38.66228494104002
-          ]
-        ],
-        "post_promotion_batch_median_fps": [
-          38.66228494104002
-        ],
+        "official_full_pipeline_latest_total_frames": 60,
+        "official_full_pipeline_latest_total_elapsed_ms": 1770.051105,
+        "official_full_pipeline_latest_report": "reports/ascend310b/20260829-full-score-recheck-v1",
+        "legacy_engine_only_archive": "reports/ascend310b/archive/legacy-engine-only/README.md",
         "lock_precision": 0.7291666666666666,
         "lock_recall": 0.6126984126984127,
         "false_activation_count": 17,

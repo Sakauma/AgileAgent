@@ -148,7 +148,15 @@ def test_model_manifest_promotes_packaged_ascend_release() -> None:
     assert release["metrics"]["base_map50"] >= 0.80
     assert release["metrics"]["new_map50"] >= 0.60
     assert release["metrics"]["krr"] >= 0.95
-    assert min(release["metrics"]["post_promotion_batch_median_fps"]) >= 30.0
+    assert min(
+        release["metrics"]["official_full_pipeline_public_8501_fps"]
+    ) >= 30.0
+    assert release["metrics"]["official_full_pipeline_latest_report"] == (
+        "reports/ascend310b/20260829-full-score-recheck-v1"
+    )
+    assert release["metrics"]["legacy_engine_only_archive"] == (
+        "reports/ascend310b/archive/legacy-engine-only/README.md"
+    )
     for row in release["models"].values():
         model_path = ROOT / row["path"]
         assert model_path.is_file()
@@ -209,3 +217,17 @@ def test_post_promotion_evidence_remains_full_score() -> None:
         )
         assert benchmark["competition"]["batch_fps_passed"] is True
         assert benchmark["competition"]["batch_fps"] >= 30.0
+
+
+def test_immutable_release_keeps_legacy_schema_and_checksum_compatibility() -> None:
+    validation = json.loads(
+        (PACKAGE / "validation/validation-summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    performance = release_local_path(validation["performance"]["path"])
+    benchmark = json.loads(performance.read_text(encoding="utf-8"))
+
+    assert benchmark["schema_version"] in {5, 6, 7}
+    assert validation["passed"] is True
+    assert sha256_file(performance) == validation["performance"]["sha256"]
